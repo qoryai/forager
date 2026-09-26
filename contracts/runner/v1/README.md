@@ -469,8 +469,10 @@ cover, and a value the run passes for a tool's placeholder. The tools a run has 
 when it starts: a run configuration that selects other tools, or another argument, fails
 the reload, and the policy in force stays.
 
-**The record.** `dev.qory.run.policy_applied` lists the tools, `name` and `hosts`, and
-their hosts among `terminated`. Every request to a tool's host is one
+**The record.** `dev.qory.run.policy_applied` lists the tools, `name`, `argument` and
+`hosts`, and their hosts among `terminated`. `argument` is the policy's argument to the
+tool, absent when the policy passes none, so the record shows what each tool is started
+for, such as a repository. Every request to a tool's host is one
 `dev.qory.run.egress`, a tool invocation: `method: HTTPS`, or `HTTP` for a plain
 request, with `request_method`, `path` without its query, `path_rule`, `tool`, the
 tool's name, `request_id`, and, once the tool answers, `status`. A request a path rule
@@ -1110,7 +1112,7 @@ the option experimental.
 | `fixtures/run-configuration/` | run configuration documents a server returns | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver returns | the receiver, replaying each with its clock at `1700000000` |
-| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
+| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 

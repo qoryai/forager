@@ -529,6 +529,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			used := make([]map[string]any, len(chosen))
 			for i, c := range chosen {
 				used[i] = map[string]any{"name": c.Name, "hosts": c.Serves}
+				if c.Argument != "" {
+					used[i]["argument"] = c.Argument
+				}
 			}
 			a["tools"] = used
 		}

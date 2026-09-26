@@ -32,7 +32,7 @@
       }
     },
     "tools": {
-      "description": "The tools the run reaches, started before the runtime: each one's name and the hosts it serves. Fixed for the run: every further policy_applied repeats them.",
+      "description": "The tools the run reaches, started before the runtime: each one's name, the argument the policy passed and the hosts it serves. Fixed for the run: every further policy_applied repeats them.",
       "type": "array",
       "items": {
         "type": "object",
@@ -40,6 +40,7 @@
         "required": ["name", "hosts"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
+          "argument": {"description": "The argument the policy's tools entry passed, such as the repository the tool is started for. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}}
         }
       }
