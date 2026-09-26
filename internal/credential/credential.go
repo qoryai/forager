@@ -57,9 +57,13 @@ type Definition struct {
 	Placeholders []string
 }
 
-// Use is one way a held token is used: what the proxy needs to know.
+// Use is one way a held token is used: what the proxy needs to know, and what the
+// record lists of it.
 type Use struct {
-	Name                     string
+	Name string
+	// Argument is the argument the run's policy passed to the credential, the same for
+	// every use of one credential; empty when it passed none.
+	Argument                 string
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
@@ -130,7 +134,7 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
-			out.Uses = append(out.Uses, &Use{Name: def.Name, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, held: h, index: i})
+			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, held: h, index: i})
 		}
 		for _, p := range append(append([]string{}, def.Placeholders...), answer.Placeholders...) {
 			if !slices.Contains(out.Placeholders, p) {

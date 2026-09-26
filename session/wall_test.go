@@ -168,6 +168,63 @@ func TestCredentialsCrossAsAnAuthorityAndAPlaceholder(t *testing.T) {
 	}
 }
 
+// TestTheRecordListsACredentialsArgument pins what an audit of the record reads of a
+// credential an adapter mints: every use of it contains the argument the policy passed,
+// the repository the token is for, and a credential with no argument in the policy has
+// none in the record.
+func TestTheRecordListsACredentialsArgument(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
+	adapter := filepath.Join(t.TempDir(), "adapter")
+	answer := `#!/bin/sh
+cat <<JSON
+{"version": 1, "token": "token-for-$1", "expires_at": "2099-01-01T00:00:00Z",
+ "apply": [
+  {"hosts": ["git.example.com"], "scheme": "basic", "username": "x-access-token", "paths": ["/$1.git/*"]},
+  {"hosts": ["api.git.example.com"], "scheme": "bearer", "paths": ["/repos/$1", "/repos/$1/*"]}]}
+JSON
+`
+	if err := os.WriteFile(adapter, []byte(answer), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defs := []session.Credential{
+		{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"},
+		{Name: "git", Adapter: []string{adapter, "${argument}"}, Argument: `[a-z0-9-]+/[a-z0-9-]+`},
+	}
+	pol := &session.Policy{Version: 1,
+		Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example", "git.example.com", "api.git.example.com"}},
+		Credentials: []session.PolicyCredential{{Name: "model"}, {Name: "git", Argument: "acme/shop"}}}
+	sp := spec(t, pol, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Credentials = &openWall{}, "example.com/agent:1", defs
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
+	creds, _ := applied["credentials"].([]any)
+	if len(creds) != 3 {
+		t.Fatalf("run.policy_applied %v", applied)
+	}
+	for _, c := range creds {
+		use := c.(map[string]any)
+		switch use["name"] {
+		case "model":
+			if _, set := use["argument"]; set {
+				t.Errorf("a credential with no argument in the policy has one in the record: %v", use)
+			}
+		case "git":
+			if use["argument"] != "acme/shop" {
+				t.Errorf("a use of the adapter's credential %v, want the argument acme/shop", use)
+			}
+		default:
+			t.Errorf("a use of %v", use["name"])
+		}
+	}
+	record, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
+	if strings.Contains(string(record), "token-for-") || strings.Contains(string(record), "the-token-held-outside") {
+		t.Error("a token reached the record")
+	}
+}
+
 // TestAReloadBehindAWallBringsCredentialsAndPaths pins the other half: behind a wall a
 // run with a server always has its authority, given to the enclosure at the start, so
 // a reloaded run configuration's path rules are held and its credentials resolved and

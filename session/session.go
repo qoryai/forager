@@ -516,6 +516,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			uses := make([]map[string]any, len(held.Uses))
 			for i, u := range held.Uses {
 				uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+				if u.Argument != "" {
+					uses[i]["argument"] = u.Argument
+				}
 				if u.Paths != nil {
 					uses[i]["paths"] = u.Paths
 				}

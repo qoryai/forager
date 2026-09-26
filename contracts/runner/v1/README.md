@@ -380,8 +380,11 @@ trusted bundle (§The wall). The proxy verifies the real host against the machin
 roots. Every other host stays a tunnel the proxy does not read, and a run with no
 credential and no path rule has no authority at all.
 
-**The record.** `dev.qory.run.policy_applied` contains each use, `name`, `hosts`, `scheme`
-and `paths`, and the `terminated` hosts. On a terminated host `dev.qory.run.egress` is one
+**The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
+`hosts`, `scheme` and `paths`, and the `terminated` hosts. `argument` is the policy's
+argument to the credential, the same on every use of one credential and absent when the
+policy passes none, so the record shows what each token is minted for, such as the
+repositories of a source code host. On a terminated host `dev.qory.run.egress` is one
 event per request, `method: HTTPS` with `request_method`, `path` without its query,
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
 and no error contains a token.
@@ -1107,7 +1110,7 @@ the option experimental.
 | `fixtures/run-configuration/` | run configuration documents a server returns | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver returns | the receiver, replaying each with its clock at `1700000000` |
-| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool | `event.schema.json` per line, plus the sequence, source and concatenation rules |
+| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
