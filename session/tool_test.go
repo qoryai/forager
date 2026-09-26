@@ -178,6 +178,43 @@ func TestAToolIsStartedForTheRunAndItsInvocationsRecorded(t *testing.T) {
 	}
 }
 
+// TestTheRecordListsAToolsArgument pins what an audit of the record reads of the tools
+// a run reaches: a tool the policy passes an argument contains it, the repository it is
+// started for, and a tool with no argument in the policy has none in the record.
+func TestTheRecordListsAToolsArgument(t *testing.T) {
+	sp, _ := toolSpec(t, filepath.Join(t.TempDir(), "tool-saw"))
+	const notesHost = "notes.tools.internal"
+	pol := *sp.Policy
+	pol.Egress.Allow = append(slices.Clone(pol.Egress.Allow), notesHost)
+	pol.Tools = append(slices.Clone(pol.Tools), session.PolicyTool{Name: "notes"})
+	sp.Policy = &pol
+	sp.Tools = append(sp.Tools, session.Tool{Name: "notes", Command: []string{os.Args[0], toolMode, filepath.Join(t.TempDir(), "notes-saw")}, Serves: []string{notesHost}})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
+	tools, _ := applied["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("run.policy_applied %v", applied)
+	}
+	for _, e := range tools {
+		entry := e.(map[string]any)
+		switch entry["name"] {
+		case "files":
+			if entry["argument"] != "acme/shop" {
+				t.Errorf("the tool with an argument %v, want the argument acme/shop", entry)
+			}
+		case "notes":
+			if _, set := entry["argument"]; set {
+				t.Errorf("a tool with no argument in the policy has one in the record: %v", entry)
+			}
+		default:
+			t.Errorf("a tool %v", entry["name"])
+		}
+	}
+}
+
 // TestARunWhoseToolsCannotHoldDoesNotStart pins the runs refused before anything
 // starts: no wall, a tool nobody defined, an argument the machine does not provide for,
 // a host a credential is for as well, a value the run passes for a placeholder, and a

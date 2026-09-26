@@ -13,7 +13,8 @@ release may change what an existing document does, and says so under Upgrading.
   and `image`. `dev.qory.run.egress` carries `tool`, `request_id` and `status`,
   `dev.qory.run.started` carries `image_name`, `container_runtime` and `docker`, and
   `dev.qory.run.policy_applied` carries `tools` and `image`, when they apply, and each
-  of its credential uses contains `argument` when the policy passed one.
+  of its credential uses and each of its tools contains `argument` when the policy
+  passed one.
 - `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
   that builds a request of its own, or an adapter of its own, reads them. A caller that
   gives an image with a Docker of the agent's own gives its helper a mode that calls
@@ -79,9 +80,10 @@ release may change what an existing document does, and says so under Upgrading.
 - The wall's conformance suite reaches a tool from inside the enclosure: on its paths it
   is handed the proxy's headers and not the ones the probe forged, and off them the
   proxy refuses.
-- Each credential use in `dev.qory.run.policy_applied` contains `argument`, the argument
-  the policy passed to the credential, when it passed one, so an audit of the record
-  reads which repositories a token was minted for.
+- Each credential use and each tool in `dev.qory.run.policy_applied` contains
+  `argument`, the argument the policy passed to the credential or the tool, when it
+  passed one, so an audit of the record reads which repositories a token was minted for
+  and what each tool was started for.
 
 ### Changed
 
