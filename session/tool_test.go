@@ -179,8 +179,8 @@ func TestAToolIsStartedForTheRunAndItsInvocationsRecorded(t *testing.T) {
 }
 
 // TestTheRecordListsAToolsArgument pins what an audit of the record reads of the tools
-// a run reaches: a tool the policy passes an argument contains it, the repository it is
-// started for, and a tool with no argument in the policy has none in the record.
+// a run reaches: a tool the policy passes an argument to contains it, the repository it
+// is started for, and a tool with no argument in the policy has none in the record.
 func TestTheRecordListsAToolsArgument(t *testing.T) {
 	sp, _ := toolSpec(t, filepath.Join(t.TempDir(), "tool-saw"))
 	const notesHost = "notes.tools.internal"

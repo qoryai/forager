@@ -9,10 +9,10 @@ release may change what an existing document does, and says so under Upgrading.
 ### Upgrading
 
 - The contract is `v1` revision 1, and the runner sends `X-Qory-Contract-Version: 1`
-  and `contract_version: 1` in the ping. A run configuration's policy may carry `tools`
-  and `image`. `dev.qory.run.egress` carries `tool`, `request_id` and `status`,
-  `dev.qory.run.started` carries `image_name`, `container_runtime` and `docker`, and
-  `dev.qory.run.policy_applied` carries `tools` and `image`, when they apply, and each
+  and `contract_version: 1` in the ping. A run configuration's policy may contain `tools`
+  and `image`. `dev.qory.run.egress` contains `tool`, `request_id` and `status`,
+  `dev.qory.run.started` contains `image_name`, `container_runtime` and `docker`, and
+  `dev.qory.run.policy_applied` contains `tools` and `image`, when they apply, and each
   of its credential uses and each of its tools contains `argument` when the policy
   passed one.
 - `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
