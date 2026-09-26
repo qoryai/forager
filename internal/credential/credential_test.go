@@ -45,6 +45,11 @@ func TestAnAdapterSaysHowItsTokenIsUsed(t *testing.T) {
 	if len(held.Placeholders) != 1 || held.Placeholders[0] != "GIT_HOST_TOKEN" {
 		t.Errorf("placeholders %v", held.Placeholders)
 	}
+	for _, u := range held.Uses {
+		if u.Argument != "acme/shop" {
+			t.Errorf("a use of %s has the argument %q, want the policy's", u.Name, u.Argument)
+		}
+	}
 }
 
 func TestWhatCannotHoldIsNoRun(t *testing.T) {

@@ -16,7 +16,7 @@
     "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when source is fetched. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: where each goes and how. Never a token.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a token.",
       "type": "array",
       "items": {
         "type": "object",
@@ -24,6 +24,7 @@
         "required": ["name", "hosts", "scheme"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
+          "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the token is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
           "paths": {"type": "array", "items": {"type": "string"}}
