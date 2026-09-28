@@ -1,8 +1,8 @@
 # Credentials
 
 The runner keeps its own credentials out of the session. Behind a wall, it keeps the
-run's credentials outside the container too. Its proxy sets each credential on the way
-out.
+run's credentials outside the container too. Its proxy sets each credential on the
+way out.
 
 Credentials need a wall. Without one, a program that ignores the proxy is bound by
 nothing here.

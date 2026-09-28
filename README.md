@@ -10,8 +10,8 @@ It does four things:
 2. **It enforces a policy.** A policy lists what the agent may reach. `enforce` denies
    the rest. `observe` records everything and denies only what `deny` lists.
 3. **It walls the agent in, and keeps your secrets out.** A wall starts the agent in a
-   container whose one way out is the proxy. The secrets a run's policy selects stay
-   with the runner. The proxy adds them on the way out.
+   container whose one way out is the proxy. The credentials a run's policy selects stay
+   with the runner. The proxy sets them on the way out.
 4. **It reports to your server.** The events your server selects go there too, signed.
    The server can set each run's policy, and change it while the run goes.
 
@@ -98,8 +98,8 @@ Credentials stay outside too. The machine defines them, and a run's policy selec
 by name. Inside, the agent sees a placeholder. The proxy sets the real credential on the
 requests to the hosts it is for.
 
-A tool runs outside as well, for what needs more than a credential, such as a request
-signed with a key.
+A **tool**, a program of the machine's, runs outside as well. It is for what needs more
+than a credential, such as a request signed with a key.
 
 The wall ships with a Docker adapter. `wall/walltest` checks it from inside the
 container, in CI.
