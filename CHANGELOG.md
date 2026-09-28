@@ -97,7 +97,7 @@ release may change what an existing document does, and says so under Upgrading.
   nor `ca_bundle` in the image's AWS configuration is set, so an image that sets a
   bundle of its own there did not trust a terminated host. A caller that sets its own
   variables in `Docker.CAEnv` gets those, as before.
-- The contract lists what a path rule reads: a request's host and path; its query,
+- The contract states that a path rule reads the request's path alone: its query,
   headers and body are outside the rule. A subresource in the query, a listing's prefix,
   a copy's source in a header and a GraphQL body are outside what a rule checks.
 - A policy's credential and tool `argument` may have up to 4096 characters, where it had
