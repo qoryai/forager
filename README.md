@@ -173,7 +173,7 @@ run behind a wall, and reports what happened. It is two halves, and one of them 
 
 | Half | What it does | State |
 |---|---|---|
-| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths; since 0.6.0 it starts a run's tools outside the container and hands them the requests to the hosts they serve, starts a run in the image of the machine's its policy selects, and, experimental, gives an agent a Docker daemon of its own inside the container under `sysbox-runc` |
+| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it keeps a run's credentials outside the container and limits a host to paths; since 0.6.0 it starts a run's tools outside the container and passes them the requests to the hosts they serve, starts a run in the image of the machine's its policy selects, and, experimental, starts a Docker daemon of the agent's own inside the container under `sysbox-runc` |
 | **The fleet layer** | registers the node with a control plane, heartbeats and claims work | not built; no command starts it, and nothing here describes it as if one did. The run's policy from the control plane ships since 0.4.0, as the server's run configuration |
 
 So today a node is a machine with Docker on which `qory run --wall docker` is started,

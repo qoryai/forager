@@ -144,7 +144,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		return nil, fmt.Errorf("wall docker: %q is not a container runtime's name", req.Runtime)
 	}
 	if req.Docker && req.Runtime == "" {
-		return nil, errors.New("wall docker: a Docker of the agent's own needs a runtime that runs one without privileges, sysbox-runc say; a privileged container is never an enclosure")
+		return nil, errors.New("wall docker: a Docker of the agent's own needs a runtime that runs one without privileges, such as sysbox-runc; a privileged container is never an enclosure")
 	}
 	if req.Docker && len(d.NestArgs) == 0 {
 		return nil, errors.New("wall docker: a Docker of the agent's own needs the helper's arguments that start it")

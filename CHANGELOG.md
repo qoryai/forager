@@ -8,17 +8,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Upgrading
 
-- The contract is `v1` revision 1, and the runner sends `X-Qory-Contract-Version: 1`
-  and `contract_version: 1` in the ping. A run configuration's policy may contain `tools`
-  and `image`. `dev.qory.run.egress` contains `tool`, `request_id` and `status`,
-  `dev.qory.run.started` contains `image_name`, `container_runtime` and `docker`, and
-  `dev.qory.run.policy_applied` contains `tools` and `image`, when they apply, and each
-  of its credential uses and each of its tools contains `argument` when the policy
-  passed one.
-- `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
-  that builds a request of its own, or an adapter of its own, reads them. A caller that
-  gives an image with a Docker of the agent's own gives its helper a mode that calls
-  `wall.Nest`, as it gives one that calls `wall.Relay`.
 - `golang.org/x/sys` is a direct dependency.
 
 ### Added
@@ -30,26 +19,33 @@ release may change what an existing document does, and says so under Upgrading.
   name of one of `Images`, or a reference. A name the machine does not define, a
   selection without a wall, an image defined twice and a daemon without a runtime are no
   run; a reload that selects another image is refused, where another image is the one
-  the selection resolves to, so naming the machine's default, or no longer naming it, is
-  no change.
+  the selection resolves to, so selecting the machine's default by name, or dropping
+  that selection, is no change.
+- `dev.qory.run.started` contains `image_name`, `container_runtime` and `docker`, and
+  `dev.qory.run.policy_applied` contains `image`, when they apply; `image` in
+  `run.started` is the reference the selection resolves to.
+- `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`, the
+  helper's arguments for the mode that calls `wall.Nest`, beside the one that calls
+  `wall.Relay`. The Docker adapter refuses an image with `Docker` when `NestArgs` is
+  empty.
 - A Docker of the agent's own, experimental because whether the enclosure's root reaches
   the mounts the run lists as the machine's root has not been verified: it may change or
   be withdrawn in a minor release. An image with `Docker` starts under its `Runtime`,
   `sysbox-runc`, whose root is a user of the machine's that is not root. The enclosure
   starts as that root, with `no-new-privileges` and a volume of the run's for the
   daemon's store; `wall.Nest`, the helper in a hidden mode, starts `dockerd` on its Unix
-  socket alone with the socket in the agent's group, waits until it answers, gives the
-  agent a docker configuration that hands the containers it starts the proxy by its
+  socket alone with the socket in the agent's group, waits until it answers, writes the
+  agent a docker configuration that points the containers it starts at the proxy's
   address, drops every capability, the bounding set included, and executes the launch as
   the agent's user, with the inheritable and ambient sets cleared. It refuses a runtime
-  that maps the enclosure's root to the machine's, and looks for `dockerd` in the image's
-  system directories only, never on the run's `PATH`. The daemon's store has no size limit
-  of the run's, and a daemon that exits during the run is not started again. Docker in
-  Docker with `--privileged` and the machine's socket stay refused.
-- The relay forwards no packet between the enclosure's network and the ordinary one: IP
-  forwarding is off in its namespace.
+  that maps the enclosure's root to the machine's, and looks for `dockerd` only in the
+  image's system directories. The daemon's store is bounded only by the machine's disk,
+  and a daemon that exits stays stopped for the rest of the run. Docker in Docker with
+  `--privileged` and the machine's socket stay refused.
+- IP forwarding is off in the relay's namespace, for IPv4 and IPv6: the relay connects
+  the enclosure's network to the ordinary one only through the proxy.
 - The wall's conformance suite runs in an enclosure with a Docker of the agent's own,
-  `TestDockerNestedConforms`, where `QORY_WALL_RUNTIME` names the runtime; the CI job
+  `TestDockerNestedConforms`, with the runtime set in `QORY_WALL_RUNTIME`; the CI job
   installs Sysbox and runs it.
 
 - Tools: programs of the machine's that serve hosts, for what a run reaches that needs
@@ -57,29 +53,30 @@ release may change what an existing document does, and says so under Upgrading.
   with `${argument}`, the pattern the argument must match, the hosts the tool serves and
   its placeholders, and a policy's `tools` selects among them, by name and argument, as
   it selects credentials. Behind a wall the runner starts each selected tool outside the
-  enclosure before the runtime, with `QORY_TOOL_LISTEN` naming the Unix socket it listens
-  on and without the variables the machine's credentials are read from, and stops its
-  process group when the run ends. The proxy ends the session's TLS for the hosts a
-  tool serves, decides the host and the path by the policy, and hands every request it
-  lets through to the tool over the socket, streamed, with `Qory-Request-Id` and
-  `Qory-Path-Rule` set, `none` for a path observed that no rule covers. Every header and
-  trailer of the `Qory-` prefix the session sent, in any case or with an underscore, is
-  taken off, and naming the proxy's headers in `Connection` does not remove them. A host a
-  tool serves need not exist: the proxy never dials it, so a service with no host of its
-  own, an MCP server say, serves a name under `.internal`. A tool that does not listen
-  within a minute, a host a tool and a credential both claim, and under enforce a host
-  the allow list does not cover are no run; a reload that selects other tools is
-  refused. The runner knows no protocol: signing a request to an object store is a
-  tool's, not a scheme's.
+  enclosure before the runtime, with `QORY_TOOL_LISTEN` set to the Unix socket it
+  listens on, `QORY_RUN_ID` set to the run's id, and the runner's environment minus the
+  variables the machine's credentials are read from, and stops its process group when
+  the run ends. The proxy ends the session's TLS for the hosts a tool serves, decides
+  the host and the path by the policy, and passes every request it lets through to the
+  tool over the socket, streamed, with `Qory-Request-Id` and `Qory-Path-Rule` set,
+  `none` for a path observed that no rule covers. Every header and trailer of the
+  `Qory-` prefix the session sent, in any case or with an underscore, is taken off, and
+  the proxy's headers stay on the request when the session lists them in `Connection`. A
+  host a tool serves need not exist: the proxy never dials it, so a service with no host
+  of its own, such as an MCP server, serves a name under `.internal`. A selection
+  without a wall, a tool that does not listen within a minute, a host a tool and a
+  credential both claim, and under enforce a host the allow list does not cover are no
+  run; a reload that selects other tools is refused. The runner knows no protocol:
+  signing a request to an object store is a tool's, not a scheme's.
 - Every request to a tool's host is one `dev.qory.run.egress`, a tool invocation, with
   `tool`, the tool's name. `dev.qory.run.policy_applied` lists the run's `tools` and
   their hosts among `terminated`.
 - Every egress event that is one request, a plain one or one inside a terminated
-  connection, carries `request_id`, the proxy's own id of it, and `status`, the status
-  the host or the tool answered, when one answered.
+  connection, contains `request_id`, the proxy's own id of it, and `status`, the status
+  the host or the tool returned, when one returned.
 - The wall's conformance suite reaches a tool from inside the enclosure: on its paths it
-  is handed the proxy's headers and not the ones the probe forged, and off them the
-  proxy refuses.
+  receives the proxy's headers and not the ones the probe forged, and off them the proxy
+  refuses.
 - Each credential use and each tool in `dev.qory.run.policy_applied` contains
   `argument`, the argument the policy passed to the credential or the tool, when it
   passed one, so an audit of the record reads which repositories a token was minted for
@@ -87,36 +84,40 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- Contract `v1` revision 1 is amended in place again, before any server relied on it:
+  the policy may contain `tools` and `image`, and the events contain the fields listed
+  under Added. The runner sends `X-Qory-Contract-Version: 1` and `contract_version: 1`,
+  as before.
 - The contract's wording is plainer: the README, the schemas' descriptions and the
-  fixtures' notes use plain verbs in the present tense. No behaviour changed; where the
-  text disagreed with the runner it now describes what the runner does.
+  fixtures' notes use plain verbs in the present tense. The runner's behaviour is the
+  same; where the text disagreed with the runner it now describes what the runner does.
 - A wall points `AWS_CA_BUNDLE` at the run's bundle as well, beside `SSL_CERT_FILE`,
   `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`.
   The AWS CLI and botocore read `REQUESTS_CA_BUNDLE` only when neither `AWS_CA_BUNDLE`
-  nor `ca_bundle` in the image's AWS configuration is set, so an image that names a
-  bundle of its own there did not trust a terminated host. A caller that names its own
+  nor `ca_bundle` in the image's AWS configuration is set, so an image that sets a
+  bundle of its own there did not trust a terminated host. A caller that sets its own
   variables in `Docker.CAEnv` gets those, as before.
-- The contract says what a path rule does not read: a request's query, headers and
-  body. A subresource in the query, a listing's prefix, a copy's source in a header and
-  a GraphQL body are outside what a rule holds a run to.
-- A policy's credential and tool `argument` may have up to 4096 characters, where it
-  had 256, so one argument holds several repositories, `acme/shop,acme/lib`. The cap
-  bounds only the size of the run's record: what guards the argument is the
-  definition's pattern, which must match it whole, and it reaches the program as one
-  word, with no shell.
+- The contract lists what a path rule reads: a request's host and path; its query,
+  headers and body are outside the rule. A subresource in the query, a listing's prefix,
+  a copy's source in a header and a GraphQL body are outside what a rule checks.
+- A policy's credential and tool `argument` may have up to 4096 characters, where it had
+  256, so one argument can list several repositories, `acme/shop,acme/lib`. The cap
+  bounds only the size of the run's record: what guards the argument is the definition's
+  pattern, which must match it whole, and it reaches the program as one word, with no
+  shell.
 
 ### Removed
 
 - The paths kept for what a runner before 0.5.1 left: sending a record again no longer
-  reads an `ai.qory.` type as `dev.qory.`, and a reap no longer looks for containers
-  and networks labelled `ai.qory.run`. No runner or server is in use yet, so there is no
+  reads an `ai.qory.` type as `dev.qory.`, and a reap no longer looks for containers and
+  networks labelled `ai.qory.run`. No runner or server is in use yet, so there is no
   such record or container to read.
 
 ### Fixed
 
-- A request's trailer reaches the host of a terminated connection. The proxy passed on
-  a copy of the trailer made before the body was read, which held no values, so a
-  client that sent a checksum as a trailer sent none upstream.
+- A request's trailer reaches the host of a terminated connection. The proxy passed on a
+  copy of the trailer made before the body was read, which was empty, so a client that
+  sent a checksum as a trailer sent none upstream.
 
 ## [0.5.1] - 2026-09-24
 
