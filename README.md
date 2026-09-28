@@ -9,9 +9,9 @@ It does four things:
    and turn the agent reports. The record is written to the checkout.
 2. **It enforces a policy.** A policy lists what the agent may reach. `enforce` denies
    the rest. `observe` records everything and denies only what `deny` lists.
-3. **It walls the agent in, and keeps your tokens out.** A wall starts the agent in a
-   container whose one way out is the proxy. The tokens a run's policy selects stay with
-   the runner. The proxy sets them on the way out.
+3. **It walls the agent in, and keeps your secrets out.** A wall starts the agent in a
+   container whose one way out is the proxy. The secrets a run's policy selects stay
+   with the runner. The proxy adds them on the way out.
 4. **It reports to your server.** The events your server selects go there too, signed.
    The server can set each run's policy, and change it while the run goes.
 
@@ -21,9 +21,9 @@ it does, and stops it.
 ## Why
 
 A coding agent acts on its own. It runs commands and calls hosts you don't see. It has
-your tokens. Afterwards, you can't tell what it reached, or what it did there.
+your secrets. Afterwards, you can't tell what it reached, or what it did there.
 
-A proxy sees only the programs that honour it. A token in the agent's environment goes
+A proxy sees only the programs that honour it. A secret in the agent's environment goes
 wherever the agent sends it. And connections are half the story: the prompts, the tool
 calls and the exit are the rest. The runner covers all of it, in one record.
 
@@ -85,7 +85,7 @@ tools and the image the run gets.
 
 More: [docs/policy.md](docs/policy.md).
 
-## 3. Wall the agent in, keep the tokens out
+## 3. Wall the agent in, keep the secrets out
 
 The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
@@ -95,8 +95,11 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
   from outside.
 
 Credentials stay outside too. The machine defines them, and a run's policy selects them
-by name. Inside, the agent sees a placeholder. The proxy sets the real token on the
+by name. Inside, the agent sees a placeholder. The proxy sets the real credential on the
 requests to the hosts it is for.
+
+A tool runs outside as well, for what needs more than a credential, such as a request
+signed with a key.
 
 The wall ships with a Docker adapter. `wall/walltest` checks it from inside the
 container, in CI.

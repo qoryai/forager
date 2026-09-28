@@ -1,7 +1,8 @@
 # Credentials
 
 The runner keeps its own credentials out of the session. Behind a wall, it keeps the
-run's credentials outside the container too. Its proxy sets each token on the way out.
+run's credentials outside the container too. Its proxy sets each credential on the way
+out.
 
 Credentials need a wall. Without one, a program that ignores the proxy is bound by
 nothing here.
@@ -26,20 +27,21 @@ For a credential that stays outside:
 The machine defines credentials. A run's policy selects among them by name, and defines
 none.
 
-A token comes from one of three sources:
+A credential's secret comes from one of three sources:
 
-| Source    | The token is                                  |
+| Source    | The secret is                                 |
 | --------- | --------------------------------------------- |
 | `env`     | a variable of the runner's own environment    |
 | `file`    | a file's content, read again on each use      |
 | `adapter` | what a program of the machine's prints        |
 
-- The runner keeps each token in memory, outside the container.
+- The runner keeps each secret in memory, outside the container.
 - For the hosts a credential is for, the proxy ends the container's TLS itself. It uses
   an authority made for the run. The authority's key never leaves the runner.
 - A placeholder has the value `qory-sets-the-credential-outside-the-enclosure`. The proxy
   replaces what the program sends.
-- The record lists each credential the run uses, by name. No event contains a token.
+- The record lists each credential the run uses, by name. No event contains a
+  credential's secret.
 
 In `qory`, the `credentials` section of `runner.yaml` defines them. See
 [qory's docs](https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has).
@@ -47,7 +49,7 @@ In `qory`, the `credentials` section of `runner.yaml` defines them. See
 ## Tools
 
 A **tool** is a program of the machine's that serves hosts. It is for what a run reaches
-that needs more than a token in a header.
+that needs more than a credential in a header.
 
 - The runner starts a run's tools outside the container.
 - The proxy passes each tool the requests to the hosts it serves.
