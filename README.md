@@ -29,14 +29,17 @@ calls and the exit are the rest. The runner covers all of it, in one record.
 
 ## Install
 
-The runner ships inside [`qory`](https://github.com/qoryai/qory). Its command is
-`qory run`: it starts your agent inside the runner. Install `qory`:
+The runner ships inside [`qory`](https://github.com/qoryai/qory). You start it with
+`qory run`, a subcommand of `qory`: it starts your agent inside the runner.
+
+Install `qory`:
 
 ```sh
 brew install qoryai/tap/qory
 ```
 
-`qory` builds the agent's launch from the harness. The runner runs it.
+`qory` builds the agent's launch from the harness: what the agent reads, such as
+instructions, skills and settings. The runner runs it.
 
 To build the runner into a program of your own, see [Embed it in Go](#embed-it-in-go).
 
@@ -83,10 +86,11 @@ The policy comes from one of three places:
 - **The machine**: the `egress` section of `~/.config/qory/runner.yaml`.
 - **The run**: `qory run --policy <file>`, a file in the format above. It narrows the
   machine's policy, and never widens it.
-- **Your server**: its run configuration, chosen by the run's labels. See
-  [Report to a server](#4-report-to-a-server).
+- **Your server**: its run configuration, chosen by the run's labels, such as its
+  repository. See [Report to a server](#4-report-to-a-server).
 
-With no policy, the runner observes and records everything.
+When your server sends a run configuration, that is the policy. With no policy, the
+runner observes and records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the

@@ -43,13 +43,13 @@ A run has one policy. It comes from one of three places:
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/runner/v1/README.md#the-policy).
   - It narrows the machine's `egress`, and never widens it.
-  - Keep the file outside the checkout, where the agent could write it. `qory` refuses a
-    file there, or in a mount the container may write.
+  - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
+    in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
   section. Then the runner fetches the run configuration, with the run's labels, and
-  its `security_policy` is the policy. The runner merges it with no other policy. See
-  [the server](server.md).
+  its `security_policy` is the policy. It replaces the machine's policy and a run's own,
+  so it may allow more than `runner.yaml` does. See [the server](server.md).
 
 Which one applies:
 
@@ -79,9 +79,10 @@ server:                                 # optional
   secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
 ```
 
-- `egress` is the ceiling on what the runtime may reach.
-- Without `egress`, everything is allowed and recorded.
+- `egress` is the machine's policy, and the ceiling on a run's own. See
+  [where the policy comes from](#where-the-policy-comes-from).
 - `egress` is the policy when the server offers no run configuration.
+- Without `egress`, and with no other policy, everything is allowed and recorded.
 - `server` defines the server the runner reports to. See [the server](server.md).
 
 ## A denied connection
