@@ -1,4 +1,4 @@
-# Qory runner
+# 🐝 Qory runner
 
 The runner stands between your coding agent and the world.
 
