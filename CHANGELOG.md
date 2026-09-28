@@ -39,9 +39,10 @@ release may change what an existing document does, and says so under Upgrading.
   address, drops every capability, the bounding set included, and executes the launch as
   the agent's user, with the inheritable and ambient sets cleared. It refuses a runtime
   that maps the enclosure's root to the machine's, and looks for `dockerd` only in the
-  image's system directories. The daemon's store is bounded only by the machine's disk,
-  and a daemon that exits stays stopped for the rest of the run. Docker in Docker with
-  `--privileged` and the machine's socket stay refused.
+  image's system directories. The daemon's store is a volume of the run's, removed with
+  the enclosure and bounded only by the engine's disk, and a daemon that exits stays
+  stopped for the rest of the run. Docker in Docker with `--privileged` and the machine's
+  socket stay refused.
 - IP forwarding is off in the relay's namespace, for IPv4 and IPv6: the relay connects
   the enclosure's network to the ordinary one only through the proxy.
 - The wall's conformance suite runs in an enclosure with a Docker of the agent's own,
@@ -68,9 +69,9 @@ release may change what an existing document does, and says so under Upgrading.
   credential both claim, and under enforce a host the allow list does not cover are no
   run; a reload that selects other tools is refused. The runner knows no protocol:
   signing a request to an object store is a tool's, not a scheme's.
-- Every request to a tool's host is one `dev.qory.run.egress`, a tool invocation, with
-  `tool`, the tool's name. `dev.qory.run.policy_applied` lists the run's `tools` and
-  their hosts among `terminated`.
+- Every request to a tool's host is one `dev.qory.run.egress` with `tool`, the tool's
+  name; an allowed one is a tool invocation. `dev.qory.run.policy_applied` lists the
+  run's `tools` and their hosts among `terminated`.
 - Every egress event that is one request, a plain one or one inside a terminated
   connection, contains `request_id`, the proxy's own id of it, and `status`, the status
   the host or the tool returned, when one returned.
