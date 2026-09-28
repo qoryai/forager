@@ -1,4 +1,4 @@
-# Qory runner
+# 🐝 Qory runner
 
 The runner stands between your coding agent and the world.
 
@@ -9,9 +9,9 @@ It does four things:
    and turn the agent reports. The record is written to the checkout.
 2. **It enforces a policy.** A policy lists what the agent may reach. `enforce` denies
    the rest. `observe` records everything and denies only what `deny` lists.
-3. **It walls the agent in, and keeps your tokens out.** A wall starts the agent in a
-   container whose one way out is the proxy. The tokens a run's policy selects stay with
-   the runner. The proxy sets them on the way out.
+3. **It walls the agent in, and keeps your secrets out.** A wall starts the agent in a
+   container whose one way out is the proxy. The credentials a run's policy selects stay
+   with the runner. The proxy sets them on the way out.
 4. **It reports to your server.** The events your server selects go there too, signed.
    The server can set each run's policy, and change it while the run goes.
 
@@ -21,25 +21,27 @@ it does, and stops it.
 ## Why
 
 A coding agent acts on its own. It runs commands and calls hosts you don't see. It has
-your tokens. Afterwards, you can't tell what it reached, or what it did there.
+your secrets. Afterwards, you can't tell what it reached, or what it did there.
 
-A proxy sees only the programs that honour it. A token in the agent's environment goes
+A proxy sees only the programs that honour it. A secret in the agent's environment goes
 wherever the agent sends it. And connections are half the story: the prompts, the tool
 calls and the exit are the rest. The runner covers all of it, in one record.
 
 ## Install
 
-The runner is a Go module. It needs Go 1.27.1 or above:
+The runner ships inside [`qory`](https://github.com/qoryai/qory). You start it with
+`qory run`, a subcommand of `qory`: it starts your agent inside the runner.
 
-```sh
-go get github.com/qoryai/runner
-```
-
-Its command is [`qory`](https://github.com/qoryai/qory):
+Install `qory`:
 
 ```sh
 brew install qoryai/tap/qory
 ```
+
+`qory` builds the agent's launch from the harness: what the agent reads, such as
+instructions, skills and settings. The runner runs it.
+
+To build the runner into a program of your own, see [Embed it in Go](#embed-it-in-go).
 
 ## Try it
 
@@ -79,13 +81,24 @@ egress:
   deny: [gist.github.com]     # denied in either mode
 ```
 
+The policy comes from one of three places:
+
+- **The machine**: the `egress` section of `~/.config/qory/runner.yaml`.
+- **The run**: `qory run --policy <file>`, a file in the format above. It narrows the
+  machine's policy, and never widens it.
+- **Your server**: its run configuration, chosen by the run's labels, such as its
+  repository. See [Report to a server](#4-report-to-a-server).
+
+When your server sends a run configuration, that is the policy. With no policy, the
+runner observes and records everything.
+
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the
 tools and the image the run gets.
 
 More: [docs/policy.md](docs/policy.md).
 
-## 3. Wall the agent in, keep the tokens out
+## 3. Wall the agent in, keep the secrets out
 
 The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
@@ -95,13 +108,17 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
   from outside.
 
 Credentials stay outside too. The machine defines them, and a run's policy selects them
-by name. Inside, the agent sees a placeholder. The proxy sets the real token on the
+by name. Inside, the agent sees a placeholder. The proxy sets the real credential on the
 requests to the hosts it is for.
+
+A **tool**, a program of the machine's, runs outside as well. It is for what needs more
+than a credential, such as a request signed with a key.
 
 The wall ships with a Docker adapter. `wall/walltest` checks it from inside the
 container, in CI.
 
-More: [docs/wall.md](docs/wall.md), [docs/credentials.md](docs/credentials.md).
+More: [docs/wall.md](docs/wall.md), [docs/credentials.md](docs/credentials.md). A machine
+that runs agents for others: [docs/node.md](docs/node.md).
 
 ## 4. Report to a server
 
@@ -118,9 +135,18 @@ worked example.
 
 More: [docs/server.md](docs/server.md).
 
-## From Go
+## Embed it in Go
 
-One call runs one session:
+The runner is a Go module, and `qory` is one program built on it. Build it into a
+program of your own to run an agent inside the same boundary. It needs Go 1.27.1 or
+above:
+
+```sh
+go get github.com/qoryai/runner
+```
+
+One call, `session.Run`, runs one session. You pass the program to start and its policy.
+You get back the exit status and the directory of the record:
 
 ```go
 rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
@@ -140,28 +166,10 @@ if err != nil {                                   // the run did not start
 os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
 ```
 
+`qory` imports the runner, and the runner imports nothing of `qory`. What the runner
+reads and writes is specified in [contracts/runner/v1](contracts/runner/v1/README.md).
+
 More: [docs/go.md](docs/go.md).
-
-## Packages
-
-| Package                | What it does                                              |
-| ---------------------- | --------------------------------------------------------- |
-| `session`              | `Run` runs one session; `Forward` is the hook forwarder   |
-| `wall`                 | The wall's adapter interface, and the Docker adapter      |
-| `wall/walltest`        | The suite every wall adapter passes                       |
-| `runtimes`             | The interface to the program the runner starts            |
-| `runtimes/catalog`     | Resolves a runtime by its name                            |
-| `runtimes/runtimetest` | The suite every runtime passes                            |
-| `receiver`             | A server of the contract, as a worked example             |
-| `contracts`            | The contract, embedded, with every fixture validated      |
-
-The specification: [contracts/runner/v1](contracts/runner/v1/README.md). A machine that
-runs agents for others: [docs/node.md](docs/node.md).
-
-## The runner and qory
-
-`qory run` starts the agent inside the runner. `qory` builds the launch from the harness;
-the runner runs it. `qory` imports the runner, and the runner imports nothing of `qory`.
 
 ## Development
 
