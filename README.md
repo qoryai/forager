@@ -29,17 +29,16 @@ calls and the exit are the rest. The runner covers all of it, in one record.
 
 ## Install
 
-The runner is a Go module. It needs Go 1.27.1 or above:
-
-```sh
-go get github.com/qoryai/runner
-```
-
-Its command is [`qory`](https://github.com/qoryai/qory):
+The runner ships inside [`qory`](https://github.com/qoryai/qory). Its command is
+`qory run`: it starts your agent inside the runner. Install `qory`:
 
 ```sh
 brew install qoryai/tap/qory
 ```
+
+`qory` builds the agent's launch from the harness. The runner runs it.
+
+To build the runner into a program of your own, see [Embed it in Go](#embed-it-in-go).
 
 ## Try it
 
@@ -79,6 +78,16 @@ egress:
   deny: [gist.github.com]     # denied in either mode
 ```
 
+The policy comes from one of three places:
+
+- **The machine**: the `egress` section of `~/.config/qory/runner.yaml`.
+- **The run**: `qory run --policy <file>`, a file in the format above. It narrows the
+  machine's policy, and never widens it.
+- **Your server**: its run configuration, chosen by the run's labels. See
+  [Report to a server](#4-report-to-a-server).
+
+With no policy, the runner observes and records everything.
+
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the
 tools and the image the run gets.
@@ -104,7 +113,8 @@ than a credential, such as a request signed with a key.
 The wall ships with a Docker adapter. `wall/walltest` checks it from inside the
 container, in CI.
 
-More: [docs/wall.md](docs/wall.md), [docs/credentials.md](docs/credentials.md).
+More: [docs/wall.md](docs/wall.md), [docs/credentials.md](docs/credentials.md). A machine
+that runs agents for others: [docs/node.md](docs/node.md).
 
 ## 4. Report to a server
 
@@ -121,9 +131,18 @@ worked example.
 
 More: [docs/server.md](docs/server.md).
 
-## From Go
+## Embed it in Go
 
-One call runs one session:
+The runner is a Go module, and `qory` is one program built on it. Build it into a
+program of your own to run an agent inside the same boundary. It needs Go 1.27.1 or
+above:
+
+```sh
+go get github.com/qoryai/runner
+```
+
+One call, `session.Run`, runs one session. You pass the program to start and its policy.
+You get back the exit status and the directory of the record:
 
 ```go
 rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
@@ -143,28 +162,10 @@ if err != nil {                                   // the run did not start
 os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
 ```
 
+`qory` imports the runner, and the runner imports nothing of `qory`. What the runner
+reads and writes is specified in [contracts/runner/v1](contracts/runner/v1/README.md).
+
 More: [docs/go.md](docs/go.md).
-
-## Packages
-
-| Package                | What it does                                              |
-| ---------------------- | --------------------------------------------------------- |
-| `session`              | `Run` runs one session; `Forward` is the hook forwarder   |
-| `wall`                 | The wall's adapter interface, and the Docker adapter      |
-| `wall/walltest`        | The suite every wall adapter passes                       |
-| `runtimes`             | The interface to the program the runner starts            |
-| `runtimes/catalog`     | Resolves a runtime by its name                            |
-| `runtimes/runtimetest` | The suite every runtime passes                            |
-| `receiver`             | A server of the contract, as a worked example             |
-| `contracts`            | The contract, embedded, with every fixture validated      |
-
-The specification: [contracts/runner/v1](contracts/runner/v1/README.md). A machine that
-runs agents for others: [docs/node.md](docs/node.md).
-
-## The runner and qory
-
-`qory run` starts the agent inside the runner. `qory` builds the launch from the harness;
-the runner runs it. `qory` imports the runner, and the runner imports nothing of `qory`.
 
 ## Development
 

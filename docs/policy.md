@@ -34,6 +34,34 @@ The machine defines the credentials, the tools and the images. A policy selects 
 them. See [credentials](credentials.md), [tools](credentials.md#tools) and
 [images](wall.md#images).
 
+## Where the policy comes from
+
+A run has one policy. It comes from one of three places:
+
+- **The machine's policy.** For `qory`, the `egress` section of `runner.yaml`, below.
+  From Go, `Policy` in the spec.
+- **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
+  contract's [policy](../contracts/runner/v1/README.md#the-policy).
+  - It narrows the machine's `egress`, and never widens it.
+  - Keep the file outside the checkout, where the agent could write it. `qory` refuses a
+    file there, or in a mount the container may write.
+  - With a server configured, it needs `--local`.
+- **The server's run configuration.** The server's configuration may contain a `run`
+  section. Then the runner fetches the run configuration, with the run's labels, and
+  its `security_policy` is the policy. The runner merges it with no other policy. See
+  [the server](server.md).
+
+Which one applies:
+
+| The runner has         | The policy is                                           |
+| ---------------------- | ------------------------------------------------------- |
+| no server              | the run's own under the machine's, else the machine's   |
+| a server               | the server's run configuration, else the machine's      |
+| a server and `--local` | the run's own under the machine's, else the machine's   |
+
+With no policy at all, the runner observes everything: every connection is allowed and
+recorded.
+
 ## In runner.yaml
 
 For `qory`, one optional file changes what the runner does: `~/.config/qory/runner.yaml`.
