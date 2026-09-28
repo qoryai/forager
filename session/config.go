@@ -275,7 +275,7 @@ func (i Image) Check() error {
 		return fmt.Errorf("image %s: the reference is empty", i.Name)
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: a Docker of the agent's own needs a runtime that runs one without privileges, sysbox-runc say", i.Name)
+		return fmt.Errorf("image %s: a Docker of the agent's own needs a runtime that runs one without privileges, such as sysbox-runc", i.Name)
 	}
 	return nil
 }

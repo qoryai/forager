@@ -29,7 +29,7 @@ func TestDockerConforms(t *testing.T) {
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
-// own, started under the runtime QORY_WALL_RUNTIME names, sysbox-runc say, which the
+// own, started under the runtime set in QORY_WALL_RUNTIME, such as sysbox-runc, which the
 // engine must have. QORY_WALL_NESTED_IMAGE names the image, one that holds dockerd;
 // without QORY_WALL_RUNTIME the test is skipped.
 func TestDockerNestedConforms(t *testing.T) {

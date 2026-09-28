@@ -76,7 +76,7 @@ func userNamespaced(uidMap string) error {
 		}
 		if inside == 0 {
 			if outside == 0 {
-				return errors.New("nest: the enclosure's root is the machine's root; a Docker of the agent's own needs a runtime that maps it to a user of the machine's that is not root, sysbox-runc say")
+				return errors.New("nest: the enclosure's root is the machine's root; a Docker of the agent's own needs a runtime that maps it to a user of the machine's that is not root, such as sysbox-runc")
 			}
 			return nil
 		}
