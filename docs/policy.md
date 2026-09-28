@@ -48,8 +48,8 @@ A run has one policy. It comes from one of three places:
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
   section. Then the runner fetches the run configuration, with the run's labels, and
-  its `security_policy` is the policy. It replaces the machine's policy and a run's own,
-  so it may allow more than `runner.yaml` does. See [the server](server.md).
+  its `security_policy` is the policy. It replaces the machine's policy, so it may
+  allow more than `runner.yaml` does. See [the server](server.md).
 
 Which one applies:
 
@@ -79,9 +79,9 @@ server:                                 # optional
   secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
 ```
 
-- `egress` is the machine's policy, and the ceiling on a run's own. See
+- `egress` is the machine's policy. It applies when the server offers no run
+  configuration, and it is the ceiling on a run's own. See
   [where the policy comes from](#where-the-policy-comes-from).
-- `egress` is the policy when the server offers no run configuration.
 - Without `egress`, and with no other policy, everything is allowed and recorded.
 - `server` defines the server the runner reports to. See [the server](server.md).
 

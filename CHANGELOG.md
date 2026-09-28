@@ -10,7 +10,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The README is short. It lists the runner's four jobs: it records the session,
   enforces a policy, walls the agent in with the secrets kept outside, and reports to a
-  server. `docs/` contains the rest, one page per topic.
+  server. It shows that `qory run` starts the runner, and where a run's policy comes
+  from. `docs/` contains the rest, one page per topic.
 
 ## [0.6.0] - 2026-09-28
 
