@@ -4,6 +4,14 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Changed
+
+- The README is short. It lists the runner's four jobs: it records the session,
+  enforces a policy, walls the agent in with the tokens kept outside, and reports to a
+  server. `docs/` contains the rest, one page per topic.
+
 ## [0.6.0] - 2026-09-28
 
 ### Upgrading
