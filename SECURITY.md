@@ -25,7 +25,7 @@ in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-
 [the server](contracts/runner/v1/README.md#the-server). For example:
 
 - a session behind a wall reaches a host, or a path of a host, the run's policy denies;
-- a session reads a credential the runner holds for it, the run's authority key, the
+- a session reads a credential the runner keeps for it, the run's authority key, the
   relay's secret or the server's secret;
 - a session changes the run's record, or what the runner reports;
 - a run's policy, a descriptor or a credential adapter's answer makes the runner do
@@ -42,7 +42,7 @@ describe is how the runner works, not a flaw in it:
 - in mode `observe` nothing is denied;
 - a host that answers with the headers it was sent shows a session the credential set on
   its request; a credential belongs only on hosts trusted not to;
-- what a credential may do on the paths a run was given is the credential's own grant,
-  not the runner's.
+- what a credential may do on the paths a run's policy allows is the credential's own
+  grant, not the runner's.
 
 If you are not sure which side something falls on, write anyway.
