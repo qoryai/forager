@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -242,6 +243,55 @@ func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
 		is(elsewhere, 0o700, root)
 		if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
 			t.Errorf("run/%s as a link: %d entries written where it points", link, len(entries))
+		}
+	}
+}
+
+// TestNestGivesTheDaemonNoneOfTheRunsEnvironmentButTheProxy pins what the daemon, and
+// everything it starts as the enclosure's root, runs with: the system directories as
+// PATH whatever the run's names, the proxy in both cases, and the wall's bundle when the
+// run has one. What the run sets for the agent, a PATH into the workspace, a library to
+// preload, where the daemon keeps things, stays the agent's.
+func TestNestGivesTheDaemonNoneOfTheRunsEnvironmentButTheProxy(t *testing.T) {
+	run := map[string]string{
+		"PATH":              "/work/node_modules/.bin:/work/bin:/usr/bin:/bin",
+		"LD_PRELOAD":        "/work/preload.so",
+		"LD_LIBRARY_PATH":   "/work/lib",
+		"XTABLES_LIBDIR":    "/work/xtables",
+		"DOCKER_TMPDIR":     "/work/tmp",
+		"DOCKER_DRIVER":     "vfs",
+		"DOCKER_HOST":       "tcp://0.0.0.0:2375",
+		"DOCKER_CERT_PATH":  "/work/certs",
+		"DOCKER_TLS_VERIFY": "1",
+		"SSL_CERT_FILE":     "/work/ca.pem",
+		"HOME":              "/work",
+		"TMPDIR":            "/work/tmp",
+		"HTTP_PROXY":        "http://qory-proxy:3128",
+		"HTTPS_PROXY":       "http://qory-proxy:3128",
+		"NO_PROXY":          "localhost,127.0.0.1,::1",
+		"http_proxy":        "http://qory-proxy:3128",
+		"https_proxy":       "http://qory-proxy:3128",
+		"no_proxy":          "localhost,127.0.0.1,::1",
+	}
+	env := func(vars map[string]string) func(string) string {
+		return func(k string) string { return vars[k] }
+	}
+	system := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	proxies := []string{
+		"HTTP_PROXY=http://qory-proxy:3128", "HTTPS_PROXY=http://qory-proxy:3128", "NO_PROXY=localhost,127.0.0.1,::1",
+		"http_proxy=http://qory-proxy:3128", "https_proxy=http://qory-proxy:3128", "no_proxy=localhost,127.0.0.1,::1",
+	}
+	for _, tc := range []struct {
+		vars   map[string]string
+		bundle string
+		want   []string
+	}{
+		{run, BundlePath, append(append([]string{system}, proxies...), "SSL_CERT_FILE="+BundlePath)},
+		{run, "", append([]string{system}, proxies...)},
+		{map[string]string{"PATH": "/work/bin", "LD_PRELOAD": "/work/preload.so"}, "", []string{system}},
+	} {
+		if got := daemonEnv(env(tc.vars), tc.bundle); strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+			t.Errorf("bundle %q: got\n%s\nwant\n%s", tc.bundle, strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 		}
 	}
 }

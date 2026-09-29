@@ -46,8 +46,13 @@ func nest(user string, argv []string) error {
 	if err != nil {
 		return fmt.Errorf("nest: the daemon's log: %w", err)
 	}
+	bundle := ""
+	if info, err := os.Stat(BundlePath); err == nil && info.Mode().IsRegular() {
+		bundle = BundlePath
+	}
 	daemon := exec.Command(dockerd, "--host=unix://"+NestSocket, "--group", strconv.Itoa(gid))
 	daemon.Dir, daemon.Stdout, daemon.Stderr = "/", log, log
+	daemon.Env = daemonEnv(os.Getenv, bundle)
 	daemon.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := daemon.Start(); err != nil {
 		return fmt.Errorf("nest: dockerd: %w", err)

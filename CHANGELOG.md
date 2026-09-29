@@ -6,6 +6,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 ## [Unreleased]
 
+### Upgrading
+
+- An image with a Docker of the agent's own holds what `dockerd` starts, `containerd`,
+  `runc` and `iptables` among them, in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
+  `/usr/bin`, `/sbin` or `/bin`: the daemon no longer looks on the run's `PATH`, and gets
+  none of the run's environment but the proxy and the bundle. `docker:dind` needs no
+  change.
+
 ### Changed
 
 - The README is short. It lists the runner's four jobs: it records the session,
@@ -30,6 +38,15 @@ release may change what an existing document does, and says so under Upgrading.
   command, as the agent's user and told nothing of the proxy, and requires it to reach
   the origin through the proxy and nothing else, so the image of
   `TestDockerNestedConforms` holds the docker command as well as dockerd.
+- `wall.Nest` started `dockerd` with the run's environment, so the daemon looked for
+  `containerd`, `runc` and `iptables` on the run's `PATH`, which may name a directory of
+  the workspace, and ran what it found there as the enclosure's root; `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `XTABLES_LIBDIR` and the `DOCKER_` variables reached it the same
+  way. The daemon now runs with the system directories as its `PATH`, the proxy
+  variables for its pulls and, when the run has a bundle, `SSL_CERT_FILE` pointing at
+  it, and with nothing else; the agent keeps the run's environment. The conformance
+  suite puts programs of these names first on the run's `PATH`, in the workspace, and
+  requires that none of them runs.
 
 ## [0.6.0] - 2026-09-28
 

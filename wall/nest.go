@@ -35,11 +35,12 @@ const nestWait = 2 * 60
 // Nest is the program that starts an enclosure with a Docker of the agent's own. It
 // runs as the enclosure's root, which the runtime maps to a user of the machine's that
 // is not root: it starts dockerd on [NestSocket] alone, in a session of its own so the
-// terminal's signals do not reach it, with its socket in the agent's group; waits until
-// the daemon answers; writes the agent's docker configuration, which gives the
-// containers the agent starts the proxy by its address, since they do not resolve its
-// name; then drops every capability, the bounding set included, becomes the agent's
-// user and executes the launch. It returns only on an error.
+// terminal's signals do not reach it, with its socket in the agent's group and none of
+// the run's environment but the proxy; waits until the daemon answers; writes the
+// agent's docker configuration, which gives the containers the agent starts the proxy
+// by its address, since they do not resolve its name; then drops every capability, the
+// bounding set included, becomes the agent's user and executes the launch with the
+// run's environment. It returns only on an error.
 //
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
@@ -86,9 +87,30 @@ func userNamespaced(uidMap string) error {
 	return errors.New("nest: the user map does not map the enclosure's root")
 }
 
-// daemonDirs are where [Nest] looks for dockerd: the image's system directories, never
-// the run's PATH, which may name a directory of the workspace.
+// daemonDirs are where [Nest] looks for dockerd, and the daemon's PATH, where it looks
+// for what it starts, containerd, runc and iptables among them: the image's system
+// directories, never the run's PATH, which may name a directory of the workspace.
 var daemonDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// daemonEnv is the daemon's environment, which the programs it starts as the enclosure's
+// root inherit: [daemonDirs] as PATH; the proxy the enclosure's environment names, env's
+// HTTP_PROXY, HTTPS_PROXY and NO_PROXY in either case, for its pulls; and bundle as
+// SSL_CERT_FILE when the run has one, so it trusts the hosts the proxy answers as.
+// Nothing else of the run's environment reaches it: the run sets that for the agent,
+// and a variable such as LD_PRELOAD, LD_LIBRARY_PATH, XTABLES_LIBDIR or DOCKER_TMPDIR
+// would choose, from the workspace, what root loads or where it writes.
+func daemonEnv(env func(string) string, bundle string) []string {
+	out := []string{"PATH=" + strings.Join(daemonDirs, ":")}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
+		if v := env(k); v != "" {
+			out = append(out, k+"="+v)
+		}
+	}
+	if bundle != "" {
+		out = append(out, "SSL_CERT_FILE="+bundle)
+	}
+	return out
+}
 
 // findDaemon is the first executable dockerd in dirs.
 func findDaemon(dirs []string) (string, error) {

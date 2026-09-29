@@ -27,6 +27,10 @@ import (
 // report.
 const innerPrefix = "walltest-inner: "
 
+// decoyRan is where the programs [decoys] writes note, inside the enclosure, that they
+// ran.
+const decoyRan = "/tmp/walltest-decoys-ran"
+
 // nested is what the probe found of the Docker of its own, when the enclosure has one.
 type nested struct {
 	// Ping is the status the daemon answered on its socket, as the agent's user.
@@ -36,6 +40,9 @@ type nested struct {
 	DaemonID string `json:"daemon_id"`
 	// Listening are the TCP addresses of the enclosure that are not loopback and listen.
 	Listening []string `json:"listening"`
+	// Decoys are the programs of the run's PATH in the workspace that ran, each once as
+	// the uid it ran as and its name.
+	Decoys []string `json:"decoys"`
 	// Image is the error of building an image from the probe, empty when it was built.
 	Image string `json:"image"`
 	// Containers are the reports of the containers the agent started, by kind.
@@ -86,6 +93,8 @@ func dockerClient(timeout time.Duration) *http.Client {
 // probeNested checks the Docker of the enclosure's own from the agent's side.
 func probeNested() *nested {
 	n := &nested{Containers: map[string]inner{}}
+	// Last, so what the daemon ran for the containers the agent started counts too.
+	defer func() { n.Decoys = decoysRan() }()
 	c := dockerClient(30 * time.Second)
 	resp, err := c.Get("http://docker/_ping")
 	if err != nil {
@@ -168,6 +177,24 @@ func configModes(dir string) []string {
 		out = append(out, fmt.Sprintf("%s %v%s", p, info.Mode(), owner))
 	}
 	return out
+}
+
+// decoysRan are the lines of [decoyRan], each once, in the order they were first
+// written.
+func decoysRan() []string {
+	b, err := os.ReadFile(decoyRan)
+	if err != nil {
+		return nil
+	}
+	var ran []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line != "" && !seen[line] {
+			seen[line] = true
+			ran = append(ran, line)
+		}
+	}
+	return ran
 }
 
 // getJSON decodes one answer of the daemon.

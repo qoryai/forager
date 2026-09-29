@@ -961,10 +961,11 @@ one, and `docker: true` when the enclosure has a daemon of its own.
   certificate goes after them (§The wall);
 - with the runtime at the path the launch sets;
 - with no setuid program or capability needed for its work;
-- for a Docker of the agent's own, with `dockerd` in `/usr/local/sbin`, `/usr/local/bin`,
-  `/usr/sbin`, `/usr/bin`, `/sbin` or `/bin`, never looked for on the run's `PATH`, and
-  the users and groups the wall passes it by name in its own `/etc/passwd` and
-  `/etc/group`.
+- for a Docker of the agent's own, with `dockerd`, and what it starts, `containerd`,
+  `runc` and `iptables` among them, in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
+  `/usr/bin`, `/sbin` or `/bin`, the daemon's `PATH`: none of them is looked for on the
+  run's `PATH`. The users and groups the wall passes it by name are in its own
+  `/etc/passwd` and `/etc/group`.
 
 ## The wall
 
@@ -1057,7 +1058,10 @@ starts as that root, with no privileged mode and `no-new-privileges`, and with t
 set of capabilities the runtime grants it inside its user namespace, which the daemon
 needs; the wall's helper, not the image, starts it: `dockerd` on its Unix socket alone,
 never a port of the enclosure's network, the socket in the agent's group, the daemon's
-output in a file of its own; then, once the daemon answers, it drops every capability,
+output in a file of its own. The daemon and what it starts run with the system
+directories §Images lists as their `PATH` and, of the run's environment, only the proxy
+and the run's bundle, never what the run sets for the agent, such as a `PATH` into the
+workspace or `LD_PRELOAD`. Once the daemon answers, the helper drops every capability,
 the bounding set included, becomes the agent's user, and clears the inheritable and
 ambient sets. The daemon's store is a volume of the run's, removed with the enclosure,
 with no size limit of the run's: the run's limits do not bound it. A daemon that exits

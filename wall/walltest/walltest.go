@@ -281,6 +281,7 @@ func Run(t *testing.T, o Options) {
 		check("no container runtime socket but the enclosure's own daemon", len(others) == 0 && n.DaemonID != "" && n.DaemonID != o.EngineID, fmt.Sprintf("other sockets %v; the daemon inside is %q, the machine's engine %q", others, n.DaemonID, o.EngineID))
 		check("the agent reaches its own daemon, as its user", n.Ping == 200 && p.UID != 0, fmt.Sprintf("the daemon answered %d (%s) to uid %d", n.Ping, n.PingErr, p.UID))
 		check("nothing listens on the enclosure's network", len(n.Listening) == 0, n.Listening)
+		check("the daemon runs nothing of the run's PATH", len(n.Decoys) == 0, fmt.Sprintf("the programs of the workspace that ran, as uid and name: %q", n.Decoys))
 		check("the agent builds an image of its own", n.Image == "", n.Image)
 		for _, k := range innerKinds {
 			c, ok := n.Containers[k.name]
@@ -371,6 +372,28 @@ func orNil(s string) any {
 
 func zero(hex string) bool { return hex != "" && strings.Trim(hex, "0") == "" }
 
+// decoyNames are programs the daemon starts as the enclosure's root, looked for on its
+// PATH.
+var decoyNames = []string{"containerd", "runc", "iptables"}
+
+// decoys writes a directory of the workspace, which the run puts first on its PATH,
+// holding a program of each of decoyNames that notes in [decoyRan], inside the
+// enclosure, that it ran and as whom, then runs the image's own from the rest of the
+// PATH. The enclosure's root must run none of them.
+func decoys(workspace string) (string, error) {
+	bin := filepath.Join(workspace, "decoys")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		return "", err
+	}
+	script := "#!/bin/sh\necho \"$(id -u) ${0##*/}\" >> " + decoyRan + "\nPATH=${PATH#*:} exec \"${0##*/}\" \"$@\"\n"
+	for _, name := range decoyNames {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			return "", err
+		}
+	}
+	return bin, nil
+}
+
 // result is one run behind the wall.
 type result struct {
 	res    *session.Result
@@ -405,8 +428,16 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	if err != nil {
 		t.Fatal(err)
 	}
+	path := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if o.Docker {
+		bin, err := decoys(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path = bin + ":" + path
+	}
 	env := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"PATH=" + path,
 		"PROBE_PASSED=yes", "PROBE_EXIT=7", "PROBE_HOST_FILE=" + outside,
 		"PROBE_ALLOWED=" + h.origin,
 		"PROBE_DENIED=http://denied.invalid/",
