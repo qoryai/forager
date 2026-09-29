@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -23,7 +24,8 @@ const (
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
 	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// names one: the proxy for the containers the agent starts.
+	// names one: the proxy for the containers the agent starts. It is the agent's
+	// alone, in a directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
 
@@ -197,20 +199,70 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 	return json.MarshalIndent(map[string]any{"proxies": map[string]any{"default": p}}, "", "  ")
 }
 
-// writeNestConfig writes the agent's docker configuration, owned by the agent, and
-// returns its directory.
-func writeNestConfig(config []byte, uid, gid int) (string, error) {
-	if err := os.MkdirAll(nestConfig, 0o700); err != nil {
-		return "", err
+// nestOwner is a user and a group, by id, as a file is given to them.
+type nestOwner struct{ uid, gid int }
+
+// writeNestConfig writes the agent's docker configuration, config.json in dir, for the
+// agent alone: dir is given to agent with mode 0700 and the file with mode 0600, since
+// the docker command reads its configuration as the agent's user and writes to it as
+// well. The directory above dir, /run/qory, is the runner's: it is given to root, the
+// enclosure's root, with mode 0755, so the agent's user passes through it to dir and
+// writes nothing in it. Were it narrower, the docker command could not read the
+// configuration and would give the containers the agent starts no proxy.
+//
+// Both modes are set whatever the umask, and whatever the image holds there: a
+// directory the image made narrower, or gave another owner, is changed rather than
+// refused, since the runner keeps nothing else in it and a narrower mode only hides the
+// agent's configuration from the agent. A link or a file in either place is refused,
+// since the owner and the mode would land where it points. The file is written anew.
+func writeNestConfig(dir string, config []byte, root, agent nestOwner) error {
+	runner := filepath.Dir(dir)
+	if err := os.MkdirAll(filepath.Dir(runner), 0o755); err != nil {
+		return err
 	}
-	file := filepath.Join(nestConfig, "config.json")
-	if err := os.WriteFile(file, config, 0o600); err != nil {
-		return "", err
+	if err := nestDir(runner, 0o755, root); err != nil {
+		return err
 	}
-	for _, p := range []string{nestConfig, file} {
-		if err := os.Chown(p, uid, gid); err != nil {
-			return "", err
-		}
+	if err := nestDir(dir, 0o700, agent); err != nil {
+		return err
 	}
-	return nestConfig, nil
+	file := filepath.Join(dir, "config.json")
+	if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(config)
+	if err == nil {
+		err = f.Chown(agent.uid, agent.gid)
+	}
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// nestDir makes dir, or takes the directory the image holds there, and gives it to o
+// with mode, set after the umask has narrowed what Mkdir made. A link or a file at dir
+// is refused.
+func nestDir(dir string, mode fs.FileMode, o nestOwner) error {
+	if err := os.Mkdir(dir, mode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory but %v", dir, info.Mode().Type())
+	}
+	if err := os.Chown(dir, o.uid, o.gid); err != nil {
+		return err
+	}
+	return os.Chmod(dir, mode)
 }

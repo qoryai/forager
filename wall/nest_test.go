@@ -3,8 +3,10 @@ package wall
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -156,6 +158,90 @@ func TestNestFindsTheDaemonInTheSystemDirectories(t *testing.T) {
 		if daemonDirs[i] != d {
 			t.Errorf("the daemon is looked for in %v", daemonDirs)
 			break
+		}
+	}
+}
+
+// TestNestGivesTheAgentItsDockerConfigurationAlone pins the owners and modes of the
+// agent's docker configuration: the directory above it is root's with mode 0755, so the
+// agent's user passes through it and writes nothing there, whatever the umask or the
+// image made it; the configuration's directory and file are the agent's, 0700 and 0600,
+// and the file is written anew. A link where either directory goes is refused, and what
+// it points at is left as it was. As root the test gives the agent another user; as
+// anyone else it can give only its own, and the owners it checks are that one.
+func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
+	root := nestOwner{os.Getuid(), os.Getgid()}
+	agent := root
+	if root.uid == 0 {
+		agent = nestOwner{1000, 1001}
+	}
+	defer syscall.Umask(syscall.Umask(0o077))
+	is := func(p string, mode fs.FileMode, o nestOwner) {
+		t.Helper()
+		info, err := os.Lstat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := info.Sys().(*syscall.Stat_t)
+		if info.Mode().Perm() != mode || int(st.Uid) != o.uid || int(st.Gid) != o.gid {
+			t.Errorf("%s is %v %d:%d, want %v %d:%d", p, info.Mode().Perm(), st.Uid, st.Gid, mode, o.uid, o.gid)
+		}
+	}
+	config := []byte(`{"proxies":{"default":{"httpProxy":"http://172.25.0.2:3128"}}}`)
+	written := func(dir string) {
+		t.Helper()
+		is(filepath.Dir(dir), 0o755, root)
+		is(dir, 0o700, agent)
+		is(filepath.Join(dir, "config.json"), 0o600, agent)
+		if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err != nil || string(b) != string(config) {
+			t.Errorf("the configuration is %q, %v", b, err)
+		}
+	}
+
+	// Nothing there, not even /run, under a umask that would close all of it.
+	dir := filepath.Join(t.TempDir(), "run", "qory", "docker")
+	if err := writeNestConfig(dir, config, root, agent); err != nil {
+		t.Fatal(err)
+	}
+	written(dir)
+
+	// The image holds /run/qory narrower, the configuration's directory wider, and a
+	// configuration of its own.
+	dir = filepath.Join(t.TempDir(), "run", "qory", "docker")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"auths":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for p, mode := range map[string]fs.FileMode{filepath.Dir(dir): 0o700, dir: 0o777, filepath.Join(dir, "config.json"): 0o644} {
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeNestConfig(dir, config, root, agent); err != nil {
+		t.Fatal(err)
+	}
+	written(dir)
+
+	// A link where either directory goes.
+	for _, link := range []string{"qory", "qory/docker"} {
+		run := filepath.Join(t.TempDir(), "run")
+		elsewhere := filepath.Join(filepath.Dir(run), "elsewhere")
+		for _, d := range []string{elsewhere, filepath.Dir(filepath.Join(run, link))} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(elsewhere, filepath.Join(run, link)); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeNestConfig(filepath.Join(run, "qory", "docker"), config, root, agent); err == nil {
+			t.Errorf("run/%s as a link was taken", link)
+		}
+		is(elsewhere, 0o700, root)
+		if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+			t.Errorf("run/%s as a link: %d entries written where it points", link, len(entries))
 		}
 	}
 }

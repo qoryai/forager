@@ -1081,10 +1081,14 @@ and nothing else, and what they reach is decided and recorded as the agent's own
 traffic. The daemon pulls through the proxy, so a registry is a host the policy allows.
 Those containers do not resolve the relay's name: the agent's docker configuration,
 `DOCKER_CONFIG` at `/run/qory/docker` unless the run sets one, sets the proxy for them
-by its address. They do not get the run's bundle unless the agent mounts it into them, and
-they inherit `no-new-privileges`, so a setuid program in them gains nothing. Docker in
-Docker with `--privileged`, and the machine's own socket, stay refused. gVisor breaks
-the list: its daemon inside starts only with every capability added.
+by its address. The directory and its `config.json` belong to the agent's user, mode 0700
+and 0600, inside `/run/qory`, which belongs to root with mode 0755: the agent's user
+passes through it and cannot write in it. The helper sets these owners and modes whatever
+the umask, and on a `/run/qory` the image holds, and refuses a link in either place.
+The containers the agent starts do not get the run's bundle unless it mounts it into
+them, and they inherit `no-new-privileges`, so a setuid program in them gains nothing.
+Docker in Docker with `--privileged`, and the machine's own socket, stay refused. gVisor
+breaks the list: its daemon inside starts only with every capability added.
 
 **One conformance suite**, the `wall/walltest` package, checks the list from inside the
 enclosure with a real session behind the adapter, and an adapter ships when the suite

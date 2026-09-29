@@ -121,7 +121,7 @@ func Main() {
 		fmt.Fprintln(os.Stderr, wall.Nest(os.Args[2:]))
 		os.Exit(1)
 	case modeInner:
-		os.Exit(innerProbe())
+		os.Exit(innerProbe(os.Args[2:]))
 	}
 }
 
@@ -175,9 +175,9 @@ type Options struct {
 	// defines it; empty is the engine's default. With it or Docker set, the run selects
 	// the image by name among the machine's.
 	Runtime string
-	// Docker says the image holds dockerd and the enclosure gets a Docker of the
-	// agent's own. The suite then checks it from the agent's side, and from containers
-	// the agent starts.
+	// Docker says the image holds dockerd and the docker command, and the enclosure gets
+	// a Docker of the agent's own. The suite then checks it from the agent's side, and
+	// from containers the agent starts, through the Engine API and with the command.
 	Docker bool
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
@@ -232,8 +232,9 @@ func Run(t *testing.T, o Options) {
 	originHost := mustHost(t, o.Origin)
 	want := "[" + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
 	if o.Docker {
-		// Each container the agent starts reaches the origin once, through the relay.
-		for range innerKinds {
+		// Each container the agent starts reaches the origin once, through the relay: one
+		// of each kind through the Engine API, and one with the docker command.
+		for range len(innerKinds) + 1 {
 			want += " " + originHost + " allowed " + originHost
 		}
 	}
@@ -287,6 +288,10 @@ func Run(t *testing.T, o Options) {
 				ok && c.Err == "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
 				fmt.Sprintf("%+v", c))
 		}
+		c := n.Command
+		check("a container the agent's docker command starts reaches the origin by the proxy of the agent's configuration, and nothing else",
+			c.Err == "" && c.Proxy != "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
+			fmt.Sprintf("%+v; the agent's configuration, as its user sees it: %v", c, n.Config))
 	}
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")

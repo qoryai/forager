@@ -13,6 +13,24 @@ release may change what an existing document does, and says so under Upgrading.
   server. It shows that `qory run` starts the runner, and where a run's policy comes
   from. `docs/` contains the rest, one page per topic.
 
+### Fixed
+
+- In an enclosure with a Docker of the agent's own, the agent's `docker` command reads
+  its configuration, so the containers it starts get the proxy. `wall.Nest` made
+  `/run/qory` root's with mode 0700, which the agent's user could not pass through: the
+  command printed `WARNING: Error loading config file: open
+  /run/qory/docker/config.json: permission denied`, and its containers reached nothing.
+  `/run/qory` is now root's with mode 0755, whatever the umask, and a `/run/qory` the
+  image holds is given the same owner and mode; `/run/qory/docker` and its `config.json`
+  stay the agent's, 0700 and 0600, now also whatever the umask or the image made them,
+  and the file is written anew. A link where either directory goes is refused. An image
+  that makes `/run/qory` 0755 to work around this may keep doing so.
+- The wall's conformance suite missed that: the containers it starts through the Engine
+  API are handed the relay's address. It also starts one with the image's `docker`
+  command, as the agent's user and told nothing of the proxy, and requires it to reach
+  the origin through the proxy and nothing else, so the image of
+  `TestDockerNestedConforms` holds the docker command as well as dockerd.
+
 ## [0.6.0] - 2026-09-28
 
 ### Upgrading

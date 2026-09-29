@@ -14,7 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qoryai/runner/wall"
@@ -37,6 +40,12 @@ type nested struct {
 	Image string `json:"image"`
 	// Containers are the reports of the containers the agent started, by kind.
 	Containers map[string]inner `json:"containers"`
+	// Command is the report of the container the agent started with the image's docker
+	// command, as its user and told nothing of the proxy.
+	Command inner `json:"command"`
+	// Config is the agent's docker configuration, the directory above it and its file,
+	// each with its mode and owner as the agent's user sees them, or the error it gets.
+	Config []string `json:"config"`
 }
 
 // inner is what a container the agent started found. An attempt that must fail
@@ -50,6 +59,10 @@ type inner struct {
 	ViaProxy       int    `json:"via_proxy"`
 	ViaProxyErr    string `json:"via_proxy_err"`
 	UID            int    `json:"uid"`
+	// Proxy is the proxy the container found in its environment, when it was told none.
+	Proxy string `json:"proxy,omitempty"`
+	// Said is what the docker command printed on its standard error.
+	Said string `json:"said,omitempty"`
 }
 
 // innerKinds are the containers the agent starts: plain, on the host's network, and
@@ -101,7 +114,60 @@ func probeNested() *nested {
 	for _, k := range innerKinds {
 		n.Containers[k.name] = runInner(c, k.network, k.privileged, relay)
 	}
+	n.Config = configModes(os.Getenv("DOCKER_CONFIG"))
+	n.Command = commandInner(os.Getenv("PROBE_ALLOWED"))
 	return n
+}
+
+// commandInner starts a container of the probe the way the agent does, with the
+// image's docker command, as the agent's user and in the enclosure's environment with
+// nothing added: the proxy the container gets is the one the agent's DOCKER_CONFIG
+// gives the command, and the probe inside is told only the origin, as its argument.
+func commandInner(origin string) inner {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		return inner{Err: "the image holds no docker command: " + err.Error()}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var said bytes.Buffer
+	cmd := exec.CommandContext(ctx, docker, "run", "--rm", probeImage, "/probe", modeInner, origin)
+	cmd.Stderr = &said
+	out, err := cmd.Output()
+	for _, line := range strings.Split(string(out), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), innerPrefix); ok {
+			var r inner
+			if err := json.Unmarshal([]byte(rest), &r); err != nil {
+				return inner{Err: err.Error()}
+			}
+			r.Said = strings.TrimSpace(said.String())
+			return r
+		}
+	}
+	return inner{Err: fmt.Sprintf("no report: %v: %s", err, bytes.TrimSpace(out)), Said: strings.TrimSpace(said.String())}
+}
+
+// configModes are the directory above the agent's docker configuration, the
+// configuration's directory and its file, each with its mode and owner as the agent's
+// user sees them, or the error that user gets.
+func configModes(dir string) []string {
+	if dir == "" {
+		return []string{"DOCKER_CONFIG is not set"}
+	}
+	var out []string
+	for _, p := range []string{filepath.Dir(dir), dir, filepath.Join(dir, "config.json")} {
+		info, err := os.Stat(p)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		owner := ""
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			owner = fmt.Sprintf(" %d:%d", st.Uid, st.Gid)
+		}
+		out = append(out, fmt.Sprintf("%s %v%s", p, info.Mode(), owner))
+	}
+	return out
 }
 
 // getJSON decodes one answer of the daemon.
@@ -271,8 +337,11 @@ func procIP(h string) net.IP {
 }
 
 // innerProbe is the probe in a container the agent started: it tries what the wall
-// forbids and reaches the origin through the relay.
-func innerProbe() int {
+// forbids and reaches the origin through the relay. Started through the Engine API it
+// is told the origin and the relay's address in PROBE_ORIGIN and PROBE_RELAY. Started
+// by the docker command it is told the origin as its argument and nothing of the relay,
+// and reaches it by the proxy variables the command set from the agent's configuration.
+func innerProbe(args []string) int {
 	r := inner{UID: os.Getuid()}
 	r.OutsideAddress = dial("1.1.1.1:443")
 	r.Metadata = dial("169.254.169.254:80")
@@ -283,15 +352,26 @@ func innerProbe() int {
 		r.OutsideName = "no addresses"
 	}
 	cancel()
-	origin, err := url.Parse(os.Getenv("PROBE_ORIGIN"))
+	target := os.Getenv("PROBE_ORIGIN")
+	var proxy func(*http.Request) (*url.URL, error)
+	if len(args) > 0 {
+		target = args[0]
+		if r.Proxy = os.Getenv("HTTP_PROXY"); r.Proxy == "" {
+			r.ViaProxyErr = "no HTTP_PROXY: the docker command set no proxy for the container"
+		}
+		proxy = http.ProxyFromEnvironment
+	} else if relay, err := url.Parse(os.Getenv("PROBE_RELAY")); err != nil || relay.Host == "" {
+		r.ViaProxyErr = "no relay address: " + os.Getenv("PROBE_RELAY")
+	} else {
+		proxy = http.ProxyURL(relay)
+	}
+	origin, err := url.Parse(target)
 	if err == nil {
 		r.OriginDirect = dial(origin.Host)
 	}
-	if relay, err := url.Parse(os.Getenv("PROBE_RELAY")); err != nil || relay.Host == "" {
-		r.ViaProxyErr = "no relay address: " + os.Getenv("PROBE_RELAY")
-	} else {
-		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(relay)}, Timeout: 10 * time.Second}
-		if resp, err := client.Get(os.Getenv("PROBE_ORIGIN")); err != nil {
+	if r.ViaProxyErr == "" {
+		client := &http.Client{Transport: &http.Transport{Proxy: proxy}, Timeout: 10 * time.Second}
+		if resp, err := client.Get(target); err != nil {
 			r.ViaProxyErr = err.Error()
 		} else {
 			resp.Body.Close()

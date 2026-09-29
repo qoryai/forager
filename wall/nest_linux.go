@@ -70,11 +70,10 @@ func nest(user string, argv []string) error {
 			return err
 		}
 		if config != nil {
-			dir, err := writeNestConfig(config, uid, gid)
-			if err != nil {
+			if err := writeNestConfig(nestConfig, config, nestOwner{0, 0}, nestOwner{uid, gid}); err != nil {
 				return fmt.Errorf("nest: the agent's docker configuration: %w", err)
 			}
-			env = append(env, "DOCKER_CONFIG="+dir)
+			env = append(env, "DOCKER_CONFIG="+nestConfig)
 		}
 	}
 
