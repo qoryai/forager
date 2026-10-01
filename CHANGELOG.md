@@ -8,16 +8,16 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Upgrading
 
-- An image with a Docker of the agent's own contains the programs `dockerd` starts,
-  `containerd`, `runc` and `iptables` among them, in `/usr/local/sbin`, `/usr/local/bin`,
-  `/usr/sbin`, `/usr/bin`, `/sbin` or `/bin`: the daemon no longer looks on the run's
-  `PATH`, and gets none of the run's environment but the proxy and the bundle.
-  `docker:dind` needs no change.
-- An image passed to `walltest.Run` with `Docker` contains the `docker` command as well
-  as `dockerd`.
+- In an image with a Docker of the agent's own, `dockerd` runs with `/usr/local/sbin`,
+  `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin` as its whole `PATH`, so
+  these directories contain the programs it starts, `containerd`, `runc` and `iptables`
+  among them. Of the run's environment it gets the proxy and, when the run has one, the
+  run's certificate bundle. `docker:dind` needs no change.
+- An image passed to `walltest.Run` with `Docker` needs the `docker` command as well as
+  `dockerd`: the suite starts a container with it as the agent's user.
 - A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
-  own stops the run, unless the run sets `DOCKER_CONFIG`. `wall.Nest` followed it
-  before.
+  own stops the run when the wall writes the agent's docker configuration there, which
+  it does whenever the run sets no `DOCKER_CONFIG`. `wall.Nest` followed it before.
 
 ### Changed
 

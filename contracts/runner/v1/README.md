@@ -964,8 +964,8 @@ one, and `docker: true` when the enclosure has a daemon of its own.
 - for a Docker of the agent's own, with `dockerd`, and what it starts, `containerd`,
   `runc` and `iptables` among them, in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
   `/usr/bin`, `/sbin` or `/bin`: the daemon's `PATH` is these directories alone. The
-  users and groups the wall passes it by name are in its own `/etc/passwd` and
-  `/etc/group`.
+  users and groups the wall passes to the image by name are in the image's own
+  `/etc/passwd` and `/etc/group`.
 
 ## The wall
 
@@ -1089,7 +1089,7 @@ by its address. The directory and its `config.json` belong to the agent's user, 
 0700 and 0600, inside `/run/qory`, which belongs to root with mode 0755: the agent's
 user passes through it and cannot write in it. The helper sets these owners and modes
 whatever the umask, and on a `/run/qory` already in the image, and refuses a link in
-either place. The containers the agent starts do not get the run's bundle unless it
+either place. The containers the agent starts get the run's bundle only when the agent
 mounts it into them, and they inherit `no-new-privileges`, so a setuid program in them
 gains nothing. Docker in Docker with `--privileged`, and the machine's own socket, stay
 refused. gVisor breaks the list: its daemon inside starts only with every capability

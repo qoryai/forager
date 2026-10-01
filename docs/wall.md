@@ -217,10 +217,11 @@ never the machine's:
 - `wall.Nest` starts `dockerd`, and the daemon starts `containerd`, `runc` and
   `iptables`, from the image's system directories, `/usr/local/sbin`, `/usr/local/bin`,
   `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`: these are the daemon's `PATH`.
-- The daemon's environment contains the proxy and, when the run has one, the run's
-  certificate bundle.
-- `/run/qory` is root's, mode 0755. The agent's docker configuration, `/run/qory/docker`
-  and its `config.json`, is the agent's, 0700 and 0600.
+- Of the run's environment, the daemon gets the proxy and, when the run has one, the
+  run's certificate bundle.
+- Unless the run sets `DOCKER_CONFIG`, the agent's docker configuration is
+  `/run/qory/docker` and its `config.json`, the agent's, 0700 and 0600, in a `/run/qory`
+  that is root's, mode 0755. A link at either path stops the run.
 
 What to know:
 

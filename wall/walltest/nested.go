@@ -29,8 +29,8 @@ import (
 // report.
 const innerPrefix = "walltest-inner: "
 
-// decoyRan is the file, inside the enclosure, where each program that [decoys] writes
-// notes that it ran.
+// decoyRan is the file, inside the enclosure, in which each program of [decoys] records
+// that it ran, and as whom.
 const decoyRan = "/tmp/walltest-decoys-ran"
 
 // nested is what the probe found of the Docker of its own, when the enclosure has one.
