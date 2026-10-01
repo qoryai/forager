@@ -163,14 +163,14 @@ func TestNestFindsTheDaemonInTheSystemDirectories(t *testing.T) {
 	}
 }
 
-// TestNestGivesTheAgentItsDockerConfigurationAlone pins the owners and modes of the
+// TestNestWritesTheAgentsDockerConfigurationForItAlone pins the owners and modes of the
 // agent's docker configuration: the directory above it is root's with mode 0755, so the
 // agent's user passes through it and writes nothing there, whatever the umask or the
 // image made it; the configuration's directory and file are the agent's, 0700 and 0600,
 // and the file is written anew. A link where either directory goes is refused, and what
-// it points at is left as it was. As root the test gives the agent another user; as
-// anyone else it can give only its own, and the owners it checks are that one.
-func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
+// it points at is left as it was. As root the test uses another user for the agent;
+// otherwise its own, and the owners it checks are that one.
+func TestNestWritesTheAgentsDockerConfigurationForItAlone(t *testing.T) {
 	root := nestOwner{os.Getuid(), os.Getgid()}
 	agent := root
 	if root.uid == 0 {
@@ -199,15 +199,16 @@ func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
 		}
 	}
 
-	// Nothing there, not even /run, under a umask that would close all of it.
+	// Nothing there, not even /run, under a umask that narrows a new /run/qory to 0700.
 	dir := filepath.Join(t.TempDir(), "run", "qory", "docker")
 	if err := writeNestConfig(dir, config, root, agent); err != nil {
 		t.Fatal(err)
 	}
 	written(dir)
 
-	// The image holds /run/qory narrower, the configuration's directory wider, and a
-	// configuration of its own.
+	// The image contains a narrower /run/qory, a wider configuration's directory, and a
+	// configuration of its own. The umask while the configuration is written creates
+	// config.json 0400, so the file is 0600 only when its mode is set after.
 	dir = filepath.Join(t.TempDir(), "run", "qory", "docker")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -220,9 +221,12 @@ func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := writeNestConfig(dir, config, root, agent); err != nil {
-		t.Fatal(err)
-	}
+	func() {
+		defer syscall.Umask(syscall.Umask(0o377))
+		if err := writeNestConfig(dir, config, root, agent); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	written(dir)
 
 	// A link where either directory goes.
@@ -247,12 +251,12 @@ func TestNestGivesTheAgentItsDockerConfigurationAlone(t *testing.T) {
 	}
 }
 
-// TestNestGivesTheDaemonNoneOfTheRunsEnvironmentButTheProxy pins what the daemon, and
+// TestNestStartsTheDaemonWithTheProxyAndTheSystemPath pins what the daemon, and
 // everything it starts as the enclosure's root, runs with: the system directories as
-// PATH whatever the run's names, the proxy in both cases, and the wall's bundle when the
+// PATH whatever the run's lists, the proxy in both cases, and the wall's bundle when the
 // run has one. What the run sets for the agent, a PATH into the workspace, a library to
 // preload, where the daemon keeps things, stays the agent's.
-func TestNestGivesTheDaemonNoneOfTheRunsEnvironmentButTheProxy(t *testing.T) {
+func TestNestStartsTheDaemonWithTheProxyAndTheSystemPath(t *testing.T) {
 	run := map[string]string{
 		"PATH":              "/work/node_modules/.bin:/work/bin:/usr/bin:/bin",
 		"LD_PRELOAD":        "/work/preload.so",

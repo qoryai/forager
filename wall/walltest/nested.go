@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,8 +29,8 @@ import (
 // report.
 const innerPrefix = "walltest-inner: "
 
-// decoyRan is where the programs [decoys] writes note, inside the enclosure, that they
-// ran.
+// decoyRan is the file, inside the enclosure, where each program that [decoys] writes
+// notes that it ran.
 const decoyRan = "/tmp/walltest-decoys-ran"
 
 // nested is what the probe found of the Docker of its own, when the enclosure has one.
@@ -48,7 +50,7 @@ type nested struct {
 	// Containers are the reports of the containers the agent started, by kind.
 	Containers map[string]inner `json:"containers"`
 	// Command is the report of the container the agent started with the image's docker
-	// command, as its user and told nothing of the proxy.
+	// command, as its user and with no proxy setting.
 	Command inner `json:"command"`
 	// Config is the agent's docker configuration, the directory above it and its file,
 	// each with its mode and owner as the agent's user sees them, or the error it gets.
@@ -66,10 +68,11 @@ type inner struct {
 	ViaProxy       int    `json:"via_proxy"`
 	ViaProxyErr    string `json:"via_proxy_err"`
 	UID            int    `json:"uid"`
-	// Proxy is the proxy the container found in its environment, when it was told none.
+	// Proxy is the proxy the container found in its environment, when none was set for
+	// it.
 	Proxy string `json:"proxy,omitempty"`
-	// Said is what the docker command printed on its standard error.
-	Said string `json:"said,omitempty"`
+	// Stderr is what the docker command printed on its standard error.
+	Stderr string `json:"stderr,omitempty"`
 }
 
 // innerKinds are the containers the agent starts: plain, on the host's network, and
@@ -131,17 +134,17 @@ func probeNested() *nested {
 // commandInner starts a container of the probe the way the agent does, with the
 // image's docker command, as the agent's user and in the enclosure's environment with
 // nothing added: the proxy the container gets is the one the agent's DOCKER_CONFIG
-// gives the command, and the probe inside is told only the origin, as its argument.
+// sets for the command, and the probe inside reads only the origin, from its argument.
 func commandInner(origin string) inner {
 	docker, err := exec.LookPath("docker")
 	if err != nil {
-		return inner{Err: "the image holds no docker command: " + err.Error()}
+		return inner{Err: "the image contains no docker command: " + err.Error()}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	var said bytes.Buffer
+	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, docker, "run", "--rm", probeImage, "/probe", modeInner, origin)
-	cmd.Stderr = &said
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	for _, line := range strings.Split(string(out), "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), innerPrefix); ok {
@@ -149,11 +152,11 @@ func commandInner(origin string) inner {
 			if err := json.Unmarshal([]byte(rest), &r); err != nil {
 				return inner{Err: err.Error()}
 			}
-			r.Said = strings.TrimSpace(said.String())
+			r.Stderr = strings.TrimSpace(stderr.String())
 			return r
 		}
 	}
-	return inner{Err: fmt.Sprintf("no report: %v: %s", err, bytes.TrimSpace(out)), Said: strings.TrimSpace(said.String())}
+	return inner{Err: fmt.Sprintf("no report: %v: %s", err, bytes.TrimSpace(out)), Stderr: strings.TrimSpace(stderr.String())}
 }
 
 // configModes are the directory above the agent's docker configuration, the
@@ -180,11 +183,15 @@ func configModes(dir string) []string {
 }
 
 // decoysRan are the lines of [decoyRan], each once, in the order they were first
-// written.
+// written: none when no program wrote it, and the error when it is there but
+// unreadable, so the check fails.
 func decoysRan() []string {
 	b, err := os.ReadFile(decoyRan)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
+	}
+	if err != nil {
+		return []string{"unreadable: " + err.Error()}
 	}
 	var ran []string
 	seen := map[string]bool{}
@@ -365,9 +372,9 @@ func procIP(h string) net.IP {
 
 // innerProbe is the probe in a container the agent started: it tries what the wall
 // forbids and reaches the origin through the relay. Started through the Engine API it
-// is told the origin and the relay's address in PROBE_ORIGIN and PROBE_RELAY. Started
-// by the docker command it is told the origin as its argument and nothing of the relay,
-// and reaches it by the proxy variables the command set from the agent's configuration.
+// reads the origin and the relay's address from PROBE_ORIGIN and PROBE_RELAY. Started
+// by the docker command it reads the origin from its argument, and reaches the relay by
+// the proxy variables the command set from the agent's configuration.
 func innerProbe(args []string) int {
 	r := inner{UID: os.Getuid()}
 	r.OutsideAddress = dial("1.1.1.1:443")

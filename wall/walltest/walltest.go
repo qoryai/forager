@@ -175,9 +175,10 @@ type Options struct {
 	// defines it; empty is the engine's default. With it or Docker set, the run selects
 	// the image by name among the machine's.
 	Runtime string
-	// Docker says the image holds dockerd and the docker command, and the enclosure gets
-	// a Docker of the agent's own. The suite then checks it from the agent's side, and
-	// from containers the agent starts, through the Engine API and with the command.
+	// Docker is true when the image contains dockerd and the docker command, and the
+	// enclosure gets a Docker of the agent's own. The suite then checks it from the
+	// agent's side, and from containers the agent starts, through the Engine API and
+	// with the command.
 	Docker bool
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
@@ -377,7 +378,7 @@ func zero(hex string) bool { return hex != "" && strings.Trim(hex, "0") == "" }
 var decoyNames = []string{"containerd", "runc", "iptables"}
 
 // decoys writes a directory of the workspace, which the run puts first on its PATH,
-// holding a program of each of decoyNames that notes in [decoyRan], inside the
+// containing a program of each of decoyNames that notes in [decoyRan], inside the
 // enclosure, that it ran and as whom, then runs the image's own from the rest of the
 // PATH. The enclosure's root must run none of them.
 func decoys(workspace string) (string, error) {

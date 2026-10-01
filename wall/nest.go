@@ -24,7 +24,7 @@ const (
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
 	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// names one: the proxy for the containers the agent starts. It is the agent's
+	// sets one: the proxy for the containers the agent starts. It is the agent's
 	// alone, in a directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
@@ -37,10 +37,10 @@ const nestWait = 2 * 60
 // is not root: it starts dockerd on [NestSocket] alone, in a session of its own so the
 // terminal's signals do not reach it, with its socket in the agent's group and none of
 // the run's environment but the proxy; waits until the daemon answers; writes the
-// agent's docker configuration, which gives the containers the agent starts the proxy
-// by its address, since they do not resolve its name; then drops every capability, the
-// bounding set included, becomes the agent's user and executes the launch with the
-// run's environment. It returns only on an error.
+// agent's docker configuration, which sets the proxy for the containers the agent
+// starts by its address, since they do not resolve its name; then drops every
+// capability, the bounding set included, becomes the agent's user and executes the
+// launch with the run's environment. It returns only on an error.
 //
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
@@ -89,13 +89,13 @@ func userNamespaced(uidMap string) error {
 
 // daemonDirs are where [Nest] looks for dockerd, and the daemon's PATH, where it looks
 // for what it starts, containerd, runc and iptables among them: the image's system
-// directories, never the run's PATH, which may name a directory of the workspace.
+// directories, never the run's PATH, which may list a directory of the workspace.
 var daemonDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 
 // daemonEnv is the daemon's environment, which the programs it starts as the enclosure's
-// root inherit: [daemonDirs] as PATH; the proxy the enclosure's environment names, env's
-// HTTP_PROXY, HTTPS_PROXY and NO_PROXY in either case, for its pulls; and bundle as
-// SSL_CERT_FILE when the run has one, so it trusts the hosts the proxy answers as.
+// root inherit: [daemonDirs] as PATH; the proxy the enclosure's environment defines,
+// env's HTTP_PROXY, HTTPS_PROXY and NO_PROXY in either case, for its pulls; and bundle
+// as SSL_CERT_FILE when the run has one, so it trusts the hosts the proxy answers as.
 // Nothing else of the run's environment reaches it: the run sets that for the agent,
 // and a variable such as LD_PRELOAD, LD_LIBRARY_PATH, XTABLES_LIBDIR or DOCKER_TMPDIR
 // would choose, from the workspace, what root loads or where it writes.
@@ -221,19 +221,19 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 	return json.MarshalIndent(map[string]any{"proxies": map[string]any{"default": p}}, "", "  ")
 }
 
-// nestOwner is a user and a group, by id, as a file is given to them.
+// nestOwner is a user and a group, by id: the owner a file is set to.
 type nestOwner struct{ uid, gid int }
 
 // writeNestConfig writes the agent's docker configuration, config.json in dir, for the
-// agent alone: dir is given to agent with mode 0700 and the file with mode 0600, since
+// agent alone: dir is owned by agent with mode 0700 and the file with mode 0600, since
 // the docker command reads its configuration as the agent's user and writes to it as
-// well. The directory above dir, /run/qory, is the runner's: it is given to root, the
+// well. The directory above dir, /run/qory, is the runner's: it is owned by root, the
 // enclosure's root, with mode 0755, so the agent's user passes through it to dir and
 // writes nothing in it. Were it narrower, the docker command could not read the
-// configuration and would give the containers the agent starts no proxy.
+// configuration and would start the agent's containers without a proxy.
 //
-// Both modes are set whatever the umask, and whatever the image holds there: a
-// directory the image made narrower, or gave another owner, is changed rather than
+// Both modes are set whatever the umask, and whatever the image contains there: a
+// directory the image made narrower, or set to another owner, is changed rather than
 // refused, since the runner keeps nothing else in it and a narrower mode only hides the
 // agent's configuration from the agent. A link or a file in either place is refused,
 // since the owner and the mode would land where it points. The file is written anew.
@@ -269,9 +269,9 @@ func writeNestConfig(dir string, config []byte, root, agent nestOwner) error {
 	return err
 }
 
-// nestDir makes dir, or takes the directory the image holds there, and gives it to o
-// with mode, set after the umask has narrowed what Mkdir made. A link or a file at dir
-// is refused.
+// nestDir makes dir, or uses the directory already in the image, and sets its owner to
+// o and its mode to mode, after the umask has narrowed what Mkdir made. A link or a
+// file at dir is refused.
 func nestDir(dir string, mode fs.FileMode, o nestOwner) error {
 	if err := os.Mkdir(dir, mode); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err

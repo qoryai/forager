@@ -214,8 +214,13 @@ never the machine's:
 - The enclosure's root is then a user of the machine's that is not root.
 - The agent is not root.
 - `wall.Nest` refuses a runtime that maps the enclosure's root to the machine's.
-- `wall.Nest` looks for `dockerd` in the image's system directories, never on the run's
-  `PATH`.
+- `wall.Nest` starts `dockerd`, and the daemon starts `containerd`, `runc` and
+  `iptables`, from the image's system directories, `/usr/local/sbin`, `/usr/local/bin`,
+  `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`: these are the daemon's `PATH`.
+- The daemon's environment contains the proxy and, when the run has one, the run's
+  certificate bundle.
+- `/run/qory` is root's, mode 0755. The agent's docker configuration, `/run/qory/docker`
+  and its `config.json`, is the agent's, 0700 and 0600.
 
 What to know:
 
