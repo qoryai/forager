@@ -56,6 +56,12 @@ release may change what an existing document does, and says so under Upgrading.
   it, and with nothing else; the agent keeps the run's environment. The conformance
   suite puts programs of these names first on the run's `PATH`, in the workspace, and
   requires that none of them runs.
+- A run that sets `DOCKER_CONFIG` to an empty string gets the agent's docker
+  configuration too: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
+  value, which the agent's `docker` command read first, so the containers it started got
+  no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the wall's, when
+  the run sets none or an empty one; a non-empty one the run sets stays as it is, which
+  §The wall of the contract and `docs/wall.md` now define exactly.
 
 ## [0.6.0] - 2026-09-28
 

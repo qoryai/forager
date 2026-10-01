@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -296,6 +297,69 @@ func TestNestStartsTheDaemonWithTheProxyAndTheSystemPath(t *testing.T) {
 	} {
 		if got := daemonEnv(env(tc.vars), tc.bundle); strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
 			t.Errorf("bundle %q: got\n%s\nwant\n%s", tc.bundle, strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
+		}
+	}
+}
+
+// TestNestSetsOneDockerConfigForTheAgent pins the agent's DOCKER_CONFIG. A run that
+// sets none, or an empty one, which the docker command reads as none, gets the agent's
+// docker configuration, and the agent's environment then contains one DOCKER_CONFIG,
+// that one, first for getenv as well; the run's other variables stay as they are, in
+// their order. A run that sets a non-empty DOCKER_CONFIG keeps its own.
+func TestNestSetsOneDockerConfigForTheAgent(t *testing.T) {
+	getenv := func(environ []string, k string) (string, bool) {
+		for _, e := range environ {
+			if v, ok := strings.CutPrefix(e, k+"="); ok {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	ours := "DOCKER_CONFIG=" + nestConfig
+	for _, tc := range []struct {
+		name    string
+		environ []string
+		sets    bool
+		want    []string
+	}{
+		{"unset", []string{"PATH=/usr/bin:/bin", "HOME=/work"}, false,
+			[]string{"PATH=/usr/bin:/bin", "HOME=/work", ours}},
+		{"empty", []string{"PATH=/usr/bin:/bin", "DOCKER_CONFIG=", "HOME=/work"}, false,
+			[]string{"PATH=/usr/bin:/bin", "HOME=/work", ours}},
+		{"empty, then a directory", []string{"DOCKER_CONFIG=", "HOME=/work", "DOCKER_CONFIG=/work/.docker"}, false,
+			[]string{"HOME=/work", ours}},
+		{"empty twice", []string{"DOCKER_CONFIG=", "DOCKER_CONFIG=", "HOME=/work"}, false,
+			[]string{"HOME=/work", ours}},
+		{"the run's own", []string{"DOCKER_CONFIG=/work/.docker", "HOME=/work"}, true,
+			[]string{"DOCKER_CONFIG=/work/.docker", "HOME=/work"}},
+		{"the run's own, then empty", []string{"DOCKER_CONFIG=/work/.docker", "DOCKER_CONFIG=", "HOME=/work"}, true,
+			[]string{"DOCKER_CONFIG=/work/.docker", "DOCKER_CONFIG=", "HOME=/work"}},
+	} {
+		sets := runSetsDockerConfig(tc.environ)
+		if sets != tc.sets {
+			t.Errorf("%s: the run sets its own DOCKER_CONFIG: %v, want %v", tc.name, sets, tc.sets)
+		}
+		// As nest does: the agent's docker configuration is written, and set, only
+		// when the run sets none of its own.
+		got := slices.Clone(tc.environ)
+		if !sets {
+			got = agentEnv(got, nestConfig)
+		}
+		if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
+		}
+		n := 0
+		for _, e := range got {
+			if strings.HasPrefix(e, "DOCKER_CONFIG=") {
+				n++
+			}
+		}
+		if !tc.sets && n != 1 {
+			t.Errorf("%s: %d DOCKER_CONFIG entries, want 1", tc.name, n)
+		}
+		want, _ := getenv(tc.want, "DOCKER_CONFIG")
+		if v, ok := getenv(got, "DOCKER_CONFIG"); !ok || v != want {
+			t.Errorf("%s: getenv reads DOCKER_CONFIG as %q, want %q", tc.name, v, want)
 		}
 	}
 }

@@ -69,7 +69,7 @@ func nest(user string, argv []string) error {
 	}
 
 	env := os.Environ()
-	if os.Getenv("DOCKER_CONFIG") == "" {
+	if !runSetsDockerConfig(env) {
 		config, err := nestProxies(os.Getenv, net.LookupHost)
 		if err != nil {
 			return err
@@ -78,7 +78,7 @@ func nest(user string, argv []string) error {
 			if err := writeNestConfig(nestConfig, config, nestOwner{0, 0}, nestOwner{uid, gid}); err != nil {
 				return fmt.Errorf("nest: the agent's docker configuration: %w", err)
 			}
-			env = append(env, "DOCKER_CONFIG="+nestConfig)
+			env = agentEnv(env, nestConfig)
 		}
 	}
 

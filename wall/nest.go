@@ -24,8 +24,8 @@ const (
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
 	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// sets one: the proxy for the containers the agent starts. It is the agent's
-	// alone, in a directory of root's that the agent passes through.
+	// sets a non-empty one: the proxy for the containers the agent starts. It is the
+	// agent's alone, in a directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
 
@@ -219,6 +219,33 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 		p["noProxy"] = no
 	}
 	return json.MarshalIndent(map[string]any{"proxies": map[string]any{"default": p}}, "", "  ")
+}
+
+// runSetsDockerConfig reports whether environ, the run's environment, sets a docker
+// configuration of its own: a DOCKER_CONFIG that is not empty in environ's first entry
+// for it, the one getenv reads. The docker command reads an empty DOCKER_CONFIG as
+// none set, so the agent's docker configuration is written then as well.
+func runSetsDockerConfig(environ []string) bool {
+	for _, e := range environ {
+		if v, ok := strings.CutPrefix(e, "DOCKER_CONFIG="); ok {
+			return v != ""
+		}
+	}
+	return false
+}
+
+// agentEnv is the agent's environment once its docker configuration is written to dir:
+// environ, the run's, with every DOCKER_CONFIG entry dropped and DOCKER_CONFIG=dir at
+// the end. The environment then contains one DOCKER_CONFIG, since getenv reads the
+// first entry for a name and an empty one left before dir would hide it.
+func agentEnv(environ []string, dir string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, e := range environ {
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+			out = append(out, e)
+		}
+	}
+	return append(out, "DOCKER_CONFIG="+dir)
 }
 
 // nestOwner is a user and a group, by id: the owner a file is set to.
