@@ -17,7 +17,8 @@ release may change what an existing document does, and says so under Upgrading.
   `dockerd`: the suite starts a container with it as the agent's user.
 - A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
   own stops the run when the wall writes the agent's docker configuration there, which
-  it does whenever the run sets no `DOCKER_CONFIG`. `wall.Nest` followed it before.
+  it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
+  it before.
 
 ### Changed
 
@@ -27,8 +28,9 @@ release may change what an existing document does, and says so under Upgrading.
   from. `docs/` contains the rest, one page per topic.
 - Contract `v1` revision 1 is amended in place again: §Images lists what `dockerd`
   starts among the programs in the system directories, and §The wall defines the
-  daemon's environment and the owners and modes of `/run/qory` and the agent's docker
-  configuration.
+  daemon's environment, the owners and modes of `/run/qory` and the agent's docker
+  configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
+  that configuration.
 
 ### Fixed
 
@@ -57,11 +59,10 @@ release may change what an existing document does, and says so under Upgrading.
   suite puts programs of these names first on the run's `PATH`, in the workspace, and
   requires that none of them runs.
 - A run that sets `DOCKER_CONFIG` to an empty string gets the agent's docker
-  configuration too: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
-  value, which the agent's `docker` command read first, so the containers it started got
-  no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the wall's, when
-  the run sets none or an empty one; a non-empty one the run sets stays as it is, which
-  §The wall of the contract and `docs/wall.md` now define exactly.
+  configuration: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
+  entry, the agent's `docker` command read the empty one as unset, and the containers it
+  started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
+  wall's, when the run's is unset or empty; a non-empty one stays as it is.
 
 ## [0.6.0] - 2026-09-28
 

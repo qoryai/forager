@@ -302,10 +302,12 @@ func TestNestStartsTheDaemonWithTheProxyAndTheSystemPath(t *testing.T) {
 }
 
 // TestNestSetsOneDockerConfigForTheAgent pins the agent's DOCKER_CONFIG. A run that
-// sets none, or an empty one, which the docker command reads as none, gets the agent's
-// docker configuration, and the agent's environment then contains one DOCKER_CONFIG,
-// that one, first for getenv as well; the run's other variables stay as they are, in
-// their order. A run that sets a non-empty DOCKER_CONFIG keeps its own.
+// sets none, or an empty one, which the docker command reads as none, has the agent's
+// docker configuration written, and once it is written the agent's environment contains
+// one DOCKER_CONFIG, the wall's, first for getenv as well; the run's other variables stay
+// as they are, in their order. A run with no proxy has none written and keeps its
+// environment, and an error writing it is returned. A run that sets a non-empty
+// DOCKER_CONFIG keeps its own, and nothing is written.
 func TestNestSetsOneDockerConfigForTheAgent(t *testing.T) {
 	getenv := func(environ []string, k string) (string, bool) {
 		for _, e := range environ {
@@ -316,49 +318,64 @@ func TestNestSetsOneDockerConfigForTheAgent(t *testing.T) {
 		return "", false
 	}
 	ours := "DOCKER_CONFIG=" + nestConfig
+	failed := errors.New("read-only file system")
 	for _, tc := range []struct {
 		name    string
 		environ []string
-		sets    bool
+		wrote   bool  // what write returns
+		err     error // what write returns
+		called  bool  // whether write is called
 		want    []string
 	}{
-		{"unset", []string{"PATH=/usr/bin:/bin", "HOME=/work"}, false,
+		{"unset", []string{"PATH=/usr/bin:/bin", "HOME=/work"}, true, nil, true,
 			[]string{"PATH=/usr/bin:/bin", "HOME=/work", ours}},
-		{"empty", []string{"PATH=/usr/bin:/bin", "DOCKER_CONFIG=", "HOME=/work"}, false,
+		{"empty", []string{"PATH=/usr/bin:/bin", "DOCKER_CONFIG=", "HOME=/work"}, true, nil, true,
 			[]string{"PATH=/usr/bin:/bin", "HOME=/work", ours}},
-		{"empty, then a directory", []string{"DOCKER_CONFIG=", "HOME=/work", "DOCKER_CONFIG=/work/.docker"}, false,
+		{"empty, then a directory", []string{"DOCKER_CONFIG=", "HOME=/work", "DOCKER_CONFIG=/work/.docker"}, true, nil, true,
 			[]string{"HOME=/work", ours}},
-		{"empty twice", []string{"DOCKER_CONFIG=", "DOCKER_CONFIG=", "HOME=/work"}, false,
+		{"empty twice", []string{"DOCKER_CONFIG=", "DOCKER_CONFIG=", "HOME=/work"}, true, nil, true,
 			[]string{"HOME=/work", ours}},
-		{"the run's own", []string{"DOCKER_CONFIG=/work/.docker", "HOME=/work"}, true,
+		{"empty, no proxy", []string{"DOCKER_CONFIG=", "HOME=/work"}, false, nil, true,
+			[]string{"DOCKER_CONFIG=", "HOME=/work"}},
+		{"unset, the write failing", []string{"HOME=/work"}, false, failed, true, nil},
+		{"the run's own", []string{"DOCKER_CONFIG=/work/.docker", "HOME=/work"}, true, nil, false,
 			[]string{"DOCKER_CONFIG=/work/.docker", "HOME=/work"}},
-		{"the run's own, then empty", []string{"DOCKER_CONFIG=/work/.docker", "DOCKER_CONFIG=", "HOME=/work"}, true,
+		{"the run's own, then empty", []string{"DOCKER_CONFIG=/work/.docker", "DOCKER_CONFIG=", "HOME=/work"}, true, nil, false,
 			[]string{"DOCKER_CONFIG=/work/.docker", "DOCKER_CONFIG=", "HOME=/work"}},
 	} {
-		sets := runSetsDockerConfig(tc.environ)
-		if sets != tc.sets {
-			t.Errorf("%s: the run sets its own DOCKER_CONFIG: %v, want %v", tc.name, sets, tc.sets)
+		called := false
+		got, err := nestAgentEnv(slices.Clone(tc.environ), func() (bool, error) {
+			called = true
+			return tc.wrote, tc.err
+		})
+		if called != tc.called {
+			t.Errorf("%s: write called: %v, want %v", tc.name, called, tc.called)
 		}
-		// As nest does: the agent's docker configuration is written, and set, only
-		// when the run sets none of its own.
-		got := slices.Clone(tc.environ)
-		if !sets {
-			got = agentEnv(got, nestConfig)
+		if tc.err != nil {
+			if !errors.Is(err, tc.err) {
+				t.Errorf("%s: got %v, want %v", tc.name, err, tc.err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
 		}
 		if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
 			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 		}
-		n := 0
-		for _, e := range got {
-			if strings.HasPrefix(e, "DOCKER_CONFIG=") {
-				n++
+		if tc.called && tc.wrote {
+			n := 0
+			for _, e := range got {
+				if strings.HasPrefix(e, "DOCKER_CONFIG=") {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("%s: %d DOCKER_CONFIG entries, want 1", tc.name, n)
 			}
 		}
-		if !tc.sets && n != 1 {
-			t.Errorf("%s: %d DOCKER_CONFIG entries, want 1", tc.name, n)
-		}
 		want, _ := getenv(tc.want, "DOCKER_CONFIG")
-		if v, ok := getenv(got, "DOCKER_CONFIG"); !ok || v != want {
+		if v, _ := getenv(got, "DOCKER_CONFIG"); v != want {
 			t.Errorf("%s: getenv reads DOCKER_CONFIG as %q, want %q", tc.name, v, want)
 		}
 	}

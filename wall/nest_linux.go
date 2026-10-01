@@ -68,18 +68,18 @@ func nest(user string, argv []string) error {
 		return fmt.Errorf("%w; the daemon said:\n%s", err, bytes.TrimSpace(tail))
 	}
 
-	env := os.Environ()
-	if !runSetsDockerConfig(env) {
+	env, err := nestAgentEnv(os.Environ(), func() (bool, error) {
 		config, err := nestProxies(os.Getenv, net.LookupHost)
-		if err != nil {
-			return err
+		if err != nil || config == nil {
+			return false, err
 		}
-		if config != nil {
-			if err := writeNestConfig(nestConfig, config, nestOwner{0, 0}, nestOwner{uid, gid}); err != nil {
-				return fmt.Errorf("nest: the agent's docker configuration: %w", err)
-			}
-			env = agentEnv(env, nestConfig)
+		if err := writeNestConfig(nestConfig, config, nestOwner{0, 0}, nestOwner{uid, gid}); err != nil {
+			return false, fmt.Errorf("nest: the agent's docker configuration: %w", err)
 		}
+		return true, nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// Capabilities belong to a thread: the bounding set is dropped on the thread that

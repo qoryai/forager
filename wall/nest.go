@@ -221,31 +221,39 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 	return json.MarshalIndent(map[string]any{"proxies": map[string]any{"default": p}}, "", "  ")
 }
 
-// runSetsDockerConfig reports whether environ, the run's environment, sets a docker
-// configuration of its own: a DOCKER_CONFIG that is not empty in environ's first entry
-// for it, the one getenv reads. The docker command reads an empty DOCKER_CONFIG as
-// none set, so the agent's docker configuration is written then as well.
-func runSetsDockerConfig(environ []string) bool {
+// nestAgentEnv is the agent's environment: environ, the run's, with the agent's docker
+// configuration when the run sets none of its own. The run sets its own with a
+// DOCKER_CONFIG that is not empty in environ's first entry for it, the one getenv reads;
+// the docker command reads an empty DOCKER_CONFIG as none set. Otherwise write writes
+// the configuration and reports whether it wrote one, which it does when the run has a
+// proxy. When it wrote one, every DOCKER_CONFIG entry of environ is dropped and
+// DOCKER_CONFIG=[nestConfig] is appended, so the environment contains one, the wall's:
+// an empty entry left before it would be the one getenv reads. An error of write's is
+// returned as it is.
+//
+// os.Environ already keeps only the first entry for a name, so the environ [Nest] reads
+// contains at most one DOCKER_CONFIG; the function drops every one all the same, for an
+// environ built elsewhere.
+func nestAgentEnv(environ []string, write func() (bool, error)) ([]string, error) {
 	for _, e := range environ {
 		if v, ok := strings.CutPrefix(e, "DOCKER_CONFIG="); ok {
-			return v != ""
+			if v != "" {
+				return environ, nil
+			}
+			break
 		}
 	}
-	return false
-}
-
-// agentEnv is the agent's environment once its docker configuration is written to dir:
-// environ, the run's, with every DOCKER_CONFIG entry dropped and DOCKER_CONFIG=dir at
-// the end. The environment then contains one DOCKER_CONFIG, since getenv reads the
-// first entry for a name and an empty one left before dir would hide it.
-func agentEnv(environ []string, dir string) []string {
+	wrote, err := write()
+	if err != nil || !wrote {
+		return environ, err
+	}
 	out := make([]string, 0, len(environ)+1)
 	for _, e := range environ {
 		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
 			out = append(out, e)
 		}
 	}
-	return append(out, "DOCKER_CONFIG="+dir)
+	return append(out, "DOCKER_CONFIG="+nestConfig), nil
 }
 
 // nestOwner is a user and a group, by id: the owner a file is set to.
