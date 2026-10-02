@@ -961,10 +961,11 @@ one, and `docker: true` when the enclosure has a daemon of its own.
   certificate goes after them (§The wall);
 - with the runtime at the path the launch sets;
 - with no setuid program or capability needed for its work;
-- for a Docker of the agent's own, with `dockerd` in `/usr/local/sbin`, `/usr/local/bin`,
-  `/usr/sbin`, `/usr/bin`, `/sbin` or `/bin`, never looked for on the run's `PATH`, and
-  the users and groups the wall passes it by name in its own `/etc/passwd` and
-  `/etc/group`.
+- for a Docker of the agent's own, with `dockerd`, and what it starts, `containerd`,
+  `runc` and `iptables` among them, in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
+  `/usr/bin`, `/sbin` or `/bin`: the daemon's `PATH` is these directories alone. The
+  users and groups the wall passes to the image by name are in the image's own
+  `/etc/passwd` and `/etc/group`.
 
 ## The wall
 
@@ -1057,13 +1058,16 @@ starts as that root, with no privileged mode and `no-new-privileges`, and with t
 set of capabilities the runtime grants it inside its user namespace, which the daemon
 needs; the wall's helper, not the image, starts it: `dockerd` on its Unix socket alone,
 never a port of the enclosure's network, the socket in the agent's group, the daemon's
-output in a file of its own; then, once the daemon answers, it drops every capability,
-the bounding set included, becomes the agent's user, and clears the inheritable and
-ambient sets. The daemon's store is a volume of the run's, removed with the enclosure,
-with no size limit of the run's: the run's limits do not bound it. A daemon that exits
-during the run is not started again, and its output is root's inside the enclosure, not
-the agent's to read. Three guarantees read differently under it, and every other stands
-as written:
+output in a file of its own. The daemon and what it starts run with the system
+directories §Images lists as their `PATH` and, of the run's environment, only the proxy
+and the run's bundle; the rest of the run's environment, such as a `PATH` into the
+workspace or `LD_PRELOAD`, reaches the agent alone. Once the daemon answers, the helper
+drops every capability, the bounding set included, becomes the agent's user, and clears
+the inheritable and ambient sets. The daemon's store is a volume of the run's, removed
+with the enclosure, with no size limit of the run's: the run's limits do not bound it. A
+daemon that exits during the run is not started again, and its output is root's inside
+the enclosure, not the agent's to read. Three guarantees read differently under it, and
+every other stands as written:
 
 - *no added capabilities*: the agent has none, and none to gain. The enclosure's root has
   every capability inside its user namespace, and nothing of the machine's;
@@ -1080,11 +1084,16 @@ container on the host's network or a privileged one included, so they reach the 
 and nothing else, and what they reach is decided and recorded as the agent's own
 traffic. The daemon pulls through the proxy, so a registry is a host the policy allows.
 Those containers do not resolve the relay's name: the agent's docker configuration,
-`DOCKER_CONFIG` at `/run/qory/docker` unless the run sets one, sets the proxy for them
-by its address. They do not get the run's bundle unless the agent mounts it into them, and
-they inherit `no-new-privileges`, so a setuid program in them gains nothing. Docker in
-Docker with `--privileged`, and the machine's own socket, stay refused. gVisor breaks
-the list: its daemon inside starts only with every capability added.
+`DOCKER_CONFIG` at `/run/qory/docker` unless the run sets a non-empty one, sets the
+proxy for them by its address. The directory and its `config.json` belong to the agent's
+user, mode 0700 and 0600, inside `/run/qory`, which belongs to root with mode 0755: the
+agent's user passes through it and cannot write in it. The helper sets these owners and
+modes whatever the umask, and on a `/run/qory` already in the image, and refuses a link
+in either place. The containers the agent starts get the run's bundle only when the
+agent mounts it into them, and they inherit `no-new-privileges`, so a setuid program in
+them gains nothing. Docker in Docker with `--privileged`, and the machine's own socket,
+stay refused. gVisor breaks the list: its daemon inside starts only with every
+capability added.
 
 **One conformance suite**, the `wall/walltest` package, checks the list from inside the
 enclosure with a real session behind the adapter, and an adapter ships when the suite

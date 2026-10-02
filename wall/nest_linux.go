@@ -46,8 +46,13 @@ func nest(user string, argv []string) error {
 	if err != nil {
 		return fmt.Errorf("nest: the daemon's log: %w", err)
 	}
+	bundle := ""
+	if info, err := os.Stat(BundlePath); err == nil && info.Mode().IsRegular() {
+		bundle = BundlePath
+	}
 	daemon := exec.Command(dockerd, "--host=unix://"+NestSocket, "--group", strconv.Itoa(gid))
 	daemon.Dir, daemon.Stdout, daemon.Stderr = "/", log, log
+	daemon.Env = daemonEnv(os.Getenv, bundle)
 	daemon.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := daemon.Start(); err != nil {
 		return fmt.Errorf("nest: dockerd: %w", err)
@@ -63,19 +68,18 @@ func nest(user string, argv []string) error {
 		return fmt.Errorf("%w; the daemon said:\n%s", err, bytes.TrimSpace(tail))
 	}
 
-	env := os.Environ()
-	if os.Getenv("DOCKER_CONFIG") == "" {
+	env, err := nestAgentEnv(os.Environ(), func() (bool, error) {
 		config, err := nestProxies(os.Getenv, net.LookupHost)
-		if err != nil {
-			return err
+		if err != nil || config == nil {
+			return false, err
 		}
-		if config != nil {
-			dir, err := writeNestConfig(config, uid, gid)
-			if err != nil {
-				return fmt.Errorf("nest: the agent's docker configuration: %w", err)
-			}
-			env = append(env, "DOCKER_CONFIG="+dir)
+		if err := writeNestConfig(nestConfig, config, nestOwner{0, 0}, nestOwner{uid, gid}); err != nil {
+			return false, fmt.Errorf("nest: the agent's docker configuration: %w", err)
 		}
+		return true, nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// Capabilities belong to a thread: the bounding set is dropped on the thread that

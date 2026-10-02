@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -23,7 +24,8 @@ const (
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
 	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// names one: the proxy for the containers the agent starts.
+	// sets a non-empty one: the proxy for the containers the agent starts. It is the
+	// agent's alone, in a directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
 
@@ -33,11 +35,12 @@ const nestWait = 2 * 60
 // Nest is the program that starts an enclosure with a Docker of the agent's own. It
 // runs as the enclosure's root, which the runtime maps to a user of the machine's that
 // is not root: it starts dockerd on [NestSocket] alone, in a session of its own so the
-// terminal's signals do not reach it, with its socket in the agent's group; waits until
-// the daemon answers; writes the agent's docker configuration, which gives the
-// containers the agent starts the proxy by its address, since they do not resolve its
-// name; then drops every capability, the bounding set included, becomes the agent's
-// user and executes the launch. It returns only on an error.
+// terminal's signals do not reach it, with its socket in the agent's group and none of
+// the run's environment but the proxy; waits until the daemon answers; writes the
+// agent's docker configuration, which sets the proxy for the containers the agent
+// starts by its address, since they do not resolve its name; then drops every
+// capability, the bounding set included, becomes the agent's user and executes the
+// launch with the run's environment. It returns only on an error.
 //
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
@@ -84,9 +87,30 @@ func userNamespaced(uidMap string) error {
 	return errors.New("nest: the user map does not map the enclosure's root")
 }
 
-// daemonDirs are where [Nest] looks for dockerd: the image's system directories, never
-// the run's PATH, which may name a directory of the workspace.
+// daemonDirs are where [Nest] looks for dockerd, and the daemon's PATH, where it looks
+// for what it starts, containerd, runc and iptables among them: the image's system
+// directories, never the run's PATH, which may list a directory of the workspace.
 var daemonDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// daemonEnv is the daemon's environment, which the programs it starts as the enclosure's
+// root inherit: [daemonDirs] as PATH; the proxy the enclosure's environment defines,
+// env's HTTP_PROXY, HTTPS_PROXY and NO_PROXY in either case, for its pulls; and bundle
+// as SSL_CERT_FILE when the run has one, so it trusts the hosts the proxy answers as.
+// Nothing else of the run's environment reaches it: the run sets that for the agent,
+// and a variable such as LD_PRELOAD, LD_LIBRARY_PATH, XTABLES_LIBDIR or DOCKER_TMPDIR
+// would choose, from the workspace, what root loads or where it writes.
+func daemonEnv(env func(string) string, bundle string) []string {
+	out := []string{"PATH=" + strings.Join(daemonDirs, ":")}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
+		if v := env(k); v != "" {
+			out = append(out, k+"="+v)
+		}
+	}
+	if bundle != "" {
+		out = append(out, "SSL_CERT_FILE="+bundle)
+	}
+	return out
+}
 
 // findDaemon is the first executable dockerd in dirs.
 func findDaemon(dirs []string) (string, error) {
@@ -197,20 +221,105 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 	return json.MarshalIndent(map[string]any{"proxies": map[string]any{"default": p}}, "", "  ")
 }
 
-// writeNestConfig writes the agent's docker configuration, owned by the agent, and
-// returns its directory.
-func writeNestConfig(config []byte, uid, gid int) (string, error) {
-	if err := os.MkdirAll(nestConfig, 0o700); err != nil {
-		return "", err
-	}
-	file := filepath.Join(nestConfig, "config.json")
-	if err := os.WriteFile(file, config, 0o600); err != nil {
-		return "", err
-	}
-	for _, p := range []string{nestConfig, file} {
-		if err := os.Chown(p, uid, gid); err != nil {
-			return "", err
+// nestAgentEnv is the agent's environment: environ, the run's, with the agent's docker
+// configuration when the run sets none of its own. The run sets its own with a
+// DOCKER_CONFIG that is not empty in environ's first entry for it, the one getenv reads;
+// the docker command reads an empty DOCKER_CONFIG as none set. Otherwise write writes
+// the configuration and reports whether it wrote one, which it does when the run has a
+// proxy. When it wrote one, every DOCKER_CONFIG entry of environ is dropped and
+// DOCKER_CONFIG=[nestConfig] is appended, so the environment contains one, the wall's:
+// an empty entry left before it would be the one getenv reads. An error of write's is
+// returned as it is.
+//
+// os.Environ already keeps only the first entry for a name, so the environ [Nest] reads
+// contains at most one DOCKER_CONFIG; the function drops every one all the same, for an
+// environ built elsewhere.
+func nestAgentEnv(environ []string, write func() (bool, error)) ([]string, error) {
+	for _, e := range environ {
+		if v, ok := strings.CutPrefix(e, "DOCKER_CONFIG="); ok {
+			if v != "" {
+				return environ, nil
+			}
+			break
 		}
 	}
-	return nestConfig, nil
+	wrote, err := write()
+	if err != nil || !wrote {
+		return environ, err
+	}
+	out := make([]string, 0, len(environ)+1)
+	for _, e := range environ {
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") {
+			out = append(out, e)
+		}
+	}
+	return append(out, "DOCKER_CONFIG="+nestConfig), nil
+}
+
+// nestOwner is a user and a group, by id: the owner a file is set to.
+type nestOwner struct{ uid, gid int }
+
+// writeNestConfig writes the agent's docker configuration, config.json in dir, for the
+// agent alone: dir is owned by agent with mode 0700 and the file with mode 0600, since
+// the docker command reads its configuration as the agent's user and writes to it as
+// well. The directory above dir, /run/qory, is the runner's: it is owned by root, the
+// enclosure's root, with mode 0755, so the agent's user passes through it to dir and
+// writes nothing in it. Were it narrower, the docker command could not read the
+// configuration and would start the agent's containers without a proxy.
+//
+// Both modes are set whatever the umask, and whatever the image contains there: a
+// directory the image made narrower, or set to another owner, is changed rather than
+// refused, since the runner keeps nothing else in it and a narrower mode only hides the
+// agent's configuration from the agent. A link or a file in either place is refused,
+// since the owner and the mode would land where it points. The file is written anew.
+func writeNestConfig(dir string, config []byte, root, agent nestOwner) error {
+	runner := filepath.Dir(dir)
+	if err := os.MkdirAll(filepath.Dir(runner), 0o755); err != nil {
+		return err
+	}
+	if err := nestDir(runner, 0o755, root); err != nil {
+		return err
+	}
+	if err := nestDir(dir, 0o700, agent); err != nil {
+		return err
+	}
+	file := filepath.Join(dir, "config.json")
+	if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(config)
+	if err == nil {
+		err = f.Chown(agent.uid, agent.gid)
+	}
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// nestDir makes dir, or uses the directory already in the image, and sets its owner to
+// o and its mode to mode, after the umask has narrowed what Mkdir made. A link or a
+// file at dir is refused.
+func nestDir(dir string, mode fs.FileMode, o nestOwner) error {
+	if err := os.Mkdir(dir, mode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory but %v", dir, info.Mode().Type())
+	}
+	if err := os.Chown(dir, o.uid, o.gid); err != nil {
+		return err
+	}
+	return os.Chmod(dir, mode)
 }

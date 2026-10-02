@@ -6,12 +6,63 @@ release may change what an existing document does, and says so under Upgrading.
 
 ## [Unreleased]
 
+### Upgrading
+
+- In an image with a Docker of the agent's own, `dockerd` runs with `/usr/local/sbin`,
+  `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin` as its whole `PATH`, so
+  these directories contain the programs it starts, `containerd`, `runc` and `iptables`
+  among them. Of the run's environment it gets the proxy and, when the run has one, the
+  run's certificate bundle. `docker:dind` needs no change.
+- An image passed to `walltest.Run` with `Docker` needs the `docker` command as well as
+  `dockerd`: the suite starts a container with it as the agent's user.
+- A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
+  own stops the run when the wall writes the agent's docker configuration there, which
+  it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
+  it before.
+
 ### Changed
 
 - The README is short. It lists the runner's four jobs: it records the session,
   enforces a policy, walls the agent in with the secrets kept outside, and reports to a
   server. It shows that `qory run` starts the runner, and where a run's policy comes
   from. `docs/` contains the rest, one page per topic.
+- Contract `v1` revision 1 is amended in place again: §Images lists what `dockerd`
+  starts among the programs in the system directories, and §The wall defines the
+  daemon's environment, the owners and modes of `/run/qory` and the agent's docker
+  configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
+  that configuration.
+
+### Fixed
+
+- In an enclosure with a Docker of the agent's own, the agent's `docker` command reads
+  its configuration, so the containers it starts get the proxy. `wall.Nest` made
+  `/run/qory` root's with mode 0700, which the agent's user could not pass through: the
+  command printed `WARNING: Error loading config file: open
+  /run/qory/docker/config.json: permission denied`, and its containers reached nothing.
+  `/run/qory` is now root's with mode 0755, whatever the umask, and a `/run/qory`
+  already in the image is set to the same owner and mode; `/run/qory/docker` and its
+  `config.json` stay the agent's, 0700 and 0600, now also whatever the umask or the
+  image made them, and the file is written anew. A link where either directory goes is
+  refused. An image that makes `/run/qory` 0755 to work around this may keep doing so.
+- The wall's conformance suite missed that: the containers it starts through the Engine
+  API receive the relay's address. It also starts one with the image's `docker`
+  command, as the agent's user and with no proxy setting of its own, and requires it to
+  reach the origin through the proxy and nothing else, so the image of
+  `TestDockerNestedConforms` contains the docker command as well as dockerd.
+- `wall.Nest` started `dockerd` with the run's environment, so the daemon looked for
+  `containerd`, `runc` and `iptables` on the run's `PATH`, which may list a directory of
+  the workspace, and ran what it found there as the enclosure's root; `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `XTABLES_LIBDIR` and the `DOCKER_` variables reached it the same
+  way. The daemon now runs with the system directories as its `PATH`, the proxy
+  variables for its pulls and, when the run has a bundle, `SSL_CERT_FILE` pointing at
+  it, and with nothing else; the agent keeps the run's environment. The conformance
+  suite puts programs of these names first on the run's `PATH`, in the workspace, and
+  requires that none of them runs.
+- A run that sets `DOCKER_CONFIG` to an empty string gets the agent's docker
+  configuration: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
+  entry, the agent's `docker` command read the empty one as unset, and the containers it
+  started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
+  wall's, when the run's is unset or empty; a non-empty one stays as it is.
 
 ## [0.6.0] - 2026-09-28
 
