@@ -68,8 +68,9 @@ through `X-Qory-Contract-Version`.
   to empty.
 - **Integrations** receive their secrets as a settings document on standard input,
   written from a goroutine; anything they write to standard error is reported with every
-  value of that document redacted. `describe`'s name must equal the connection's, and its
-  version is checked for compatibility.
+  value of that document, every line of a multi-line value and the returned credential
+  redacted. `describe`'s name must equal the connection's, and its version is checked
+  for compatibility.
 - **Services** have exact hosts, no argument, and a scheme from the closed set; header
   names are checked against a data file, `headers.json`.
 - **A host the policy denies** does not refuse the run: the value is never set there, and
@@ -83,6 +84,20 @@ through `X-Qory-Contract-Version`.
   not in 0.7.0.
 - **Ids** are `sec_` or `con_` and 16 lower-case Crockford base32 characters, the form of
   an access key.
+- **The server's database** is covered: access key and runner key rows have integrity
+  codes too, verified before sealing and on registration.
+- **The machine keeps more out of the wall:** a mount of a program the runner starts, a
+  `secrets.local` file or a runtime's credential file is refused, and a `secrets.local`
+  `env:` source never enters the enclosure, a tool or an integration.
+- **Integrations** can be bounded by the machine (`arguments`, `settings`), and their
+  settings are checked against their own description.
+- **Runner keys** may come from a CI's secret store, need fresh approval on replacement
+  when approval is required, and registration has a timestamp.
+- **An optional envelope pin**: the server signs envelopes with Ed25519, and a runner that
+  pins the key verifies them.
+- **Claude Code's declarations** have `paths: [/v1/*]` and `credential_files`.
+- **Limits:** request bodies 32 KiB, sealed values 512 KiB per request in an answer of at
+  most 5 MiB, settings documents 512 KiB; values set only on port 443.
 - **Resolved:** placeholders are the declarations' conventional names; names are
   variable-style and identity is the id; an integration is matched by name and version;
   the server seals only for the connections the run lists; the digest is the SHA-256 of
@@ -151,6 +166,7 @@ it refuses such a variable when it is saved; the names a machine sets through
 | `DOCKER_CONFIG` | the wall sets it for a Docker of the agent's own |
 | a placeholder of this run: a declaration's `name` or an integration's | `variable_secret_conflict`: the enclosure gets the placeholder value there |
 | every variable the run's runtime declares or reserves | `runtime_secret_conflict` (Runtimes) |
+| every variable a `secrets.local` value reads (`env:`) | the machine's value, kept outside the enclosure |
 
 `HOME` stays free behind a wall, and so do loader and interpreter variables (`LD_PRELOAD`,
 `DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `GIT_CONFIG_*`, `GIT_SSH_COMMAND`): inside the
@@ -222,8 +238,9 @@ item 2).
   start's connections with `hosts_denied` recomputed for the policy now in force. A
   change in the server applies from the next run. To cut a running run off a host, the
   server reloads a policy that denies it: the proxy refuses new requests there, closes the
-  open connections to it and records each (§The server, Reload, rules 1 and 2). An
-  integration's credential keeps renewing.
+  open connections to it and records each (§The server, Reload, rules 1 and 2). To cut a
+  run off entirely: reload with a `deny`, then revoke the access key. An integration's
+  credential keeps renewing.
 - **Discovery during a run.** A discovery document that starts listing `secrets` or
   `runner_keys` while a run goes on takes effect at the next run.
 - **A reload is only as strong as its delivery.** A middlebox that drops answers keeps the
@@ -241,16 +258,23 @@ item 2).
   `runner-key` next to `runner.yaml`, `$XDG_CONFIG_HOME/qory/runner-key`, else
   `~/.config/qory/runner-key`. One line: the KEM, `x25519`, a space, the private key in
   base64url without padding.
+- **On a CI machine** the key comes from the CI's secret store instead: `qory` reads it
+  from `QORY_RUNNER_KEY` or from a file descriptor it is given, in the key file's format,
+  and writes no key file. A CI system then has one stable key, which approval and the
+  key limit work with, however often its machines are replaced. The variable is reserved
+  (`QORY_`) and never reaches a tool, an integration or the enclosure.
 - **The key file.** `qory` creates it with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0600`, in a
   directory of mode `0700`, and refuses a key file whose mode grants anything to the
   group or to others, a file or directory owned by another user than the effective one,
   and the published fixture key. Optionally it keeps the key, and the access key's
-  secret, in the system's keychain instead (Open question 8).
+  secret, in the system's keychain instead (Open question 9).
 - **The runner module writes nothing.** It takes the private key through `session.Spec`.
 - **Registration.** The runner registers its public key with a signed POST at every run
-  start, after the ping and before the run-configuration fetch. The same key always has
-  the same id; the runner computes the id itself and refuses an answer with another,
-  `runner_key_mismatch`. A refused, unsigned or mismatched registration answer is no run
+  start, after the ping and before the run-configuration fetch; the body contains a
+  `timestamp` the server accepts within ±300 seconds. The same key always has the same
+  id; the runner computes the id itself and refuses an answer with another,
+  `runner_key_mismatch`, and `qory` prints the id, so an administrator approves a key by
+  comparing it. A refused, unsigned or mismatched registration answer is no run
   when a connection the run applies references a stored value; otherwise the runner
   reports it and the run goes on.
 - **What registration refuses.** `409` `runner_key_invalid`: a public key that is not 32
@@ -260,6 +284,10 @@ item 2).
   registered under the same id. `409` `runner_key_revoked`: a key or an id that matches a
   tombstone. `409` `runner_key_limit`: the access key has as many runner keys as the
   server allows.
+- **Approval.** When the server requires approval of new runner keys (Open question 1),
+  it seals nothing to a key that awaits it: the secrets request answers `409`
+  `runner_key_pending`. A key registered with `replaces` always needs approval of its
+  own; it never inherits the old key's.
 - **Scope.** A runner key belongs to one access key; the server keeps a set per access
   key, unique within it, capped. Every rule here applies per access key. The secrets
   request contains the runner key id, which selects the key the server seals to. The
@@ -290,16 +318,24 @@ runner key fetches every value the server stores for that access key.
   needs a wall: `server_needs_wall`, decided after the ping so the refusal reaches the
   server. Offline, the key file is the signal: on a machine where `runner-key` exists,
   `qory` refuses every unwalled run, `--local` included.
-- *Mounts.* On a machine whose runner file configures a server, every walled run,
-  `--local` included, refuses a mount that is, contains or lies inside the directory of
-  `runner.yaml` and the runner key, resolved through symbolic links:
-  `mount_contains_runner_config`. The runner module takes the paths through
-  `session.Spec`.
-- *The enclosure's environment.* A run that passes `QORY_SERVER_SECRET` into the
-  enclosure is no run, `variable_reserved`.
-- *Integrations and tools* run as the runner's user and are trusted. Neither receives
-  `QORY_SERVER_SECRET` nor the variables a node runner passes its spec in. A node runner
-  passes the secret and the runner key through a file descriptor.
+- *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
+  lies inside one of the runner's files, resolved through symbolic links:
+  `mount_contains_runner_files`, with the path. The runner's files are the directory of
+  `runner.yaml` and the runner key when the runner file configures a server, every
+  integration program and every tool program the machine defines, and every `file:`
+  path of `secrets.local`: an agent that can write a program the runner starts outside
+  the wall, or read a value file, has left the wall. A mount that contains a runtime's
+  `credential_files` is `mount_contains_credential_files` (Runtimes). The runner module
+  takes the paths through `session.Spec`. Optionally the runner opens each program at
+  the start and starts it by its file descriptor, so a later change of the path changes
+  nothing.
+- *The enclosure's environment.* A run that passes `QORY_SERVER_SECRET`, `QORY_RUNNER_KEY`
+  or a variable a `secrets.local` value reads (`env:`) into the enclosure is no run,
+  `variable_reserved`.
+- *Integrations and tools* run as the runner's user and are trusted. None of them,
+  `describe` included, receives `QORY_SERVER_SECRET`, `QORY_RUNNER_KEY`, a variable a
+  `secrets.local` value reads, or the variables a node runner passes its spec in. A node
+  runner passes the secret and the runner key through a file descriptor.
 - *Memory*, optionally: on Linux `PR_SET_DUMPABLE 0`, which also makes the runner's
   `/proc/<pid>/environ` unreadable to other processes of the same user, `RLIMIT_CORE 0`,
   and `mlock` of the opened plaintext.
@@ -338,15 +374,23 @@ runner key fetches every value the server stores for that access key.
   | recipient private key | `AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA` (bytes 1 to 32); public key `B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw`; runner key id `3sVqYB9mvRVgaGW-JNlyfw` |
   | ephemeral private key | `ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A` (bytes 33 to 64) |
   | run id, access key, exp | `01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a`, `ak_f1xt0re000000000`, `1700000600` |
-  | digest | `sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5`, the SHA-256 of `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}}` |
+  | run configuration | the 580 bytes below, the two connections the plaintext lists; digest `sha256=1379353f4075ab5bb861594e18ee646590e431c6349e9ed23d1dba28270e7ebf` |
   | `info` (hex) | `716f72792073656372657473207631000020000100020016337356715942396d765256676147572d4a4e6c796677`, 46 bytes |
-  | `aad` | 168 bytes, as Wire format defines, starting `0024` |
-  | plaintext | `{"version":1,"run_configuration":"sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5","connections":["con_0b5n6t2r9y4f7j3s","con_7q2m4k9x0d3h8w1c"],"values":[{"secret":"sec_3fz8k2m9q4w7x1d6","value":"fixture-value-not-a-real-one"},{"secret":"sec_9c4r7t2y5b8n1h3e","label":"production","value":"-----BEGIN FIXTURE-----\nnot-a-real-key\n-----END FIXTURE-----\n"}]}`, 383 bytes, the `\n` being JSON escapes |
+  | `aad` (hex) | `002430313932386634652d376333612d376432652d396231612d3366356536643763386239610013616b5f663178743072653030303030303030300016337356715942396d765256676147572d4a4e6c79667700477368613235363d31333739333533663430373561623562623836313539346531386565363436353930653433316336333439653965643233643164626132383237306537656266000a31373030303030363030`, 168 bytes |
+  | plaintext | `{"version":1,"run_configuration":"sha256=1379353f4075ab5bb861594e18ee646590e431c6349e9ed23d1dba28270e7ebf","connections":["con_0b5n6t2r9y4f7j3s","con_7q2m4k9x0d3h8w1c"],"values":[{"secret":"sec_3fz8k2m9q4w7x1d6","value":"fixture-value-not-a-real-one"},{"secret":"sec_9c4r7t2y5b8n1h3e","label":"production","value":"-----BEGIN FIXTURE-----\nnot-a-real-key\n-----END FIXTURE-----\n"}]}`, 383 bytes, the `\n` being JSON escapes |
   | `enc` | `WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns` |
-  | `ct` | 399 bytes, SHA-256 `c294c94cf658e4bc8e79065b2be487bc7f9af05946d21314d4974999fa655abe` |
+  | `ct` | 399 bytes, SHA-256 `5824da8771be6a70bd795a3015be0959a0acf4865c44c9d6ac93a94c868d96f7` |
+
+  The run configuration:
+
+  ```json
+  {"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","github.com","api.github.com"]}},"connections":[{"kind":"runtime","id":"con_7q2m4k9x0d3h8w1c","name":"claude","secrets":{"oauth_token":{"id":"sec_3fz8k2m9q4w7x1d6","name":"CLAUDE_OAUTH"}}},{"kind":"integration","id":"con_0b5n6t2r9y4f7j3s","name":"qory-github","repository":"github.com/qoryai/qory-github","version":"1.4.0","argument":"acme/shop","settings":{"app_id":"123456"},"secrets":{"private_key":{"id":"sec_9c4r7t2y5b8n1h3e","name":"GITHUB_APP_KEY","label":"production"}}}]}
+  ```
+
+  `ct`:
 
   ```
-  vWlOGjqntNxqkgdXlQiXxG5i2wUIYkZ_S_CUDYYQHLkxuXtCRP-2oFtRm1Bpn4ZNnNep1jFckIS1CAnZLVioJx7DuufQNwYy2sMABjD6_8xDkrMA8jdSjYsgh0L6sQZdintu96fy7ZT-XsDxTEdXRcIHro6DLtLlCxZKp-IiinXJ7NdElM6np4BIn1Jbo9QFVrsW5N0ht8ECwccpQPNiwKMb4fdcfwB_7s5cCYr8Uue1iat7U0vdp5Vo7BrSuA2OEXr5kYMPKWU20J5Mx1-yRa1Xt4bkzLpDNnQT7unP2x-L9TPR1JF4P4FlKh-6Km53a1YlubL0HU5kXzI9bdlfJgxvFEXUCCoCakQGSTdgc2LHPHAGddD0CytLTCRZ0Kv1df3DxV-at8sgoK9U0q3rbKwHFu4hePLWqUadZlrwISFjwyNWv5-3z-o3EIkeJ7mmI7HON1hzhdisCU8hiA7iAIvpyBGKvhJRzxtRTqOpX82Gp1SETF-yaPvdcwGrrDtC-XCUI0eYkATiegsh6crp
+  vWlOGjqntNxqkgdXlQiXxG5i2wUIYkZ_S_CUDYYQHLkxuXtCRP-2oFtWnlVpm4pJw9ChhzYKkdCxCwjeK1qldU7Cu7fUZVdg2s9TB2Cs-5dBkuMKompT2493hUap51AKin1spvr1vZOtXsDxTEdXRcIHro6DLtLlCxZKp-IiinXJ7NdElM6np4BIn1Jbo9QFVrsW5N0ht8ECwccpQPNiwKMb4fdcfwB_7s5cCYr8Uue1iat7U0vdp5Vo7BrSuA2OEXr5kYMPKWU20J5Mx1-yRa1Xt4bkzLpDNnQT7unP2x-L9TPR1JF4P4FlKh-6Km53a1YlubL0HU5kXzI9bdlfJgxvFEXUCCoCakQGSTdgc2LHPHAGddD0CytLTCRZ0Kv1df3DxV-at8sgoK9U0q3rbKwHFu4hePLWqUadZlrwISFjwyNWv5-3z-o3EIkeJ7mmI7HON1hzhdisCU8hiA7iAIvpyBGKvhJRzxtRTqOpX82Gp1SETF-yaPvdcwGrrDuIuguf7jNbli_ANph7O8qe
   ```
 
   A second case alters `aad` and expects the open to fail.
@@ -415,14 +459,43 @@ whose exact bytes the server defines:
 - an integrity code over each stored rendering, its body bytes and its digest, checked
   when serving the GET and again before sealing; a failure is `503` `unavailable` on both,
   no run;
+- an integrity code over each access key row: its id, its secret's ciphertext and the
+  previous secret's during a rotation, its workspace, its stored-secrets flag and whether
+  it is revoked. The secret is already encrypted at rest under the instance key, so a
+  reader of the database does not get it; the code stops a writer who moves a ciphertext
+  between rows, enables stored secrets or un-revokes a key;
+- an integrity code over each runner key row: its public key, its access key, its
+  approval and its revocation, so a writer cannot insert or approve a key;
+- both verified on the secrets endpoint before sealing, and on registration;
 - a per-row version inside the coded data, with the audit recording the current version
   of each row, so an older row restored over a newer one is detected unless the audit is
   rolled back with it;
 - audit of every change with before and after.
 
-A connection or definition whose code fails refuses the render, and the holder keeps its
-last good rendering. None of this stops a writer who has the instance key, nor a change
-made through the server's own pages, which is authorization's matter.
+All codes use the same key, derived from the instance key with HKDF-SHA256. A connection
+or definition whose code fails refuses the render, and the holder keeps its last good
+rendering; an access key or runner key row whose code fails seals nothing. None of this
+stops a writer who has the instance key, nor a change made through the server's own
+pages, which is authorization's matter.
+
+**The limit of a shared secret.** Base mode and an answer signature under the access
+key's secret leave one thing open: a holder of that secret cannot reroute real values,
+but it can seal values of its own choosing to the runner and sign the answer, and the
+agent then uses them on the hosts the connections route to. An optional pin closes it:
+
+- The server signs every sealed envelope with an Ed25519 key of the instance, from a
+  separate signing key or derived from the instance key. Discovery lists its public key,
+  `signing_key: {"alg": "ed25519", "public_key": "<32 bytes, base64url>"}`, and the access
+  keys page shows it.
+- The envelope gains `sig`, the 64-byte signature in base64url, over
+  `lp32("qory envelope v1") ‖ lp32(suite) ‖ lp32(runner_key_id) ‖ lp32(run_id) ‖
+  lp32(access_key) ‖ lp32(run_configuration) ‖ lp32(exp in canonical decimal) ‖
+  lp32(enc, raw) ‖ lp32(ct, raw)`, where `lp32` is a u32 big-endian length, then the
+  bytes.
+- A runner whose server document pins the key, `signing_key` in `runner.yaml`'s
+  `server` section, requires the signature and verifies it before opening:
+  `envelope_signature_invalid`. An unpinned runner skips it. The pin is the machine's,
+  so nothing on the wire can remove it (Open question 13).
 
 ### 7. Machine values and the runner file
 
@@ -440,7 +513,7 @@ made through the server's own pages, which is authorization's matter.
     providers: [local]
     local:
       SENTRY_AUTH:
-        env: SENTRY_AUTH                # read once at run start
+        env: SENTRY_AUTH_SOURCE         # read once at run start
         hosts: [sentry.io]
       GITHUB_APP_KEY:
         hosts: [github.com, api.github.com]
@@ -454,6 +527,12 @@ made through the server's own pages, which is authorization's matter.
   or from the runner file. The hosts compared are the service's, the runtime declaration's
   for a runtime connection, and `describe`'s `roles.credential.hosts` for an integration.
   A server can therefore never send a machine value further than the machine allows.
+  For an integration the bound covers where the produced credential is set, not where the
+  program sends the raw value (Integrations).
+- **Every provider is bounded.** A provider resolves a reference a server sent only for
+  a name the machine defines a `hosts` bound for. `secrets.local` requires `hosts` on
+  every entry; a later provider, such as a vault, configures a bound per name, and a name
+  without one does not resolve.
 - **Source decides.** A reference with an id is resolved from the sealed payload and
   nothing else; `qory` refuses `apiary` in `secrets.providers`. An external reference is
   resolved through the providers alone.
@@ -500,7 +579,7 @@ made through the server's own pages, which is authorization's matter.
   `X-Qory-Contract-Version: 1`. A later change to what a server may rely on goes through
   that header.
 - **Answer signatures are required.** A runner refuses an answer without a valid
-  signature. An exemption for a plain receiver, if there is one (Open question 5), is a
+  signature. An exemption for a plain receiver, if there is one (Open question 6), is a
   setting of the runner file, never inferred from an answer, and a run configuration with
   connections or variables under it is no run.
 - **`TRACE` and `TRACK`** are refused with a `403`, rule `wall:trace`, on every host where
@@ -521,23 +600,30 @@ secrets:
       label: Anthropic API key
       name: ANTHROPIC_API_KEY
       hosts: [api.anthropic.com]
+      paths: [/v1/*]
       auth: {scheme: header, header: x-api-key}
     - id: oauth_token
       label: Claude OAuth credential
       name: CLAUDE_CODE_OAUTH_TOKEN
       hosts: [api.anthropic.com]
+      paths: [/v1/*]
       auth: {scheme: bearer}
   one_of:
     - id: model_key
       required: true
       of: [api_key, oauth_token]
   reserves: [ANTHROPIC_AUTH_TOKEN]
+  credential_files: [~/.claude/.credentials.json]
 ```
 
 - A declaration's `hosts` are exact DNS names, no wildcard, no IP literal; its `auth` is a
   scheme from the closed set; its optional `paths`, in the policy's path grammar, bound
-  the requests its value is set on. Warning about an administrative key on save is the
-  server's matter.
+  the requests its value is set on. A credential that can mint credentials gives the
+  agent a readable one if the agent reaches the minting path, so a declaration bounds its
+  value with `paths`: Claude Code's are `/v1/*`, and the exact paths Claude Code needs
+  are a release-gate check. Whether `api.anthropic.com` serves a path that creates an API
+  key from an OAuth credential is to verify. Warning about an administrative key on save
+  is the server's matter.
 - A group of `one_of` has an `id`, its declarations under `of`, and may be `required`.
   A runtime connection supplies at most one declaration of each group, else
   `runtime_secret_choice`; a declaration in no group is optional. A walled run of the
@@ -548,14 +634,21 @@ secrets:
   `connection_secret_unknown`.
 - **The stand-in.** The runner sets the placeholder value only in the chosen
   declaration's variable, and the proxy sets the value on its hosts by its scheme. The
-  placeholder need not look like a key: Claude Code does not check the format.
+  placeholder need not look like a key: Claude Code does not check the format. Another
+  connection whose placeholder is a variable the run's runtime declares or reserves is
+  refused, `placeholder_conflict`: only the runtime connection sets those.
 - **Conflicts.** A walled run is refused when its environment, `Spec.Env` with
   `wall.env`, `--env` and the harness's launch, or its variables contain a variable the
   run's runtime declares or reserves: `runtime_secret_conflict`. For Claude Code these
   are `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Claude
   Code reads `ANTHROPIC_AUTH_TOKEN` before `ANTHROPIC_API_KEY` before
   `CLAUDE_CODE_OAUTH_TOKEN`, so a stray value for another alternative would win over the
-  stand-in. A model credential reaches a walled run only through a connection.
+  stand-in. A model credential from the run's environment never reaches a walled run.
+- **Credential files.** `credential_files` lists files in which the runtime keeps a
+  credential of its own, for Claude Code `~/.claude/.credentials.json`. A walled run
+  refuses a mount that contains one, resolved through symbolic links:
+  `mount_contains_credential_files`. A file baked into the image is out of the runner's
+  reach; that is the image owner's matter.
 - **Emptied.** The wall writes every variable the runtime declares or reserves that the
   run does not set a placeholder in, as an empty value in the enclosure's environment
   file, so an image's own `ENV` cannot set one. This relies on Claude Code reading an
@@ -610,6 +703,25 @@ credential.
   the private section included, is `connection_host_public_suffix`. Scheme and paths come
   from the program's answer, `credential.schema.json`; a claim above the described hosts
   is refused.
+- **What the hosts bound.** For an integration, the hosts bound only where the proxy sets
+  the credential the program produces. The program runs outside the wall and receives
+  the raw value, and where it sends that value is the program's. The server chooses
+  `argument` and `settings`, which steer the program.
+- **The machine's bounds.** An entry of `integrations:` may bound what a server chooses:
+  `arguments`, an RE2 pattern the argument must match whole, else
+  `integration_argument_not_allowed`; and `settings`, per member a fixed value or
+  `{pattern: <RE2>}`, else `integration_settings_not_allowed`. Before it writes standard
+  input the runner also validates the settings against the program's own description,
+  else `integration_settings_invalid`.
+
+  ```yaml
+  integrations:
+    qory-github:
+      path: /usr/local/bin/qory-github
+      arguments: '^acme/[a-z0-9._-]+$'
+      settings:
+        app_id: '123456'
+  ```
 - **Invocation.** `<program> credential --settings - -- <argument>`, the argument as one
   word after `--`. Standard input contains exactly one JSON document: the connection's
   `settings` with each secret's value inline under its setting's name, a name in both
@@ -618,17 +730,19 @@ credential.
 - **The settings document** is written from memory, from a goroutine (`cmd.Stdin` set to
   a `bytes.Reader`), so a program that never reads cannot stall the runner; standard input
   is then closed. It is written again on every invocation, renewals included, and never
-  goes to a file, an argument, the environment or a log. At most 64 KiB, refused before
-  the program starts: `integration_settings_too_large`. No `${argument}` is replaced
+  goes to a file, an argument, the environment or a log. At most 512 KiB as encoded,
+  refused before the program starts: `integration_settings_too_large`; the server refuses
+  on save a link that would make it larger with a stored value. No `${argument}` is replaced
   inside it.
 - **What the program writes to standard error** is reported, in errors and as the
-  runner's lines, only after every value written to its standard input is replaced by
-  `[redacted]`, matched exactly. Redaction, not dropping, keeps the program's own reason
+  runner's lines, only after `[redacted]` replaces, matched exactly, every value written
+  to its standard input, every line of 8 bytes or more of a value that has several
+  lines, and the credential the program returned. Redaction, not dropping, keeps the program's own reason
   readable. It does not catch a value the program transforms before writing it, such as
   an encoded form; that is the program's to avoid.
 - **A program that does not read `--settings -`** fails under the credential-failure rule
   (§Credentials). The integrations contract adds no description member announcing it
-  (Open question 10).
+  (Open question 11).
 - **Validation.** The server validates `argument` and `settings` against the release's
   `description.json`, and that each key of `secrets` is a top-level `writeOnly` property
   of it; the runner passes them as received.
@@ -667,13 +781,18 @@ custom definitions on save and its built-in definitions in CI against the same f
 
 ## Connections at the proxy
 
-- **Termination.** Every host of a connection is terminated.
+- **Termination.** Every host of a connection is terminated, and the proxy sets a value
+  only on port 443 of a host. Today the proxy ignores the port when it sets a credential
+  (`internal/proxy/terminate.go`); a request to another port of the host is decided by
+  the policy and receives no value.
 - **A host the policy denies** does not refuse the run. The run starts; a request to the
   host is refused by the policy, so the proxy never sets the value there; the host is
   listed in the connection's `hosts_denied`. The list comes from the proxy's own decision
   function, the host lists and the path rules both, so the record and the proxy cannot
   disagree. Under `observe`, every connection host that `deny` does not cover receives the
   value.
+- **Nested Docker.** A run with stored values may use a Docker of the agent's own: values
+  never enter the enclosure, so the containers the agent starts receive none either.
 - **One credential per host.** Two connections, or a connection and a tool, whose hosts
   overlap, one entry covering the other as `*.github.com` covers `api.github.com`, are
   `connection_host_conflict`.
@@ -833,7 +952,8 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `secrets-request.schema.json`, the secrets request's body, and
   `runner-key.schema.json`, the registration's body;
 - `events/run.refused.schema.json` and `events/run.policy_applied.schema.json`, with
-  `connections` and `uses`.
+  `connections` and `uses`;
+- `server.schema.json`, with the optional `signing_key` pin.
 
 ### Runner key registration
 
@@ -842,13 +962,16 @@ A signed POST to `runner_keys.url`:
 ```json
 {"version": 1, "suite": "x25519-sha256-aes256gcm",
  "public_key": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
- "replaces": "<the old key's id, on rotation only>"}
+ "replaces": "<the old key's id, on rotation only>",
+ "timestamp": 1700000000}
 ```
 
-answered `200` (or `201` the first time) `{"version": 1, "runner_key_id":
-"3sVqYB9mvRVgaGW-JNlyfw"}`, or `409` with `runner_key_invalid`, `runner_key_revoked`,
-`runner_key_limit`, or `runner_key_unknown` for a `replaces` that is not a key of the same
-access key. A replayed registration is harmless.
+The server accepts `timestamp` within ±300 seconds, else `401`, verifies the access key
+row's integrity code, else `503` `unavailable`, and answers `200` (or `201` the first
+time) `{"version": 1, "runner_key_id": "3sVqYB9mvRVgaGW-JNlyfw"}`, or `409` with
+`runner_key_invalid`, `runner_key_revoked`, `runner_key_limit`, or `runner_key_unknown`
+for a `replaces` that is not a key of the same access key. A replayed registration is
+harmless.
 
 ### The secrets request and the envelope
 
@@ -878,7 +1001,9 @@ The server, in order, after the endpoint rules:
 1. accepts `timestamp` within ±300 seconds, else `401`;
 2. refuses an access key not allowed stored secrets: `409` `secrets_not_allowed`;
 3. finds the runner key registered to the access key and not revoked, else `409`
-   `runner_key_unknown` or `runner_key_revoked`;
+   `runner_key_unknown` or `runner_key_revoked`, and approved when the server requires
+   approval, else `409` `runner_key_pending`; the access key row's and the runner key
+   row's integrity codes must verify, else `503` `unavailable`;
 4. refuses a run whose row it has closed: `410` `run_closed`;
 5. resolves the holder the labels select, with the GET's resolver, and requires that
    holder's current rendering, or one superseded at most 15 minutes ago, to have the
@@ -907,7 +1032,8 @@ The answer, `200`:
             "run_configuration": "sha256=<64 hex digits>",
             "exp": 1700000600,
             "enc": "<32 bytes, base64url>",
-            "ct": "<ciphertext and tag, base64url>"}}
+            "ct": "<ciphertext and tag, base64url>",
+            "sig": "<64 bytes, base64url, Ed25519 of Decision 6>"}}
 ```
 
 A `410` here is no run; it never means the events endpoint's "stop". The runner checks
@@ -923,10 +1049,19 @@ For `runner_keys.url` and `secrets.url`:
 - **Content type** `application/json`, else `415`; every answer `application/json`. A
   request has no `Content-Encoding` (a server answers `415` to one); the runner sends
   no `Accept-Encoding` but `gzip`.
-- **Sizes.** A request body at most 4 KiB, else `413`. The secrets answer at most 1 MiB,
-  a refusal body at most 64 KiB.
+- **Sizes.** A request body at most 32 KiB, else `413`. The largest secrets request has
+  16 labels with a 64-byte key and a 256-byte value, at most 1,606 bytes each once every
+  byte of a value is escaped as `\u00XX`, 25,696 in all; 32 connection ids, 736 bytes;
+  and under 300 bytes besides: about 26.7 KiB. Without escapes it is about 6.3 KiB. The
+  secrets answer is at most 5 MiB: 512 KiB of values, every byte escaped at six bytes,
+  is 3 MiB of plaintext and 4 MiB in base64url. A refusal body is at most 64 KiB.
 - **Members.** A member the schema does not define is refused. A POST's signature covers
   its body and not its path, so a body signed for one endpoint must fail at every other.
+  The runner decodes the envelope and the plaintext, and the server the request bodies,
+  with `encoding/json/v2` and `RejectUnknownMembers(true)`, since v2 ignores unknown
+  members by default; member names are compared with case, never relaxed; a value
+  decoded in part before an error is discarded; and `exp` is decoded as an unsigned
+  integer, so a negative one is refused.
 - **Order of refusals.** `413`; `415`; `400` `bad_request` for a header sent twice; `401`;
   `429`; `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is
   not JSON, fails its schema, has another `version`, an unknown `suite`, a `run_id` that is
@@ -938,8 +1073,9 @@ For `runner_keys.url` and `secrets.url`:
 - **Answer headers.** Answers of these two endpoints contain neither digest header. Every
   signed answer contains `Cache-Control: no-store, no-transform`.
 - **Counts.** At most 32 connections, 16 references per connection, 16 hosts and 32 paths
-  per service, 32 distinct stored values per secrets request. The server checks the count
-  per holder when it renders.
+  per service, 32 distinct stored values and 512 KiB of values per secrets request, and
+  a settings document of 512 KiB per integration. The server checks the counts per holder
+  when it renders.
 - **Values.** Every secret value is UTF-8 text, 1 to 16384 bytes, with no NUL; a binary
   secret is stored encoded, base64 for one, as its consumer expects. A value linked to a
   runtime or service connection, which goes into a header, also has no byte
@@ -982,9 +1118,10 @@ plaintext echoes it.
   `secret_unresolved` with the connections that reference it, an extra or repeated one,
   another digest or another set `secret_sealed_mismatch`.
 - A value follows the value rules above, for where it is used.
-- The runner decodes with `encoding/json/v2`, which refuses a member name twice in one
-  object by default (verified on Go 1.27.1): `secret_sealed_invalid`. It never wraps that
-  decoder's errors, nor the schema validator's, whose messages can quote input.
+- The runner decodes with `encoding/json/v2` under the options of Endpoint rules; v2
+  refuses a member name twice in one object by default (verified on Go 1.27.1):
+  `secret_sealed_invalid`. It never wraps that decoder's errors, nor the schema
+  validator's, whose messages can quote input.
 
 ### Signed answers
 
@@ -1087,16 +1224,19 @@ Order at run start; the steps not listed are §Sequence's.
    `connections` member, or without a run configuration, the connections are the runner
    file's.
 5. Check the connections: connections without a wall; duplicates; the runtime connection
-   for the run's runtime kept and any other set aside; declarations and `one_of`; hosts
-   and `headers.json`; protected mounts.
-6. When a connection the run applies references a stored value: no runner key, no
-   `secrets` section, or a refused, unsigned or mismatched registration is no run.
-   Otherwise the secrets request with the applied connections; check and open the
-   envelope; check the plaintext.
+   for the run's runtime kept and any other set aside; declarations and `one_of`, a
+   required group included; hosts and `headers.json`; the mounts against the runner's
+   files and the runtime's credential files; for each integration, the machine's
+   `arguments` and `settings` bounds.
+6. When a connection the run applies references a stored value: no runner key
+   (`runner_key_missing`), no `secrets` section in discovery (`secrets_endpoint_missing`),
+   or a refused, unsigned or mismatched registration is no run. Otherwise the secrets
+   request with the applied connections; with a pinned `signing_key`, verify the
+   envelope's signature; check and open the envelope; check the plaintext.
 7. Resolve every external reference through the providers in order, and check each
    machine value's `hosts` against where its connection sends it.
 8. For each integration connection: find the program, run `describe`, compare its name
-   and version, read its hosts.
+   and version, read its hosts, validate the settings against its description.
 9. Check the hosts and the values together: `connection_host_conflict`, the value rules
    for where each value goes; compute `hosts_denied`.
 10. Check the variables and the environment: without a wall `variables.accept`; the
@@ -1121,11 +1261,12 @@ are unreferenced, since Go cannot wipe a string.
 | `unsupported_contract_version` | server, `400` | `X-Qory-Contract-Version` other than `1` |
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate is exceeded |
-| `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request |
+| `unavailable` | server, `503` | a stored rendering, an access key row or a runner key row fails its integrity code, on the GET, registration or the secrets request |
 | `runner_key_invalid` | server, `409` | not 32 bytes, non-canonical, low-order, or another key under an existing id |
 | `runner_key_limit` | server, `409` | as many runner keys as allowed |
 | `runner_key_revoked` | server, `409` | the key or its id is a tombstone |
 | `runner_key_unknown` | server, `409` | the key id, or `replaces`, is not a key of the access key |
+| `runner_key_pending` | server, `409` | the key awaits approval |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
 | `run_closed` | server, `410` | the server has closed the run's row |
 | `run_configuration_superseded` | server, `410` | no rendering of the holder with that digest, current or within 15 minutes |
@@ -1134,9 +1275,12 @@ are unreferenced, since Go cannot wipe a string.
 | `run_secrets_expired` | server, `409` | a reseal after the first payload's `exp` |
 | `runner_key_mismatch` | runner | the registration answer's id is not the runner's own |
 | `runner_key_missing` | runner | a stored value referenced and no runner key in the spec |
+| `secrets_endpoint_missing` | runner | a stored value referenced and discovery lists no `secrets` |
+| `envelope_signature_invalid` | runner | a pinned `signing_key` and an envelope without a valid signature |
 | `answer_unsigned` | runner | an answer at run start without a valid signature |
 | `server_needs_wall` | runner | discovery lists `secrets` and the run has no wall |
-| `mount_contains_runner_config` | runner | a mount is, contains or lies inside the runner's configuration directory |
+| `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, an integration or tool program, or a `secrets.local` file |
+| `mount_contains_credential_files` | runner | a mount contains a file the run's runtime lists in `credential_files` |
 | `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document |
 | `run_configuration_digest_mismatch` | runner | the recomputed digest differs from the header's |
 | `connection_needs_wall` | runner | a connection and no wall |
@@ -1153,7 +1297,10 @@ are unreferenced, since Go cannot wipe a string.
 | `integration_missing` | runner | the machine has no integration of that name |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
-| `integration_settings_too_large` | runner | the settings document exceeds 64 KiB |
+| `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern |
+| `integration_settings_not_allowed` | runner | a setting outside the machine's `settings` bound |
+| `integration_settings_invalid` | runner | the settings fail the program's own description |
+| `integration_settings_too_large` | runner | the settings document exceeds 512 KiB |
 | `secret_label_missing` | runner, and the server on save | a reference to a secret with several values without a label |
 | `secret_unresolved` | runner | no provider resolves it, or the sealed list lacks it |
 | `secret_hosts_exceeded` | runner | a machine value sent to a host its `hosts` do not cover |
@@ -1162,29 +1309,36 @@ are unreferenced, since Go cannot wipe a string.
 | `secret_sealed_expired` | runner | `exp` passed by more than 300 s, or more than 900 s ahead |
 | `secret_sealed_mismatch` | runner | an extra or repeated value, another digest or another set of connections |
 | `variable_not_accepted` | runner | without a wall, a name outside `variables.accept` |
-| `variable_reserved` | runner | a reserved name, or `QORY_SERVER_SECRET` passed into the enclosure |
+| `variable_reserved` | runner | a reserved name, or `QORY_SERVER_SECRET`, `QORY_RUNNER_KEY` or a variable a `secrets.local` value reads passed into the enclosure |
 | `variable_secret_conflict` | runner | a variable with a placeholder's name |
 | `variable_conflict` | runner | a variable the run or the runtime sets |
-| `placeholder_conflict` | runner | the run passes a value for a placeholder |
+| `placeholder_conflict` | runner | the run passes a value for a placeholder, or a connection other than the runtime's sets a placeholder in a variable the runtime declares or reserves |
 
 ## Security considerations
 
 | Threat | What protects | What does not |
 |---|---|---|
 | A TLS-terminating middlebox between the runner and the server, without the access key's secret | It cannot read a stored value; it cannot alter the connections, the policy, the variables or the digests, nor replay an older answer; `no-transform` keeps a proxy from re-coding a signed answer | It reads the document. At the start it can only refuse; during a run, dropping answers keeps the policy in force |
-| A proxy between the runner and a destination host, whose authority the machine trusts | — | It reads the value there: that leg is ordinary TLS against the machine's trust store (Open question 7) |
+| A proxy between the runner and a destination host, whose authority the machine trusts | — | It reads the value there: that leg is ordinary TLS against the machine's trust store (Open question 8) |
 | The server's logs and answer caches | Ciphertext only; `Cache-Control: no-store` | — |
-| A read of the server's database | Values encrypted under a key derived from the instance key | A reader with the instance key reads everything |
-| A write to the server's database | Integrity codes over connections, custom definitions and every rendering, with a per-row version; seals taken from the verified rendering's bytes; audit | A writer with the instance key, or a change through the server's own pages |
+| A read of the server's database | Values encrypted under a key derived from the instance key; access key secrets encrypted under the instance key, so a reader cannot take one, register a runner key and fetch values | A reader with the instance key reads everything |
+| A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every access key row and every runner key row, with a per-row version, verified before sealing: a writer cannot move a secret between access keys, enable stored secrets, or insert or approve a runner key; seals taken from the verified rendering's bytes; audit | A writer with the instance key, or a change through the server's own pages |
+| A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument and settings, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments` and `settings` bounds and the optional envelope pin are what remain |
+| A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may (Open question 12) | Choosing the host is reading the value |
+| A holder of the access key's secret, on the path | Routing bound to the document; the optional envelope pin | Without the pin, it can seal values of its own choosing and the agent uses them |
 | A link removed while a run starts | A superseded rendering seals only what the current rendering still references through the same connection | — |
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
 | A machine with the access key, choosing labels | — | Repository scope is no boundary against a machine: an access key is workspace-wide |
-| A stolen access key secret | Stored secrets only for access keys allowed them; revocation; the recomputed digest binds values to the document the server rendered | Whoever has it registers a key and receives future stored values (Open question 1) |
-| An agent reading the machine's configuration | `server_needs_wall`; `qory` refusing unwalled runs where `runner-key` exists; `mount_contains_runner_config`; `QORY_SERVER_SECRET` refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
-| A model credential reaching the enclosure | `runtime_secret_conflict`; the runtime's other declared and reserved variables set to empty | — |
+| A stolen access key secret | Stored secrets only for access keys allowed them; approval of new runner keys; revocation; the recomputed digest binds values to the document the server rendered | Without approval, whoever has it registers a key and receives future stored values (Open question 1) |
+| A thief of the runner key file with recorded traffic or the server's logs | Rotation and revocation | Base mode has no forward secrecy: the key opens every past payload sealed to it, so keys are rotated |
+| A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
+| Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
+| An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing unwalled runs where `runner-key` exists; `mount_contains_runner_files`; `QORY_SERVER_SECRET`, `QORY_RUNNER_KEY` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
+| A model credential reaching the enclosure | `runtime_secret_conflict`; the runtime's other declared and reserved variables set to empty; `mount_contains_credential_files` | A credential file baked into the image |
+| A credential that mints credentials | A declaration's `paths`, `/v1/*` for Claude Code | A minting path inside the allowed paths gives the agent a readable credential; to verify for `api.anthropic.com` |
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
-| An integration program | Its settings on standard input only; `describe`'s name must match; its standard error redacted before it is reported | It runs as the runner's user and is trusted; a value it transforms before writing escapes redaction |
+| An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
 | A payload replayed | Run id, access key, runner key id, digest and `exp` in `aad`; the timestamp; the reseal window bound to one key, digest and set; a new run id per attempt | — |
 | A signed body sent to another endpoint | Strict schemas on every endpoint | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
@@ -1200,6 +1354,10 @@ are unreferenced, since Go cannot wipe a string.
     real value, and the enclosure never sees it;
   - both run as an explicit check in CI.
 
+  - the exact paths Claude Code requests on `api.anthropic.com` with each credential,
+    so the declarations' `paths` bound them, and whether a path there creates an API key
+    from an OAuth credential.
+
   A real Claude Code run with a real API key stays a manual check before the release,
   because CI has no Anthropic key.
 - **Empty means unset.** A check that Claude Code treats an empty `ANTHROPIC_AUTH_TOKEN`,
@@ -1211,8 +1369,11 @@ are unreferenced, since Go cannot wipe a string.
 - **Integrations:** a fake program that checks its standard input is one document, that
   it arrives fresh on a renewal, that a program that never reads does not stall the run,
   that no value reaches its arguments or environment, that a value it writes to
-  standard error is reported redacted, and that a program whose `describe` reports
-  another name is refused.
+  standard error is reported redacted, its credential and every line of a multi-line
+  value included, and that a program whose `describe` reports another name is refused.
+- **Mounts:** a walled run refuses a mount of an integration program, a tool program, a
+  `secrets.local` file and `~/.claude/.credentials.json`, each through a symbolic link
+  too.
 
 ## Upgrading
 
@@ -1232,9 +1393,14 @@ are unreferenced, since Go cannot wipe a string.
   `CLAUDE_CODE_OAUTH_TOKEN`. A walled run whose runtime has a required group and no
   connection that supplies it is refused, `runtime_secret_missing`.
 - Every run against a server that lists `secrets` needs a wall, and so does every run on a
-  machine with `runner-key`. A mount of the runner's configuration directory, or of a
-  directory above it, is refused.
-- The proxy refuses `TRACE` and `TRACK` on every host where it sets a value.
+  machine with `runner-key`. A mount of the runner's configuration directory, a program
+  the runner starts, a `secrets.local` file, a directory above any of them, or a
+  runtime's credential file, is refused.
+- A CI machine may take its runner key from `QORY_RUNNER_KEY` or a file descriptor.
+- The proxy refuses `TRACE` and `TRACK`, and sets a value only on port 443, on every host
+  where it sets one.
+- A server may pin its envelope signing key in `runner.yaml`; a pinned runner verifies
+  every envelope.
 - `dev.qory.run.refused` is new; `dev.qory.run.policy_applied` lists connections and
   variables' names.
 
@@ -1243,24 +1409,53 @@ are unreferenced, since Go cannot wipe a string.
 1. Does a newly registered runner key need approval in the server before values are
    sealed to it? It is the one control between a stolen access key secret and the
    workspace's stored values, and the case where the recomputed digest matters.
-2. `variable_conflict` against the names the run sets: refuse (proposed), or let the
+   Reviewer's safer answer: yes, approval; it needs the CI key path (Decision 4) and
+   fresh approval for every replacement (`runner_key_pending`).
+2. Ephemeral machines, a new machine per job, generate a new runner key at every start,
+   which manual approval cannot follow. Either (a) the CI's secret store supplies one
+   stable key through `QORY_RUNNER_KEY` or a file descriptor, which keeps approval
+   meaningful; or (b) a per-access-key option, "approve runner keys from this access key
+   automatically", administrators only and off by default, at the cost that a thief of
+   that access key's secret receives values.
+   Reviewer's safer answer: (a), and (b) only for keys whose machines cannot keep a
+   stable key.
+3. `variable_conflict` against the names the run sets: refuse (proposed), or let the
    server's value win, or the run's?
-3. `server_needs_wall`, scoped per access key as the server's side proposes, with `qory`
+   Reviewer's safer answer: refuse.
+4. `server_needs_wall`, scoped per access key as the server's side proposes, with `qory`
    refusing every unwalled run where `runner-key` exists: accept?
-4. `variables.accept`: the server's side accepts it as drafted, names only. Agree?
-5. A runner-file exemption from answer signing for a plain receiver: offer one, or none?
-6. Should other no-runs after the ping, such as a tool that does not start, also emit
+   Reviewer's safer answer: accept; `qory`'s error states that deleting `runner-key`
+   restores unwalled runs.
+5. `variables.accept`: the server's side accepts it as drafted, names only. Agree?
+   Reviewer's safer answer: agree, and add a built-in list the machine can never accept:
+   `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `ENV`, `PYTHONSTARTUP`, `PERL5OPT`,
+   `RUBYOPT`, `GIT_*`, `*_PROXY`, `HOME`. Leaving such a variable out and reporting it,
+   instead of refusing the run, is equally safe.
+6. A runner-file exemption from answer signing for a plain receiver: offer one, or none?
+   Reviewer's safer answer: no exemption.
+7. Should other no-runs after the ping, such as a tool that does not start, also emit
    `dev.qory.run.refused`?
-7. Build the optional setting that verifies destination hosts against public roots only?
-8. Keychain storage for the access key's secret and the runner key: now, or later?
-9. Routing out of the seal, with the digest recomputed and the server sealing from the
-   verified rendering (Decision 6): the server's side agrees. Agree?
-10. Integrations: add a description member announcing support for `--settings -`, so a
+   Reviewer's safer answer: yes.
+8. Build the optional setting that verifies destination hosts against public roots only?
+   Reviewer's safer answer: build it as an option, on by default for hosts that receive
+   stored values.
+9. Keychain storage for the access key's secret and the runner key: now, or later?
+   Reviewer's safer answer: later, with the CI key path now.
+10. Routing out of the seal, with the digest recomputed and the server sealing from the
+    verified rendering (Decision 6): the server's side agrees. Agree?
+    Reviewer's safer answer: agree, now that access key and runner key rows have
+    integrity codes.
+11. Integrations: add a description member announcing support for `--settings -`, so a
     program without it is refused by name rather than by its failure?
-11. For a later release, with organisation secrets: who may link a secret into a
-    connection? The server's side prefers a permission on the secret at the level that
-    owns it, and, until then, the right to enable stored secrets on an access key held by
-    administrators.
+    Reviewer's safer answer: yes; the project is new.
+12. Who may link a secret into a connection? The server's 0.7.0 answer: custom service
+    definitions and enabling stored secrets on an access key are for owners and
+    administrators only, and linking a secret needs a `secret.use` permission on it,
+    which only owners and administrators have. Open for a later release: finer roles,
+    and with organisation secrets a permission on the secret at the level that owns it.
+    Reviewer's safer answer: a link permission on the secret, with custom services and
+    stored secrets on an access key for administrators only.
+13. The envelope signing pin (Decision 6): require it, or keep it optional?
 
 **For the server's side:** none open. Answered: the secrets request lists the
 connections the run applies, so the server seals for the run's runtime only; the digest
@@ -1303,3 +1498,13 @@ and version, with `describe`'s name required to match.
     `connection` field takes either form.
 13. **An unsigned `2xx` on an event POST** is retried until the run ends; the runner
     reports it once, not per batch.
+14. **The proxy ignores the port today** when it sets a credential
+    (`internal/proxy/terminate.go` trims `:443` and sets the credential whatever the
+    port); setting values on port 443 only is a change to the proxy.
+15. **The request body limit is 32 KiB, not 16.** 16 KiB covers every measured request,
+    6.2 to 10.3 KiB, but not 16 labels whose values are escaped byte by byte, about
+    26.7 KiB; 32 KiB covers the contract's own label limits.
+16. **Validating settings against the program's description** needs a JSON Schema
+    validator on the program's `description.json` at run start; the runner has one
+    (`santhosh-tekuri/jsonschema/v6`), whose errors quote values, so a settings error
+    reports the member only.
