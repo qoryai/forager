@@ -15,11 +15,11 @@ is one of three kinds, and each kind defines how and where its secrets are sent:
   needs.
 
 A **connection** links each secret a kind needs to a secret. Connections are the only
-way a run sends a credential anywhere: the policy selects no credential. With a server, a
-run's connections come from its run configuration, beside an optional `security_policy`
-and optional `variables`, all covered by the digest; without one, from the machine's
-runner file in the same shapes. Connections and variables are fixed when the run starts;
-a reload never changes them.
+way a run sends a credential anywhere: the policy selects no credential. A run's
+connections come from its run configuration when the document has a `connections`
+member, beside an optional `security_policy` and optional `variables`, all covered by
+the digest; otherwise from the machine's runner file in the same shapes. Connections and
+variables are fixed when the run starts; a reload never changes them.
 
 A value the server stores is sealed to a key pair of the runner's own (HPKE base mode,
 X25519, HKDF-SHA256, AES-256-GCM) and fetched once per run from a new signed endpoint,
@@ -47,6 +47,9 @@ through `X-Qory-Contract-Version`.
   (`sec_…`) and label, or a machine value by name. Without a server, the runner file's
   `connections:` has the same shapes: a machine's static credentials are service
   connections, and a machine's adapter is an integration connection.
+- **The machine's connections** apply when a run configuration has no `connections`
+  member, as the machine's policy applies without `security_policy`; a present
+  `connections`, even empty, is the server's whole set.
 - **Machine values** live in `secrets.local`, each with `hosts`, the most it may be sent
   to: `secret_hosts_exceeded` beyond them.
 - **Variables** are an object, name to value. A value at most 4 KiB, all variables at
@@ -58,10 +61,11 @@ through `X-Qory-Contract-Version`.
   (Decision 6).
 - **Value rules** depend on where a value goes: header rules for runtime and service
   values, any text for integration values, a PEM key included.
-- **Runtimes declare secrets** in their descriptor (`declares`, `one_of`, `reserves`,
-  optional `paths`). A walled run is refused when its environment contains a variable
-  the runtime declares or reserves, and the wall sets every such variable the run does
-  not use to empty.
+- **Runtimes declare secrets** in their descriptor (`declares`, `one_of` groups that may
+  be `required`, `reserves`, optional `paths`). A walled run is refused when its
+  environment contains a variable the runtime declares or reserves, or when no connection
+  supplies a required group, and the wall sets every such variable the run does not use
+  to empty.
 - **Integrations** receive their secrets as a settings document on standard input,
   written from a goroutine; anything they write to standard error is reported with every
   value of that document redacted. `describe`'s name must equal the connection's, and its
@@ -114,10 +118,13 @@ through `X-Qory-Contract-Version`.
   | `integration` | `roles.credential.hosts` of the program's `describe` | the program's answer: scheme and paths |
   | `service` | the definition's exact hosts | the definition's scheme |
 
-- **Where connections come from.** A run whose policy comes from a server's run
-  configuration takes that document's `connections`; any other run, without a server,
-  with `--local`, or against a server that offers no run configuration, takes the runner
-  file's `connections:`, which `qory` parses and passes through `session.Spec`.
+- **Where connections come from.** A run configuration's `connections`, when the member
+  is present, even as an empty array, is the server's whole set. When the run
+  configuration has no `connections` member, or the run has no run configuration (no
+  server, `--local`, or a server that offers none), the runner file's `connections:`
+  apply, as the machine's policy applies without `security_policy`; `qory` parses them
+  and passes them through `session.Spec`. Machine values stay within their `hosts`
+  either way.
 
 ## Decisions
 
@@ -181,8 +188,10 @@ item 2).
   included.
 - **One value, sealed once.** A value that two connections reference is sealed once and
   set wherever the connections route it.
-- **Empty lists.** A server omits an empty `connections` or `variables`; a runner reads
-  an empty one as absent.
+- **Empty lists.** An empty `connections` is the server's whole set, no connection, and
+  keeps the runner file's out; a server that leaves the machine's connections in force
+  omits the member. A server omits an empty `variables`; a runner reads an empty one as
+  absent.
 
 ### 3. Expiry, clock skew, reload
 
@@ -404,9 +413,11 @@ whose exact bytes the server defines:
   a built-in definition lives in the server's release and has no code, and the
   rendering records the definitions it was rendered from;
 - an integrity code over each stored rendering, its body bytes and its digest, checked
-  when serving the GET (a failure is a `503`, no run) and again before sealing;
-- a per-row version inside the coded data, so an older row restored over a newer one
-  fails;
+  when serving the GET and again before sealing; a failure is `503` `unavailable` on both,
+  no run;
+- a per-row version inside the coded data, with the audit recording the current version
+  of each row, so an older row restored over a newer one is detected unless the audit is
+  rolled back with it;
 - audit of every change with before and after.
 
 A connection or definition whose code fails refuses the render, and the holder keeps its
@@ -517,7 +528,9 @@ secrets:
       hosts: [api.anthropic.com]
       auth: {scheme: bearer}
   one_of:
-    - [api_key, oauth_token]
+    - id: model_key
+      required: true
+      of: [api_key, oauth_token]
   reserves: [ANTHROPIC_AUTH_TOKEN]
 ```
 
@@ -525,9 +538,14 @@ secrets:
   scheme from the closed set; its optional `paths`, in the policy's path grammar, bound
   the requests its value is set on. Warning about an administrative key on save is the
   server's matter.
-- A runtime connection supplies exactly one declaration of each `one_of` group, and every
-  declaration in no group: else `runtime_secret_choice`. A key that is no declaration of
-  the runtime is `connection_secret_unknown`.
+- A group of `one_of` has an `id`, its declarations under `of`, and may be `required`.
+  A runtime connection supplies at most one declaration of each group, else
+  `runtime_secret_choice`; a declaration in no group is optional. A walled run of the
+  runtime with no connection that supplies one declaration of a required group is refused
+  before anything starts, `runtime_secret_missing`, with the group's id. Claude Code's
+  `model_key` group is required, so a walled Claude Code run needs a runtime connection
+  for its model credential. A key that is no declaration of the runtime is
+  `connection_secret_unknown`.
 - **The stand-in.** The runner sets the placeholder value only in the chosen
   declaration's variable, and the proxy sets the value on its hosts by its scheme. The
   placeholder need not look like a key: Claude Code does not check the format.
@@ -585,8 +603,8 @@ credential.
   under another name cannot answer for a connection. When the connection has a
   `version`, which a server's always has, `program_version` must equal it after removing
   one leading `v`; `dev` never matches: `integration_version_mismatch`. This is a
-  compatibility check, not identity: `describe` reports what the program says about
-  itself. Trust in the program rests on `qory`'s path and ownership checks; matching by
+  compatibility check, not identity: `describe` is the program's own report
+  about itself. Trust in the program rests on `qory`'s path and ownership checks; matching by
   name and version is enough, and a program digest recorded at install is a later option.
 - **Hosts** are `describe`'s `roles.credential.hosts`; a `*.` entry over a public suffix,
   the private section included, is `connection_host_public_suffix`. Scheme and paths come
@@ -624,8 +642,9 @@ service takes no argument. The runner enforces the hosts exactly.
 
 - `auth.scheme` is `bearer`, `header` with `header`, or `basic` with exactly one of
   `username`, a fixed string, or `username_secret`, a declaration whose value is the
-  username and contains no `:` (`secret_value_invalid`). `auth.secret` is the declaration
-  whose value is sent.
+  username and contains no `:` (`secret_value_invalid`), which the server checks when the
+  value is saved and when the link is saved. `auth.secret` is the declaration whose value
+  is sent.
 - A declaration with `name` gets the placeholder in that variable.
 
 **Header names.** `auth.header`, in a service and in a runtime declaration, is an RFC
@@ -688,7 +707,8 @@ covered by the digest. Without `security_policy` the machine's own policy applie
 policy the command passes, else observe everything: `dev.qory.run.policy_applied` reports
 `source` `config` or `none` with `url` and `run_configuration`, a reload that brings a
 `security_policy` puts it in force and one that drops it puts the machine's back, and
-`--policy` keeps its meaning. The request is the labels, and nothing else, as the query;
+`--policy` keeps its meaning. Without `connections` the runner file's connections apply;
+a present `connections`, even `[]`, is the whole set. The request is the labels, and nothing else, as the query;
 labels the contract refuses are `400` `invalid_request` here and on the secrets request
 alike, decided by one resolver.
 
@@ -793,7 +813,8 @@ id has a reference, and `headers.json`.
 ### The descriptor
 
 `descriptor.schema.json` gains `secrets`: `declares`, a list of `{id, label, name, hosts,
-paths?, auth}`; `one_of`, a list of groups of declared ids, each id in at most one group;
+paths?, auth}`; `one_of`, a list of groups `{id, required?, of}`, `of` a list of declared
+ids, each id in at most one group;
 `reserves`, variable names. Its `runtime` pattern becomes `^[a-z][a-z0-9-]{0,63}$`.
 
 ### Contract files the server vendors
@@ -802,12 +823,17 @@ All under `contracts/runner/v1`, so one pin covers them:
 
 - `runtimes.json`, generated from the built-in descriptors and checked in CI against
   them: per runtime its `name`, a `label`, its `reserves`, its declarations with `id`,
-  `label`, `name`, `hosts`, `auth` with its `header`, and `paths`, and `one_of`;
+  `label`, `name`, `hosts`, `auth` with its `header`, and `paths`, and its `one_of`
+  groups with `id`, `required` and `of`;
 - `reserved-variables.json`, the names and prefixes of Decision 1 that do not depend on
   the machine;
 - `headers.json`;
 - `run-configuration.schema.json` and `policy.schema.json`, without `credentials`;
-- `auth.schema.json`.
+- `auth.schema.json`;
+- `secrets-request.schema.json`, the secrets request's body, and
+  `runner-key.schema.json`, the registration's body;
+- `events/run.refused.schema.json` and `events/run.policy_applied.schema.json`, with
+  `connections` and `uses`.
 
 ### Runner key registration
 
@@ -856,7 +882,8 @@ The server, in order, after the endpoint rules:
 4. refuses a run whose row it has closed: `410` `run_closed`;
 5. resolves the holder the labels select, with the GET's resolver, and requires that
    holder's current rendering, or one superseded at most 15 minutes ago, to have the
-   digest and a valid integrity code, else `410` `run_configuration_superseded`;
+   digest, else `410` `run_configuration_superseded`; that rendering's integrity code
+   must verify, else `503` `unavailable`, as on the GET;
 6. requires `connections` to be connections of that rendering, every one that is not a
    runtime connection and at most one runtime connection, else `409`
    `run_connections_invalid`;
@@ -908,9 +935,8 @@ For `runner_keys.url` and `secrets.url`:
   is signed.
 - **Rate limits** are the server's policy, per access key. A `429` at run start is no
   run, `rate_limited`; an event POST's `429` is retried as today.
-- **Answer headers.** Only discovery's `200` contains `X-Qory-Configuration`, only a run
-  configuration's `200` contains `X-Qory-Run-Configuration`, and event answers may contain
-  either. Every signed answer contains `Cache-Control: no-store, no-transform`.
+- **Answer headers.** Answers of these two endpoints contain neither digest header. Every
+  signed answer contains `Cache-Control: no-store, no-transform`.
 - **Counts.** At most 32 connections, 16 references per connection, 16 hosts and 32 paths
   per service, 32 distinct stored values per secrets request. The server checks the count
   per holder when it renders.
@@ -920,8 +946,9 @@ For `runner_keys.url` and `secrets.url`:
   `0x01`–`0x08`, `0x0A`–`0x1F` or `0x7F` and no leading or trailing space or tab; bytes
   from `0x80` travel as `obs-text`, which some hosts refuse. A value linked only to
   integrations, which goes on standard input, may contain line breaks, such as a PEM key.
-  The server checks a value against every current link on save; the runner checks it
-  where it uses it, `secret_value_invalid`. A variable's value is at most 4 KiB, with no
+  The server checks a value against every link when the value is saved and when a link
+  is saved, such as an existing PEM key linked to a service connection; the runner checks
+  it where it uses it, `secret_value_invalid`. A variable's value is at most 4 KiB, with no
   NUL, carriage return or line feed; all variables, names and values, at most 64 KiB. A
   runner refuses a document over these limits, `run_configuration_invalid`.
 
@@ -1056,8 +1083,9 @@ Order at run start; the steps not listed are §Sequence's.
    register; keep the outcome.
 4. When the configuration lists `run`: fetch the run configuration; recompute its digest;
    decode it with `encoding/json/v2`; validate it against the schema and the limits.
-   Without `security_policy`, the machine's policy is the run's. Without a run
-   configuration, the connections are the runner file's.
+   Without `security_policy`, the machine's policy is the run's; without a
+   `connections` member, or without a run configuration, the connections are the runner
+   file's.
 5. Check the connections: connections without a wall; duplicates; the runtime connection
    for the run's runtime kept and any other set aside; declarations and `one_of`; hosts
    and `headers.json`; protected mounts.
@@ -1093,14 +1121,14 @@ are unreferenced, since Go cannot wipe a string.
 | `unsupported_contract_version` | server, `400` | `X-Qory-Contract-Version` other than `1` |
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate is exceeded |
-| `unavailable` | server, `503` | a stored rendering fails its integrity code |
+| `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request |
 | `runner_key_invalid` | server, `409` | not 32 bytes, non-canonical, low-order, or another key under an existing id |
 | `runner_key_limit` | server, `409` | as many runner keys as allowed |
 | `runner_key_revoked` | server, `409` | the key or its id is a tombstone |
 | `runner_key_unknown` | server, `409` | the key id, or `replaces`, is not a key of the access key |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
 | `run_closed` | server, `410` | the server has closed the run's row |
-| `run_configuration_superseded` | server, `410` | no valid rendering of the holder with that digest, current or within 15 minutes |
+| `run_configuration_superseded` | server, `410` | no rendering of the holder with that digest, current or within 15 minutes |
 | `run_connections_invalid` | server, `409` | the listed connections are not those the rendering requires |
 | `run_secrets_conflict` | server, `409` | a reseal with another runner key, digest or set of connections |
 | `run_secrets_expired` | server, `409` | a reseal after the first payload's `exp` |
@@ -1119,7 +1147,8 @@ are unreferenced, since Go cannot wipe a string.
 | `connection_header_reserved` | runner, and the server on save | a header name `headers.json` refuses |
 | `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap |
 | `runtime_connection_duplicate` | runner | two runtime connections for one runtime |
-| `runtime_secret_choice` | runner | not exactly one declaration per `one_of` group, or a required one missing |
+| `runtime_secret_choice` | runner | more than one declaration of one `one_of` group |
+| `runtime_secret_missing` | runner | a walled run with no connection that supplies a required group; reported with the group's id |
 | `runtime_secret_conflict` | runner | the environment or the variables contain a variable the runtime declares or reserves |
 | `integration_missing` | runner | the machine has no integration of that name |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
@@ -1200,7 +1229,8 @@ are unreferenced, since Go cannot wipe a string.
 - Every answer of the server is signed, and the runner verifies it.
 - A walled run is refused when its environment contains a variable the run's runtime
   declares or reserves; for Claude Code, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and
-  `CLAUDE_CODE_OAUTH_TOKEN`.
+  `CLAUDE_CODE_OAUTH_TOKEN`. A walled run whose runtime has a required group and no
+  connection that supplies it is refused, `runtime_secret_missing`.
 - Every run against a server that lists `secrets` needs a wall, and so does every run on a
   machine with `runner-key`. A mount of the runner's configuration directory, or of a
   directory above it, is refused.
@@ -1261,11 +1291,15 @@ and version, with `describe`'s name required to match.
    want; a service that needs one is a change to the file and the contract.
 9. **Services have exact hosts only.** A machine credential for every host below a
    domain is an integration whose `describe` lists `*.` hosts, not a service.
-10. **`policy_applied`'s schema** changes: `credentials` goes, `connections` comes, and
+10. **Under a server, an integration must be published.** A server-sent integration
+    requires `repository` and `version`, so an unpublished in-house adapter, or a
+    credential for a whole domain, is usable under a server only once it is published as
+    an integration.
+11. **`policy_applied`'s schema** changes: `credentials` goes, `connections` comes, and
     `url` and `run_configuration` are allowed with `source` `none`. `qory` decides
     whether `--policy` applies only after the fetch shows whether `security_policy` is
     present.
-11. **The runner file's connection ids** use a grammar of their own; the record's
+12. **The runner file's connection ids** use a grammar of their own; the record's
     `connection` field takes either form.
-12. **An unsigned `2xx` on an event POST** is retried until the run ends; the runner
+13. **An unsigned `2xx` on an event POST** is retried until the run ends; the runner
     reports it once, not per batch.
