@@ -307,7 +307,10 @@ item 2).
   `runner-key`. With approval, a `replaces` alone revokes nothing: the server revokes the
   old key only once the new one is approved, and until then keeps sealing to the old
   key, which the run keeps using; the first run whose registration answers `approved:
-  true` seals to the new key, and `qory` then promotes it.
+  true` seals to the new key, and `qory` then promotes it. One race remains: a run that
+  registers both keys before the approval and requests its secrets after it names the
+  old key, which the approval has just revoked. It receives `409` `runner_key_revoked`
+  and that run alone fails; the next run uses the promoted key.
 - **Revocation.** The server seals nothing to a revoked key. A revoked key stays for good
   as a tombstone, its id, its public key and when it was revoked, so neither can be
   registered again. A runner key id the access key never registered is
@@ -498,9 +501,11 @@ whose exact bytes the server defines:
   approval and its revocation, so a writer cannot insert or approve a key;
 - an integrity code over the settings that decide approval, the server's "approval
   required" switch among them, so a writer cannot turn approval off;
-- the access key row's code verified on every request's authentication, so a writer
-  cannot un-revoke a key for the GET or the events endpoint either; the runner key row's
-  and the approval settings' on registration and before sealing;
+- the access key row's code verified on every request's authentication: a row whose code
+  fails does not verify, `401`, unsigned, on every endpoint, so a writer cannot
+  un-revoke a key for the GET or the events endpoint either, and the server never signs
+  with a secret from a row it cannot trust; the runner key row's and the approval
+  settings' codes on registration and before sealing, else `503` `unavailable`;
 - a per-row version inside the coded data, with the audit recording the current version
   of each row, so an older row restored over a newer one is detected unless the audit is
   rolled back with it;
@@ -1009,7 +1014,8 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `run-configuration.schema.json` and `policy.schema.json`, without `credentials`;
 - `auth.schema.json`;
 - `secrets-request.schema.json`, the secrets request's body, and
-  `runner-key.schema.json`, the registration's body;
+  `runner-key.schema.json`, the registration's body and its answer, with `approved`
+  required;
 - `events/run.refused.schema.json` and `events/run.policy_applied.schema.json`, with
   `connections` and `uses`;
 - `server.schema.json`, with the optional `signing_key` pin.
@@ -1025,9 +1031,17 @@ A signed POST to `runner_keys.url`:
  "timestamp": 1700000000}
 ```
 
-The server accepts `timestamp` within ±300 seconds, else `401`, verifies the access key
-row's integrity code, else `503` `unavailable`, and answers `200` (or `201` the first
-time) `{"version": 1, "runner_key_id": "3sVqYB9mvRVgaGW-JNlyfw"}`, or `409` with
+The server authenticates the request, the access key row's integrity code included, else
+`401`; accepts `timestamp` within ±300 seconds, else `401`; verifies the approval
+settings' integrity code, else `503` `unavailable`; and answers `200` (or `201` the first
+time):
+
+```json
+{"version": 1, "runner_key_id": "3sVqYB9mvRVgaGW-JNlyfw", "approved": false}
+```
+
+`approved` is required in `runner-key.schema.json`'s answer: `true` when the server
+requires no approval or the key is approved. Otherwise the answer is `409` with
 `runner_key_invalid`, `runner_key_revoked`, `runner_key_limit`, or `runner_key_unknown`
 for a `replaces` that is not a key of the same access key. A replayed registration is
 harmless.
@@ -1061,8 +1075,9 @@ The server, in order, after the endpoint rules:
 2. refuses an access key not allowed stored secrets: `409` `secrets_not_allowed`;
 3. finds the runner key registered to the access key and not revoked, else `409`
    `runner_key_unknown` or `runner_key_revoked`, and approved when the server requires
-   approval, else `409` `runner_key_pending`; the access key row's and the runner key
-   row's integrity codes must verify, else `503` `unavailable`;
+   approval, else `409` `runner_key_pending`; the runner key row's and the approval
+   settings' integrity codes must verify, else `503` `unavailable` (the access key row's
+   was verified when the request was authenticated);
 4. refuses a run whose row it has closed: `410` `run_closed`;
 5. resolves the holder the labels select, with the GET's resolver, and requires that
    holder's current rendering, or one superseded at most 15 minutes ago, to have the
@@ -1214,16 +1229,22 @@ Two known answers, under `fixture-secret-not-a-real-one`, for the request
 `GET\n/.well-known/qory-configuration\n1700000000`, signature
 `sha256=0c895b2f1c1c62629e6298a59746b975ccae2e5156b01f733d2d7768f6eb55a2`:
 
-- `200`; body `{"version":1,"events":{"url":"https://qory.example/v1/events","types":["*"]}}`,
-  SHA-256 `ed0f5b284ef81c9277ee50cf30d91662056274028f226533a6e59ce51be4ce56`;
+- `200`; the discovery body, with `signing_key` as every verified access key's has it,
+  170 bytes:
+
+  ```json
+  {"version":1,"events":{"url":"https://qory.example/v1/events","types":["*"]},"signing_key":[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
+  ```
+
+  SHA-256 `8e153b07d85d603dc269d5f890ca673db4ae9d706dab77af0a470f5d754231e6`;
   `X-Qory-Configuration: sha256=` and the same hex; no run-configuration digest:
-  `sha256=3104ba0fa44df9d05c101b29a4383be2abdff143830e1c008b2799955f856016`
-- `404`, empty body, no digest:
+  `sha256=6301b305e5eacb4f2bc44d00f7015ffdddfe8832e4269c7cd7e4746430c1a7de`
+- `404`, empty body, no digest, unchanged:
   `sha256=040a264ad219396ad1dcee84e93816aa49394b633a5db303818fe1a19a58c9bf`
 
 The Ed25519 answer signature of the `200` above, under the fixture signing key, over the
 same six lines with `qory-answer-ed25519-v1` as the first, 236 bytes:
-`X-Qory-Signature-Ed25519: _IFYeKUQiJU7FE36Mw2AfYjUk_EIHE49YSPjZT2RktyvpeO0cVy_JXpb_nn75-Yql7onrgUVxpwLVV5E7xYjDQ`.
+`X-Qory-Signature-Ed25519: 1tCfgMKH-hqX4qveObhEaBQB2Am3EXyTnVZqmS_ko9Y4ZA0fNK5JS8PU8fHAoonNj_QhHdOjDzYAUufifNULBA`.
 
 ### Coded refusals
 
@@ -1327,7 +1348,7 @@ are unreferenced, since Go cannot wipe a string.
 | `unsupported_contract_version` | server, `400` | `X-Qory-Contract-Version` other than `1` |
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate is exceeded |
-| `unavailable` | server, `503` | a stored rendering, an access key row or a runner key row fails its integrity code, on the GET, registration or the secrets request |
+| `unavailable` | server, `503` | a stored rendering, a runner key row or the approval settings fail their integrity code, on the GET, registration or the secrets request; a failing access key row is `401` |
 | `runner_key_invalid` | server, `409` | not 32 bytes, non-canonical, low-order, or another key under an existing id |
 | `runner_key_limit` | server, `409` | as many runner keys as allowed |
 | `runner_key_revoked` | server, `409` | the key or its id is a tombstone |
