@@ -37,6 +37,12 @@ release may change what an existing document does, and says so under Upgrading.
   own process's roots at an authority of its own with `SSL_CERT_FILE`, so the proxy
   verifies the recorders. The proxy's tests cover both schemes as well, with a request
   that carries both stand-ins.
+- `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
+  adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
+  `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
+  with an API key and once with an OAuth credential. Claude Code prints the recorder's
+  answer, each request carries the fake key in the credential's header and no stand-in,
+  and the record lists every request, to the recorder alone.
 
 ### Changed
 
