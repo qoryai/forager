@@ -19,6 +19,24 @@ release may change what an existing document does, and says so under Upgrading.
   own stops the run when the wall writes the agent's docker configuration there, which
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
+- `walltest.Options` has `Recorders`: three origins, each the helper started with
+  `walltest.RecorderArgs` and `walltest.RecorderEnv()` in a container of its own. An
+  adapter's test that passes none skips the checks of a runtime's key, and
+  `QORY_WALL_REQUIRE` turns those skips into failures. `TestDockerConforms` starts them
+  from `busybox:stable`.
+
+### Added
+
+- The wall's conformance suite checks a runtime's two credentials from inside the
+  enclosure, as Claude Code sends them: an API key in `x-api-key` and an OAuth
+  credential as a bearer, each a fake key for a recorder that acts as its host. Each key
+  reaches its own host once, in its own header and in place of the stand-in; another
+  allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
+  probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
+  key; and the run's directory, output and reports contain no key. The suite points its
+  own process's roots at an authority of its own with `SSL_CERT_FILE`, so the proxy
+  verifies the recorders. The proxy's tests cover both schemes as well, with a request
+  that carries both stand-ins.
 
 ### Changed
 
