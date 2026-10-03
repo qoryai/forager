@@ -125,7 +125,7 @@ Fixtures on main the fixtures, and Sources the sources.
   and keeps a `secrets.local` source and the access key's variables out of the
   enclosure.
 - A server that lists `secrets` requires a wall for every run against it, and so does
-  the `stored-secrets` marker for a run that contacts no server.
+  the `stored-secrets` marker for every run, with or without a server.
 
 **§The events**
 
@@ -694,8 +694,7 @@ runs with it.**
   exclusively, after checking that `access-key-secret` still holds the secret the
   request was signed with. With `--print`, a key command takes the key lock and refuses
   while an unwalled run is live, and leaves the marker as it is: the printed key is kept
-  elsewhere. Deleting the marker by hand also restores unwalled runs that contact no
-  server.
+  elsewhere. Deleting the marker by hand also restores unwalled runs.
 - **The key pair.** Everything comes from the seed:
   - the Ed25519 public key A, as RFC 8032 derives it;
   - the X25519 private key, the clamped first 32 bytes of SHA-512(seed), the same scalar
@@ -873,13 +872,17 @@ runs with it.**
 **Keeping the secret from the agent.** An agent that reads the access key secret fetches
 every value the server stores for that access key.
 
-- *Unwalled runs.* With a server, signed discovery decides: once it lists `secrets`,
-  every run against that server needs a wall, `server_needs_wall`, a refusal that comes
-  after the ping, so it reaches the server. The marker is the signal for a run that
-  contacts no server, `--local` or a runner file without a server: `qory` writes it
-  when signed discovery lists `secrets` and before every key it generates, and while it
-  exists `qory` refuses such a run unwalled, with the same code, before the run starts.
-  A marker that cannot be written means no run. In 0.7.0 stored
+- *Unwalled runs.* Once a server's signed discovery lists `secrets`, every run against
+  that server needs a wall, `server_needs_wall`. The marker applies to every unwalled
+  run as well, whichever key the run signs with: `qory` writes it when signed discovery
+  lists `secrets` and before every key it generates, and while it exists every unwalled
+  run is refused, `server_needs_wall`. Only the moment of the check differs. For a run
+  that contacts no server, `--local` or a runner file without a server, `qory` refuses
+  before the run starts. With a server, the order is signed discovery, which may remove
+  the marker under the rule above, then the ping, then the marker check, so the refusal
+  comes after the ping and reaches the server. A run that signs with a key from the
+  environment therefore starts unwalled only while the directory holds no stored-secrets
+  secret. A marker that cannot be written means no run. In 0.7.0 stored
   secrets go only to walled runs; a credentials broker is a later direction (Later: a
   credentials broker).
 - *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
@@ -1293,7 +1296,7 @@ it is.
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
 | `variables` | the server's; the node adds only names whose server value the run does not apply (Decision 1) |
 | `connections` | the server's, when present, are the whole set; the node's bounds narrow them: `secrets.local`'s `hosts` (Decision 7) and `integrations:`'s `arguments` and `settings` (Integrations) |
-| a wall | a server that lists `secrets` requires one, and so does the `stored-secrets` marker for a run that contacts no server; the node keeps that requirement (Decision 4) |
+| a wall | a server that lists `secrets` requires one, and so does the `stored-secrets` marker for every run; the node keeps that requirement (Decision 4) |
 
 - **Fields that select one thing.** `image` selects one thing, so its narrowing is
   agreement: two different selections are no run rather than a choice. `connections` and
@@ -2386,25 +2389,27 @@ configuration), and is empty otherwise. With no
 
 Order at run start; the steps not listed are §Sequence's.
 
-1. `qory` takes `locks/key.lock` shared; for a run that contacts no server, refuses an
-   unwalled run while the `stored-secrets` marker exists, `server_needs_wall`; creates
+1. `qory` takes `locks/key.lock` shared; reads the `stored-secrets` marker, and for a
+   run that contacts no server refuses an unwalled run while it exists,
+   `server_needs_wall`; creates
    and holds its own run lock file; and drops the shared lock (Decision 4). With a
    server: validate the server document; without a pinned `apiary_public_key`,
    `apiary_public_key_missing`, before any request. Every request is signed with the
    access key secret. Every answer's signature is verified under the pin before its body or
    headers are read.
-2. Discovery: a signed `409` `key_pending` is no run, `key_pending`; a `401` is
-   no run, `unauthorized`. `qory` prints the `node_id` discovery lists. When the run's
-   secret is the one in `access-key-secret`, `qory` then, under the key lock held
-   exclusively: deletes every moved-aside secret; writes the marker when discovery lists
-   `secrets`, a marker it cannot write being no run; and removes it when discovery lists
-   none and the directory holds that one secret alone (Decision 4). Ping, with the run's
+2. Discovery: a signed `409` `key_pending` is no run, `key_pending`; a `401` is no run,
+   `unauthorized`. `qory` prints the `node_id` discovery lists. When the run's secret is
+   the one in `access-key-secret`, `qory` then, under the key lock held exclusively:
+   deletes every moved-aside secret; writes the marker when discovery lists `secrets`, a
+   marker it cannot write being no run; and removes it when discovery lists none and the
+   directory holds that one secret alone (Decision 4). Ping, with the run's
    `interval_seconds`; heartbeats start once it is accepted. A signed `409`
    `instance_limit` is no run, `instance_limit`, and `qory` prints that the node's live
-   instances have reached its limit. When discovery lists `secrets` and the run has no
-   wall: `server_needs_wall`; when it lists `secrets`, the runner reports that to its
-   caller. Before discovery, `qory` checks the run's labels against the checkout's pinned
-   ones, `labels_changed`, and its `instance-id` file.
+   instances have reached its limit. When discovery lists `secrets`, or the marker still
+   exists after discovery, and the run has no wall: `server_needs_wall`, after the ping;
+   when discovery lists `secrets`, the runner reports that to its caller. Before
+   discovery, `qory` checks the run's labels against the checkout's pinned ones,
+   `labels_changed`, and its `instance-id` file.
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
    decode it with `encoding/json/v2`; validate it against the schema and the limits.
    Without `security_policy`, the node's policy is the run's; with it, the node's
@@ -2486,7 +2491,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `answer_unsigned` | runner | an answer at run start without a valid signature, other than a `401` |
 | `unauthorized` | runner | a `401` at run start: the access key is unknown or revoked, or its key or row does not verify |
 | `labels_changed` | `qory` | a local checkout's derived labels differ from those pinned at its first run the server accepted, the checkout keyed by its resolved real path, until the user confirms with `--relabel` |
-| `server_needs_wall` | runner, and `qory` for a run without a server | with a server, after the ping: discovery lists `secrets` and the run has no wall; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run: an unwalled run while the `stored-secrets` marker exists |
+| `server_needs_wall` | runner and `qory` | an unwalled run while discovery lists `secrets` or the `stored-secrets` marker exists, whichever key the run signs with. With a server, after the ping, the marker checked after signed discovery may have removed it; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run |
 | `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, or a `secrets.local` file |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
 | `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included |
@@ -2553,13 +2558,13 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | An agent choosing the next run's labels, such as by rewriting `.git/config`'s origin | A CI or job spec passes labels explicitly; for a local checkout, `qory` pins the labels of its first run the server accepts, in the runner file's directory, which walled agents cannot reach, and a later run whose derived labels differ is `labels_changed` until the user confirms with `--relabel` | Pinning is trust on first use: a checkout's first run, or the same checkout at a new path, pins what the origin says then. An unwalled agent of the same user can rewrite the pin file as easily as `.git/config`. A user who confirms without reading the change |
 | An access key secret an unwalled agent read before stored secrets were wanted | The stored-secrets flag is fixed when a key is created, so stored values need a new key, enrolled with a new code and approved; every key command writes the `stored-secrets` marker before it generates the key and refuses while an unwalled run's lock is held, and no run starts while a key command runs; an enrolment retry reuses a secret only for the same code within 15 minutes | A pasted key generated earlier and pasted with the flag; the owner pastes a key generated for the purpose. An agent that keeps a process running outside `qory` after its session ends, and so holds no lock |
 | An unwalled agent reading a moved-aside secret, such as the old key of a node whose new key has no stored secrets | The marker stays while any moved-aside secret is in the runner file's directory; `qory` deletes moved-aside secrets once the current key's first signed discovery succeeds, or once a signed answer shows the old key revoked, and removes the marker only when one secret remains and discovery signed for it lists no `secrets`; a secret from the environment or a file descriptor never removes it | An old key that stays approved keeps its stored values until it is revoked; revoking the old key is the administrator's last step of a replacement |
-| A run under another runner file's directory, such as another `XDG_CONFIG_HOME` | The marker belongs to its directory, and with a server signed discovery decides | Such a run sees another directory's marker nowhere; an unwalled agent can read the original secret file by its path anyway (Issues, item 4) |
+| A run under another runner file's directory, such as another `XDG_CONFIG_HOME` | The marker belongs to its directory, and with a server, signed discovery still lists `secrets` for a key allowed them | Such a run sees another directory's marker nowhere; an unwalled agent can read the original secret file by its path anyway (Issues, item 4) |
 | A stolen code | Single use, valid for at most 15 minutes, bound to one node or node pool, new or existing, and one access key's settings; until an owner or administrator approves the key, after comparing fingerprints, it waits; the server shows how a pending key arrived, and `qory` prints to its user when their code was already used; a node holds at most one pending key | An approval given without comparing the fingerprint |
 | A stolen access key secret | Stored secrets only for access keys allowed them; revocation, immediate, which closes the key's live runs and cuts off every instance using the key; a batch that verifies only under the revoked key's tombstone gets a signed `410` `run_closed` and the server stores nothing from it, so a thief holding the key cannot write into a run's record, and that path stays open only for the runs live at the revocation, until 3 × their `interval_seconds` after their last accepted event, then `401`; sealing and revocation serialised on the key row, so nothing is sealed after a revocation commits; a new key for the same node, enrolled with a new code and approved after comparing its fingerprint; the recomputed digest binds values to the document the server rendered | Whoever has it is the access key, on any machine, and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so access keys are replaced from time to time |
 | One public key on two servers | `qory` keeps one secret per server and moves a secret aside before it enrols with another, so a compromise of one server's records involves no key another server trusts | This is a `qory` rule, not a cryptographic guarantee: an administrator who pastes one public key into two servers is outside its reach, and the request string names no server |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
 | Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
-| An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing unwalled runs that contact no server while `stored-secrets` exists; `mount_contains_runner_files`; `QORY_ACCESS_KEY_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
+| An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing every unwalled run while `stored-secrets` exists, whichever key the run signs with; `mount_contains_runner_files`; `QORY_ACCESS_KEY_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
 | A model credential reaching the enclosure | `runtime_secret_conflict`; in a walled run, the runtime's other declared and reserved variables set to empty; `mount_contains_credential_files` | A credential file baked into the image |
 | A credential that mints credentials | A declaration's `paths`, `/v1/*` for Claude Code | A minting path inside the allowed paths gives the agent a readable credential; to verify for `api.anthropic.com` |
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
@@ -2663,9 +2668,10 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   from `access-key-secret`, removes the marker when that is the directory's only secret,
   and an unsigned answer, an enrolment answer, or a discovery under a secret from the
   environment or a file descriptor leaves it; a moved-aside secret keeps the marker and
-  is deleted once the current key's first signed discovery succeeds; with a server, an
-  unwalled run follows signed discovery alone, and without one the
-  marker refuses it; `--print` leaves the marker as it is.
+  is deleted once the current key's first signed discovery succeeds; the marker refuses
+  every unwalled run, before the run without a server and after the ping with one, a
+  run signing with a key from the environment included; `--print` leaves the marker as
+  it is.
 - **Key checks and enrolment:** enrolment and paste each refuse the torsion key of
   Decision 5, `key_invalid`, and with a bad proof enrolment answers `key_invalid` before
   any key check; a base64url value with padding, a `+` or `/`, or non-zero spare bits is
@@ -2789,10 +2795,11 @@ What a node's owner sets up and meets in 0.7.0:
   declares or reserves; for Claude Code, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and
   `CLAUDE_CODE_OAUTH_TOKEN`. A walled run whose runtime has a required group and no
   connection that supplies it is refused, `runtime_secret_missing`.
-- Every run against a server that lists `secrets` needs a wall, and so does every run that
-  contacts no server on a machine with the `stored-secrets` marker. A mount of the
-  runner's configuration directory, a program the runner starts, a `secrets.local` file, a
-  directory above any of them, or a runtime's credential file, is refused.
+- Every run against a server that lists `secrets` needs a wall, and so does every run on a
+  machine with the `stored-secrets` marker, with or without a server; with a server, the
+  marker is checked after signed discovery, and the refusal comes after the ping. A mount
+  of the runner's configuration directory, a program the runner starts, a `secrets.local`
+  file, a directory above any of them, or a runtime's credential file, is refused.
 - A CI machine takes its secret from `QORY_ACCESS_KEY_SECRET` or a file descriptor, and
   `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY` from plain settings.
 - The proxy refuses `TRACE` and `TRACK`, and sets a value only on port 443, on every host
