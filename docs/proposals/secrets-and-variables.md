@@ -1535,13 +1535,13 @@ program of the machine's produces a credential or serves hosts for a connection.
   the names of the top-level settings it may receive: unique names, `[]` for none; and
   in its optional `required`, the subset it must receive. A secret is listed by
   `<name>`, and either `<name>` or `<name>_file` satisfies it. At its top level the
-  description's `settings` schema allows only `properties`, `patternProperties`,
-  `additionalProperties`, `propertyNames`, `type`, `title`, `description`, `$schema`,
-  `$id` and `$defs`; the integrations contract refuses `required`, `allOf`, `anyOf`,
-  `oneOf`, `not`, `if`, `then`, `else`, `dependentRequired`, `dependentSchemas`,
-  `minProperties`, `maxProperties`, `const`, `enum`, `$ref` and `$dynamicRef` there, since
-  a subset of the properties could fail a minimum, a maximum or a fixed value, and a
-  top-level `$ref` could bring in any refused keyword. Keywords inside a property stay allowed. So a role's document is
+  description's `settings` schema allows only `type`, `properties`, `patternProperties`,
+  `additionalProperties`, `unevaluatedProperties`, `propertyNames`, `title`,
+  `description`, `$comment`, `$schema`, `$id` and `$defs`, the same list the integrations
+  contract checks, and refuses every other keyword there: a subset of the properties
+  could fail a `required`, a minimum, a maximum, a `const` or an `enum`, an applicator
+  such as `allOf` or `if` could carry any of them, and a top-level `$ref` could bring in
+  any refused keyword. Keywords inside a property stay allowed. So a role's document is
   validated against that schema as it stands; `additionalProperties: false` passes for a
   subset.
   At run start the runner checks each chosen role's document, in order:
