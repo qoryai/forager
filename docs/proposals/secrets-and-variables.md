@@ -94,9 +94,19 @@ Fixtures on main the fixtures, and Sources the sources.
   connection. An `adapter` is an integration: a program of the integrations contract,
   started as `<program> credential -- <argument>` with its settings on standard input,
   whose answer, `credential.schema.json`, keeps its role.
-- An integration connection contains `source`, where the integration's releases are, and
-  `ways`, the roles it uses: `credential`, `tool`, or both. A tool from an integration is
-  a role of that integration's program, `<program> tool -- <argument>` (Integrations).
+- An integration connection contains `source`, where the integration's releases are,
+  with `forge_kind` where the host does not imply it, and `ways`, the roles it uses:
+  `credential`, `tool`, or both (Integrations).
+  - The `tool` role is new: a tool from an integration is a role of that integration's
+    program, `<program> tool -- <argument>`, serving the hosts its description lists,
+    with an optional `mcp` URL and placeholders.
+  - A credential answer's `placeholders` come from the answer, as on main.
+  - Standard input is per role: each started role gets the settings it lists and nothing
+    else, checked in a fixed order.
+  - A `<name>_file` setting comes only from the node, never from a server.
+  - `qory` records each installed integration's `source` and the SHA-256 of its
+    `description.json`, which the runner compares at run start.
+  - A static-key API stays a service.
 - A runtime declares the secrets it needs in its descriptor: `declares`, `one_of`,
   `reserves`, `denies` and `credential_files` (Runtimes).
 - A host that receives a stored value, or a credential minted from one, is verified
@@ -165,7 +175,7 @@ Fixtures on main the fixtures, and Sources the sources.
   schemas, `events/run.refused`, and the data files
   `headers.json`, `runtimes.json` and `denied-variables.json`.
 - Changed: `server`; `configuration`; `run-configuration`, whose integration connection
-  has `source`, `forge` and `ways`; `policy`; `descriptor`;
+  has `source`, `forge_kind` and `ways`; `policy`; `descriptor`;
   `event.schema.json`, whose type list and per-type branches gain
   `dev.qory.run.refused`; `events/ping`, with `interval_seconds`;
   `events/run.heartbeat`, whose description and `elapsed_seconds` count from the ping;
@@ -1468,14 +1478,24 @@ program of the machine's produces a credential or serves hosts for a connection.
   machine lacks is `integration_missing`.
 - **Source and releases.** A connection's `source` is where the integration's releases
   are, in one of two forms:
-  - a forge path, `<host>/<path>` with no scheme and a lower-case host, such as
-    `github.com/owner/repo`, `gitlab.com/group/sub/project` or
-    `git.example.com/owner/repo`, not ending in `.git`; with it, `forge`, one of
-    `github`, `gitlab` and `forgejo`, which is required on any host other than
-    `github.com`, `gitlab.com` and `codeberg.org`, where it is implied as `github`,
-    `gitlab` and `forgejo`;
-  - an `https://` URL of a `description.json`, with no userinfo, query or fragment, and
-    no `forge`.
+  - a forge path, `<host>/<path>` with no scheme, such as `github.com/owner/repo`,
+    `gitlab.com/group/sub/project` or `git.example.com/owner/repo`, matching
+    `^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}){2,}$` and not ending in `.git`; with it, `forge_kind`, one of `github`, `gitlab` and
+    `forgejo`, which is required on any host other than `github.com`, `gitlab.com` and
+    `codeberg.org`, where it is implied as `github`, `gitlab` and `forgejo`;
+  - an `https://` URL of a `description.json`, matching
+    `^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99})*/description\.json$`, with no `forge_kind`.
+
+  The host is a lower-case DNS name with at least one dot, whose last label starts with
+  a letter, so no IPv4 address and no bare name matches, and neither form has room for
+  brackets, a port or userinfo. Each path segment starts with a letter, a digit, `_` or
+  `-`, so no `.` or `..` segment, no percent-encoding, nothing outside ASCII and no
+  control character can appear. Beside the patterns, a host that is `localhost` or ends
+  in `.localhost`, `.local`, `.internal` or `.home.arpa` is refused in both forms,
+  `run_configuration_invalid`, and the server refuses it on save. A reader that fetches
+  refuses a host whose address is loopback, private, link-local or unspecified, checked
+  on the address it connects to; a server may refuse a source that does not resolve to
+  public addresses.
 
   A release is its `description.json`, the program archives
   `<program>_X.Y.Z_<os>_<arch>.tar.gz` for `linux` and `darwin` on `amd64` and `arm64`,
@@ -1483,13 +1503,19 @@ program of the machine's produces a credential or serves hosts for a connection.
   `description.json`; the integrations contract defines the download URL of each for
   both forms. A release's version is `X.Y.Z`, its description's `program_version`.
   `source` is the integration's identity: the server validates it, and `policy_applied`
-  records the `source` the server sent. A `forge` missing on another host, present with
-  a URL source, or other than the one its host implies is `run_configuration_invalid`.
-  An `integrations:` entry may record the `source` its program was installed from; when
-  both are present and differ, the run is refused, `integration_source_mismatch`.
+  records the `source` the server sent. A `forge_kind` missing on another host, present
+  with a URL source, or other than the one its host implies is
+  `run_configuration_invalid`.
 - **Installing** runs only on the node owner's command, never at run start from a
   `source` a server sent: a server that could make the node install and run a program of
-  its choosing would have code execution on the node.
+  its choosing would have code execution on the node. When `qory` installs an
+  integration, it records in the `integrations:` entry the `source` it installed from and
+  `description_sha256`, the lower-case hex SHA-256 of the release's `description.json`.
+  `describe` prints the description byte for byte as the release's `description.json`
+  holds it. At run start the runner compares the SHA-256 of `describe`'s output with the
+  recorded digest, and the connection's `source` with the recorded one; either mismatch
+  is `integration_source_mismatch`. An entry without a record, such as a program of the
+  owner's own, is compared by name and version alone.
 - **Name and version.** At run start the runner runs `describe` and requires its `name` to
   equal the connection's, else `integration_name_mismatch`, so a program registered under
   another name cannot answer for a connection. When the connection has a `version`, which
@@ -1636,7 +1662,7 @@ program of the machine's produces a credential or serves hosts for a connection.
   credential the program returned. Redaction, not dropping, keeps the program's own reason
   readable. Redaction matches values as written; keeping a transformed form, such as an
   encoded one, out of its output is the program's task.
-- **Validation.** The server validates `source`, `forge`, `ways`, `argument` and
+- **Validation.** The server validates `source`, `forge_kind`, `ways`, `argument` and
   `settings` against the release's `description.json`, and that each key of `secrets` is
   a top-level `writeOnly` property of it listed by a chosen role; the runner passes them
   as received.
@@ -1877,11 +1903,11 @@ runtime unmet, `runtime_secret_missing` applies as usual.
       "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
       "source": {"oneOf": [
         {"type": "string", "maxLength": 512, "not": {"pattern": "\\.git$"},
-         "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}){2,}$"},
-        {"type": "string", "maxLength": 2048, "not": {"pattern": "^https://[^/]*@"},
-         "pattern": "^https://[^\\s?#]+/description\\.json$"}]},
-      "forge": {"enum": ["github", "gitlab", "forgejo"]},
-      "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+         "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}){2,}$"},
+        {"type": "string", "maxLength": 2048,
+         "pattern": "^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99})*/description\\.json$"}]},
+      "forge_kind": {"enum": ["github", "gitlab", "forgejo"]},
+      "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
       "ways": {"type": "array", "minItems": 1, "uniqueItems": true,
         "items": {"enum": ["credential", "tool"]}},
       "argument": {"type": "string", "minLength": 1, "maxLength": 4096},
@@ -1902,16 +1928,19 @@ runtime unmet, `runtime_secret_missing` applies as usual.
       "secrets": {"$ref": "#/$defs/secrets"}}}}
 ```
 
-A `maxLength` in the sketch counts characters, so it is not the check: the runner and the
+Every pattern in this proposal is anchored: `$` means the end of the string, as in RE2
+and ECMAScript, so a trailing newline does not match. A `maxLength` in the sketch
+counts characters, so it is not the check: the runner and the
 server count UTF-8 bytes, 4096 for a variable's value and for an integration's
 `argument`, and 1 to 16384 for a secret value (Endpoint rules).
 
 The runner file's connections follow the same shapes with three differences: `id` is
 `^[a-z0-9][a-z0-9_-]{0,63}$`, references are external only, and an integration's
-`source` and `version` are optional. `forge` is required for a forge path on any host
-other than `github.com`, `gitlab.com` and `codeberg.org`, where it is implied as
+`source` and `version` are optional. `forge_kind` is required for a forge path on any
+host other than `github.com`, `gitlab.com` and `codeberg.org`, where it is implied as
 `github`, `gitlab` and `forgejo`, and absent for a URL source; the runner and the server
-check that rule beside the schema. `auth.schema.json` is shared with the
+check that rule, and the refused host names, beside the schema. `version` is `X.Y.Z`
+with no leading zeros, so `01.4.0` is refused. `auth.schema.json` is shared with the
 descriptor:
 
 ```json
@@ -2488,6 +2517,12 @@ order of the run's connections:
    "secrets": [{"id": "sec_3fz8k2m9q4w7x1d6", "name": "CLAUDE_OAUTH"}],
    "uses": [{"hosts": ["api.anthropic.com"], "scheme": "bearer"}],
    "hosts_denied": []},
+  {"id": "con_0b5n6t2r9y4f7j3s", "kind": "integration", "name": "qory-github",
+   "source": "github.com/qoryai/qory-github", "forge_kind": "github",
+   "version": "1.4.0", "ways": ["credential"], "argument": "acme/shop",
+   "secrets": [{"id": "sec_9c4r7t2y5b8n1h3e", "name": "GITHUB_APP_KEY", "value_id": "production"}],
+   "uses": [{"hosts": ["api.github.com", "github.com"], "scheme": "bearer"}],
+   "hosts_denied": []},
   {"id": "con_5h1k8m3p6r0t4w9x", "kind": "service", "name": "Sentry",
    "secrets": [{"name": "SENTRY_AUTH", "source": "external"}],
    "uses": [{"hosts": ["sentry.io"], "scheme": "bearer", "paths": ["/api/0/*"]}],
@@ -2498,7 +2533,8 @@ order of the run's connections:
 and value id; `uses` where and how the proxy sets each value; `hosts_denied` the
 connection's hosts the policy in force denies, recomputed in every further
 `policy_applied`. An integration connection's entry also records its `argument`,
-`version`, `source`, `forge` when set, and `ways`, so the record shows what each
+`version`, `source`, `forge_kind`, recorded when the connection has it, and `ways`, so
+the record shows what each
 credential is minted for and which roles ran. `terminated`
 stays: the hosts where the proxy terminates TLS in this run, namely those a connection
 sets a value on, those a tool serves, and those with path rules; a host verified against
@@ -2608,9 +2644,10 @@ Order at run start; the steps not listed are §Sequence's.
 7. Resolve every external reference through the providers in order, and check each
    machine value's `hosts` against where its connection sends it, for an integration the
    `hosts` or `serves` that `describe` reported for the chosen roles that list it.
-8. Check the hosts and the values together: `connection_host_conflict`, the value rules
-   for where each value goes; check each chosen role's document, values inlined, in the
-   order Integrations gives; compute `hosts_denied`.
+8. Check the hosts and the values together, per chosen role: `connection_host_conflict`
+   over every connection's hosts, each credential role's `hosts` and each tool role's
+   `serves`; the value rules for where each value goes; check each chosen role's
+   document, values inlined, in the order Integrations gives; compute `hosts_denied`.
 9. Resolve the variables: in an unwalled run with `variables.unwalled` unset or
    `ignore`, leave out every server variable; otherwise leave out every denied or
    reserved name, every placeholder's name, every name a `secrets.local` value reads,
@@ -2675,7 +2712,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `server_needs_wall` | runner and `qory` | an unwalled run while discovery lists `secrets` or the `stored-secrets` marker exists, whichever key the run signs with. With a server, after the ping, the discovery step having removed the marker where its rule allows; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run |
 | `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, a `secrets.local` file, an integration's `_file` setting, or the tools' socket directory |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
-| `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included |
+| `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included; an integration's `source` host that is refused beside the pattern, or a `forge_kind` missing, misplaced or contradicting its host |
 | `fetch_failed` | runner | the run configuration's fetch answers other than `200` with no code in a signed body, reported with `status`, or fails in transport, without it |
 | `run_configuration_digest_mismatch` | runner | the recomputed digest differs from the header's |
 | `connection_needs_wall` | runner | a connection and no wall |
@@ -2684,7 +2721,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `connection_host_invalid` | runner, and the server on save | a service or runtime host that is not an exact DNS name, such as an IP literal |
 | `connection_host_public_suffix` | runner | an integration's `*.` host over a public suffix |
 | `connection_header_reserved` | runner, and the server on save | a header name `headers.json` refuses, in a service, a runtime declaration or an integration's answer |
-| `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap; any overlap involving an integration's `serves`, with a credential role's `hosts` or another tool's hosts, in one connection or across two |
+| `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap; per chosen role, any overlap involving an integration tool role's `serves`, with a credential role's `hosts` or another tool's hosts, in one connection or across two |
 | `runtime_connection_duplicate` | runner | two runtime connections for one runtime |
 | `runtime_secret_choice` | runner | more than one declaration of one `one_of` group |
 | `runtime_secret_missing` | runner | a walled run with no connection that supplies a required group; reported with the group's id |
@@ -2693,7 +2730,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `integration_role_missing` | runner | a role in the connection's `ways` that the description does not define |
 | `integration_way_not_allowed` | runner | a server-chosen role outside the node's `integrations:` `ways` bound |
 | `integration_description_invalid` | runner | a description the runner cannot use as it stands, such as a tool role whose `mcp` host its `serves` does not cover |
-| `integration_source_mismatch` | runner | the connection's `source` differs from the one the node's `integrations:` entry records |
+| `integration_source_mismatch` | runner | the connection's `source` differs from the one the node's `integrations:` entry records, or the SHA-256 of `describe`'s output differs from its recorded `description_sha256` |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
 | `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern or a chosen role's `argument` pattern, or the connection passes an argument to a role that takes none |
@@ -2797,8 +2834,15 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   server-sent `<name>_file` setting is `integration_settings_not_allowed`; that a role
   without `argument` gets the empty string whatever the connection's argument; that an
   `mcp` host `serves` does not cover is `integration_description_invalid`; that a
-  `source` other than the `integrations:` entry's is `integration_source_mismatch`, and
-  a `forge` missing, misplaced or contradicting its host is `run_configuration_invalid`;
+  `source` other than the `integrations:` entry's, or a `describe` output whose SHA-256
+  differs from the recorded `description_sha256`, is `integration_source_mismatch`, and
+  a `forge_kind` missing, misplaced or contradicting its host is
+  `run_configuration_invalid`; that `source` refuses, in the forge form and the URL form
+  alike, an IPv4 literal such as `192.168.1.10` or `127.1`, an IPv6 literal such as
+  `[::1]`, a dotless host, an upper-case host, a port, an empty host, a `..` segment, a
+  `%2e`, a query, a fragment, userinfo, a forge path ending in `.git`, a contradicting
+  `forge_kind`, and the hosts `localhost`, `x.localhost`, `printer.local`,
+  `svc.internal` and `nas.home.arpa`; that `version` refuses `01.4.0`;
   that a placeholder named `QORY_*`, on the deny list, or set by the runner is
   `placeholder_conflict`; that a tool's standard error is redacted before and after it
   listens; that the runner module returns the tools' `mcp` URLs and the workspace's
@@ -2809,7 +2853,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   listens being `tool_not_started` with its one line; that `qory` registers a tool's
   `mcp` URL with the agent's MCP client; that a credential answer's placeholders are
   checked after the answer, and a renewal that changes them is refused; that `source`
-  in either form, and `forge` on a host other than the three it is implied on, are
+  in either form, and `forge_kind` on a host other than the three it is implied on, are
   accepted, and `program_version` compared exactly; that the document
   arrives fresh on a renewal; that a document over 65536 bytes is refused before the
   program starts, `integration_settings_too_large`; that a program that never reads does
