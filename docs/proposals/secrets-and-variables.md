@@ -36,8 +36,8 @@ them.
 
 From the server to the runner a stored value is end to end: only the runner process opens
 it. From the runner to the host it is sent to, the value travels in a TLS connection that
-the proxy verifies against public roots only, by default (`tls.public_roots_only`), so
-only a host whose certificate chains to a public root receives it. A machine value travels
+the proxy verifies against public roots only, so only a host whose certificate chains to
+a public root receives it. A machine value travels
 in an ordinary TLS connection verified against the machine's trust store.
 
 The contract is `v1`, revision 1, and describes the runner as it is; a later change goes
@@ -46,7 +46,7 @@ through `X-Qory-Contract-Version`.
 ## What this changes in the contract
 
 Against `contracts/runner/v1/README.md` on main. The contract stays `v1`, revision 1,
-amended in place. README passages this amends gives the new wording passage by passage,
+amended in place. README passages this amends contains the new wording passage by passage,
 Fixtures on main the fixtures, and Sources the sources.
 
 **§The server: identity and signing**
@@ -73,7 +73,9 @@ Fixtures on main the fixtures, and Sources the sources.
 
 **§The server: documents**
 
-- Discovery gains `node_id`, `secrets` and `apiary_public_key`, and is per access key.
+- Discovery gains `node_id` and `apiary_public_key`, both required, and `secrets`, and is
+  per access key. It lists no key endpoint such as `access_key`: keys change only
+  through enrolment.
 - The run configuration gains `connections`, `variables` and `withheld`, and
   `security_policy` becomes optional. Its digest becomes normative: the runner recomputes
   it, and the server keeps a rendering per holder and variant (Decision 6).
@@ -87,31 +89,31 @@ Fixtures on main the fixtures, and Sources the sources.
 - The policy's `credentials` moves to connections: a run's credentials come from its run
   configuration's `connections`, else from the runner file's, and the policy keeps
   `egress`, `tools` and `image`.
-- A credential definition's sources map onto connections. An `env` or `file` token is a
+- A credential definition's sources map onto connections. An `env` or `file` source is a
   machine value in `secrets.local`, bounded by its `hosts`, sent through a service
   connection. An `adapter` is an integration: a program of the integrations contract,
   started as `<program> credential -- <argument>` with its settings on standard input,
   whose answer, `credential.schema.json`, keeps its role.
 - A runtime declares the secrets it needs in its descriptor: `declares`, `one_of`,
   `reserves`, `denies` and `credential_files` (Runtimes).
-- A host that receives a stored value is verified against public roots only
-  (`tls.public_roots_only`), and values are set on port 443 alone; `TRACE` and `TRACK`
+- A host that receives a stored value, or a credential minted from one, is verified
+  against public roots only, and values are set on port 443 alone; `TRACE` and `TRACK`
   are refused there.
 
 **Variables**
 
 - A run configuration's `variables` reach the agent's process, resolved by the server; the
-  node adds names and never overrides; a short built-in deny list, the runtime's `denies`
-  and the node's `variables.deny` apply; an unwalled run receives them only with
-  `variables.unwalled: accept` (Decision 1).
+  node adds only names whose server value the run does not apply; a short built-in deny
+  list, the runtime's `denies` and the node's `variables.deny` apply; an unwalled run
+  receives them only with `variables.unwalled: accept` (Decision 1).
 - The node's policy and proxy settings only narrow the server's, and a fetched policy and
   `--policy` combine by narrowing (Decision 9).
 
 **The runner file**
 
 - It gains `connections:`, `secrets.providers`, `secrets.local`, bounds on
-  `integrations:` (`arguments`, `settings`), `variables.deny`, `variables.unwalled`,
-  `instance.name` and `tls.public_roots_only`.
+  `integrations:` (`arguments`, `settings`), `variables.deny`, `variables.unwalled` and
+  `instance.name`.
 - Its directory holds everything `qory` keeps for the server, the secret, `instance-id`,
   the `stored-secrets` marker and the locks among them, and every walled run refuses a
   mount of it.
@@ -122,15 +124,21 @@ Fixtures on main the fixtures, and Sources the sources.
   files, sets the runtime's declared and reserved variables it leaves unused to empty,
   and keeps a `secrets.local` source and the access key's variables out of the
   enclosure.
-- A server that lists `secrets` requires a wall for every run, and so does a machine
-  with the `stored-secrets` marker.
+- A server that lists `secrets` requires a wall for every run against it, and so does
+  the `stored-secrets` marker for a run that contacts no server.
 
 **§The events**
 
 - `dev.qory.run.refused` is new: every no-run after the ping emits it as the run's first
-  and last event, always sent, like the ping. Main's refusals before the start, of tools,
-  images and the run configuration's fetch, get codes of their own.
-- `dev.qory.ping` gains `interval_seconds`, the heartbeat interval the run uses.
+  event after the ping, heartbeats aside, and its last, always sent, like the ping.
+  Main's refusals before the start, of tools, images and the run configuration's fetch,
+  get codes of their own.
+- `dev.qory.ping` gains `interval_seconds`, the heartbeat interval the run uses, at most
+  300. Heartbeats run from the accepted ping until the final event, and
+  `elapsed_seconds` counts from the ping. A run is live from its accepted ping until its
+  final event, or until no accepted event has arrived for 3 × `interval_seconds`.
+- A signed `410` `run_closed` from the events endpoint ends the run: the runner stops the
+  runtime, and `dev.qory.run.exited` has `reason: run_closed`.
 - `dev.qory.run.policy_applied` reports `connections`, `connections_withheld`, `variables`
   and `node_policy` in place of `credentials`, keeps `terminated`, and allows `url` and
   `run_configuration` with `source` `none`. `dev.qory.run.egress` names the `connection`
@@ -139,10 +147,11 @@ Fixtures on main the fixtures, and Sources the sources.
 
 **Refusal codes**
 
-- The server's codes for keys, instances and secrets: `key_pending`, `key_invalid`,
-  `instance_limit`, `secrets_not_allowed`, `run_closed`, `run_configuration_superseded`,
-  `run_connections_invalid`, `run_secrets_conflict`, `run_secrets_expired`, and
-  `bad_request` for an instance id.
+- The server's codes, fifteen in all: `bad_request`, for a header sent twice and for an
+  instance id; `invalid_request`; `unsupported_contract_version`; `rate_limited`;
+  `unavailable`; `key_pending`; `key_invalid`; `key_limit`; `instance_limit`;
+  `secrets_not_allowed`; `run_closed`; `run_configuration_superseded`;
+  `run_connections_invalid`; `run_secrets_conflict`; `run_secrets_expired`.
 - The runner's codes for the pin, the answers, the wall, connections, runtimes,
   integrations, secrets and variables, from `apiary_public_key_missing` to
   `placeholder_conflict`, and `qory`'s `labels_changed` (Refusal codes).
@@ -152,10 +161,14 @@ Fixtures on main the fixtures, and Sources the sources.
 - New: `secrets-request`, `secrets-answer`, `sealed-plaintext`, `enrolment` and `auth`
   schemas, `events/run.refused`, and the data files
   `headers.json`, `runtimes.json` and `denied-variables.json`.
-- Changed: `server`, `configuration`, `run-configuration`, `policy`, `descriptor`,
-  `events/ping`, `events/run.policy_applied`, and `events/run.egress`, whose `credential`
-  becomes `connection` and which gains `renewal_failed`, a boolean, true on a request
-  whose connection's last renewal failed.
+- Changed: `server`, `configuration`, `run-configuration`, `policy`, `descriptor`;
+  `event.schema.json`, whose type list and per-type branches gain
+  `dev.qory.run.refused`; `events/ping`, with `interval_seconds`;
+  `events/run.heartbeat`, whose description and `elapsed_seconds` count from the ping;
+  `events/run.exited`, whose `reason` gains `run_closed`; `events/run.policy_applied`;
+  and `events/run.egress`, whose `credential` becomes `connection` and which gains
+  `renewal_failed`, a boolean, true on a request whose connection's last renewal
+  failed.
 
 **§Fixtures**
 
@@ -178,15 +191,26 @@ Each line names a passage of the README on main and what it becomes.
   server. Every answer is signed under the key the runner pins, so the runner
   authenticates the server over `https` and over loopback `http` alike."
 - **§The events, the table.** `dev.qory.ping`'s data gains `interval_seconds`.
-- **§The events, the first and last events.** `dev.qory.run.started` is the first event
-  and `dev.qory.run.exited` the last, except for a refused run, whose
-  `dev.qory.run.refused` is both its first and its last event.
+- **§The events, the first and last events.** "`dev.qory.run.started` is the first
+  event" becomes "`dev.qory.run.started` or `dev.qory.run.refused` is the first event
+  after the ping, heartbeats aside"; `dev.qory.run.exited` is the last, or
+  `dev.qory.run.refused` for a refused run.
+- **§The events, the heartbeat.** "every `interval_seconds` while the runtime runs"
+  becomes "every `interval_seconds` from the accepted ping until the final event", and
+  `elapsed_seconds` counts "since the ping" in place of "since run.started". The
+  heartbeat schema's "a receiver that misses two in a row may consider the run lost"
+  becomes "a run is live from its accepted ping until its final event, or until no
+  accepted event has arrived for 3 × `interval_seconds`".
 - **§The server, after a runner stops.** The resend adds `dev.qory.run.exited` with
   `reason: runner_lost` only to a record that has `dev.qory.run.started` and no
   `dev.qory.run.exited`.
 - **§The server, delivery.** "The server returns a status; the body is ignored" and
   "nothing in an answer's body is read" become: "the runner reads a body's code only
-  from a signed answer".
+  from a signed answer". The delivery table gains two rows: a signed `409` to the ping,
+  such as `instance_limit`, is no run, with its code; a signed `410` with
+  `run_closed` ends the run: the runner stops the runtime as at its time limit, records
+  `dev.qory.run.exited` with `reason: run_closed` in the file sink, and sends nothing
+  further. A `410` without that code keeps main's meaning.
 - **§The server, failure.** A missing or empty `X-Qory-Access-Key-Id` or
   `X-Qory-Signature-Ed25519` is an unsigned `401`; a header sent twice is an unsigned
   `400` before verification; a missing or malformed `X-Qory-Instance-Id` is a signed `400`
@@ -210,7 +234,7 @@ Each line names a passage of the README on main and what it becomes.
   step 4, "its `security_policy` is the policy", gains "narrowed by the policy the
   command passes".
 - **§The server, the modes of a run.** The row for a server reads "the server's run
-  configuration when it offers one, narrowed by the machine's policy, else the machine's
+  configuration when it offers one, narrowed by the node's policy, else the node's
   policy". "with a fetched run configuration the fetched policy is the policy, and
   `--policy` is refused with an error that states so" becomes: "with a fetched run
   configuration, `--policy` narrows the fetched policy as the machine's does".
@@ -234,8 +258,7 @@ Each line names a passage of the README on main and what it becomes.
 - **§Limits, the enclosure bullet.** "one the policy selects stays outside" becomes "a
   value a connection supplies stays outside", with `runtime_secret_conflict` (Runtimes).
 - **§Sequence, step 1.** The launch spec gains the connections, the providers and local
-  values, the integrations, the access key secret, the instance id, the variables and
-  `tls.public_roots_only`.
+  values, the integrations, the access key secret, the instance id and the variables.
 - **§Sequence, step 5.** "Nothing else of the runner's enters the environment" gains:
   "the variables, the placeholders and, in a walled run, the runtime's declared and
   reserved variables as empty".
@@ -256,7 +279,7 @@ Each line names a passage of the README on main and what it becomes.
 - **§The wall.** "the proxy, the policy and the server's secret" becomes "the proxy, the
   policy and the access key secret"; the guarantee "no credential the run's policy
   selects" becomes "no value a connection supplies"; "When the run has an authority of
-  its own (§Credentials)" refers to §Connections at the proxy.
+  its own (§Credentials)" refers to Connections at the proxy in this proposal.
 - **§The runtime.** "A runtime defines six things" becomes seven, the secrets it
   declares; the descriptor "has five parts" becomes six, `secrets` (Runtimes).
 
@@ -273,6 +296,10 @@ Each line names a passage of the README on main and what it becomes.
 - `fixtures/server/https.yaml` and `fixtures/server/loopback.yaml`, with `access_key` and
   `secret: fixture-secret-not-a-real-one`.
 - `fixtures/invalid/server-no-key.yaml`, about `access_key`.
+- `fixtures/invalid/run-configuration-no-policy.json`: `security_policy` is optional, and
+  a member the runner does not recognise is ignored, so the document is valid now;
+  `fixtures/run-configuration/no-policy.json`, `{"version": 1}`, takes its place as a
+  valid one.
 - The nine `fixtures/signed/*` files, signed with the HMAC secret.
 - In the recorded run `fixtures/run/0192a0b1-7c2d-7e3f-8a4b-5c6d7e8f9a0b/`, the
   `credentials` of its `policy_applied` and the `credential` of its egress events.
@@ -281,6 +308,11 @@ Each line names a passage of the README on main and what it becomes.
 
 - `fixtures/server/https.yaml` and `loopback.yaml`: `access_key_id` and
   `apiary_public_key`, the fixture keys of Decision 5.
+- `fixtures/invalid/server-plain-http.yaml`, rewritten with `access_key_id` and
+  `apiary_public_key` in place of `access_key` and `secret`, so the plain `http` URL to
+  a host other than loopback is the one thing it refuses.
+- `fixtures/batch/ping.json` and the recorded run's ping gain `interval_seconds`, and
+  the recorded run's heartbeats start at the ping.
 - `fixtures/invalid/server-no-access-key-id.yaml`, `server-no-pin.yaml` and
   `server-secret-member.yaml`: a server document without its id, without its pin, or
   with a secret.
@@ -355,7 +387,7 @@ Each line names a passage of the README on main and what it becomes.
   is present, even as an empty array, is the server's whole set. When the run
   configuration has no `connections` member, or the run has no run configuration (no
   server, `--local`, or a server that offers none), the runner file's `connections:`
-  apply, as the machine's policy applies without `security_policy`; `qory` parses them
+  apply, as the node's policy applies without `security_policy`; `qory` parses them
   and passes them through `session.Spec`. Machine values stay within their `hosts`
   either way.
 
@@ -366,18 +398,23 @@ Each line names a passage of the README on main and what it becomes.
 **Variables reach the agent's process alone.** The runner adds them to the launch's
 environment, and tools, integrations, the relay, the agent's Docker daemon and the wall's
 `docker` command keep their own environment. The nested Docker helper starts `dockerd`
-with the system `PATH`, the proxy variables and the bundle only (Issues, item 3).
+with the system `PATH`, the proxy variables and the bundle only, as main does since
+057ce43.
 
 **The server leads.** On a node connected to a server, the server's variables are the
-run's. The server resolves them among its own levels, the organisation (in the
-commercial editions) over the workspace over the repository, a level that locks a name
-keeping it from the levels below, and sends the resolved values alone: a name and a
-value each. The node adds and never overrides: its own variables, from `wall.env` in
-`runner.yaml` and `qory`'s `--env`, add names the server leaves unset, and a node value
-for a name the server sets is left out and reported in `policy_applied`'s
-`variables.node_ignored`. The run starts either way. The reason, plainly: a node, for
-example through an agent that writes `runner.yaml`, is easier to compromise than the
-server. Without a server, the node's own variables are the run's.
+run's. The server resolves them among its own levels, where the more specific level
+wins, the repository over the workspace over the organisation (in the commercial
+editions), and a broader level may lock a name against the levels below it. It sends
+the resolved values alone: a name and a value each. The node adds only names: its own
+variables, from `wall.env` in `runner.yaml` and `qory`'s `--env`, apply for every name
+whose server value the run does not apply. A node value for a name whose server value
+the run applies, a name in `names`, is left out and reported in `policy_applied`'s
+`variables.node_ignored`, and the run starts. A server value the deny list leaves out,
+or one an unwalled run leaves out under `ignore`, leaves the node's own value in place,
+as without a server. Names are compared exactly between the node and the server; the
+deny list matches regardless of case. The reason, plainly: a node, for example through
+an agent that writes `runner.yaml`, is easier to compromise than the server. Without a
+server, the node's own variables are the run's.
 
 - The runtime's `Prepare` and the harness's composed launch set names that are the
   runner's own, not the node's. Such a name wins over the server's variable, which is
@@ -473,8 +510,9 @@ a placeholder is `placeholder_conflict`.
 - **Request freshness.** The secrets request contains a `timestamp` the server accepts
   within ±300 seconds.
 - **Resealing.** The server records the first payload it seals for an access key and a run
-  id, with its digest, its set of connections and the key the request verified under. It
-  seals again for that pair only with the same digest, set and key (else `409`
+  id, with its digest and its set of connections; the pair already names the access key
+  the request verified under. It seals again for that pair only with the same digest and
+  set (else `409`
   `run_secrets_conflict`), and
   only until the first payload's `exp` (else `409` `run_secrets_expired`). A run whose row
   the server has already closed receives nothing: `410` `run_closed`.
@@ -510,11 +548,12 @@ a placeholder is `placeholder_conflict`.
 **A node or a node pool owns access keys; an access key is the credential; an instance
 runs with it.**
 
-- **A node** is permanent, such as a server or a laptop. It has its own access key, two
-  while one replaces the other, and runs one instance at a time.
+- **A node** is permanent, such as a server or a laptop. It has its own access key and
+  runs one instance at a time.
 - **A node pool** is ephemeral, such as CI or an autoscaled fleet. Its instances share
-  one access key, two while one replaces the other, and it may limit how many run at
-  once; unlimited is allowed.
+  one access key, and it may limit how many run at once; unlimited is allowed.
+- **While a key is replaced**, a node or node pool holds at most two approved access keys
+  and one awaiting approval (Replacing a key).
 - **The kind is fixed at creation.** The server assigns the id: `nd_` for a node, `np_`
   for a node pool, each followed by 16 lower-case Crockford base32 characters. Every
   access key belongs to exactly one node or node pool, and a node to exactly one
@@ -532,20 +571,21 @@ runs with it.**
   that holds it, revokes its access keys first, so every key becomes a tombstone.
 - **An instance** is one running copy of `qory` with the node's access key. The runner
   reports an instance id as a signed line of every request, for display, audit,
-  per-instance events and the instance limit. Authorisation rests on the access key alone: the seal, the
-  variant and the rate bucket are per access key, and anyone who holds the access key
-  can claim any instance id.
+  per-instance events and the instance limit. Authorisation rests on the access key alone:
+  the seal, the variant and the rate bucket are per access key, and anyone who holds the
+  access key can claim any instance id.
   - The id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `qory` generates `i_` and 16
     random bytes in base64url, 24 characters, and keeps it in the file `instance-id` in
-    the runner file's directory, two lines: the id and HMAC-SHA256, keyed with the
-    constant `qory instance-id v1`, of the machine's identity, `/etc/machine-id` on
-    Linux, `IOPlatformUUID` on macOS, else the host name, as machine-id(5) recommends.
-    When the directory is read-only the id lives for the process, which suits an
-    ephemeral instance. Before the first request `qory` reads the file and generates a
-    new id when the file's id fails the pattern or the identity's hash differs, which
-    catches a file copied with a home directory. An image that keeps `/etc/machine-id`
-    gives its instances one id; most image builds reset that file. The runner module
-    takes the id through `session.Spec`.
+    the runner file's directory, created with `O_CREAT|O_EXCL|O_NOFOLLOW` and read again
+    when another process created it first (`EEXIST`), two lines: the id and HMAC-SHA256,
+    keyed with the constant `qory instance-id v1`, of the machine's identity,
+    `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, else the host name, as
+    machine-id(5) recommends. When the directory is read-only the id lives for the
+    process, which suits an ephemeral instance. Before the first request `qory` reads the
+    file and generates a new id when the file's id fails the pattern or the identity's
+    hash differs, which catches a file copied with a home directory. An image that keeps
+    `/etc/machine-id` gives its instances one id; most image builds reset that file. The
+    runner module takes the id through `session.Spec`.
   - The display name is `instance.name` in `runner.yaml`, under enrolment's name pattern,
     `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, and defaults to the host name, or its first
     label when the host name does not fit. `qory` refuses a configured name outside the
@@ -567,31 +607,35 @@ runs with it.**
     a delivery id already stored, the first accepted stays, since a resend is
     deduplicated.
   - The server shows each node's live instances: when each was last seen, its runs and
-    its events. Heartbeats arrive during runs only. A run is live until it misses two
-    heartbeats in a row, that is, until no `dev.qory.run.heartbeat` has arrived for 3 ×
-    `interval_seconds`; then the server knows when its instance was last seen, and an
-    idle instance looks like one that is switched off.
+    its events. Heartbeats arrive during runs only, and a run is live as Liveness below
+    defines; after a run, the server knows when its instance was last seen, and an idle
+    instance looks like one that is switched off.
   - The server ignores the instance headers at enrolment, which no access key signs.
+- **Liveness**, one rule everywhere: a run is live from its accepted ping until its final
+  event, `dev.qory.run.exited` or `dev.qory.run.refused`, or until no accepted event of
+  the run has arrived for 3 × its `interval_seconds`, counted from the ping. The ping
+  carries the heartbeat interval the run uses, at most 300 seconds, and heartbeats run
+  from the accepted ping until the final event, so the slowest part of a start, the
+  integrations, the tools, the wall and the image, keeps the run live too.
 - **The instance limit.** A node's limit is 1; a node pool's is its own, or none. The
   limit counts distinct instance ids, not runs: an instance with a live run may ping for
-  a second, concurrent run and still counts once.
+  a second, concurrent run and counts once.
   - The server checks it on the ping alone, after `key_pending` in the order and after
     the events endpoint's deduplication: a ping whose delivery id or event id the server
-    already accepted gets the same `2xx` again, never `409`. A ping from a new instance id
-    beyond the limit is a signed `409` `instance_limit`, and that run does not start.
-  - Only instances whose ping the server accepted count; a refused instance never
-    counts. An instance counts while one of its runs is live: from the accepted ping
-    until the run's final event, `dev.qory.run.exited` or `dev.qory.run.refused`, or
-    until no event of the run has arrived for 3 × the `interval_seconds` its ping
-    carried. The ping carries the heartbeat interval the run uses, so the window follows
-    the run's own value.
+    already accepted gets the same `2xx` again. A ping from a new instance id beyond the
+    limit is a signed `409` `instance_limit`, and that run does not start.
+  - An instance counts while one of its runs is live. Only an accepted ping makes a run
+    live, so a refused instance stays out of the count. The server counts and admits
+    under the node row's lock, so an accepted ping's run counts for the next ping at
+    once.
   - When an instance of a node dies without a final event, a replacement instance is
-    refused for about 3 × `interval_seconds`, about 90 seconds at 30 seconds. An owner or
-    administrator can clear the live instance at once: clearing closes that instance's
-    live runs, so a later event of such a run, its heartbeat included, gets `410`
-    `run_closed` and counts for nothing, and the instance's next ping counts as a new
-    start.
-  - The limit is fleet sizing, not security: instance ids are claims.
+    refused for 3 × `interval_seconds`, 90 seconds at 30 seconds. An owner or
+    administrator can clear an instance at once: clearing closes that instance's live
+    runs, so a later event of such a run, its heartbeat included, gets a signed `410`
+    `run_closed`, which ends the run (Events), and the instance's next ping counts as a
+    new start.
+  - The limit sizes a fleet. Instance ids are claims, so security rests on the access
+    key.
 - **Names.** A name ending in `_SECRET` is kept hidden; one ending in `_PUBLIC_KEY` or
   `_ID` is safe to show. `QORY_ACCESS_KEY_ID` is the access key id,
   `QORY_ACCESS_KEY_SECRET` the access key's only secret, and `QORY_APIARY_PUBLIC_KEY` the
@@ -618,9 +662,11 @@ runs with it.**
 - **The files.** `qory` creates `access-key-secret` with `O_CREAT|O_EXCL|O_NOFOLLOW`,
   mode `0600`, under the key lock, and refuses a file whose mode grants anything to the
   group or to others, a file or directory owned by another user than the effective one,
-  and the published fixture secret (Decision 5). A file it moves aside gets a name with
+  and the published fixture secret (Decision 5). A secret it moves aside gets a name with
   the time, such as `access-key-secret.old.1700000000`, under a name no existing file
-  has. Keeping the secret in the system's keychain is a later option.
+  has. `qory` deletes every moved-aside secret once the current key's first signed
+  discovery succeeds, which shows that key approved, or once a signed answer shows the
+  old key revoked. Keeping the secret in the system's keychain is a later option.
 - **On a CI machine** the secret comes from the CI's secret store, through
   `QORY_ACCESS_KEY_SECRET` or a file descriptor, and `qory` writes no secret file.
   `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY` are plain settings of the CI; only the
@@ -630,21 +676,26 @@ runs with it.**
 - **The runner module keeps everything in memory; `qory` owns the files.** The module
   takes the secret and the instance id through `session.Spec`.
 - **Locks.** Every command that generates a key, `enrol` and `create`, takes
-  `locks/key.lock` exclusively with `flock`. A run takes `locks/key.lock` shared, creates
-  its own lock file `locks/<run id>.lock`, naming whether it is walled, holds that file
-  with `flock` for its life, and then drops the key lock; so a key command waits for
-  starting runs, and starting runs wait for it. A key command refuses while any unwalled
-  run's lock file is held, and says to stop those sessions first. A lock file whose
-  `flock` can be taken belongs to a run that has ended, and is removed.
+  `locks/key.lock` exclusively with `flock`. A run, in order: takes `locks/key.lock`
+  shared; checks the marker; creates its own lock file `locks/<run id>.lock`, naming
+  whether it is walled, and holds it with `flock` for its life; then drops the key lock.
+  So a key command waits for starting runs, and starting runs wait for it. A key command
+  refuses while any unwalled run's lock file is held, and prints that those sessions
+  must stop first. A key command, holding the key lock exclusively, removes every run
+  lock file whose `flock` it can take, since that run has ended.
 - **The marker and key commands.** Every key command that keeps its key on this machine
   writes the `stored-secrets` marker before it generates the key, unconditionally, and a
-  marker it cannot write means no key. `qory` removes the marker only on a signed answer
-  that shows this machine's access key has no stored secrets: discovery without
-  `secrets`, or an enrolment answer with `stored_secrets: false`. With `--print`, a key
-  command takes the key lock and refuses while an unwalled run is live, and leaves the
-  marker as it is: the printed key is kept elsewhere, and the answer's `stored_secrets`
-  describes that holder's access key. Deleting the file by hand also restores unwalled
-  runs.
+  marker it cannot write means no key. The marker belongs to the runner file's
+  directory and stays while any moved-aside secret is in it. `qory` removes it only when
+  the directory holds exactly one secret, `access-key-secret`, and discovery signed for
+  a request under that secret, read from that file, lists no `secrets`; a secret from
+  the environment or a file descriptor leaves the marker as it is. `qory` writes or
+  removes the marker, and deletes moved-aside secrets, under `locks/key.lock` held
+  exclusively, after checking that `access-key-secret` still holds the secret the
+  request was signed with. With `--print`, a key command takes the key lock and refuses
+  while an unwalled run is live, and leaves the marker as it is: the printed key is kept
+  elsewhere. Deleting the marker by hand also restores unwalled runs that contact no
+  server.
 - **The key pair.** Everything comes from the seed:
   - the Ed25519 public key A, as RFC 8032 derives it;
   - the X25519 private key, the clamped first 32 bytes of SHA-512(seed), the same scalar
@@ -676,14 +727,14 @@ runs with it.**
   present, its next key's, so a change of the server's key ends every outstanding code
   by itself; deleting the node ends its codes, and an owner or administrator can cancel
   an outstanding code. A used code passes again for a retry with the same public key for
-  15 minutes after its first use. When a code is used or expired, `qory` says so plainly:
+  15 minutes after its first use. When a code is used or expired, `qory` prints plainly:
   "this code was used or has expired; if you did not use it, tell your administrator,
   who must reject the pending key".
 - **An existing pin.** When the machine has a pin and none of a code's fingerprints is in
   it, `qory access-key enrol` refuses before it generates a key: the code is from another
   server, or the pin is out of date, and the operator updates the pin out of band.
   `qory` writes a pin from an answer only where none exists.
-- **Enrolment** gives an access key its id, with a code or by a pasted key.
+- **Enrolment** assigns an access key its id, with a code or by a pasted key.
   - (a) **An enrolment code.** On the machine, `qory access-key enrol <server> <code>`
     takes the key lock, writes the marker, generates the secret, keeps it as above,
     records the code's SHA-256 and the time in `enrolment-pending`, prints the key's
@@ -694,7 +745,8 @@ runs with it.**
       holds that code's hash and is younger than 15 minutes. With any other code, or
       later, `qory` moves the secret aside and generates a fresh one. A `401` to a retry
       means the code was used or has expired; a `409` `key_invalid` means the key was
-      refused. Either way `qory` moves the secret aside and asks for a new code.
+      refused. Either way `qory` moves the secret aside and prints that a new code is
+      needed.
     - A machine that already holds a secret moves it aside before it enrols, so its runs
       use the new key once the new key is approved. With `--print` the machine's files
       stay as they are, and its old key keeps working until it is revoked.
@@ -703,9 +755,9 @@ runs with it.**
       fingerprints the code carries, writing `access_key_id` and `apiary_public_key` into
       `runner.yaml`'s `server` section, and removes `enrolment-pending`. The answer
       contains the access key id, the id of its node or node pool in `node_id` with
-      `node_kind`, `node` or `pool`, `approved`, `stored_secrets` and the server's keys;
-      `stored_secrets: false` removes the marker. Discovery lists `node_id` too, and
-      `qory` prints it.
+      `node_kind`, `node` or `pool`, `approved`, `stored_secrets` and the server's keys.
+      `qory` prints `node_id` and `stored_secrets`; the marker follows discovery alone.
+      Discovery lists `node_id` too, and `qory` prints it.
     - The access key awaits approval, and an owner or administrator compares the
       fingerprint `qory` printed with the one the server shows, and sees the settings the
       access key will get, before approving it.
@@ -715,12 +767,14 @@ runs with it.**
   - (b) **A pasted key.** `qory access-key create` takes the key lock, writes the marker,
     generates the secret, keeps it as above, and prints the public key and its
     fingerprint; with `--print` it writes no file, the marker included, and prints
-    `QORY_ACCESS_KEY_SECRET` as well. An owner or administrator adds the access key to a
-    node by pasting the public key, with its settings, and it is approved at once, since
-    an administrator entered the key. The server then shows `QORY_ACCESS_KEY_ID` and the
-    pin, which the machine sets in `runner.yaml` or its environment. A pasted key the
-    server refuses gets one message, "this key cannot be used", whatever the reason, so a
-    paste tells nothing about other access keys.
+    `QORY_ACCESS_KEY_SECRET` as well. An owner or administrator adds the access key to an
+    existing node or node pool by pasting the public key, with its settings, and it is
+    approved at once, since an administrator entered the key; a paste creates no node.
+    The server then shows `QORY_ACCESS_KEY_ID` and the pin, which the machine sets in
+    `runner.yaml` or its environment. A pasted key the key checks or the index refuse
+    gets one message, "this key cannot be used", whatever the reason, so a paste reveals
+    nothing about other access keys; a paste beyond the node's keys is `key_limit`
+    (Replacing a key).
 
   A fingerprint is `base64url(SHA-256(raw public key)[:16])`, 22 characters, for an
   access key's key and the server's alike.
@@ -731,7 +785,7 @@ runs with it.**
   invalid key, so a refusal reveals nothing about other access keys. An enrolment retry
   is exempt for its own row.
 - **What the server checks.** At enrolment it verifies the proof of possession first, so
-  a key's status is told only to whoever holds its private key. Then it checks every
+  it reveals a key's status only to whoever holds its private key. Then it checks every
   public key it is given, the pasted key included:
   - a canonical encoding: decode, re-encode and compare the bytes, since a lenient
     decoder such as `filippo.io/edwards25519` `SetBytes` accepts non-canonical encodings;
@@ -772,17 +826,32 @@ runs with it.**
 - **Replacing a key.** Changing the flag, or replacing a lost or compromised key, means
   enrolling a new access key for the same node, with a new code and an administrator's
   approval, or pasting a new key. A node holds at most two approved access keys, the
-  current one and its replacement, and one awaiting approval. An enrolment for a node that
-  already holds a pending key or two approved ones is `409` `key_limit`, and the code
-  stays unused, so the same command succeeds within the code's 15 minutes once an owner or
-  administrator has made room; a pasted key for a node with two approved keys gets "this
-  key cannot be used". An owner or administrator revokes the old key, or rejects the
-  pending one, to make room; revocation is immediate. A node pool's operator enrols the
+  current one and its replacement, and one awaiting approval, under the node row's lock:
+  - an enrolment for a node that already holds a pending key or two approved ones is
+    `409` `key_limit`, and the code stays unused, so the same command succeeds within the
+    code's 15 minutes once an owner or administrator has made room;
+  - approving a pending key is refused while the node holds two approved keys;
+  - a paste is refused while the node holds two keys, approved or pending, since a
+    pasted key is approved at once; the server shows the refusal as `key_limit`.
+
+  An owner or administrator revokes the old key, or rejects the pending one, to make
+  room; revocation is immediate. A node pool's operator enrols the
   new key with `--print`, approves it, puts the new secret in the fleet's secret store,
   and then revokes the old key, so the fleet keeps running throughout.
-- **Revocation.** An owner or administrator revokes an access key. Its requests then fail
-  verification, `401`, from every instance that uses it, so the server seals nothing to
-  it, and the runner reports the `401` as `unauthorized`. Its key becomes a tombstone.
+- **Revocation.** An owner or administrator revokes an access key, and its key becomes a
+  tombstone. Revocation closes the key's live runs. Its requests then get `401` from
+  every instance that uses it, and the runner reports the `401` as `unauthorized`, with
+  one exception for the runs it closed:
+  - For a run that was live at the revocation, the events endpoint verifies a batch
+    under the tombstone's public key and answers it with a signed `410` `run_closed`,
+    which ends the run (Events). The server stores nothing from such a batch: no event,
+    no delivery record, no heartbeat, since the key may have been revoked because it
+    leaked, and its thief must not write into the run's record.
+  - The exception lasts only until that run's liveness window would have lapsed, 3 ×
+    its `interval_seconds` after its last accepted event; then that key's requests get
+    `401` too.
+  - Sealing and revocation take the key row's lock, so no value is sealed after a
+    revocation commits.
 - **Unused keys.** The server may revoke an access key unused for a period it sets; its
   operator then enrols a new access key, which gets a new id.
 - **What it protects, plainly.** The server stores public keys only, so a reader of its
@@ -804,12 +873,13 @@ runs with it.**
 **Keeping the secret from the agent.** An agent that reads the access key secret fetches
 every value the server stores for that access key.
 
-- *Unwalled runs.* Once a server's signed discovery lists `secrets`, every run against it
-  needs a wall: `server_needs_wall`. With a server, that refusal comes after the ping,
-  so it reaches the server. The marker is the offline signal: `qory` writes it when
-  signed discovery lists `secrets` and before every key it generates, and while it
-  exists `qory` refuses every unwalled run, `--local` included, with the same code,
-  before the run starts. A marker that cannot be written means no run. In 0.7.0 stored
+- *Unwalled runs.* With a server, signed discovery decides: once it lists `secrets`,
+  every run against that server needs a wall, `server_needs_wall`, a refusal that comes
+  after the ping, so it reaches the server. The marker is the signal for a run that
+  contacts no server, `--local` or a runner file without a server: `qory` writes it
+  when signed discovery lists `secrets` and before every key it generates, and while it
+  exists `qory` refuses such a run unwalled, with the same code, before the run starts.
+  A marker that cannot be written means no run. In 0.7.0 stored
   secrets go only to walled runs; a credentials broker is a later direction (Later: a
   credentials broker).
 - *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
@@ -855,8 +925,8 @@ every value the server stores for that access key.
   `hpke.DHKEM(ecdh.X25519())`, `hpke.HKDFSHA256()`, `hpke.AES256GCM()`; `NewRecipient`
   with `info`, then `Open` on the context with `aad`, since the single-shot `Open` takes
   no `aad`. The recipient's key is `DHKEM(ecdh.X25519()).NewPrivateKey` of the clamped
-  first 32 bytes of SHA-512(seed) (Decision 4). The server seals to the access key the
-  secrets request verified under, the one key that access key has. `NewSender` and
+  first 32 bytes of SHA-512(seed) (Decision 4). The server seals to the public key of the
+  access key the secrets request verified under. `NewSender` and
   `NewRecipient` refuse a low-order point; enrolment refuses an Ed25519 key of small
   order, the only kind that converts to a low-order u, so the server meets prime-order
   keys only.
@@ -886,8 +956,8 @@ every value the server stores for that access key.
   second RFC 9180 implementation over pyca/cryptography whose key came from libsodium's
   `crypto_sign_ed25519_sk_to_curve25519`. libsodium's
   `crypto_sign_ed25519_pk_to_curve25519`, `filippo.io/edwards25519` and big-integer
-  arithmetic each give the same u from the Ed25519 public key, and it equals X25519 of the
-  clamped scalar.
+  arithmetic each compute the same u from the Ed25519 public key, and it equals X25519 of
+  the clamped scalar.
 
   | Input | Value |
   |---|---|
@@ -1022,9 +1092,10 @@ whose exact bytes the server defines:
   so a writer cannot swap a key or un-revoke an access key for the GET or the events
   endpoint either;
 - an integrity code over each code row: the code's SHA-256, its node or node pool, or
-  the kind and workspace of a new one, the settings the access key will get, its expiry
-  and who issued it, so a writer cannot insert a code that creates an access key of its
-  choosing;
+  the kind and workspace of a new one, the settings the access key will get, its expiry,
+  who issued it, and whether and when it was used or cancelled, so a writer can neither
+  insert a code that creates an access key of its choosing nor revive a used or
+  cancelled one;
 - a per-row version inside the coded data, with the audit recording the current version
   of each row, so an older row restored over a newer one is detected unless the audit is
   rolled back with it;
@@ -1050,7 +1121,7 @@ with a key of its own. Base mode authenticates no sender, so the runner opens on
 envelope the server signed and reads only answers the server signed, both under a key
 the machine pins:
 
-- The server has an Ed25519 key of the instance: `APIARY_SIGNING_SECRET` when it is set,
+- The server has an Ed25519 signing key of its own: `APIARY_SIGNING_SECRET` when it is set,
   which overrides the default, else one derived from the server's encryption key,
   `APIARY_ENCRYPTION_SECRET`, with HKDF-SHA256 under a label of its own, distinct from the
   integrity key's. The server's documentation recommends setting `APIARY_SIGNING_SECRET`,
@@ -1180,14 +1251,14 @@ the machine pins:
   ```
 
 - **Connections alone select credentials.** `credentials` leaves `policy.schema.json`, and
-  with it the run configuration's `security_policy`, `--policy` files and the machine's
+  with it the run configuration's `security_policy`, `--policy` files and the node's
   policy: what a run may send where is decided by connections alone. The policy keeps
   `egress`, `tools` and `image`.
 - **Connections need a wall**: `connection_needs_wall`. The wall is what binds a program
   that ignores the proxy.
 - **Where it lives.** `qory` parses `runner.yaml`; the runner module takes the providers,
-  the local values, the integrations, the runner file's connections and
-  `tls.public_roots_only` (Connections at the proxy) through `session.Spec`.
+  the local values, the integrations and the runner file's connections through
+  `session.Spec`.
 
 ### 8. Contract version and behaviour
 
@@ -1204,38 +1275,39 @@ the machine pins:
 ### 9. A node narrows, the server leads
 
 **The server leads; the node only narrows.** A node is easier to compromise than the
-server, so on a node connected to a server, what the node contributes can take away from
-the run and never add to it. The node's policy is the policy the command passes: for
-`qory`, its runner file's `egress` and the command's `--policy`, as `qory` combines them
-today. A fetched `security_policy` and the node's policy combine by narrowing, so a
-`--policy` beside a fetched policy narrows it too. Without a server's `security_policy`
-the node's policy is the run's, as on main; a side without a policy narrows nothing.
+server, so on a node connected to a server, what the node contributes can only take away
+from the run. The node's policy is the policy the command passes: for `qory`, its runner
+file's `egress` and the command's `--policy`, as `qory` combines them today. A fetched
+`security_policy` and the node's policy combine by narrowing, so a `--policy` beside a
+fetched policy narrows it too. Without a server's `security_policy` the node's policy is
+the run's, as on main; with a server's policy and no node policy, the server's applies as
+it is.
 
 | Field | The run's |
 |---|---|
-| `egress.mode` | `enforce` when either side says `enforce`, else `observe` |
-| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` does not cover. The runner reports the entries of each side under `enforce` that every other such side's list covers, which is exactly the hosts both allow; with neither under `enforce`, the server's entries |
+| `egress.mode` | `enforce` when either side sets `enforce`, else `observe` |
+| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. The runner reports the entries of each side under `enforce` that every other such side's list covers, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
 | `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
-| `egress.paths` | a host either side lists is terminated; a request to it passes only when it matches an entry of every side that lists its host |
-| `tools` | the server's selection, each of which the node's `tools`, when it has them, lists by name, and by argument when the node's entry has one; a tool the node's policy leaves out is no run, `tool_unknown`, as a tool the node does not define |
+| `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does, as on main: under `enforce` it is denied; under `observe`, both sides observing, it passes and is recorded with the rule of the side it missed |
+| `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
-| `tls.public_roots_only` | `true` with a server; the node's `false` applies only without one (Connections at the proxy) |
-| `variables` | the server's; the node adds names and never overrides (Decision 1) |
+| `variables` | the server's; the node adds only names whose server value the run does not apply (Decision 1) |
 | `connections` | the server's, when present, are the whole set; the node's bounds narrow them: `secrets.local`'s `hosts` (Decision 7) and `integrations:`'s `arguments` and `settings` (Integrations) |
-| a wall | a server that lists `secrets`, or the `stored-secrets` marker, requires one; the node cannot waive it (Decision 4) |
+| a wall | a server that lists `secrets` requires one, and so does the `stored-secrets` marker for a run that contacts no server; the node keeps that requirement (Decision 4) |
 
-- **Fields with no narrowing.** `image` selects one thing, so its only narrowing is
+- **Fields that select one thing.** `image` selects one thing, so its narrowing is
   agreement: two different selections are no run rather than a choice. `connections` and
   `variables` are the server's data, which the node bounds rather than intersects. The
-  labels come from outside the agent's reach and select, they do not grant.
+  labels come from outside the agent's reach and only select.
 - **Reloads.** The node's policy is fixed for the run. A reload replaces the server's
   side, and the run applies the new `security_policy` narrowed by the same node policy;
   the reload rules of main hold for the result.
 - **The record.** `dev.qory.run.policy_applied` reports the run's `mode`, `allow` and
   `deny` as the table computes them, the server's `paths`, and `source` `fetched` with the
-  server's `url`, `digest` and `run_configuration`. When a node policy narrows a fetched
-  one, a new optional member `node_policy` contains its `digest`, as canonical JSON, and
-  its `paths`, when it has any, so the record shows both sides of every path rule.
+  server's `url`, `digest` and `run_configuration`. When the run has both a fetched
+  policy and a node policy, a new member `node_policy` contains the node policy's
+  `digest`, `sha256=` and the hex SHA-256 of its RFC 8785 serialisation, and its `paths`,
+  when it has any, so the record shows both sides of every path rule (Events).
 
 ## Runtimes
 
@@ -1496,26 +1568,18 @@ custom definitions on save and its built-in definitions in CI against the same f
   roots only: the runner's own public root store alone
   (`golang.org/x/crypto/x509roots/fallback`), so stored values reach only hosts with
   publicly rooted certificates, and an authority added to the machine, such as a
-  TLS-inspecting proxy's, receives none. The runner file's setting narrows only:
+  TLS-inspecting proxy's, receives none. In 0.7.0 this holds on every node.
 
-  ```yaml
-  tls:
-    public_roots_only: true   # the default
-  ```
-
-  With a server, the proxy verifies against public roots only, whatever the runner file
-  sets; `false` applies only without a server (Decision 9).
-
-  The setting covers every host where the proxy sets a value from the sealed payload,
-  through a runtime or a service connection, and every host where it sets the credential
-  an integration produced from a stored value; it covers every request to such a host.
-  `true` verifies those hosts against public roots only; `false`, without a server,
-  verifies them against the machine's trust store, as every other host is. A machine
-  value, and the credential of an integration that received machine values only, is
-  verified against the machine's trust store under either setting, because the machine
-  chose it. Stored values come only from a server, so a machine behind a TLS-inspecting
-  proxy of its own receives none through that proxy: each such request is refused as
-  below. When a host fails verification against public roots, the proxy refuses
+  It covers every host where the proxy sets a value from the sealed payload, through a
+  runtime or a service connection, and every host where it sets the credential an
+  integration produced from a stored value; it covers every request to such a host.
+  Every other host is verified against the machine's trust store. A machine value, and
+  the credential of an integration that received machine values only, is verified
+  against the machine's trust store, because the machine chose it. A node behind a
+  TLS-inspecting proxy of its own therefore receives no stored value through that proxy,
+  its stored model credential included, and uses machine values instead; custom
+  authorities per node are a later direction (Later: custom authorities per node). When
+  a host fails verification against public roots, the proxy refuses
   the request: `dev.qory.run.egress` records `decision: denied`, `outcome: refused` and
   the rule `wall:public-roots`, the session gets a `403`, the value stays with the proxy,
   and the run goes on.
@@ -1556,7 +1620,9 @@ custom definitions on save and its built-in definitions in CI against the same f
 ```
 
 `node_id` is the id of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`,
-listed for every verified access key, for display: `qory` prints it. `secrets` is
+listed for every verified access key, for display: `qory` prints it. `node_id` and
+`apiary_public_key` are required, beside `version` and `events`, since every discovery
+document comes from a server and answers a verified access key. `secrets` is
 optional, `{url}` with `run.url`'s grammar, listed only for an access key allowed to
 receive stored secrets. `apiary_public_key` is listed for every verified access key, for
 information: a runner takes keys from its pin alone. `run` is listed when the workspace
@@ -1565,11 +1631,11 @@ has a policy, a connection or a variable in force, its own or from a level above
 ### The run configuration
 
 `version` is required; `security_policy`, `connections` and `variables` are optional, all
-covered by the digest. Without `security_policy` the machine's own policy applies, the
+covered by the digest. Without `security_policy` the node's own policy applies, the
 policy the command passes, else observe everything: `dev.qory.run.policy_applied` reports
 `source` `config` or `none` with `url` and `run_configuration`, a reload that brings a
-`security_policy` puts it in force, narrowed by the machine's, and one that drops it puts
-the machine's back. With `security_policy`, the policy the command passes narrows it
+`security_policy` puts it in force, narrowed by the node's, and one that drops it puts
+the node's back. With `security_policy`, the policy the command passes narrows it
 (Decision 9). Without `connections` the runner file's connections apply;
 a present `connections`, even `[]`, is the whole set. The request is the labels, and
 nothing else, as the query; labels the contract refuses are `400` `invalid_request` here
@@ -1722,8 +1788,8 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `denied-variables.json`, the built-in deny list of Decision 1: `version`, `names` and
   `patterns`;
 - `headers.json`;
-- `configuration.schema.json`, discovery's document, with `node_id`, `secrets` and
-  `apiary_public_key`;
+- `configuration.schema.json`, discovery's document, with `node_id` and
+  `apiary_public_key` required and `secrets` optional;
 - `run-configuration.schema.json`, with the optional `withheld` and `variables` of string
   values, and `policy.schema.json`, both without `credentials`;
 - `auth.schema.json`;
@@ -1777,12 +1843,15 @@ set, as for the pin.
     its path and its body, so a body signed for one endpoint fails at every other; the
     secrets request's body contains a timestamp of its own.
 - **Verification.** The server checks the access key id's shape, looks the access key up,
-  verifies the key row's integrity code (Decision 6), then builds the message from the two
+  verifies the key row's integrity code and its node row's (Decision 6), then builds the
+  message from the two
   headers, an absent instance id as an empty line, and verifies the signature under the
   stored public key, cofactorless (Decision 5). A missing or empty `X-Qory-Access-Key-Id`
   or `X-Qory-Signature-Ed25519` is an unsigned `401`. Every failure is `401` with
   `{"error":"unauthorized"}`, as §The server describes, a revoked access key's request
-  included; the runner reports it as `unauthorized`. A request under an access key that
+  included, apart from the events batches of the runs its revocation closed, which get a
+  signed `410` `run_closed` (Decision 4, Revocation); the runner reports a `401` as
+  `unauthorized`. A request under an access key that
   awaits approval verifies, and every signed endpoint answers it with a signed `409`
   `key_pending`, discovery and the events endpoint included. "A header sent twice"
   covers `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Signature-Ed25519` and
@@ -1815,8 +1884,8 @@ set, as for the pin.
   `ETag` is unchanged.
 - **The modes of a run.** With a server, events go to the server's `events.url` after a
   signed discovery fetch and a ping, as on main. The policy comes from the run
-  configuration's `security_policy` when it has one, narrowed by the machine's, else
-  the machine's (Decision 9); the connections from its `connections` when it has the
+  configuration's `security_policy` when it has one, narrowed by the node's, else
+  the node's (Decision 9); the connections from its `connections` when it has the
   member, else the runner file's; the variables from its `variables`, to which the
   machine adds names (Decision 1). Stored values come from `secrets.url`, and keys come
   through enrolment. With `--local`, or with no
@@ -1888,7 +1957,9 @@ and `X-Qory-Instance-Name` here.
 The server's order at enrolment is its own, because the code that authenticates the
 request is in the body:
 
-1. `413`; `415`; `400` `bad_request` for a header sent twice;
+1. `413`; `415`; `400` `bad_request` for a header sent twice, of `Content-Type`,
+   `Content-Length` and `X-Qory-Contract-Version`; the instance headers are ignored here,
+   sent twice or not;
 2. `429` per source address;
 3. `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is not
    JSON, fails its schema, a code outside the pattern included, or has another `version`;
@@ -1922,7 +1993,7 @@ as sent. A retry still passes steps 5 to 7, so a key since rejected or revoked i
 access key's current `approved`, `stored_secrets` and `apiary_public_key`, signed with
 the retry's own proof as line 3, so a machine whose answer was lost still learns the
 access key's id. On `key_limit`, `qory` keeps the secret and `enrolment-pending`, and
-says that the node already holds a pending key or two approved ones and that the same
+prints that the node already holds a pending key or two approved ones and that the same
 command, run again within the code's 15 minutes, succeeds once an owner or
 administrator has revoked or rejected one. Any other
 use of a used code is `401`. `qory` verifies the answer under the entry of
@@ -1993,8 +2064,9 @@ The server, in order, after the endpoint rules:
    pair is identical in the holder's current rendering (Decision 3). Any other pair is
    left out, and the runner refuses the run, `secret_unresolved`. The value sealed is the
    current one;
-9. seals to the key the request's signature verified under, the u-coordinate of that
-   Ed25519 public key, with a fresh ephemeral key, `exp` its own time plus 600 seconds.
+9. seals to the public key of the access key the request verified under, the u-coordinate
+   of that Ed25519 public key, with a fresh ephemeral key, `exp` its own time plus 600
+   seconds.
 
 The answer, `200`:
 
@@ -2052,9 +2124,16 @@ For the enrolment path and `secrets.url`:
 - **The events endpoint's own**, in order: deduplication, so a batch whose delivery id or
   event ids the server already accepted gets the same `2xx` again; `410` `run_closed`
   for an event of a run the server has closed, such as one whose instance an owner or
-  administrator cleared; then, for a ping alone, `409` `instance_limit` for a new
-  instance id beyond its node's limit (Decision 4). A retried ping whose first attempt
-  was accepted is therefore never `409`.
+  administrator cleared, or whose access key was revoked; then, for a ping alone, `409`
+  `instance_limit` for a new instance id beyond its node's limit (Decision 4). A retried
+  ping whose first attempt was accepted therefore gets its `2xx` again. A ping whose
+  `interval_seconds` is above 300 fails its schema, `400` `invalid_request`, before
+  these steps.
+- **A revoked key's closed runs.** A batch that verifies only under a revoked key's
+  tombstone, for a run that was live at the revocation and within 3 × its
+  `interval_seconds` of its last accepted event, gets a signed `410` `run_closed`, and
+  the server stores nothing from it: no event, no delivery record, no heartbeat. Every
+  other request under a revoked key gets `401`.
 - **Rate limits** are the server's policy, per access key, and on the enrolment path per
   code and per source address. A `429` at run start is no
   run, `rate_limited`; an event POST's `429` is retried as today.
@@ -2154,7 +2233,8 @@ Two known answers under the fixture signing key, for the GET of discovery signed
 `H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ`
 under the fixture access key secret (The access key and signed requests):
 
-- `200`; the discovery body of an access key without stored secrets, 208 bytes:
+- `200`; the discovery body of an access key without stored secrets, in a workspace with
+  nothing in force, so without `run`, 208 bytes:
 
   ```json
   {"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"https://qory.example/v1/events","types":["*"]},"apiary_public_key":[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
@@ -2205,19 +2285,30 @@ wrote. Main's other refusals before the start take codes too:
 
 | Case | Code |
 |---|---|
-| a tool the machine does not define, or one a server selects that the machine's policy leaves out (Decision 9) | `tool_unknown` |
+| a tool the machine does not define, or one a server selects that the node's policy leaves out (Decision 9) | `tool_unknown` |
 | a tool selected twice, an argument its definition does not provide for, or a host two tools serve | `tool_invalid` |
 | under `enforce`, a tool host the allow list does not cover | `tool_host_denied` |
 | a value the run passes for a tool's placeholder | `placeholder_conflict` |
-| an image the machine does not define, or a server's image other than the one the machine's policy selects (Decision 9) | `image_unknown` |
+| an image the machine does not define, or a server's image other than the one the node's policy selects (Decision 9) | `image_unknown` |
 | an image selected without a wall, defined twice, or a daemon without a runtime | `image_invalid` |
 | a fetch of the run configuration that answers other than `200`, with no code in a signed body | `fetch_failed`, with `status` |
 | a transport failure on that fetch | `fetch_failed`, without `status` |
 | a fetched `security_policy` the schema refuses | `run_configuration_invalid` |
 
 **`dev.qory.ping`** gains `interval_seconds`, required, the heartbeat interval the run
-uses, an integer of at least 1, so the server's window for the instance limit follows
-the run's own value (Decision 4).
+uses, an integer from 1 to 300, so the server's liveness window follows the run's own
+value (Decision 4). A ping with a larger value fails its schema: a signed `400`
+`invalid_request`.
+
+**`dev.qory.run.heartbeat`** is sent every `interval_seconds` from the accepted ping
+until the run's final event, the same interval as the ping's, so the start, from the
+ping to `dev.qory.run.started`, is covered too; `elapsed_seconds` counts seconds since
+the ping. `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the
+ping, heartbeats aside.
+
+**`dev.qory.run.exited`**'s `reason` gains `run_closed`: the events endpoint answered a
+signed `410` `run_closed`, and the runner stopped the runtime as at its time limit. The
+runner records it in the file sink and sends nothing further for the run.
 
 **`dev.qory.run.policy_applied`** loses `credentials` and gains `connections`, in the
 order of the run's connections:
@@ -2247,8 +2338,9 @@ public roots only is among them as a connection's host. `dev.qory.run.egress` ha
 `renewal_failed` (Integrations). `wall:trace` and `wall:public-roots` go in `rule`, as
 `wall:own-address` does on main: `decision: denied`, `outcome: refused`, and the session
 gets a `403`. The heartbeat schema's "a receiver that misses two in a row may consider the
-run lost" reads "misses two in a row, that is, receives none for 3 × `interval_seconds`",
-as Decision 4 says. A top-level `variables` reports the variables by name:
+run lost" reads "a run is live from its accepted ping until its final event, or until no
+accepted event has arrived for 3 × `interval_seconds`", as Decision 4 defines. A top-level
+`variables` reports the variables by name:
 
 ```json
 "variables": {"names": ["APP_REGION", "NODE_ENV"],
@@ -2263,9 +2355,27 @@ Each server variable appears in exactly one of `names`, `denied` and `unwalled`.
 name, one a `secrets.local` value reads, or one the runtime's `Prepare` or the harness
 sets; `unwalled` the server's variables an unwalled run left out because
 `variables.unwalled` is `ignore`, which then holds every one of them; `node_ignored` the
-node's variables left out because the server sets the same name (Decision 1). Each list
-is sorted and may be empty. `node_policy`, optional, contains the `digest` of the
-node's policy and its `paths`, when a node policy narrows a fetched one (Decision 9). A
+node's variables left out because the run applies the server's value for the same name,
+a name in `names` (Decision 1). Each list is sorted and may be empty. `node_policy`,
+present when the run has both a fetched policy and a node policy (Decision 9), contains
+its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785 serialisation of
+the node's policy document, the `policy.schema.json` document the command passes, for
+`qory` its runner file's `egress` combined with `--policy`; and that document's `paths`,
+when it has any. Schema sketch:
+
+```json
+"variables": {"type": "object", "additionalProperties": false,
+  "required": ["names", "denied", "unwalled", "node_ignored"],
+  "properties": {"names": {"$ref": "#/$defs/names"}, "denied": {"$ref": "#/$defs/names"},
+                 "unwalled": {"$ref": "#/$defs/names"},
+                 "node_ignored": {"$ref": "#/$defs/names"}}},
+"node_policy": {"type": "object", "additionalProperties": false, "required": ["digest"],
+  "properties": {"digest": {"type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+                 "paths": {"type": "object",
+                           "additionalProperties": {"type": "array", "items": {"type": "string"}}}}}
+```
+
+`names` in `$defs` is a sorted array of unique variable names. A
 top-level `connections_withheld` lists, by `id`, `kind` and `name`, the connections the
 server left out of the variant for an access key without stored secrets (The run
 configuration), and is empty otherwise. With no
@@ -2276,23 +2386,28 @@ configuration), and is empty otherwise. With no
 
 Order at run start; the steps not listed are §Sequence's.
 
-1. With a server: validate the server document; without a pinned `apiary_public_key`,
+1. `qory` takes `locks/key.lock` shared; for a run that contacts no server, refuses an
+   unwalled run while the `stored-secrets` marker exists, `server_needs_wall`; creates
+   and holds its own run lock file; and drops the shared lock (Decision 4). With a
+   server: validate the server document; without a pinned `apiary_public_key`,
    `apiary_public_key_missing`, before any request. Every request is signed with the
    access key secret. Every answer's signature is verified under the pin before its body or
    headers are read.
 2. Discovery: a signed `409` `key_pending` is no run, `key_pending`; a `401` is
-   no run, `unauthorized`. `qory` prints the `node_id` discovery lists. Ping, with the
-   run's `interval_seconds`: a signed `409` `instance_limit` is no run, `instance_limit`,
-   and `qory` says that the node's live instances have reached its limit. When
-   discovery lists `secrets` and the run has no wall: `server_needs_wall`. When it lists
-   `secrets`, the runner reports that to its caller, and `qory` writes the
-   `stored-secrets` marker; a marker it cannot write is no run. When it does not, and the
-   answer is signed, `qory` removes the marker (Decision 4). Before discovery, `qory`
-   checks the run's labels against the checkout's pinned ones, `labels_changed`, and its
-   `instance-id` file.
+   no run, `unauthorized`. `qory` prints the `node_id` discovery lists. When the run's
+   secret is the one in `access-key-secret`, `qory` then, under the key lock held
+   exclusively: deletes every moved-aside secret; writes the marker when discovery lists
+   `secrets`, a marker it cannot write being no run; and removes it when discovery lists
+   none and the directory holds that one secret alone (Decision 4). Ping, with the run's
+   `interval_seconds`; heartbeats start once it is accepted. A signed `409`
+   `instance_limit` is no run, `instance_limit`, and `qory` prints that the node's live
+   instances have reached its limit. When discovery lists `secrets` and the run has no
+   wall: `server_needs_wall`; when it lists `secrets`, the runner reports that to its
+   caller. Before discovery, `qory` checks the run's labels against the checkout's pinned
+   ones, `labels_changed`, and its `instance-id` file.
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
    decode it with `encoding/json/v2`; validate it against the schema and the limits.
-   Without `security_policy`, the machine's policy is the run's; with it, the machine's
+   Without `security_policy`, the node's policy is the run's; with it, the node's
    policy narrows it (Decision 9), and a tool or an image the narrowing refuses is
    `tool_unknown` or `image_unknown`. Without a `connections` member, or without a run
    configuration, the connections are the runner file's. Keep `withheld` for the
@@ -2329,11 +2444,17 @@ Order at run start; the steps not listed are §Sequence's.
 11. Then §Sequence from the tools on. A tool that does not start or does not listen in
     time is `tool_not_started`; any other failure before the next step, such as the wall,
     the image or the runtime's launch, is `start_failed`. The proxy receives the uses and
-    the hosts it verifies against public roots only (`tls.public_roots_only`); the
+    the hosts it verifies against public roots only; the
     launch's environment is the run's and the variables resolved at step 9, then the
     runner's own, the placeholders, and, in a walled run, the runtime's other declared
     and reserved variables as empty.
 12. `dev.qory.run.started`, then `dev.qory.run.policy_applied`.
+
+A signed `410` `run_closed` from the events endpoint, at any point after the ping, ends
+the run, and the runner sends nothing further. After `dev.qory.run.started` it stops the
+runtime as at its time limit and records `dev.qory.run.exited` with `reason:
+run_closed`; before it, it stops the start and records `dev.qory.run.refused` with the
+code `run_closed`. Both go to the file sink.
 
 Every no-run after an accepted ping, at steps 2 to 11, emits `dev.qory.run.refused` as
 the run's last event, a tool or an integration that does not start included. The caller
@@ -2346,15 +2467,15 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 |---|---|---|
 | `bad_request` | server, `400` | a header sent twice, before verification, unsigned; after the `429`, an instance id absent or outside its pattern, signed |
 | `unsupported_contract_version` | server, `400` | `X-Qory-Contract-Version` other than `1` |
-| `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
+| `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member, a ping with `interval_seconds` above 300 included; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing key row is `401` |
 | `key_invalid` | server, `409` | at enrolment or paste, about a public key: a `proof` that does not verify; a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; or a key the index holds, any access key's or any tombstone's. One answer for all, so a refusal reveals nothing about other access keys |
 | `key_pending` | server, `409` | on every signed endpoint, discovery and events included, after the instance id's `400`: a request under an access key that awaits approval |
-| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds a key awaiting approval or two approved keys; the code stays unused |
-| `instance_limit` | server, `409` | on the ping alone, after `key_pending` and after the events endpoint's deduplication, signed: a new instance id beyond the node's limit, 1 for a node, a node pool's own; counted over distinct instance ids with a live run |
+| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds a key awaiting approval or two approved keys; the code stays unused. The server shows the same code when it refuses a paste to a node holding two keys, approved or pending, or an approval while the node holds two approved keys |
+| `instance_limit` | server, `409` | on the ping alone, after `key_pending` and after the events endpoint's deduplication, signed: a new instance id beyond the node's limit, 1 for a node, a node pool's own; counted over distinct instance ids with a live run, and admitted under the node row's lock |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
-| `run_closed` | server, `410` | the server has closed the run's row, such as when an owner or administrator cleared its instance |
+| `run_closed` | server, `410` | the server has closed the run's row, such as when an owner or administrator cleared its instance or revoked its access key; on the events endpoint it ends the run, `reason: run_closed` |
 | `run_configuration_superseded` | server, `410` | no rendering of the holder's variant for the access key with that digest, current or within 15 minutes; a digest of the other variant included |
 | `run_connections_invalid` | server, `409` | the listed connections are not those the rendering requires |
 | `run_secrets_conflict` | server, `409` | a reseal with another digest, set of connections or verifying key |
@@ -2365,7 +2486,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `answer_unsigned` | runner | an answer at run start without a valid signature, other than a `401` |
 | `unauthorized` | runner | a `401` at run start: the access key is unknown or revoked, or its key or row does not verify |
 | `labels_changed` | `qory` | a local checkout's derived labels differ from those pinned at its first run the server accepted, the checkout keyed by its resolved real path, until the user confirms with `--relabel` |
-| `server_needs_wall` | runner, and `qory` offline | with a server, after the ping: discovery lists `secrets` and the run has no wall; offline, decided by `qory` before the run: an unwalled run, `--local` included, while the `stored-secrets` marker exists |
+| `server_needs_wall` | runner, and `qory` for a run without a server | with a server, after the ping: discovery lists `secrets` and the run has no wall; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run: an unwalled run while the `stored-secrets` marker exists |
 | `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, or a `secrets.local` file |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
 | `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included |
@@ -2392,10 +2513,10 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `integration_settings_too_large` | runner | the settings document exceeds 65536 bytes (64 KiB), refused before the program starts |
 | `integration_failed` | runner | an integration's `describe` or `credential` does not start, exits non-zero or answers what its schema refuses |
 | `tool_not_started` | runner | a tool exits before it listens, or does not listen in time |
-| `tool_unknown` | runner | a tool the machine does not define, or one a server selects that the machine's policy leaves out |
+| `tool_unknown` | runner | a tool the machine does not define, or one a server selects that the node's policy leaves out |
 | `tool_invalid` | runner | a tool selected twice, an argument its definition does not provide for, or a host two tools serve |
 | `tool_host_denied` | runner | under `enforce`, a tool host the allow list does not cover |
-| `image_unknown` | runner | an image the machine does not define, or a server's image other than the one the machine's policy selects |
+| `image_unknown` | runner | an image the machine does not define, or a server's image other than the one the node's policy selects |
 | `image_invalid` | runner | an image selected without a wall, defined twice, or a daemon without a runtime |
 | `start_failed` | runner | any other failure after the ping and before `dev.qory.run.started`, such as the wall, the image or the runtime's launch |
 | `secret_value_id_missing` | runner, and the server on save | a reference to a secret with several values without a value id |
@@ -2413,7 +2534,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | Threat | What protects | What does not |
 |---|---|---|
 | A TLS-terminating middlebox between the runner and the server, without the access key secret or the server's signing secret | It cannot read a stored value; it cannot alter the connections, the policy, the variables or the digests, nor replay an older answer; it cannot move a request to another access key, since the key's id is a signed line and one public key belongs to one access key; `no-transform` keeps a proxy from re-coding a signed answer | It reads the document. At the start it can only refuse; during a run, dropping answers keeps the policy in force |
-| A proxy between the runner and a destination host, whose authority the machine trusts | For a stored value, public roots only whenever a server is configured, whatever the runner file sets: the proxy verifies that host against public roots only, so the authority the machine added receives nothing | It reads a machine value there. An integration program's own connections use its own TLS settings |
+| A proxy between the runner and a destination host, whose authority the machine trusts | For a stored value, and a credential minted from one, public roots only, always: the proxy verifies that host against public roots only, so the authority the machine added receives nothing | It reads a machine value there. An integration program's own connections use its own TLS settings |
 | The server's logs and answer caches | Ciphertext only; `Cache-Control: no-store` | — |
 | A read of the server's database | Values encrypted under a key derived from the server's encryption key; the server stores access keys' public keys only, so a reader of the database cannot act as an access key | A reader with the server's encryption key reads every stored value and, while `APIARY_SIGNING_SECRET` is unset, signs as the server |
 | A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every key row and every code, with a per-row version, verified on every request and before sealing: a writer cannot swap an access key's public key, move an access key to another node or a node to another workspace, set the stored-secrets flag, raise an instance limit, insert a code, or insert or approve an access key; seals taken from the verified rendering's bytes; audit | A writer with the server's encryption key, or a change through the server's own pages |
@@ -2421,27 +2542,29 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables, create codes and set an access key's stored-secrets flag | Choosing the host is reading the value |
 | A party that can rewrite the administrator's browser session with the server | — | The session is trusted: such a party can show a false pin, fingerprint or code, and can equally approve keys itself. Comparing fingerprints out of band, such as over another channel with the machine's operator, is the operator's option |
 | Whoever may edit variables | Only owners and administrators; an unwalled run receives no server variable unless the machine sets `variables.unwalled: accept`; the deny list, the runtime's `denies` and the machine's `variables.deny` leave out what would undermine the wall, the proxy or the runner | The deny list protects the wall and the runner, not the developer: with `accept`, the server has the developer's shell |
-| A compromised node, such as through an agent that writes `runner.yaml` | The server leads: the node adds variables and never overrides the server's, `node_ignored`; its policy and proxy settings only narrow (Decision 9) | A node can still narrow a run until it fails, and it chooses its own variables for names the server leaves unset |
+| A compromised node, such as through an agent that writes `runner.yaml` | The server leads: the node adds only names whose server value the run does not apply, `node_ignored`; its policy only narrows, and public roots apply to every stored value (Decision 9) | A node can still narrow a run until it fails, and it chooses its own variables for names the server leaves unset |
 | A holder of an access key secret, on the path | Every runner pins the server's key, so it forges no answer and no envelope; routing is bound to the document | It signs requests as that key, under any instance id, and opens what is sealed to it, as the next rows say |
 | An instance claiming another instance's id | Authorisation rests on the access key alone | Anyone who holds the key can claim any instance id; the id serves display, audit, per-instance events and the instance limit, which is fleet sizing, not security. Claiming a live instance's id slips past the limit, and new ids can fill it |
-| A holder of the server's signing secret, on the path | Routing is bound to the document, so real values go only to the hosts the stored rendering names; it holds no access key secret | It forges documents and seals values of its own choosing to every machine that pins the key, until the server's key is rotated and the pins with it |
+| A holder of the server's signing secret, on the path | Routing is bound to the document, so real values go only to the hosts the stored rendering lists; it holds no access key secret | It forges documents and seals values of its own choosing to every machine that pins the key, until the server's key is rotated and the pins with it |
 | A link removed, or a host moved, while a run starts | A superseded rendering seals a pair only when every listed connection that references it is byte for byte identical in the current rendering, hosts included | — |
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
 | A node, choosing labels | Labels resolve only within the node's workspace | Repository scope is no boundary against a node: a node is scoped to its workspace |
 | An agent choosing the next run's labels, such as by rewriting `.git/config`'s origin | A CI or job spec passes labels explicitly; for a local checkout, `qory` pins the labels of its first run the server accepts, in the runner file's directory, which walled agents cannot reach, and a later run whose derived labels differ is `labels_changed` until the user confirms with `--relabel` | Pinning is trust on first use: a checkout's first run, or the same checkout at a new path, pins what the origin says then. An unwalled agent of the same user can rewrite the pin file as easily as `.git/config`. A user who confirms without reading the change |
 | An access key secret an unwalled agent read before stored secrets were wanted | The stored-secrets flag is fixed when a key is created, so stored values need a new key, enrolled with a new code and approved; every key command writes the `stored-secrets` marker before it generates the key and refuses while an unwalled run's lock is held, and no run starts while a key command runs; an enrolment retry reuses a secret only for the same code within 15 minutes | A pasted key generated earlier and pasted with the flag; the owner pastes a key generated for the purpose. An agent that keeps a process running outside `qory` after its session ends, and so holds no lock |
-| A stolen code | Single use, valid for at most 15 minutes, bound to one node or node pool, new or existing, and one access key's settings; until an owner or administrator approves the key, after comparing fingerprints, it waits; the server shows how a pending key arrived, and `qory` tells its user when their code was already used; a node holds at most one pending key | An approval given without comparing the fingerprint |
-| A stolen access key secret | Stored secrets only for access keys allowed them; revocation, immediate, which cuts off every instance using the key; a new key for the same node, enrolled with a new code and approved after comparing its fingerprint; the recomputed digest binds values to the document the server rendered | Whoever has it is the access key, on any machine, and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so access keys are replaced from time to time |
+| An unwalled agent reading a moved-aside secret, such as the old key of a node whose new key has no stored secrets | The marker stays while any moved-aside secret is in the runner file's directory; `qory` deletes moved-aside secrets once the current key's first signed discovery succeeds, or once a signed answer shows the old key revoked, and removes the marker only when one secret remains and discovery signed for it lists no `secrets`; a secret from the environment or a file descriptor never removes it | An old key that stays approved keeps its stored values until it is revoked; revoking the old key is the administrator's last step of a replacement |
+| A run under another runner file's directory, such as another `XDG_CONFIG_HOME` | The marker belongs to its directory, and with a server signed discovery decides | Such a run sees another directory's marker nowhere; an unwalled agent can read the original secret file by its path anyway (Issues, item 4) |
+| A stolen code | Single use, valid for at most 15 minutes, bound to one node or node pool, new or existing, and one access key's settings; until an owner or administrator approves the key, after comparing fingerprints, it waits; the server shows how a pending key arrived, and `qory` prints to its user when their code was already used; a node holds at most one pending key | An approval given without comparing the fingerprint |
+| A stolen access key secret | Stored secrets only for access keys allowed them; revocation, immediate, which closes the key's live runs and cuts off every instance using the key; a batch that verifies only under the revoked key's tombstone gets a signed `410` `run_closed` and the server stores nothing from it, so a thief holding the key cannot write into a run's record, and that path stays open only for the runs live at the revocation, until 3 × their `interval_seconds` after their last accepted event, then `401`; sealing and revocation serialised on the key row, so nothing is sealed after a revocation commits; a new key for the same node, enrolled with a new code and approved after comparing its fingerprint; the recomputed digest binds values to the document the server rendered | Whoever has it is the access key, on any machine, and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so access keys are replaced from time to time |
 | One public key on two servers | `qory` keeps one secret per server and moves a secret aside before it enrols with another, so a compromise of one server's records involves no key another server trusts | This is a `qory` rule, not a cryptographic guarantee: an administrator who pastes one public key into two servers is outside its reach, and the request string names no server |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
 | Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
-| An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing unwalled runs while `stored-secrets` exists; `mount_contains_runner_files`; `QORY_ACCESS_KEY_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
+| An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing unwalled runs that contact no server while `stored-secrets` exists; `mount_contains_runner_files`; `QORY_ACCESS_KEY_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
 | A model credential reaching the enclosure | `runtime_secret_conflict`; in a walled run, the runtime's other declared and reserved variables set to empty; `mount_contains_credential_files` | A credential file baked into the image |
 | A credential that mints credentials | A declaration's `paths`, `/v1/*` for Claude Code | A minting path inside the allowed paths gives the agent a readable credential; to verify for `api.anthropic.com` |
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
 | An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds, both required when a server-sent connection references a machine value; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
-| A payload replayed | Run id, access key id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one digest, set and key; a new run id per attempt | — |
+| A payload replayed | Run id, access key id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one access key, digest and set; a new run id per attempt | — |
 | A signed body sent to another endpoint | The request target in the request signature; strict schemas on every endpoint | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
 
@@ -2491,43 +2614,58 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   `QORY_ACCESS_KEY_SECRET` reaches a tool, an integration or the enclosure.
 - **Access key:** the runner's X25519 public key from the fixture seed equals
   `filippo.io/edwards25519`'s `BytesMontgomery` of its Ed25519 public key, and the
-  server's conversion gives the same; enrolment refuses every key of the small-order list
-  and the fixture access key; `qory` refuses an `access-key-secret` that grants anything to
-  the group or others, belongs to another user, or holds the fixture secret; `qory`
-  refuses an enrolment answer that does not verify under the entry the code's first
+  server's conversion computes the same; enrolment refuses every key of the small-order
+  list and the fixture access key; `qory` refuses an `access-key-secret` that grants
+  anything to the group or others, belongs to another user, or holds the fixture secret;
+  `qory` refuses an enrolment answer that does not verify under the entry the code's first
   fingerprint names, and pins only entries the code's fingerprints name; an access key
   that awaits approval gets a signed `409` `key_pending` on every signed endpoint,
   discovery and events included; a revoked access key gets `401` at once, from every
-  instance; a POST signed for one path fails at another, and a request whose access key
-  id or instance id line differs from its headers fails to verify.
+  instance; a POST signed for one path fails at another, and a request whose access key id
+  or instance id line differs from its headers fails to verify.
 - **Nodes and instances:** a node's id starts `nd_` and a node pool's `np_`, in the
   enrolment answer with `node_kind` and in discovery, and `qory` prints it; two instances
-  of a node pool's access key with different instance ids both run, and the server
-  records both ids; a node's second instance id is `409` `instance_limit` on its ping
-  while the first has a live run, and so is a pool's instance beyond its limit; a pool
-  without a limit takes any number; an instance with a live run that pings for a second,
-  concurrent run is accepted and counts once; a retried ping whose delivery id or event
-  id was accepted gets the same `2xx`, never `409`; a refused instance never counts; an
-  instance stops counting at its run's `dev.qory.run.exited` or `dev.qory.run.refused`,
-  and 3 × the `interval_seconds` its ping carried after the run's last event; clearing
-  an instance makes its live runs' later events `410` `run_closed`, and its next ping
-  counts as a new start; `qory` keeps the instance id in `instance-id` with the hash of
-  the machine's identity when the directory is writable, generates a fresh one per
-  process when not, and generates a new one when the file's id fails the pattern or the
-  hash differs; an instance id absent or outside its pattern is `400` `bad_request`,
-  signed, after the `429` and before `key_pending`; a known id always updates its record,
-  and past 256 new records in 24 hours for a node or node pool, whatever its keys, the
-  answers are unchanged, no new record appears and the count on the node grows; a resent
-  delivery keeps its first instance id; an instance name outside its pattern is ignored
-  and the last valid one is kept; a public key the index holds is `key_invalid` at
-  enrolment and paste, with one answer whether another access key holds it or it is a
-  tombstone; deleting a node or its workspace makes its keys tombstones.
+  of a node pool's access key with different instance ids both run, and the server records
+  both ids; a node's second instance id is `409` `instance_limit` on its ping while the
+  first has a live run, and so is a pool's instance beyond its limit; a pool without a
+  limit takes any number; an instance with a live run that pings for a second, concurrent
+  run is accepted and counts once; a retried ping whose delivery id or event id was
+  accepted gets the same `2xx` again; a refused instance stays out of the count; two pings
+  from two new instance ids of one node at once admit one and refuse the other; heartbeats
+  arrive from the accepted ping, with `elapsed_seconds` counted from it, so a start longer
+  than 3 × `interval_seconds` stays live; an instance stops counting at its run's
+  `dev.qory.run.exited` or `dev.qory.run.refused`, and 3 × the `interval_seconds` its ping
+  carried after the run's last accepted event, counted from the ping; a ping with
+  `interval_seconds` above 300 is `400` `invalid_request`; clearing an instance makes its
+  live runs' later events `410` `run_closed`, a signed `410` `run_closed` ends the run
+  with `reason: run_closed`, and the instance's next ping counts as a new start; revoking
+  an access key closes its live runs: their batches, verified under the tombstone, get a
+  signed `410` `run_closed`, the server stores nothing from them, and after 3 ×
+  `interval_seconds` from their last accepted event they get `401`; another request under
+  the revoked key gets `401`; no value is sealed after a revocation commits; `qory`
+  creates `instance-id` with `O_EXCL` and reads the other process's file on `EEXIST`, and
+  keeps the instance id in `instance-id` with the hash of the machine's identity when the
+  directory is writable, generates a fresh one per process when not, and generates a new
+  one when the file's id fails the pattern or the hash differs; an instance id absent or
+  outside its pattern is `400` `bad_request`, signed, after the `429` and before
+  `key_pending`; a known id always updates its record, and past 256 new records in 24
+  hours for a node or node pool, whatever its keys, the answers are unchanged, no new
+  record appears and the count on the node grows; a resent delivery keeps its first
+  instance id; an instance name outside its pattern is ignored and the last valid one is
+  kept; a public key the index holds is `key_invalid` at enrolment and paste, with one
+  answer whether another access key holds it or it is a tombstone; deleting a node or its
+  workspace makes its keys tombstones.
 - **Locks and the marker:** every key command writes the marker before it generates a
-  key, and with an unwalled run's lock held refuses; a run waits while a key command
-  holds the key lock; a lock file whose `flock` can be taken is removed; a signed
-  discovery without `secrets`, or an enrolment answer with `stored_secrets: false`,
-  removes the marker, and an unsigned answer leaves it; `--print` leaves the marker as it
-  is.
+  key, and with an unwalled run's lock held refuses; a run takes the key lock shared,
+  checks the marker, creates its lock file, and then drops the key lock, so it waits
+  while a key command holds the key lock; only a key command removes a run lock file
+  whose `flock` it can take; a signed discovery without `secrets`, under the secret read
+  from `access-key-secret`, removes the marker when that is the directory's only secret,
+  and an unsigned answer, an enrolment answer, or a discovery under a secret from the
+  environment or a file descriptor leaves it; a moved-aside secret keeps the marker and
+  is deleted once the current key's first signed discovery succeeds; with a server, an
+  unwalled run follows signed discovery alone, and without one the
+  marker refuses it; `--print` leaves the marker as it is.
 - **Key checks and enrolment:** enrolment and paste each refuse the torsion key of
   Decision 5, `key_invalid`, and with a bad proof enrolment answers `key_invalid` before
   any key check; a base64url value with padding, a `+` or `/`, or non-zero spare bits is
@@ -2548,8 +2686,10 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 - **Replacing a key:** a node or node pool holds at most two approved keys and one
   pending; an enrolment beyond that is `409` `key_limit`, the code stays unused, and the
   same command succeeds within the code's 15 minutes once a key is revoked or rejected;
-  a pasted key for a node with two approved keys is refused; both approved keys of a
-  node verify until one is revoked; a key's stored-secrets flag is the one its code or
+  approving a pending key while the node holds two approved keys is refused; a paste to a
+  node holding two keys, approved or pending, is refused as `key_limit`; a paste goes
+  into an existing node or node pool and creates none; both approved keys of a node
+  verify until one is revoked; a key's stored-secrets flag is the one its code or
   paste set, and nothing changes it.
 - **Stored secrets:** a key created without the flag gets `409` `secrets_not_allowed` at
   the secrets request and the variant without stored values, whatever other keys its
@@ -2565,9 +2705,11 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 - **Variables:** an unwalled run receives no server variable with `variables.unwalled`
   unset or `ignore`, each reported in `variables.unwalled`, and receives them, the deny
   list applied, with `accept`; each server variable lands in exactly one of `names`,
-  `denied` and `unwalled`; a node variable for a name the server sets is left out and
-  reported in `node_ignored`, and the run starts; a node variable for a name the server
-  leaves unset is applied; every entry of the built-in deny list, in upper and lower case,
+  `denied` and `unwalled`; a node variable for a name in `names` is left out and reported
+  in `node_ignored`, and the run starts; a node variable for a name the server leaves
+  unset, denies, or leaves out under `ignore` is applied; `node_env` and `NODE_ENV` are
+  different names between the node and the server, while the deny list matches either
+  case; every entry of the built-in deny list, in upper and lower case,
   `no_proxy` included, and a name from `variables.deny`, is left out and reported, and the
   run starts; a name from the runtime's `denies` is left out the same way; a name the
   runtime's `Prepare` sets wins over the server's variable, which is reported in `denied`;
@@ -2575,18 +2717,21 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   source passed into the enclosure from the run's environment is `variable_reserved`, and
   `QORY_RUN_ID` and `QORY_RUN_SOCKET` pass.
 - **Public roots:** a proxy test with a host whose certificate chains only to an
-  authority the test adds to the machine's trust store: with a server, whatever
-  `tls.public_roots_only` says, a stored value stays with the proxy and
-  `dev.qory.run.egress` records a refused request with `wall:public-roots`; a machine
-  value reaches that host under either setting.
+  authority the test adds to the machine's trust store: a stored value, and a credential
+  an integration minted from one, stays with the proxy, and `dev.qory.run.egress`
+  records a refused request with `wall:public-roots`; a machine value reaches that
+  host.
 - **Narrowing:** with a fetched policy and a node policy, the run is `enforce` when either
   is; a host passes under `enforce` only when every enforcing side's allow list covers
-  it, and the reported `allow` holds exactly those hosts; a host either side denies is
-  denied; a request to a host either side lists in `paths` passes only when it matches
-  every side's rules for that host; a server's tool the node's policy leaves out is
+  it, and the reported `allow` holds exactly those hosts, each entry once; a host either
+  side denies is denied; a request to a host either side lists in `paths` passes under
+  `enforce` only when it matches every side's rules for that host, and under `observe`
+  passes and is recorded; a node policy without `tools` leaves the server's tools as
+  they are, `tools: []` allows none, and a server's tool the node's policy leaves out is
   `tool_unknown`, and a server's image other than the node's is `image_unknown`; a
   `--policy` beside a fetched policy narrows it; `policy_applied` reports `node_policy`
-  with its digest; a reload keeps the node's side.
+  with its `sha256=` digest over the RFC 8785 form whenever the run has both policies;
+  a reload keeps the node's side.
 - **Labels:** a local checkout's second run with a changed origin is `labels_changed`,
   and runs after `--relabel`; a CI's explicit labels are used as given.
 - **Mounts:** a walled run refuses a mount of `runner.yaml`'s directory, with or without
@@ -2601,15 +2746,14 @@ What a node's owner sets up and meets in 0.7.0:
   `secrets.providers`, `secrets.local`, `variables.deny`, `variables.unwalled` and
   `instance.name`.
 - A run configuration may contain `connections` and `variables`, and may omit
-  `security_policy`. The server resolves its variables; the node adds names and never
-  overrides, and a node value for a name the server sets is left out and reported. A
-  denied one is left out. An unwalled run receives the server's variables only with
-  `variables.unwalled: accept`, which gives the server the developer's shell and suits
-  only a server its owner trusts as fully as their own shell.
-  `dev.qory.run.policy_applied` reports each by name.
-- The node's policy and proxy settings only narrow the server's: an allow list
-  intersects, a deny list adds, `enforce` wins, and `--policy` narrows a fetched policy
-  too (Decision 9).
+  `security_policy`. The server resolves its variables; the node adds only names whose
+  server value the run does not apply, and a node value for a name whose server value
+  applies is left out and reported. A denied server value is left out. An unwalled run
+  receives the server's variables only with `variables.unwalled: accept`, which gives the
+  server the developer's shell and suits only a server its owner trusts as fully as their
+  own shell. `dev.qory.run.policy_applied` reports each by name.
+- The node's policy only narrows the server's: an allow list intersects, a deny list
+  adds, `enforce` wins, and `--policy` narrows a fetched policy too (Decision 9).
 - A node is permanent and runs one instance at a time; a node pool is ephemeral, and its
   instances share one access key, up to the pool's limit, if it has one. Its access key
   is one secret, `access-key-secret` or `QORY_ACCESS_KEY_SECRET`, an Ed25519 key that
@@ -2618,15 +2762,19 @@ What a node's owner sets up and meets in 0.7.0:
   `qory access-key create` prints a public key for an owner or administrator to paste.
   A key's stored-secrets flag is fixed when it is created: to change it, or to replace a
   lost key, the operator enrols a new key for the same node with a new code, and the
-  administrator approves it and then revokes the old key. A node holds at most two
-  approved keys and one pending. Every key command writes the `stored-secrets` marker
-  first and waits for unwalled runs to end; the operator of a node pool, or of a key
-  held in the environment, uses `--print`.
+  administrator approves it and then revokes the old key, which closes the old key's
+  live runs. A node holds at most two approved keys and one pending. Every key command
+  writes the `stored-secrets` marker first and waits for unwalled runs to end; a
+  moved-aside secret keeps the marker until the new key's first signed discovery; the
+  operator of a node pool, or of a key held in the environment, uses `--print`.
 - Each instance has an instance id, kept in `instance-id` with a hash of the machine's
   identity when it can be, for display, audit and the instance limit, and a display
   name, the host name by default; the server lists the live instances of each node. A
   second instance of a node, or one beyond a pool's limit, is refused,
-  `instance_limit`; an owner or administrator can clear a dead instance at once. A CI
+  `instance_limit`. A run is live from its accepted ping until its final event, or until
+  3 × `interval_seconds` pass without an event, `interval_seconds` being at most 300; an
+  owner or
+  administrator can clear an instance at once, which ends its runs. A CI
   passes its labels explicitly; a local checkout's labels are pinned at its first run
   the server accepts, and `--relabel` confirms a change. Everything `qory` keeps lives in
   the runner file's directory.
@@ -2641,10 +2789,10 @@ What a node's owner sets up and meets in 0.7.0:
   declares or reserves; for Claude Code, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and
   `CLAUDE_CODE_OAUTH_TOKEN`. A walled run whose runtime has a required group and no
   connection that supplies it is refused, `runtime_secret_missing`.
-- Every run against a server that lists `secrets` needs a wall, and so does every run on a
-  machine with the `stored-secrets` marker. A mount of the runner's configuration
-  directory, a program the runner starts, a `secrets.local` file, a directory above any
-  of them, or a runtime's credential file, is refused.
+- Every run against a server that lists `secrets` needs a wall, and so does every run that
+  contacts no server on a machine with the `stored-secrets` marker. A mount of the
+  runner's configuration directory, a program the runner starts, a `secrets.local` file, a
+  directory above any of them, or a runtime's credential file, is refused.
 - A CI machine takes its secret from `QORY_ACCESS_KEY_SECRET` or a file descriptor, and
   `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY` from plain settings.
 - The proxy refuses `TRACE` and `TRACK`, and sets a value only on port 443, on every host
@@ -2653,9 +2801,10 @@ What a node's owner sets up and meets in 0.7.0:
   `runner.yaml` or `QORY_APIARY_PUBLIC_KEY`, and verifies every answer and every envelope
   with it; a runner with a server and no pin is refused, `apiary_public_key_missing`.
   Enrolment with a code writes the pin.
-- The proxy verifies a host that receives a stored value against public roots only,
-  whatever the runner file sets; `tls.public_roots_only: false` applies only without a
-  server.
+- The proxy verifies a host that receives a stored value, or a credential minted from
+  one, against public roots only. A node behind a TLS-inspecting proxy therefore
+  receives no stored value, its stored model credential included, and uses machine
+  values instead.
 - An integration is started as `<program> <role> -- [arguments]` and always receives one
   settings document on standard input, `{}` when empty, at most 64 KiB.
 - A value of a multi-valued secret is addressed by `value_id`; a declaration's human name
@@ -2680,6 +2829,33 @@ seal, from who sets it on a request, the runner's proxy today. A broker replaces
 second. Issues, item 21, lists what sits with the runner today and would move to a
 broker.
 
+## Later: custom authorities per node
+
+A future direction, not part of 0.7.0, for a node behind a TLS-inspecting proxy that
+should receive stored values. Each condition below closes a path the setting would
+otherwise open:
+
+- **Per node, set on the server.** An owner or administrator adds a node's custom
+  authorities on the server, each listed by its SPKI fingerprint. The network is the
+  node's, and keys are replaced, so the setting belongs to the node; it is the
+  workspace's owner, not whoever can add an authority to the machine, who decides that a
+  third party may read the workspace's values.
+- **Delivered in the sealed plaintext, never in discovery.** A holder of the server's
+  signing secret on the path could add its own authority to discovery and then read real
+  values at the destination host. The real server seals the authorities with the real
+  values, so a forged seal carries only forged values, and the proxy applies a seal's
+  authorities only to that seal's values. The run configuration is rendered per holder
+  and variant rather than per node, so the sealed plaintext is the place.
+- **In the node row's integrity code, and audited.** Otherwise a writer to the server's
+  database gains a new power: an authority of its own, with no other change.
+- **Shown in `policy_applied`.** The record lists the fingerprints in force, so a run's
+  reader sees who else could read its values.
+- **The node opts in.** The node accepts the server's authorities only when its runner
+  file sets an option for them, so both sides decide before a host receives more.
+
+The holder of such an authority, usually the organisation's own security team, reads
+every stored value the node sends, which is the trade the setting exists for.
+
 ## Open questions for the user
 
 None.
@@ -2699,7 +2875,7 @@ and version, with `describe`'s name required to match.
    The node's variables, the names the runtime and the harness set, and
    `runtime_secret_conflict` need the set names, `Prepare`'s included: a new `Spec`
    field.
-3. **Decision 1 relies on the nested Docker fixes**, not on `main` at 9838b7c.
+3. **Decision 1 relies on the nested Docker fixes**, which are on main as 057ce43.
 4. **`server_needs_wall` and the secret file reach only runs `qory` starts.** Any
    unwalled agent of the same user outside `qory` reads `runner.yaml` and
    `access-key-secret`.
@@ -2766,5 +2942,5 @@ and version, with `describe`'s name required to match.
     `connection_needs_wall` and `server_needs_wall` require the runner's wall for any
     connection or stored value; an integration program runs on the machine, outside the
     wall, and receives raw values; `hosts_denied` and `uses` come from the proxy's own
-    decision function; and the proxy applies `tls.public_roots_only`, port 443 only and
-    the refusal of `TRACE` and `TRACK`.
+    decision function; and the proxy applies public roots only, port 443 only and the
+    refusal of `TRACE` and `TRACK`.
