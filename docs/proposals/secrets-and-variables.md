@@ -94,8 +94,8 @@ Fixtures on main the fixtures, and Sources the sources.
   connection. An `adapter` is an integration: a program of the integrations contract,
   started as `<program> credential -- <argument>` with its settings on standard input,
   whose answer, `credential.schema.json`, keeps its role.
-- An integration connection names where the integration's releases are, `source`, and
-  the roles it uses, `ways`: `credential`, `tool`, or both. A tool from an integration is
+- An integration connection contains `source`, where the integration's releases are, and
+  `ways`, the roles it uses: `credential`, `tool`, or both. A tool from an integration is
   a role of that integration's program, `<program> tool -- <argument>` (Integrations).
 - A runtime declares the secrets it needs in its descriptor: `declares`, `one_of`,
   `reserves`, `denies` and `credential_files` (Runtimes).
@@ -164,12 +164,13 @@ Fixtures on main the fixtures, and Sources the sources.
 - New: `secrets-request`, `secrets-answer`, `sealed-plaintext`, `enrolment` and `auth`
   schemas, `events/run.refused`, and the data files
   `headers.json`, `runtimes.json` and `denied-variables.json`.
-- Changed: `server`, `configuration`, `run-configuration`, whose integration connection
-  has `source`, `forge` and `ways`, `policy`, `descriptor`;
+- Changed: `server`; `configuration`; `run-configuration`, whose integration connection
+  has `source`, `forge` and `ways`; `policy`; `descriptor`;
   `event.schema.json`, whose type list and per-type branches gain
   `dev.qory.run.refused`; `events/ping`, with `interval_seconds`;
   `events/run.heartbeat`, whose description and `elapsed_seconds` count from the ping;
-  `events/run.exited`, whose `reason` gains `run_closed`; `events/run.policy_applied`;
+  `events/run.exited`, whose `reason` gains `run_closed`; `events/run.policy_applied`,
+  whose `tools` entry for an integration's tool is `{name, connection, hosts, argument}`;
   and `events/run.egress`, whose `credential` becomes `connection` and which gains
   `renewal_failed`, a boolean, true on a request whose connection's last renewal
   failed.
@@ -267,7 +268,8 @@ Each line names a passage of the README on main and what it becomes.
   "the variables, the placeholders and, in a walled run, the runtime's declared and
   reserved variables as empty".
 - **§Sequence, behind a wall.** "starts the tools the policy selects" is preceded by:
-  "runs each integration's `credential`".
+  "runs each integration's `credential`", and becomes "starts the tools the policy
+  selects and the integrations' `tool` roles the connections choose", at the same step.
 - **§The policy and `policy.schema.json`'s description.** `credentials` leaves the table;
   "a credential for it never apply", "the paths of the credential that is for it" and
   "the proxy never sets a credential on it" name a connection; the schema's description
@@ -453,8 +455,9 @@ starts.
   the table except the two that depend on the node and the run: the names `Docker.CAEnv`
   sets, and the runtime's `denies`, which come from `runtimes.json`. The server refuses
   to save any `QORY_*` name, and warns about the file's other names, a catalogued
-  runtime's `denies`, and a placeholder of the holder's connections; the runner leaves
-  them out anyway.
+  runtime's `denies`, and a placeholder of the holder's connections that it knows on
+  save, a service's or a tool's; a credential answer's placeholders are known only at
+  run time. The runner leaves them all out anyway.
 
 | Name | Why |
 |---|---|
@@ -881,18 +884,18 @@ runs with it.**
 every value the server stores for that access key.
 
 - *Unwalled runs.* Once a server's signed discovery lists `secrets`, every run against
-  that server needs a wall, `server_needs_wall`. The marker applies to every unwalled
-  run as well, whichever key the run signs with: `qory` writes it when signed discovery
-  lists `secrets` and before every key it generates, and while it exists every unwalled
-  run is refused, `server_needs_wall`. Only the moment of the check differs. For a run
-  that contacts no server, `--local` or a runner file without a server, `qory` refuses
-  before the run starts. With a server, the order is signed discovery, which may remove
-  the marker under the rule above, then the ping, then the marker check, so the refusal
-  comes after the ping and reaches the server. A run that signs with a key from the
-  environment therefore starts unwalled only while the directory holds no stored-secrets
-  secret. A marker that cannot be written means no run. In 0.7.0 stored
-  secrets go only to walled runs; a credentials broker is a later direction (Later: a
-  credentials broker).
+  that server needs a wall, `server_needs_wall`. The marker applies to every unwalled run
+  as well, whichever key the run signs with: `qory` writes it when discovery signed for a
+  request under the directory's secret lists `secrets`, as Runner behaviour step 2 does,
+  and before every key it generates, and while it exists every unwalled run is refused,
+  `server_needs_wall`. Only the moment of the check differs. For a run that contacts no
+  server, `--local` or a runner file without a server, `qory` refuses before the run
+  starts. With a server, the order is signed discovery, which may remove the marker under
+  the rule above, then the ping, then the marker check, so the refusal comes after the
+  ping and reaches the server. A run that signs with a key from the environment therefore
+  starts unwalled only while the marker is absent. A marker that cannot be written means
+  no run. In 0.7.0 stored secrets go only to walled runs; a credentials broker is a later
+  direction (Later: a credentials broker).
 - *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
   lies inside one of the runner's files, resolved through symbolic links:
   `mount_contains_runner_files`, with the path. The runner's files are:
@@ -905,7 +908,8 @@ every value the server stores for that access key.
     statically linked program needs nothing else;
   - the `docker` command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
     whose `currentContext`, `credsStore` and `credHelpers` start programs;
-  - every `file:` path of `secrets.local`.
+  - every `file:` path of `secrets.local`, and every `_file` setting of an integration;
+  - the private directory of the tools' sockets.
 
   An agent that can write a program the runner starts outside the wall, or read a value
   file, has left the wall. A mount that contains a runtime's
@@ -1224,8 +1228,9 @@ the machine pins:
 - **The bound.** A connection that sends a machine value to a host its `hosts` do not
   cover is no run, `secret_hosts_exceeded`, whether the connection comes from the server
   or from the runner file. The hosts compared are the service's, the runtime declaration's
-  for a runtime connection, and for an integration the `roles.credential.hosts` and
-  `roles.tool.serves` of the roles its `ways` choose.
+  for a runtime connection, and for an integration those of the chosen roles that list
+  that secret: `roles.credential.hosts` for the credential role, and `roles.tool.serves`
+  for the tool role.
   For an integration the bound covers where the produced credential is set, not where
   the program sends the raw value (Integrations).
 - **Every provider is bounded.** A provider resolves a reference a server sent only for
@@ -1308,6 +1313,7 @@ it is.
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
 | `variables` | the server's; the node adds only names whose server value the run does not apply (Decision 1) |
 | `connections` | the server's, when present, are the whole set; the node's bounds narrow them: `secrets.local`'s `hosts` (Decision 7) and `integrations:`'s `arguments` and `settings` (Integrations) |
+| an integration's `ways` | the server's choice, within the node's `integrations:` `ways` bound when it has one, else `integration_way_not_allowed`; an absent bound leaves the server's choice as it is (Integrations) |
 | a wall | a server that lists `secrets` requires one, and so does the `stored-secrets` marker for every run; the node keeps that requirement (Decision 4) |
 
 - **Fields that select one thing.** `image` selects one thing, so its narrowing is
@@ -1477,7 +1483,13 @@ program of the machine's produces a credential or serves hosts for a connection.
   `description.json`; the integrations contract defines the download URL of each for
   both forms. A release's version is `X.Y.Z`, its description's `program_version`.
   `source` is the integration's identity: the server validates it, and `policy_applied`
-  records it.
+  records the `source` the server sent. A `forge` missing on another host, present with
+  a URL source, or other than the one its host implies is `run_configuration_invalid`.
+  An `integrations:` entry may record the `source` its program was installed from; when
+  both are present and differ, the run is refused, `integration_source_mismatch`.
+- **Installing** runs only on the node owner's command, never at run start from a
+  `source` a server sent: a server that could make the node install and run a program of
+  its choosing would have code execution on the node.
 - **Name and version.** At run start the runner runs `describe` and requires its `name` to
   equal the connection's, else `integration_name_mismatch`, so a program registered under
   another name cannot answer for a connection. When the connection has a `version`, which
@@ -1487,20 +1499,42 @@ program of the machine's produces a credential or serves hosts for a connection.
   `qory`'s path and ownership checks; matching by name and version is enough, and a
   program digest recorded at install is a later option.
 - **Ways.** A connection's `ways`, required, lists the roles it uses, at least one, each
-  a role its description defines: `credential`, `tool`, or both. The server ticks every
-  role the description defines by default. A role in `ways` that the description lacks
-  is no run, `integration_role_missing`. The connection carries one `argument`, matched
-  whole against each chosen role's `argument` RE2, else
-  `integration_argument_not_allowed`; a role without an `argument` pattern takes the
-  empty argument, and a connection `argument` beside it is refused the same way.
+  a role its description defines: `credential`, `tool`, or both. By default the server
+  selects `credential` and `tool`, whichever the description defines. A role in `ways`
+  that the description lacks is no run, `integration_role_missing`. The connection
+  carries one `argument`, matched whole only against each chosen role that has an
+  `argument` RE2, else `integration_argument_not_allowed`; a role without an `argument`
+  pattern ignores the connection's argument and gets the empty string.
 - **Settings per role.** Every role of a description lists, in its required `settings`,
-  the names of the top-level settings it reads: unique names, `[]` for none. A secret is
-  listed by `<name>`, never by `<name>_file`. At run start:
-  - a setting a chosen role lists that the connection lacks, as a setting or a secret,
-    `<name>` or `<name>_file`, is `integration_settings_invalid`;
-  - a connection setting or secret that no chosen role lists is
-    `integration_settings_not_allowed`, so nothing unused travels or is sealed. The
-    server checks the same on save, and seals only secrets the chosen roles list.
+  the names of the top-level settings it may receive: unique names, `[]` for none; and
+  in its optional `required`, the subset it must receive. A secret is listed by
+  `<name>`, and either `<name>` or `<name>_file` satisfies it. At its top level the
+  description's `settings` schema allows only `properties`, `patternProperties`,
+  `additionalProperties`, `propertyNames`, `type`, `title`, `description`, `$schema`,
+  `$id` and `$defs`; the integrations contract refuses `required`, `allOf`, `anyOf`,
+  `oneOf`, `not`, `if`, `then`, `else`, `dependentRequired`, `dependentSchemas`,
+  `minProperties`, `maxProperties`, `$ref` and `$dynamicRef` there, since a subset of the
+  properties could fail a minimum or a maximum, and a top-level `$ref` could bring in any
+  refused keyword. Keywords inside a property stay allowed. So a role's document is
+  validated against that schema as it stands; `additionalProperties: false` passes for a
+  subset.
+  At run start the runner checks each chosen role's document, in order:
+  1. it holds only names of that role's `settings`, and nothing in the connection lies
+     outside every chosen role's list, else `integration_settings_not_allowed`, so
+     nothing unused travels or is sealed;
+  2. every name of the role's `required` is present, else `integration_settings_invalid`;
+  3. it is valid against the description's `settings` schema, with the secret values
+     inlined so a `writeOnly` member passes, else `integration_settings_invalid`;
+  4. it holds `<name>` or `<name>_file`, never both, else
+     `integration_settings_invalid`.
+
+  The server checks the same on save, and seals only secrets the chosen roles list.
+- **`_file` settings come from the node.** A `<name>_file` setting is a path on the node,
+  so a server-sent connection carries none: one that does is
+  `integration_settings_not_allowed`. A `_file` setting comes only from the node's runner
+  file, or from a fixed value in its `integrations:` `settings` bound. Otherwise a
+  server could point a program at any file the runner's user can read and have it sent
+  to the server's chosen host.
 - **Hosts are per role.** `roles.credential.hosts` is where the proxy sets the credential
   the program produces; `roles.tool.serves` is what the tool serves. Both are
   terminated. A `*.` entry over a public suffix, the private section included, is
@@ -1522,11 +1556,13 @@ program of the machine's produces a credential or serves hosts for a connection.
     `roles.credential.hosts`: lower-case hosts, or `*.name` for every host below `name`
     and not `name` itself, with no port, path or scheme;
   - `mcp`, optional, an absolute `https://` URL with no userinfo, port or fragment, whose
-    host `serves` covers, exactly or under a `*.` entry; `qory` registers it with the
-    agent's MCP client;
+    host `serves` covers, exactly or under a `*.` entry; a host it does not cover makes
+    the description invalid, `integration_description_invalid`;
   - `placeholders`, optional, unique variable names, `^[A-Z_][A-Z0-9_]{0,127}$`, which
-    the enclosure gets set to the placeholder value. They are known from the description
-    before the program runs.
+    the enclosure gets set to the placeholder value, so an agent's client that needs a
+    credential in a variable has one to send, which the tool, not the proxy, replaces
+    or checks. They are environment variables in the enclosure and nothing else, known
+    from the description before the program runs.
 
   A tool from an integration is a role of that integration's program, and §Tools of
   main applies to it with the description in place of the machine's tool definition
@@ -1545,8 +1581,15 @@ program of the machine's produces a credential or serves hosts for a connection.
   runs outside the wall and receives the raw value, and where it sends that value is the
   program's. The server chooses `argument`, `ways` and `settings`, which steer the
   program.
+- **Placeholder names.** A placeholder name that is `QORY_*`, on the built-in deny list
+  (Decision 1), or a name the runner, the runtime's `Prepare` or the harness sets is
+  `placeholder_conflict`: a tool's `placeholders`, a credential answer's `placeholders`
+  and a service declaration's `name` alike. The server refuses the same on save, for
+  the names it knows then.
 - **The machine's bounds.** An entry of `integrations:` may bound what a server chooses:
-  `arguments`, an RE2 pattern the argument must match whole, else
+  `ways`, the roles the node allows, a server-chosen role outside it being
+  `integration_way_not_allowed`, and an absent bound narrowing nothing, since the server
+  leads; `arguments`, an RE2 pattern the argument must match whole, else
   `integration_argument_not_allowed`; and `settings`, per member a fixed value or
   `{pattern: <RE2>}`, a member the bound does not list being refused,
   `integration_settings_not_allowed`; and `paths`, by host, the most paths the program's
@@ -1601,30 +1644,39 @@ program of the machine's produces a credential or serves hosts for a connection.
 **Tools from integrations.** A connection whose `ways` lists `tool` starts its program
 as a tool, under §Tools' rules with these differences:
 
-- **Starting.** The runner starts `<program> tool -- <argument>` outside the enclosure,
-  writes the role's document to its standard input, and sets two variables, the only ones
-  the tool reads and neither a setting: `QORY_TOOL_LISTEN`, the path of a Unix socket in a
-  private directory of the runner's, mode `0700`, and `QORY_RUN_ID`. The tool reads its
-  standard input to its end, by the credential role's rules, then listens on the socket
-  within a minute; it is ready when the socket accepts connections. A failure before it
-  listens is a non-zero exit, nothing on standard output and one line on standard error,
-  the reason reported, `tool_not_started`. Once it listens, what it writes to standard
-  error is reported as the runner's lines and its standard output is discarded. SIGTERM
-  ends it at the run's end, as §Tools ends a tool.
+- **Starting.** The runner starts the integrations' tools alongside the node's own tools,
+  at the same step of §Sequence. It starts `<program> tool -- <argument>` outside the
+  enclosure and writes the role's document to its standard input. The environment is
+  main's base for a tool: the runner's own, without the names Decision 4 keeps from
+  programs, with `QORY_TOOL_LISTEN`, the path of a Unix socket in a private directory of
+  the runner's, mode `0700`, and `QORY_RUN_ID`; of the contract's variables, the tool
+  reads only those two, and neither is a setting. The tool reads its standard input to
+  its end, by the credential role's rules, then listens on the socket within a minute;
+  it is ready when the socket accepts connections. A failure before it listens is a
+  non-zero exit, nothing on standard output and one line on standard error, the reason
+  reported, `tool_not_started`. Once it listens, its standard output is discarded and
+  its standard error is reported as the runner's lines. Before and after it listens,
+  its standard error is redacted by the Integrations rule. SIGTERM ends it at the run's
+  end, as §Tools ends a tool.
 - **Reaching it.** The proxy terminates TLS for every host of `serves`, decides the host
   and the path by the policy as for any host, and sends the tool over the socket every
   request it allows, as HTTP/1.1, with `Qory-Request-Id` and `Qory-Path-Rule`, as §Tools
   defines; the tool answers each.
-- **Refused before the run starts**, as §Tools refuses a machine's tool: a host two tools
-  serve, or a tool's host a credential host covers, `connection_host_conflict`; under
+- **Refused before the run starts**, as §Tools refuses a machine's tool: any overlap
+  involving an integration's `serves`, with another tool's hosts, a node tool's or an
+  integration's, or with a credential host, `connection_host_conflict`, while two of the
+  node's own tools serving one host stay `tool_invalid`; under
   `enforce`, a `serves` host the run's allow list does not cover, `tool_host_denied`; and
   a value the run passes for a tool's placeholder, `placeholder_conflict`. The tools a run
   has are fixed when it starts.
 - **Records.** Each request to the tool is a `dev.qory.run.egress` with `tool`, the
-  integration's name, and `connection`, the connection's id; `policy_applied` lists the
-  tool among `tools`, with the connection's `argument` and its `serves`.
-- **The `mcp` URL.** `qory` registers it with the agent's MCP client, so the agent
-  reaches the tool by that URL through the proxy.
+  integration's name, and `connection`, the connection's id. `policy_applied` lists the
+  tool among `tools` as `{name, connection, hosts, argument}`: `hosts` is its `serves`,
+  and `argument` the connection's, when it has one.
+- **The `mcp` URL.** The runner module returns the chosen tools' `mcp` URLs in its
+  session's output, and `qory`, or any other caller, registers them in the run's own MCP
+  client configuration, never the workspace's `.mcp.json`, so the agent reaches each
+  tool by its URL through the proxy and the checkout carries nothing of it.
 
 A tool the run's policy selects by name from the machine's own tool definitions works as
 on main.
@@ -2256,8 +2308,8 @@ For the enrolment path and `secrets.url`:
 - **Answer headers.** Answers of these two endpoints contain neither digest header.
 - **Counts.** At most 32 connections, 16 references per connection, 16 hosts and 32 paths
   per service, 32 distinct stored values and 512 KiB of values per secrets request, and a
-  settings document of 64 KiB (65536 bytes) per integration. The server checks the counts
-  per holder when it renders.
+  settings document of 64 KiB (65536 bytes) per role of an integration. The server checks
+  the counts per holder when it renders.
 - **Values.** Every secret value is UTF-8 text, 1 to 16384 bytes, with no NUL; a binary
   secret is stored encoded, base64 for one, as its consumer expects. A value linked to a
   runtime or service connection, which goes into a header, also has no byte
@@ -2402,7 +2454,8 @@ wrote. Main's other refusals before the start take codes too:
 | Case | Code |
 |---|---|
 | a tool the machine does not define, or one a server selects that the node's policy leaves out (Decision 9) | `tool_unknown` |
-| a tool selected twice, an argument its definition does not provide for, or a host two tools serve | `tool_invalid` |
+| a tool selected twice, an argument its definition does not provide for, or a host two of the node's own tools serve | `tool_invalid` |
+| a host an integration's `serves` shares with another tool or a credential host | `connection_host_conflict` |
 | under `enforce`, a tool host the allow list does not cover | `tool_host_denied` |
 | a value the run passes for a tool's placeholder | `placeholder_conflict` |
 | an image the machine does not define, or a server's image other than the one the node's policy selects (Decision 9) | `image_unknown` |
@@ -2536,10 +2589,13 @@ Order at run start; the steps not listed are §Sequence's.
    required group included; hosts and `headers.json`; the mounts against the runner's
    files and the runtime's credential files; for each integration, the machine's
    `arguments` and `settings` bounds.
-5. For each integration connection: find the program, run `describe`, compare its name
-   and version, and check its `ways` against the description's roles,
-   `integration_role_missing`, its `argument` against each chosen role's pattern, and its
-   settings and secrets against the chosen roles' `settings`,
+5. For each integration connection: find the program, run `describe`, compare its name and
+   version, its `source` against the `integrations:` entry's,
+   `integration_source_mismatch`, and the description's tool role,
+   `integration_description_invalid`; check its `ways` against the description's roles,
+   `integration_role_missing`, and against the node's `ways` bound,
+   `integration_way_not_allowed`, its `argument` against each chosen role's pattern, and
+   its settings and secrets against the chosen roles' `settings`,
    `integration_settings_invalid` and `integration_settings_not_allowed`; then read the
    credential role's `hosts` and the tool role's `serves`, `mcp` and `placeholders`, which
    the steps below need. A `describe` that does not start or does not answer is
@@ -2550,27 +2606,27 @@ Order at run start; the steps not listed are §Sequence's.
    `apiary_public_key`; check the envelope and open it with the X25519 key of the
    access key secret; check the plaintext.
 7. Resolve every external reference through the providers in order, and check each
-   machine value's `hosts` against where its connection sends it, an integration's
-   hosts being those `describe` reported.
+   machine value's `hosts` against where its connection sends it, for an integration the
+   `hosts` or `serves` that `describe` reported for the chosen roles that list it.
 8. Check the hosts and the values together: `connection_host_conflict`, the value rules
-   for where each value goes; validate each integration's settings, values inlined,
-   against its description; compute `hosts_denied`.
+   for where each value goes; check each chosen role's document, values inlined, in the
+   order Integrations gives; compute `hosts_denied`.
 9. Resolve the variables: in an unwalled run with `variables.unwalled` unset or
    `ignore`, leave out every server variable; otherwise leave out every denied or
    reserved name, every placeholder's name, every name a `secrets.local` value reads,
    and every name the runtime's `Prepare` or the harness sets; add the node's variables
    for every name whose server value the run does not apply, and leave out the others,
    `node_ignored`. Then check the environment: `variable_reserved`,
-   `runtime_secret_conflict`, and placeholders the run passes a value for,
-   `placeholder_conflict`.
-10. Run each integration's `credential` role with its settings document; check its
-    answer. An integration that does not start or does not answer is
-    `integration_failed`. The answer's `placeholders` are known only now, so the runner
-    applies step 9 to them again: a server or node variable with such a name is left out
-    and reported in `denied`, the placeholder winning; a value the run's environment
-    passes for one, or one in a variable the runtime declares or reserves, is
-    `placeholder_conflict`. Every other placeholder, the tool role's included, is known
-    from a description or a descriptor before any program runs.
+   `runtime_secret_conflict`, and placeholders the run passes a value for, or whose names
+   the placeholder rule of Integrations refuses, `placeholder_conflict`.
+10. Run each integration's `credential` role with its settings document; check its answer.
+    An integration that does not start or does not answer is `integration_failed`. The
+    answer's `placeholders` are known only now, so the runner applies step 9 to them
+    again: a server or node variable with such a name is left out and reported in
+    `denied`, the placeholder winning; a value the run's environment passes for one, one
+    in a variable the runtime declares or reserves, or a name the placeholder rule of
+    Integrations refuses, is `placeholder_conflict`. Every other placeholder, the tool
+    role's included, is known from a description or a descriptor before any program runs.
 11. Then §Sequence from the tools on. A tool that does not start or does not listen in
     time is `tool_not_started`; any other failure before the next step, such as the wall,
     the image or the runtime's launch, is `start_failed`. The proxy receives the uses and
@@ -2616,8 +2672,8 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `answer_unsigned` | runner | an answer at run start without a valid signature, other than a `401` |
 | `unauthorized` | runner | a `401` at run start: the access key is unknown or revoked, or its key or row does not verify |
 | `labels_changed` | `qory` | a local checkout's derived labels differ from those pinned at its first run the server accepted, the checkout keyed by its resolved real path, until the user confirms with `--relabel` |
-| `server_needs_wall` | runner and `qory` | an unwalled run while discovery lists `secrets` or the `stored-secrets` marker exists, whichever key the run signs with. With a server, after the ping, the marker checked after signed discovery may have removed it; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run |
-| `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, or a `secrets.local` file |
+| `server_needs_wall` | runner and `qory` | an unwalled run while discovery lists `secrets` or the `stored-secrets` marker exists, whichever key the run signs with. With a server, after the ping, the discovery step having removed the marker where its rule allows; for a run that contacts no server, `--local` or a runner file without a server, decided by `qory` before the run |
+| `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, a `secrets.local` file, an integration's `_file` setting, or the tools' socket directory |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
 | `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included |
 | `fetch_failed` | runner | the run configuration's fetch answers other than `200` with no code in a signed body, reported with `status`, or fails in transport, without it |
@@ -2628,24 +2684,27 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `connection_host_invalid` | runner, and the server on save | a service or runtime host that is not an exact DNS name, such as an IP literal |
 | `connection_host_public_suffix` | runner | an integration's `*.` host over a public suffix |
 | `connection_header_reserved` | runner, and the server on save | a header name `headers.json` refuses, in a service, a runtime declaration or an integration's answer |
-| `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap; a credential role's `hosts` and a tool role's `serves` overlap, in one connection or across two |
+| `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap; any overlap involving an integration's `serves`, with a credential role's `hosts` or another tool's hosts, in one connection or across two |
 | `runtime_connection_duplicate` | runner | two runtime connections for one runtime |
 | `runtime_secret_choice` | runner | more than one declaration of one `one_of` group |
 | `runtime_secret_missing` | runner | a walled run with no connection that supplies a required group; reported with the group's id |
 | `runtime_secret_conflict` | runner | the run's environment contains a variable the runtime declares or reserves |
 | `integration_missing` | runner | the machine has no integration of that name |
 | `integration_role_missing` | runner | a role in the connection's `ways` that the description does not define |
+| `integration_way_not_allowed` | runner | a server-chosen role outside the node's `integrations:` `ways` bound |
+| `integration_description_invalid` | runner | a description the runner cannot use as it stands, such as a tool role whose `mcp` host its `serves` does not cover |
+| `integration_source_mismatch` | runner | the connection's `source` differs from the one the node's `integrations:` entry records |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
 | `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern or a chosen role's `argument` pattern, or the connection passes an argument to a role that takes none |
-| `integration_settings_not_allowed` | runner | a connection setting or secret that no chosen role lists; a setting outside the machine's `settings` bound, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
+| `integration_settings_not_allowed` | runner | a role's document with a name outside that role's `settings`, or a connection setting or secret that no chosen role lists; a `<name>_file` setting in a server-sent connection; a setting outside the machine's `settings` bound, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
 | `integration_hosts_exceeded` | runner | the program's answer claims hosts above those `describe` lists |
-| `integration_settings_invalid` | runner | a setting a chosen role lists that the connection lacks, or a role's document that fails the program's own description |
+| `integration_settings_invalid` | runner | a role's document that lacks a name of the role's `required`, fails the description's `settings` schema, or holds both `<name>` and `<name>_file` |
 | `integration_settings_too_large` | runner | a role's settings document exceeds 65536 bytes (64 KiB), refused before the program starts |
 | `integration_failed` | runner | an integration's `describe` or `credential` role does not start, exits non-zero or answers what its schema refuses |
 | `tool_not_started` | runner | a tool, a machine's or an integration's `tool` role, exits before it listens, or does not listen in time |
 | `tool_unknown` | runner | a tool the machine does not define, or one a server selects that the node's policy leaves out |
-| `tool_invalid` | runner | a tool selected twice, an argument its definition does not provide for, or a host two tools serve |
+| `tool_invalid` | runner | a tool selected twice, an argument its definition does not provide for, or a host two of the node's own tools serve |
 | `tool_host_denied` | runner | under `enforce`, a tool host the allow list does not cover |
 | `image_unknown` | runner | an image the machine does not define, or a server's image other than the one the node's policy selects |
 | `image_invalid` | runner | an image selected without a wall, defined twice, or a daemon without a runtime |
@@ -2658,7 +2717,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `secret_sealed_expired` | runner | `exp` passed by more than 300 s, or more than 900 s ahead |
 | `secret_sealed_mismatch` | runner | an extra or repeated value, another digest or another set of connections |
 | `variable_reserved` | runner | the run's environment passes a `QORY_` variable, `QORY_ACCESS_KEY_SECRET` among them, or a variable a `secrets.local` value reads into the enclosure; the runner's own `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt |
-| `placeholder_conflict` | runner | the run passes a value for a placeholder, or a connection other than the runtime's sets a placeholder in a variable the runtime declares or reserves |
+| `placeholder_conflict` | runner | the run passes a value for a placeholder; a connection other than the runtime's sets a placeholder in a variable the runtime declares or reserves; a placeholder name, of a tool, a credential answer or a service declaration, that is `QORY_*`, on the built-in deny list, or set by the runner, `Prepare` or the harness |
 
 ## Security considerations
 
@@ -2669,7 +2728,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | The server's logs and answer caches | Ciphertext only; `Cache-Control: no-store` | — |
 | A read of the server's database | Values encrypted under a key derived from the server's encryption key; the server stores access keys' public keys only, so a reader of the database cannot act as an access key | A reader with the server's encryption key reads every stored value and, while `APIARY_SIGNING_SECRET` is unset, signs as the server |
 | A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every key row and every code, with a per-row version, verified on every request and before sealing: a writer cannot swap an access key's public key, move an access key to another node or a node to another workspace, set the stored-secrets flag, raise an instance limit, insert a code, or insert or approve an access key; seals taken from the verified rendering's bytes; audit | A writer with the server's encryption key, or a change through the server's own pages |
-| A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument and settings, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments` and `settings` bounds, both required for a server-sent integration with a machine value, and the pin, required on every machine, are what remain |
+| A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument, settings and `ways`, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments`, `settings` and `ways` bounds, the first two required for a server-sent integration with a machine value, the refusal of a `<name>_file` setting from a server, so it cannot point a program at a file of the node's, installing only on the owner's command, and the pin, required on every machine, are what remain |
 | A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables, create codes and set an access key's stored-secrets flag | Choosing the host is reading the value |
 | A party that can rewrite the administrator's browser session with the server | — | The session is trusted: such a party can show a false pin, fingerprint or code, and can equally approve keys itself. Comparing fingerprints out of band, such as over another channel with the machine's operator, is the operator's option |
 | Whoever may edit variables | Only owners and administrators; an unwalled run receives no server variable unless the machine sets `variables.unwalled: accept`; the deny list, the runtime's `denies` and the machine's `variables.deny` leave out what would undermine the wall, the proxy or the runner | The deny list protects the wall and the runner, not the developer: with `accept`, the server has the developer's shell |
@@ -2679,7 +2738,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A holder of the server's signing secret, on the path | Routing is bound to the document, so real values go only to the hosts the stored rendering lists; it holds no access key secret | It forges documents and seals values of its own choosing to every machine that pins the key, until the server's key is rotated and the pins with it |
 | A link removed, or a host moved, while a run starts | A superseded rendering seals a pair only when every listed connection that references it is byte for byte identical in the current rendering, hosts included | — |
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
-| A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
+| A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry, compared with the hosts of the roles that list the secret: `secret_hosts_exceeded`; a server-sent `<name>_file` setting refused, `integration_settings_not_allowed`, so a server cannot have a program read a file of the node's | — |
 | A node, choosing labels | Labels resolve only within the node's workspace | Repository scope is no boundary against a node: a node is scoped to its workspace |
 | An agent choosing the next run's labels, such as by rewriting `.git/config`'s origin | A CI or job spec passes labels explicitly; for a local checkout, `qory` pins the labels of its first run the server accepts, in the runner file's directory, which walled agents cannot reach, and a later run whose derived labels differ is `labels_changed` until the user confirms with `--relabel` | Pinning is trust on first use: a checkout's first run, or the same checkout at a new path, pins what the origin says then. An unwalled agent of the same user can rewrite the pin file as easily as `.git/config`. A user who confirms without reading the change |
 | An access key secret an unwalled agent read before stored secrets were wanted | The stored-secrets flag is fixed when a key is created, so stored values need a new key, enrolled with a new code and approved; every key command writes the `stored-secrets` marker before it generates the key and refuses while an unwalled run's lock is held, and no run starts while a key command runs; an enrolment retry reuses a secret only for the same code within 15 minutes | A pasted key generated earlier and pasted with the flag; the owner pastes a key generated for the purpose. An agent that keeps a process running outside `qory` after its session ends, and so holds no lock |
@@ -2694,7 +2753,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A model credential reaching the enclosure | `runtime_secret_conflict`; in a walled run, the runtime's other declared and reserved variables set to empty; `mount_contains_credential_files` | A credential file baked into the image |
 | A credential that mints credentials | A declaration's `paths`, `/v1/*` for Claude Code | A minting path inside the allowed paths gives the agent a readable credential; to verify for `api.anthropic.com` |
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
-| An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds, both required when a server-sent connection references a machine value; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
+| An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds, both required when a server-sent connection references a machine value; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction. A tool role is a path the egress policy does not govern, since what the tool forwards leaves from the machine directly, and a channel back to the agent through its answers; the node's `ways` bound keeps a role it does not want from starting |
 | A payload replayed | Run id, access key id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one access key, digest and set; a new run id per attempt | — |
 | A signed body sent to another endpoint | The request target in the request signature; strict schemas on every endpoint | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
@@ -2729,10 +2788,21 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   without an `argument`, and no flag; that its standard input is one document per role,
   holding the settings that role lists and nothing else, a secret as `<name>` or
   `<name>_file`, `{}` for a role that lists none, never a terminal, and closed once
-  written; that a role in `ways` the description lacks is `integration_role_missing`, a
-  listed setting the connection lacks is `integration_settings_invalid`, and a setting or
-  secret no chosen role lists is `integration_settings_not_allowed`, so the secrets
-  request seals none of it; that a credential host a tool's `serves` covers is
+  written; that a role in `ways` the description lacks is `integration_role_missing`, and
+  one outside the node's `ways` bound `integration_way_not_allowed`; that each role's
+  document is checked in order: a name outside the role's `settings`, or a setting or
+  secret no chosen role lists, is `integration_settings_not_allowed`, so the secrets
+  request seals none of it; a missing name of `required`, a document the schema refuses,
+  or `<name>` beside `<name>_file`, is `integration_settings_invalid`; that a
+  server-sent `<name>_file` setting is `integration_settings_not_allowed`; that a role
+  without `argument` gets the empty string whatever the connection's argument; that an
+  `mcp` host `serves` does not cover is `integration_description_invalid`; that a
+  `source` other than the `integrations:` entry's is `integration_source_mismatch`, and
+  a `forge` missing, misplaced or contradicting its host is `run_configuration_invalid`;
+  that a placeholder named `QORY_*`, on the deny list, or set by the runner is
+  `placeholder_conflict`; that a tool's standard error is redacted before and after it
+  listens; that the runner module returns the tools' `mcp` URLs and the workspace's
+  `.mcp.json` stays unchanged; that a credential host a tool's `serves` covers is
   `connection_host_conflict`; that a `tool` role reads its document, listens on
   `QORY_TOOL_LISTEN` within a minute, receives the requests the policy allows on its
   `serves` hosts with `Qory-Request-Id`, and ends on SIGTERM, a failure before it
