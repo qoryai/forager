@@ -268,8 +268,7 @@ names the machine's owner adds in the runner file, `variables.deny: [NAME, PREFI
   teams set them so an agent's commits carry a bot identity. A name is denied when it
   matches an entry of the built-in `names`, or matches an entry of `patterns` and no
   entry of `except`; `except` lifts a pattern's match only, and a named entry always
-  denies. It
-  applies to the built-in list only: the runtime's `denies` and the owner's
+  denies. It applies to the built-in list only: the runtime's `denies` and the owner's
   `variables.deny` always win.
 - The server vendors the built-in list as `denied-variables.json`, `{"version": 1,
   "names": [...], "patterns": [...], "except": [...]}`, `except` holding the six names
@@ -315,6 +314,7 @@ names the machine's owner adds in the runner file, `variables.deny: [NAME, PREFI
 | Start-up, .NET | `CORECLR_*` | `CORECLR_ENABLE_PROFILING` with `CORECLR_PROFILER_PATH` loads a native profiler |
 | Start-up, Erlang | `ERL_AFLAGS`, `ERL_ZFLAGS`, `ERL_FLAGS` | flags for every `erl`, `-eval` included |
 | Start-up, Erlang | `ERL_LIBS` | where Erlang finds applications |
+| Start-up, Erlang | `ELIXIR_ERL_OPTIONS` | `erl` flags for every Elixir program, `-eval` included |
 | Start-up, build tools | `GOFLAGS` | `-toolexec` runs a program for every step of a Go build |
 | Start-up, build tools | `GOENV` | a Go environment file, which can set `GOFLAGS` |
 | Start-up, build tools | `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER` | Cargo runs it in place of the compiler |
@@ -328,7 +328,7 @@ names the machine's owner adds in the runner file, `variables.deny: [NAME, PREFI
 | Start-up, build tools | `RUSTC`, `RUSTDOC`, `CARGO_BUILD_RUSTC` | the compiler and documentation tool Cargo runs |
 | Start-up, build tools | `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` | compiler flags, `-C linker=` among them, which runs a program |
 | Start-up, build tools | `RUSTUP_*` | which toolchain rustup runs, where it downloads toolchains and itself from, and where it keeps them |
-| Start-up, build tools | `CGO_CFLAGS`, `CGO_CXXFLAGS`, `CGO_LDFLAGS` | flags cgo passes to the C compiler and linker as given |
+| Start-up, build tools | `CGO_*FLAGS` | flags cgo passes to the C compiler and linker as given, `CGO_CFLAGS`, `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, `CGO_FFLAGS` and `CGO_LDFLAGS` among them |
 | Start-up, build tools | `CARGO_HOME` | where Cargo reads its configuration, which can set runners and wrappers |
 | Start-up, build tools | `CARGO_REGISTRY_CREDENTIAL_PROVIDER` | a program Cargo runs for registry credentials |
 | Start-up, build tools | `GOTOOLCHAIN` | another Go toolchain the `go` command downloads and runs |
@@ -388,6 +388,10 @@ names the machine's owner adds in the runner file, `variables.deny: [NAME, PREFI
 | Package managers | `PIP_CERT` | pip's trust store |
 | Package managers | `PIP_TRUSTED_HOST` | hosts pip reaches without verifying their certificates |
 | Package managers | `UV_INSECURE_HOST` | hosts uv reaches without verifying their certificates |
+| Package managers | `HEX_UNSAFE_HTTPS`, `HEX_CACERTS_PATH` | Hex's certificate checks and its trust store |
+| Package managers | `HEX_UNSAFE_REGISTRY`, `HEX_NO_VERIFY_REPO_ORIGIN` | Hex's checks of the registry's signature and origin |
+| Package managers | `BUNDLE_SSL_VERIFY_MODE`, `BUNDLE_SSL_CA_CERT` | Bundler's certificate checks and its trust |
+| Package managers | `YARN_ENABLE_STRICT_SSL`, `YARN_HTTPS_CA_FILE_PATH` | Yarn's certificate checks and its trust |
 | Package managers | `npm_config_noproxy` | hosts npm reaches around the proxy; `npm_config_proxy` and `npm_config_https_proxy` already match `*_PROXY` |
 | Routing and trust | every name `Docker.CAEnv` sets | the machine's own names for the run's bundle |
 | Identity and lookup | `PATH` | which program a name starts; the enclosure resolves the launch's program through it (§Images) |
@@ -523,8 +527,9 @@ a revoked access key gets `401`.
   holds the access key can claim any machine id.
   - The id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. `qory` generates `m_` and 16
     random bytes in base64url, 24 characters, and keeps it in the file `machine-id` in
-    the runner file's directory, two lines: the id and the SHA-256 of the machine's
-    identity, `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, else the host name.
+    the runner file's directory, two lines: the id and HMAC-SHA256, keyed with the
+    constant `qory machine-id v1`, of the machine's identity, `/etc/machine-id` on Linux,
+    `IOPlatformUUID` on macOS, else the host name, as machine-id(5) recommends.
     When the directory is read-only the id lives for the process, which suits an
     ephemeral instance. Before the first request `qory` reads the file and generates a
     new id when the file's id fails the pattern or the identity's hash differs, which
@@ -571,11 +576,11 @@ a revoked access key gets `401`.
   it is given, else from `QORY_ACCESS_KEY_SECRET`, else from the file `access-key-secret`
   in the runner file's directory, `$XDG_CONFIG_HOME/qory`, else `~/.config/qory`. The
   variable wins over the file.
-- **The runner file's directory** holds everything `qory` keeps for the server: the
-  runner file, `access-key-secret` and `access-key-secret.next`, `machine-id`, the
-  `stored-secrets` marker, `enrolment-pending`, the pinned labels under `labels/` and the
-  lock files under `locks/`. It is mode `0700`, and every walled run refuses a mount of
-  it (below).
+- **The runner file's directory** holds everything `qory` keeps for the server: the runner
+  file, `access-key-secret` and `access-key-secret.next`, `machine-id`, the
+  `stored-secrets` marker, `enrolment-pending` and `rekey-pending`, the pinned labels
+  under `labels/` and the lock files under `locks/`. It is mode `0700`, and every walled
+  run refuses a mount of it (below).
 - **The files.** `qory` creates `access-key-secret` and `access-key-secret.next` with
   `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0600`, under the key lock, and refuses a file whose
   mode grants anything to the group or to others, a file or directory owned by another
@@ -598,11 +603,15 @@ a revoked access key gets `401`.
   waits for starting runs, and starting runs wait for it. A key command refuses while
   any unwalled run's lock file is held, and says to stop those sessions first. A lock
   file whose `flock` can be taken belongs to a run that has ended, and is removed.
-- **The marker and key commands.** Every key command writes the `stored-secrets` marker
-  before it generates the key, unconditionally, and a marker it cannot write means no
-  key. `qory` removes the marker only on a signed answer that shows the access key has no
-  stored secrets: discovery without `secrets`, or an enrolment or re-key answer with
-  `stored_secrets: false`. Deleting the file by hand also restores unwalled runs.
+- **The marker and key commands.** Every key command that keeps its key on this machine
+  writes the `stored-secrets` marker before it generates the key, unconditionally, and a
+  marker it cannot write means no key. `qory` removes the marker only on a signed answer
+  that shows this machine's access key has no stored secrets: discovery without
+  `secrets`, or an enrolment or re-key answer with `stored_secrets: false`. With
+  `--print`, a key command takes the key lock and refuses while an unwalled run is live,
+  and leaves the marker as it is: the printed key is kept elsewhere, and the answer's
+  `stored_secrets` describes that holder's access key. Deleting the file by hand also
+  restores unwalled runs.
 - **The key pair.** Everything comes from the seed:
   - the Ed25519 public key A, as RFC 8032 derives it;
   - the X25519 private key, the clamped first 32 bytes of SHA-512(seed), the same scalar
@@ -633,11 +642,18 @@ a revoked access key gets `401`.
   then `.` and the fingerprint of the server's public key; during a rotation of the
   server's key, `.` and the next key's fingerprint follow (Decision 6). The server keeps
   only a code's SHA-256, its kind and, for a re-key code, the access key id; with 130
-  random bits a fast hash is enough. It answers a code under the key whose fingerprint
-  the code carries first, and a change of the server's key ends every outstanding code,
-  as revoking or deleting the access key ends its re-key codes. When a code is used or
-  expired, `qory` says so plainly: "this code was used or has expired; if you did not use
-  it, tell your administrator, who must reject the pending key".
+  random bits a fast hash is enough. It accepts a code only when its first fingerprint is
+  its current signing key's and a second, when present, its next key's, so a change of
+  the server's key ends every outstanding code by itself; revoking or deleting the access
+  key ends its re-key codes, and an owner or administrator can cancel an outstanding
+  code on the Access keys page. A used code passes again for a retry with the same
+  public key for 15 minutes after its first use. When a code is used or expired, `qory`
+  says so plainly: "this code was used or has expired; if you did not use it, tell your
+  administrator, who must reject the pending key".
+- **An existing pin.** When the machine has a pin and none of a code's fingerprints is in
+  it, `qory access-key enrol` and `rekey` refuse before they generate a key: the code is
+  from another server, or the pin is out of date, and the operator updates the pin out
+  of band. `qory` writes a pin from an answer only where none exists.
 - **Enrolment** gives an access key its id, in one of two ways.
   - (a) **An enrolment code.** On the machine, `qory access-key enrol <server> <code>`
     takes the key lock, writes the marker, generates the secret, keeps it as above,
@@ -661,8 +677,9 @@ a revoked access key gets `401`.
     - The access key awaits approval, and an owner or administrator compares the
       fingerprint `qory` printed with the one Settings › Access keys shows, and sees the
       settings the access key will get, before approving it.
-    - `qory access-key enrol --print` writes no file and prints `QORY_ACCESS_KEY_ID`,
-      `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY` for a CI's settings.
+    - `qory access-key enrol --print` writes no file, the marker included, and prints
+      `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY` for a
+      CI's settings.
   - (b) **A pasted key.** `qory access-key create` takes the key lock, writes the marker,
     generates the secret, keeps it as above, and prints the public key and its
     fingerprint; with `--print` it writes no file and prints `QORY_ACCESS_KEY_SECRET` as
@@ -706,15 +723,17 @@ a revoked access key gets `401`.
   public key and that access key id stay retired for good, and a rejected key stays
   refused wherever it is posted again.
 - **Approval.** Every access key needs approval, and every new key of it needs approval
-  before it is used. A new access key that awaits approval receives only `key_pending`,
-  on every signed endpoint, discovery included: its run configuration, variables, stored
-  values and events wait for approval. A pending key beside an approved current key, from
-  a rotation or a re-key, is answered `401` everywhere until it is approved. An access
-  key enrolled with a code awaits approval; a pasted key is approved as it is entered.
-  Approval applies under every setting of the server. An access key has at most one
-  pending key at a time, and Settings › Access keys shows how it arrived: by enrolment,
-  by a rotation signed under which key, or by which re-key code, created by whom and
-  when, used when and from which address.
+  before it is used. A new access key that awaits approval receives only `key_pending`, on
+  every signed endpoint, discovery included, and `401` at `access_key.url`: its run
+  configuration, variables, stored values and events wait for approval. Settings › Access
+  keys refuses to enable stored secrets on an access key that awaits approval: the
+  administrator approves or rejects it first. A pending key beside an approved current
+  key, from a rotation or a re-key, is answered `401` everywhere until it is approved. An
+  access key enrolled with a code awaits approval; a pasted key is approved as it is
+  entered. Approval applies under every setting of the server. An access key has at most
+  one pending key at a time, and Settings › Access keys shows how it arrived: by
+  enrolment, by a rotation signed under which key, or by which re-key code, created by
+  whom and when, used when and from which address.
 - **Key settings.** What the server sets per key row: whether the access key may receive
   stored secrets, off by default and enabled only by owners and administrators, with
   the sequence number of its last enabling; its rate limits; and its workspace. In 0.7.0
@@ -726,8 +745,9 @@ a revoked access key gets `401`.
   after the access key's stored-secrets flag was last enabled. A secret an earlier
   unwalled agent read therefore unlocks none.
   - Order comes from a sequence the server keeps per access key and advances under the
-    row's lock: every key received, every code created and every enabling of the flag
-    takes the next number, and wall-clock time plays no part. When a new access key is
+    row's lock: every key received, every re-key code created and every enabling of the
+    flag takes the next number, these being what eligibility reads, and wall-clock time
+    plays no part. When a new access key is
     created with the flag, the flag's number precedes its key's. Enabling the flag also
     rejects any pending key, which becomes a tombstone.
   - While the flag is set, the secrets request and a rotation signed by a key received
@@ -735,10 +755,10 @@ a revoked access key gets `401`.
     access key holds; such a key stays ineligible through the old key's window, and the seal
     goes only to an eligible key. Discovery under such a key, the old key of a window
     included, lists `key_rotation_required: true`.
-  - `qory` then says, from discovery's `current_key` and `pending_key`: "re-key with a
-    code" when its key is the current one and none is pending; "approve the pending key"
-    when one is; "this key was replaced; use the access key's new secret" when its key
-    is an old one.
+  - `qory` then says, from discovery's `current_key` and `pending_key`, one of three
+    messages: "re-key with a code" when its key is the current one and none is pending;
+    "a new key awaits approval" when one is; "this key was replaced; use the access
+    key's new secret" when its key is an old one.
   - A key enrolled or pasted while the flag is set is received after it. The server
     cannot know when a pasted key was generated, so the owner pastes a key
     `qory access-key create` generated for that purpose.
@@ -748,30 +768,40 @@ a revoked access key gets `401`.
     explicit rather than a run quietly missing its connections.
 - **Re-key.** `qory access-key rekey <code>`, with the options `--print`,
   `--server <url>` and `--access-key-id <id>`, brings a new key with an administrator's
-  code. The server and the access key
-  id come from the flags, else from `runner.yaml` and `QORY_ACCESS_KEY_ID`, so it works
-  when the runner file is lost too. It takes the key lock, writes the marker, moves an
-  `access-key-secret.next` left from earlier aside, generates a new secret, writes it to
+  code. The server and the access key id come from the flags, else from `runner.yaml`
+  and `QORY_ACCESS_KEY_ID`, so it works when the runner file is lost too. It takes the
+  key lock, writes the marker, generates a new secret, writes it to
   `access-key-secret.next` when a current secret exists, else to `access-key-secret`,
-  prints its fingerprint, and posts the new public key with the code and a proof of
-  possession by the new key (Wire format). The request is authenticated by the code and
-  the new key's proof, so it works when the old secret is lost.
+  records the code's SHA-256 and the time in `rekey-pending`, prints its fingerprint,
+  and posts the new public key with the code and a proof of possession by the new key
+  (Wire format). The request is authenticated by the code and the new key's proof, so it
+  works when the old secret is lost.
+  - A second `rekey` with the same code within 15 minutes reuses the pending secret and
+    re-posts it; its answer is the same `202`, and `qory` reports that the key awaits
+    approval. With a different code it moves the earlier `.next` aside under a name with
+    the time and generates a fresh key.
+  - While its new key is pending, a machine sees `401` under that key, so `qory` keeps
+    using the current key, and its message says which key is pending.
   - A re-key code is valid whether or not the access key has the flag: it is the
     administrator's alternative to a self-signed rotation, and the recovery path for a
     lost secret, so the access key keeps its id. The access key id is public, so a
     stolen re-key code works for anyone; approval after comparing the fingerprint is the
     control, and the page shows how the pending key arrived.
   - The answer carries `approved`, `stored_secrets` and the server's keys, as
-    enrolment's does. `qory` verifies it under the listed key whose fingerprint the code
-    carries first, pins only the keys whose fingerprints the code carries, writing the
-    pin when none exists, and removes the marker on `stored_secrets: false`.
+    enrolment's does; `approved` says whether the posted key is the access key's current
+    key. `qory` verifies it under the listed key whose fingerprint the code carries
+    first, pins only the keys whose fingerprints the code carries, writing the pin only
+    where none exists, and removes the marker on `stored_secrets: false`.
   - The new key arrives pending, and an owner or administrator approves it after
     comparing the fingerprint `qory` printed. A re-key while another key is pending is
-    `409` `key_rotation_pending`, unless the administrator rejects the pending one first.
+    `409` `key_rotation_pending`. The administrator's order for a re-key while a key is
+    pending: create the re-key code first, which blocks self-signed rotation, then reject
+    the pending key, then run `rekey`.
   - On approval the old key enters the usual 24-hour window. For a lost or compromised
     secret the administrator ends the window at once, which retires the old key
     immediately.
-  - With `--print`, `qory` writes no file and prints `QORY_ACCESS_KEY_SECRET`,
+  - With `--print`, `qory` writes no file, the marker included, and prints
+    `QORY_ACCESS_KEY_SECRET`,
     `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY` for a fleet's settings (Rotation of
     a shared key). With the secret held in `QORY_ACCESS_KEY_SECRET` or a file
     descriptor, `rekey` and `rotate` run only with `--print`.
@@ -799,10 +829,12 @@ a revoked access key gets `401`.
     is approved, and `qory` moves `access-key-secret.next` over `access-key-secret`; when
     `pending_key` is, it awaits approval, and the run uses the current secret; when
     neither is, the key was rejected or retired, and `qory` moves `.next` aside under a
-    name with the time and says to rotate afresh. When the current secret gets `401`,
-    such as after its window ended, `qory` reads discovery under the new key instead, and
-    a signed `200` approves it. On any unsigned answer `qory` leaves both files and
-    reports.
+    name with the time and says to rotate afresh, or, for a key a re-key brought, to ask
+    for a new re-key code. When the current secret gets `401`, such as after its window
+    ended, `qory` reads discovery under the new key instead: a signed `200` whose
+    `current_key` is the new key's fingerprint approves it, and one that names another
+    key means the new key was approved and since replaced, which `qory` promotes and
+    reports. On any unsigned answer `qory` leaves both files and reports.
   - A key a fleet shares, or one held in `QORY_ACCESS_KEY_SECRET`, is rotated by its
     operator with `--print`, and the 24-hour window covers the whole fleet.
   - A planned rotation therefore keeps every run working: every run or job started
@@ -858,8 +890,8 @@ every value the server stores for that access key.
   lies inside one of the runner's files, resolved through symbolic links:
   `mount_contains_runner_files`, with the path. The runner's files are:
   - the runner file's directory, with the secret, `machine-id`, the marker,
-    `enrolment-pending`, the pinned labels and the lock files, whether or not the runner
-    file configures a server;
+    `enrolment-pending`, `rekey-pending`, the pinned labels and the lock files, whether or
+    not the runner file configures a server;
   - the directory of every integration program, every tool program, the `docker` command
     the wall runs and the wall's helper binary, the directory and not only the file, so
     an interpreter, a module or a configuration beside a program is covered too; a
@@ -972,7 +1004,8 @@ every value the server stores for that access key.
 
   Every fixture published here is refused in production: `qory` refuses the fixture
   access key secret, the server refuses the fixture access key at enrolment,
-  `key_invalid`, and the fixture signing key as a pin and as its own key.
+  `key_invalid`, and the fixture signing keys, current and next, as a pin and as its own
+  key.
 - **Public keys enrolment refuses**, a test list. The points of small order are eight. Their
   canonical encodings and the six non-canonical encodings a lenient decoder accepts are
   fourteen; the canonical-encoding check refuses the six and the small-order check the
@@ -1115,7 +1148,10 @@ the machine pins:
   3. The switch: `APIARY_SIGNING_SECRET` takes the next value, and
      `APIARY_NEXT_SIGNING_SECRET` is unset.
   4. A code carries the fingerprint of the key that was signing when the code was made,
-     and of the next key during a rotation; every outstanding code ends at the switch.
+     and of the next key during a rotation. Enrolment's step 4 accepts a code only when
+     its fingerprints are the current and next keys', so every outstanding code ends at
+     the switch, and when the next key is replaced or unset. Every node of the server
+     switches together.
   5. A machine whose pin lacks the new key gets `answer_unsigned` until its pin is
      updated.
   6. The retired public key is removed from every pin. After the switch the server signs
@@ -1556,25 +1592,25 @@ and on the secrets request alike, decided by one resolver.
 
 **The holder and its variant.** The labels select a holder within the access key's
 workspace only; labels that select no holder there, such as a repository the workspace
-does not hold, get the workspace's baseline, as today. The
-server stores a rendering, with its digest, per holder and variant. There are two
-variants: the full rendering, and one with every connection that references a stored
-value left out. The server picks the variant from the key row's stored-secrets flag
-alone: the full one for an access key allowed stored secrets, the other for any other
-key. The key row alone selects it.
-On every answer that carries them, the GET's and the events endpoint's alike,
+does not hold, get the workspace's baseline, as today. The server stores a rendering, with
+its digest, per holder and variant. There are two variants: the full rendering, and one
+with every connection that references a stored value left out. The server picks the
+variant from the key row's stored-secrets flag alone: the full one for an access key
+allowed stored secrets, the other for any other key. The key row alone selects it. On
+every answer that carries them, the GET's and the events endpoint's alike,
 `X-Qory-Run-Configuration` is the digest of the access key's variant, and
 `X-Qory-Configuration` that of the discovery document for the access key and the key the
-request verified under, so an access key without stored secrets reloads only when its own
-variant changes. The variant without stored values lists what it left out in the optional
-member `withheld`,
-by `id`, `kind` and `name`, and omits `withheld` when it left nothing out, so a holder
-without stored-value connections has one rendering, and one digest, for both variants.
-It keeps `connections`, even `[]`, whenever the full rendering has it, since an absent
-member would put the runner file's connections in force. The runner
-reports them in `policy_applied` as `connections_withheld`, and they raise no
-`connection_needs_wall` or `secrets_endpoint_missing`. When leaving them out leaves a
-required group of the run's runtime unmet, `runtime_secret_missing` applies as usual.
+request verified under. A running run therefore reloads once whenever its own variant or
+its own discovery document changes, and every key event of its access key, an approval, a
+rejection, a rotation, a re-key or an enabling of the flag, changes that document. The
+variant without stored values lists what it left out in the optional member `withheld`, by
+`id`, `kind` and `name`, and omits `withheld` when it left nothing out, so a holder
+without stored-value connections has one rendering, and one digest, for both variants. It
+keeps `connections`, even `[]`, whenever the full rendering has it, since an absent member
+would put the runner file's connections in force. The runner reports them in
+`policy_applied` as `connections_withheld`, and they raise no `connection_needs_wall` or
+`secrets_endpoint_missing`. When leaving them out leaves a required group of the run's
+runtime unmet, `runtime_secret_missing` applies as usual.
 
 ```json
 {"version": 1,
@@ -1716,7 +1752,9 @@ All under `contracts/runner/v1`, so one pin covers them:
   `secrets-answer.schema.json`, its answer, the envelope; `sealed-plaintext.schema.json`,
   the plaintext the envelope opens to; `enrolment.schema.json`, the enrolment's body and
   its answer, with `approved` and `stored_secrets` required; `rekey.schema.json`, the
-  re-key's body and its answer; and `access-key.schema.json`, the rotation's body;
+  re-key's body and its answer, which requires every member: `version`, `access_key_id`,
+  `approved`, `stored_secrets` and `apiary_public_key`; and `access-key.schema.json`, the
+  rotation's body;
 - `events/run.refused.schema.json` and `events/run.policy_applied.schema.json`, with
   `connections` and `uses`. An event has no member for the machine id: the server takes
   it from the POST's signed line;
@@ -1787,10 +1825,12 @@ set, as for the pin.
 - **Unsigned headers.** The signature covers the access key id, the machine id, and the
   method, the target and the timestamp of a GET, or the method, the target and the body of
   a POST. `User-Agent`, `Content-Type`, `X-Qory-Contract-Version`, `X-Qory-Machine-Name`,
-  `X-Qory-Delivery` and `X-Qory-Run-Configuration` are unsigned. The server decides from
-  the signed lines and body alone: the contract version lets it refuse a revision it
-  lacks, the display name is for display alone, outside the audit log's identities, and
-  the delivery id and the run-configuration digest of an events POST are hints the signed
+  `X-Qory-Delivery` and `X-Qory-Run-Configuration` are unsigned. The server takes every
+  authorisation decision from the signed lines and body. It reads one unsigned header to
+  decide: the contract version, which only selects a revision, so a changed value gets a
+  `400` or another revision's answer, signed all the same and bound to the request. The
+  display name is for display alone, outside the audit log's identities, and the
+  delivery id and the run-configuration digest of an events POST are hints the signed
   events repeat. `X-Qory-Access-Key-Id` selects the key the signature must verify under,
   and is signed as well.
 - **Known answers**, under the fixture access key secret and machine id (Decision 5):
@@ -1825,7 +1865,7 @@ and `X-Qory-Machine-Name` here.
 
 - `code` is an enrolment code, `qec_`, 26 Crockford base32 characters, 130 random bits,
   then `.` and the fingerprint of the server's public key, and during a rotation of the
-  server's key a second `.` and the next key's fingerprint (Decision 4). `qory` sends it,
+  server's key a second `.` and the next key's fingerprint (Decision 6). `qory` sends it,
   and the proof covers it, in its normalised form: the 26 characters in upper case, `I`
   and `L` read as `1`, `O` as `0`, and hyphens removed, so a person may type it in either
   case and in groups. `U` and every character outside Crockford's alphabet are refused.
@@ -1849,9 +1889,11 @@ request is in the body:
 2. `429` per source address;
 3. `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is not
    JSON, fails its schema, a code outside the pattern included, or has another `version`;
-4. `401` for a code it did not issue, or that is used or expired, the whole code compared,
-   fingerprints included; then `401` for a `timestamp` outside ±300 seconds. A used code
-   passes this step for a retry with the same public key while the code is valid;
+4. `401` for a code it did not issue, or that is used, expired or cancelled, the whole
+   code compared; for a code whose first fingerprint is not the server's current signing
+   key's, or whose second, when present, is not its next key's; then for a `timestamp`
+   outside ±300 seconds. A used code passes this step for a retry with the same public
+   key for 15 minutes after its first use;
 5. `429` per code;
 6. `409` `key_invalid` for a `proof` that does not verify, then for a key the checks
    refuse or the index holds (Decision 4);
@@ -1883,6 +1925,15 @@ The answer above, without spaces, is 190 bytes, SHA-256
 bytes, and `X-Qory-Signature-Ed25519` is
 `yCgKNLXJxfaPS0yTNhHiwYbLrTPc09nYkuGBJX4COykQZEgd-NIjBGbo5s87fBJNYBZoRZxwlZK4joHgI4ZDBQ`.
 
+A code made during a rotation of the server's key carries both fingerprints. With a
+fixture next signing key from the seed of bytes 161 to 192,
+`oaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-v8A`, public key
+`C0eCPnEJXdWb54rCccV27zifh7ZFYasHz5pOvNAtIEE`, fingerprint `52vzzF--Ic7qH_eZWi5K2A`,
+which production refuses as it refuses every fixture, the code is
+`qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A`. Over it,
+with the body's other members as above, the five lines are 162 bytes, and `proof` is
+`R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg`.
+
 ### Re-key
 
 A POST to `<url>/.well-known/qory-rekey`, beside enrolment's path. The re-key code and the
@@ -1911,7 +1962,7 @@ The order is enrolment's, with these steps changed:
 
 - step 4 is also `401`, unsigned, for an access key id other than the code's, and for a
   code whose access key is revoked or deleted, which ends its codes; a used code passes
-  for a retry with the same public key while the code is valid;
+  for a retry with the same public key for 15 minutes after its first use;
 - after step 5, an access key that is itself awaiting approval is `409` `key_pending`:
   the administrator rejects it and enrols afresh instead;
 - step 6 is `409` `key_invalid` for a `proof` that does not verify; then `409`
@@ -1920,12 +1971,14 @@ The order is enrolment's, with these steps changed:
   holds, this access key's current key, old key and tombstones included;
 - step 7 keeps the key as the access key's pending key, with its sequence number, uses
   the code, and answers `202` with enrolment's members: `access_key_id`, `approved`,
-  `stored_secrets` and `apiary_public_key`. A retry gets this `202` again, built afresh
-  from the access key's current state.
+  `stored_secrets` and `apiary_public_key`. Here `approved` says whether the posted key
+  is the access key's current key: `false` while it is pending. A retry gets this `202`
+  again, built afresh: `approved: true` once the key is current, and `401` once it is
+  retired.
 
 `qory` verifies the answer as at enrolment: under the entry of `apiary_public_key` whose
 fingerprint the code carries first, pinning only the entries the code's fingerprints
-name, and writing the pin when none exists.
+name, and writing the pin only where none exists.
 
 Known answers, under the new key of Rotation's known answer and the fixture signing key:
 the five lines are 150 bytes, and `proof` is
@@ -2280,7 +2333,8 @@ Order at run start; the steps not listed are §Sequence's.
    no run, `unauthorized`. Ping. When discovery lists `secrets` and the run has no wall:
    `server_needs_wall`. When it lists `secrets`, the runner reports that to its caller,
    and `qory` writes the `stored-secrets` marker; a marker it cannot write is no run.
-   When it lists `key_rotation_required`, `qory` says to re-key with a code (Decision 4).
+   When it lists `key_rotation_required`, `qory` gives one of Decision 4's three
+   messages, from `current_key` and `pending_key`.
    Before discovery, `qory` checks the run's labels against the checkout's pinned ones,
    `labels_changed`, and its `machine-id` file.
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
@@ -2339,7 +2393,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `rate_limited` | server, `429` | the access key's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing key row is `401` |
 | `key_invalid` | server, `409` | at enrolment, re-key, paste or rotation, about a public key: a `proof` that does not verify; a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; or a key the index holds, any access key's current, pending or old key or any tombstone, this access key's own included. One answer for all, so a refusal reveals nothing about other access keys |
-| `key_pending` | server, `409` | on every signed endpoint, discovery and events included, after the machine id's `400`: a request under a new access key that awaits approval, its only key; at re-key, an access key that awaits approval itself |
+| `key_pending` | server, `409` | on every signed endpoint except `access_key.url`, which answers `401`, discovery and events included, after the machine id's `400`: a request under a new access key that awaits approval, its only key; at re-key, an access key that awaits approval itself |
 | `key_rotation_pending` | server, `409` | a rotation or a re-key while another new key awaits approval, or a rotation while a re-key code for the access key is outstanding |
 | `key_rotation_required` | server, `409` | while the stored-secrets flag is set, the secrets request or a rotation signed by a key the server received before the flag's last enabling, whatever other keys the access key holds |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
@@ -2530,6 +2584,16 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   `key_rotation_pending`, and a rejected key becomes a tombstone that stays refused when
   posted again; `qory` moves `.next` aside only when signed discovery shows that key
   neither current nor pending, and leaves both files on any unsigned answer.
+- **This round's rules:** `--print` leaves the marker as it is; a second `rekey` with the
+  same code within 15 minutes re-posts the pending key and gets the same `202`, and with
+  another code moves `.next` aside; a machine whose new key is pending keeps using its
+  current key; a retry of a re-key gets `approved: true` once its key is current and
+  `401` once it is retired; with a pin that holds none of a code's fingerprints,
+  `enrol` and `rekey` refuse before generating a key; a code whose fingerprints are not
+  the server's current and next keys' is `401`, the two-fingerprint known answer
+  included once the next key changes; a used code passes for a retry for 15 minutes
+  after its first use; a cancelled code is `401`; Settings refuses to enable stored
+  secrets on an access key that awaits approval.
 - **Stored secrets enabled later:** while the flag is set, the secrets request, and a
   rotation, under a key the server received before the flag's last enabling are
   `key_rotation_required`, whatever other keys the access key holds, the old key of a
