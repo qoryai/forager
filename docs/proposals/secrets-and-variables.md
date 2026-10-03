@@ -81,9 +81,9 @@ through `X-Qory-Contract-Version`.
 - **Integrations** are started as `<program> <role> -- [arguments]` and receive their
   secrets as a settings document on standard input, always one document, `{}` when
   empty, written from a goroutine; anything they write to standard error is reported with every
-  value of that document, every line of a multi-line value and the returned credential
-  redacted. `describe`'s name must equal the connection's, and its version is checked
-  for compatibility.
+  value of that document, every line of 8 bytes or more of a multi-line value and the
+  returned credential redacted. `describe`'s name must equal the connection's, and its
+  version is checked for equality.
 - **Services** have exact hosts, no argument, and a scheme from the closed set; header
   names are checked against a data file, `headers.json`.
 - **A host the policy denies** does not refuse the run: the value is never set there, and
@@ -102,7 +102,8 @@ through `X-Qory-Contract-Version`.
   `secrets.local` file or a runtime's credential file is refused, and a `secrets.local`
   `env:` source never enters the enclosure, a tool or an integration.
 - **Integrations** can be bounded by the machine (`arguments`, `settings`), and their
-  settings are checked against their own description.
+  settings are checked against their own description. A server-sent integration that
+  references a machine value needs both bounds.
 - **One secret per machine.** The access key's secret and the runner key give way to
   one machine secret, `QORY_MACHINE_SECRET` or the file `machine-secret`: an Ed25519 key
   that signs every request and, converted to X25519, opens sealed values. The server
@@ -126,7 +127,16 @@ through `X-Qory-Contract-Version`.
 - **Every no-run after the ping** emits `dev.qory.run.refused`, a tool or an integration
   that does not start included.
 - **Who may link**: only owners and administrators link a secret into a connection,
-  define a custom service or enable stored secrets on a machine.
+  define a custom service, edit variables or enable stored secrets on a machine.
+- **Enabling stored secrets forces a rotation**: the server seals only to a key approved
+  after the flag was last enabled, so a key an earlier unwalled agent could have read
+  never receives a stored value (Decision 4).
+- **A machine without stored secrets** receives the holder's rendering with every
+  connection that references a stored value left out, and reports them by name
+  (Decision 6).
+- **One workspace per machine** in 0.7.0.
+- **Runtimes deny names**: a descriptor's `denies` lists variables the server may never
+  set for that runtime, such as Claude Code's endpoint and shell variables.
 - **Value ids and titles**: a value of a multi-valued secret is addressed by `value_id`,
   and a declaration's human name is `title`.
 - **Claude Code's declarations** have `paths: [/v1/*]` and `credential_files`.
@@ -167,6 +177,10 @@ through `X-Qory-Contract-Version`.
   | `integration` | `roles.credential.hosts` of the program's `describe` | the program's answer: scheme and paths |
   | `service` | the definition's exact hosts | the definition's scheme |
 
+- **A holder** is what the server renders a run configuration for: a workspace's
+  baseline, or a repository of the workspace that has rules, connections or variables of
+  its own. The run's labels select the holder within the machine's workspace, and the
+  server keeps every rendering of a holder with its digest (Decision 6).
 - **Where connections come from.** A run configuration's `connections`, when the member
   is present, even as an empty array, is the server's whole set. When the run
   configuration has no `connections` member, or the run has no run configuration (no
@@ -192,32 +206,43 @@ server, then the machine. There is no level per kind of run.
 - The server sends each variable with its value and `locked`. A level that locks a
   variable stops every level below it from overriding it; the server's resolution
   honours locks among its own levels, and the runner honours `locked` for the machine's.
+- `locked` is true when any server level of the chain locks the name, and the value sent
+  is then the topmost locking level's. A lock always carries a value. Whether a lower
+  level may still save a value under a lock is the server's to decide.
 - The machine's level is what the run sets on the machine: `wall.env` in `runner.yaml`,
   `--env`, the harness's composed launch and what the runtime's `Prepare` sets, the names
   a new `session.Spec` field lists (Issues, item 2).
-- A machine value replaces an unlocked variable. Where a machine value meets a locked
-  one, the server's value wins.
+- A machine value replaces an unlocked variable. Where a value from `wall.env` or `--env`
+  meets a locked one, the server's value wins. A name the runtime's `Prepare` or the
+  harness's launch sets wins even over a locked variable, because the runtime needs it;
+  the server's variable is then left out and reported in `denied`.
 - Two sources for one name never refuse a run. `dev.qory.run.policy_applied` reports, by
   name only, every variable a machine value replaced and every locked one that kept the
   server's value against a machine value (Events).
 
 **Denied names.** A machine accepts every variable the server sends except the names of a
-deny list: the built-in list below, and the names the machine's owner adds in the runner
-file, `variables.deny: [NAME, PREFIX_*]`.
+deny list: the built-in list below, the run's runtime's `denies` (Runtimes), and the
+names the machine's owner adds in the runner file, `variables.deny: [NAME, PREFIX_*]`.
 
 - A denied variable is left out of the run and reported by name. The run is never
   refused, and that holds for a locked variable too.
-- Matching ignores case, because programs read `http_proxy` and `HTTP_PROXY` alike; `*`
-  matches any run of characters.
+- An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character
+  other than `*`. It matches a whole name: `*` matches any run of characters, the empty
+  run included, anywhere in the entry. Matching ignores case, because programs read
+  `http_proxy` and `HTTP_PROXY` alike.
 - The list applies to the server's variables only, never to what the machine sets
   itself, and it applies with and without a wall.
 - The reason: in an unwalled run a server-sent `LD_PRELOAD` runs code as the developer,
   and in a walled one these names would undo the wall's own set-up: its proxy, its trust
   bundle, its Docker configuration and the program the launch starts.
-- No such list is complete; a machine's owner adds what else its tools read. The server
-  vendors the built-in list as `denied-variables.json` and refuses such a variable when
-  it is saved; the names a machine adds, and those it sets through `Docker.CAEnv`, are
-  the machine's, so the server's check is partial.
+- No such list is complete; a machine's owner extends it with `variables.deny`.
+- The server vendors the built-in list as `denied-variables.json`,
+  `{"version": 1, "names": [...], "patterns": [...]}`, under the same matching rule. It
+  holds every row of the table except two, which depend on the machine and the run: the
+  names `Docker.CAEnv` sets, and the runtime's `declares`, `reserves` and `denies`, which
+  come from `runtimes.json`. The server refuses a name the file covers when it is saved,
+  and warns about a name a catalogued runtime declares, reserves or denies, or a
+  placeholder of the holder's connections; the runner leaves both out anyway.
 
 | Category | Name | Why |
 |---|---|---|
@@ -236,6 +261,8 @@ file, `variables.deny: [NAME, PREFIX_*]`.
 | Start-up, Perl | `PERL5LIB`, `PERLLIB` | where Perl finds modules |
 | Start-up, Ruby | `RUBYOPT` | switches for every Ruby, `-r` loading a library |
 | Start-up, Ruby | `RUBYLIB` | where Ruby finds libraries |
+| Start-up, Ruby | `GEM_PATH`, `GEM_HOME` | where Ruby loads gems from |
+| Start-up, Ruby | `BUNDLE_GEMFILE` | which Gemfile, itself Ruby code, Bundler runs |
 | Start-up, Java | `JAVA_TOOL_OPTIONS` | options every JVM reads, `-javaagent` included |
 | Start-up, Java | `_JAVA_OPTIONS` | the same, read by HotSpot |
 | Start-up, Java | `JDK_JAVA_OPTIONS` | the same, read by the `java` launcher |
@@ -244,7 +271,13 @@ file, `variables.deny: [NAME, PREFIX_*]`.
 | Start-up, Erlang | `ERL_AFLAGS`, `ERL_ZFLAGS`, `ERL_FLAGS` | flags for every `erl`, `-eval` included |
 | Start-up, Erlang | `ERL_LIBS` | where Erlang finds applications |
 | Start-up, build tools | `GOFLAGS` | `-toolexec` runs a program for every step of a Go build |
-| Start-up, build tools | `RUSTC_WRAPPER` | Cargo runs it in place of the compiler |
+| Start-up, build tools | `GOENV` | a Go environment file, which can set `GOFLAGS` |
+| Start-up, build tools | `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER` | Cargo runs it in place of the compiler |
+| Start-up, build tools | `CARGO_TARGET_*_RUNNER` | Cargo runs it to start every program and test it builds |
+| Start-up, build tools | `CARGO_TARGET_*_LINKER` | Cargo runs it to link |
+| Start-up, build tools | `CC`, `CXX` | the compiler make, cgo and build scripts start |
+| Start-up, build tools | `MAKEFLAGS` | options and variable assignments for every make, `SHELL` among them |
+| Start-up, build tools | `MAVEN_OPTS`, `GRADLE_OPTS` | JVM options for the build, `-javaagent` included |
 | Shell | `BASH_ENV` | a file bash runs at the start of every non-interactive shell |
 | Shell | `ENV` | the same for an interactive POSIX shell |
 | Shell | `PROMPT_COMMAND` | a command bash runs before each prompt |
@@ -254,6 +287,7 @@ file, `variables.deny: [NAME, PREFIX_*]`.
 | Shell | `PS4` | expanded, command substitutions included, on every traced line |
 | Shell | `BASH_FUNC_*` | bash imports exported functions from it, which can replace any command |
 | Shell | `CDPATH` | moves a script's relative `cd` elsewhere |
+| Shell | `ZDOTDIR` | zsh reads its start-up files, `.zshenv` first, from it |
 | Programs others start | `EDITOR`, `VISUAL` | git, crontab and others start it to edit a file |
 | Programs others start | `PAGER`, `MANPAGER` | started to page output |
 | Programs others start | `LESSOPEN`, `LESSCLOSE` | `less` runs them on every file it opens and closes |
@@ -268,6 +302,23 @@ file, `variables.deny: [NAME, PREFIX_*]`.
 | Routing and trust | `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE` | the trust of curl, Python Requests, Node and the AWS SDKs, which the wall sets the same way |
 | Routing and trust | `NODE_TLS_REJECT_UNAUTHORIZED` | `0` turns off certificate checks in Node |
 | Routing and trust | `GODEBUG` | its settings turn insecure TLS and X.509 behaviour back on in every Go program |
+| Routing and trust | `PYTHONHTTPSVERIFY` | `0` turns off certificate checks in Python builds that honour it (PEP 493) |
+| Routing and trust | `OPENSSL_CONF` | an OpenSSL configuration, which can load engines and providers and change trust |
+| Routing and trust | `OPENSSL_ENGINES`, `OPENSSL_MODULES` | where OpenSSL loads engines and providers from |
+| Routing and trust | `CURL_HOME` | where curl reads `.curlrc`, which can set a proxy or turn off verification |
+| Routing and trust | `WGETRC` | the same for wget |
+| Routing and trust | `HOSTALIASES` | a file of host aliases the glibc resolver reads |
+| Routing and trust | `RES_OPTIONS`, `LOCALDOMAIN` | resolver options and search domains, which change where a short name leads |
+| Cloud configuration | `KUBECONFIG` | a kubeconfig, whose `exec` entries start credential programs and whose clusters receive credentials |
+| Cloud configuration | `AWS_CONFIG_FILE` | an AWS configuration, whose `credential_process` starts a program |
+| Cloud configuration | `AWS_SHARED_CREDENTIALS_FILE` | which credentials AWS tools send |
+| Package managers | `npm_config_node_options` | Node options for the scripts npm runs |
+| Package managers | `npm_config_script_shell` | the shell npm runs scripts with |
+| Package managers | `npm_config_userconfig`, `npm_config_globalconfig` | which npm configuration file is read, and it can set every other npm setting |
+| Package managers | `npm_config_strict_ssl`, `npm_config_cafile`, `npm_config_ca` | npm's trust |
+| Package managers | `PIP_CONFIG_FILE` | which pip configuration file is read |
+| Package managers | `PIP_CERT` | pip's trust store |
+| Package managers | `PIP_TRUSTED_HOST` | hosts pip reaches without verifying their certificates |
 | Routing and trust | every name `Docker.CAEnv` sets | the machine's own names for the run's bundle |
 | Identity and lookup | `PATH` | which program a name starts; the enclosure resolves the launch's program through it (§Images) |
 | Identity and lookup | `HOME` | where programs read their configuration: `.bashrc`, `.gitconfig`, `.npmrc` |
@@ -277,11 +328,14 @@ file, `variables.deny: [NAME, PREFIX_*]`.
 | Identity and lookup | `XDG_*` | where programs read configuration and data and keep runtime files |
 | Reserved, for completeness | `QORY_*` | the runner's own, `QORY_MACHINE_SECRET` included |
 | Reserved, for completeness | the run's runtime's `declares` and `reserves` | the stand-in or an empty value goes there (Runtimes) |
+| Runtime | the run's runtime's `denies` | names that move the runtime's model credential or run its commands (Runtimes) |
 
-`MALLOC_*` is not on the list: it changes glibc's allocator checks and loads no code.
-Package-manager settings, such as `PIP_INDEX_URL` or `npm_config_registry`, are not on
-the list either: they are ordinary variables a team sets for a mirror, and the egress
-policy bounds where they lead.
+`MALLOC_*` is left off the list: it changes glibc's allocator checks and loads no code.
+Package-manager settings that only choose a mirror, such as `PIP_INDEX_URL` or
+`npm_config_registry`, stay allowed: a team sets them for a mirror, and the egress policy
+bounds where they lead. Settings that run a program, load a configuration file or change
+trust are denied, as the table lists. The list cannot be complete, and a machine's owner
+extends it with `variables.deny`.
 
 **Also left out, the same way:** a server variable with the name of a placeholder of this
 run, a declaration's `name` or an integration's, where the placeholder wins; and one a
@@ -292,7 +346,8 @@ left out and reported.
 **The machine's own environment** keeps three refusals, because they keep the machine's
 secrets and the stand-ins out of the enclosure. A run whose environment passes a `QORY_`
 variable, or a variable a `secrets.local` value reads, into the enclosure is no run,
-`variable_reserved`. One whose environment contains a variable the run's runtime declares
+`variable_reserved`. `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets
+for the session, are exempt. One whose environment contains a variable the run's runtime declares
 or reserves is `runtime_secret_conflict` (Runtimes). One that passes a value for a
 placeholder is `placeholder_conflict`.
 
@@ -306,8 +361,9 @@ placeholder is `placeholder_conflict`.
   run already started keeps what it received.
 - **Names** are variable-style, `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, for secrets, variables
   and an external reference's lookup key, `secrets.local` names included. A server
-  refuses on save, within a workspace, two secrets or two variables whose names differ
-  only in case.
+  refuses on save, within a workspace, two secrets whose names differ only in case, and,
+  at the level being saved, two variables in one chain of levels whose names differ only
+  in case.
 - **No duplicates.** Two connections with one `id`, or two runtime connections for one
   runtime name, is no run: `connection_duplicate`, `runtime_connection_duplicate`. The
   run configuration is decoded with `encoding/json/v2`, which refuses a member name twice
@@ -332,8 +388,9 @@ placeholder is `placeholder_conflict`.
 - **Request freshness.** The secrets request contains a `timestamp` the server accepts
   within ±300 seconds.
 - **Resealing.** The server records the first payload it seals for a machine and a run
-  id, with its digest and set of connections. It seals again for that pair only with the
-  same digest and set (else `409` `run_secrets_conflict`), and
+  id, with its digest, its set of connections and the key the request verified under. It
+  seals again for that pair only with the same digest, set and key (else `409`
+  `run_secrets_conflict`), and
   only until the first payload's `exp` (else `409` `run_secrets_expired`). A run whose row
   the server has already closed receives nothing: `410` `run_closed`.
 - **A new run id per attempt.** A caller mints a new run id for every attempt to start a
@@ -342,7 +399,8 @@ placeholder is `placeholder_conflict`.
   holder's current one, or for one superseded at most 15 minutes ago, and for an older one
   no longer: `410` `run_configuration_superseded`. From a superseded rendering it seals a
   value only when the holder's current rendering still references it through the same
-  connection, so removing a link takes effect at once.
+  connection, so removing a link takes effect at once. A holder has two renderings at a
+  time, one per variant (Decision 6), and these rules apply to each.
 - **Reload.** The runner reads `connections` and `variables` from the run-start fetch
   only. A reload's document may contain them, changed or not, or omit them; the runner
   ignores them either way, and each further `dev.qory.run.policy_applied` repeats the
@@ -373,10 +431,10 @@ placeholder is `placeholder_conflict`.
   `ANTHROPIC_API_KEY`, are never renamed.
 - **The secret.** One line: `qms_` and the 32-byte Ed25519 seed in base64url without
   padding, 47 characters. The prefix lets secret scanners recognise it. `qory` generates
-  the seed from the system's random source and reads the secret from
-  `QORY_MACHINE_SECRET`, from a file descriptor it is given, or from the file
-  `machine-secret` next to `runner.yaml`: `$XDG_CONFIG_HOME/qory/machine-secret`, else
-  `~/.config/qory/machine-secret`.
+  the seed from the system's random source and reads the secret from a file descriptor
+  it is given, else from `QORY_MACHINE_SECRET`, else from the file `machine-secret` next
+  to `runner.yaml`: `$XDG_CONFIG_HOME/qory/machine-secret`, else
+  `~/.config/qory/machine-secret`. The variable wins over the file.
 - **The file.** `qory` creates it with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0600`, in a
   directory of mode `0700`, and refuses a file whose mode grants anything to the group or
   to others, a file or directory owned by another user than the effective one, and the
@@ -417,16 +475,19 @@ placeholder is `placeholder_conflict`.
     machines page: single use, valid for minutes, bound to a workspace and to the
     machine's settings, and carrying the fingerprint of the server's public key. On the
     machine, `qory machine enrol <server> <code>` generates the secret, keeps it as
-    above, and posts the enrolment request (Wire format): the public key, a name, a
-    timestamp, the code, and a proof of possession, an Ed25519 signature under the new
-    key. The answer is signed with the server's key; `qory` verifies it against the key
-    whose fingerprint the code carries, then writes `machine_id` and
-    `apiary_public_key` into `runner.yaml`'s `server` section. The answer contains the
-    machine id and `approved: false`: the machine awaits approval, and an owner or
-    administrator compares the fingerprint `qory` prints with the one the machines page
-    shows before approving it. `qory machine enrol --print` writes no file and prints
-    `QORY_MACHINE_ID`, `QORY_MACHINE_SECRET` and `QORY_APIARY_PUBLIC_KEY` for a CI's
-    settings.
+    above, prints its fingerprint, and posts the enrolment request (Wire format): the
+    public key, a name, a timestamp, the code, and a proof of possession, an Ed25519
+    signature under the new key. When `machine-secret` exists, `qory` first moves it to
+    `machine-secret.old`, replacing an earlier one. The answer is signed with the
+    server's key; `qory` verifies it against the key whose fingerprint the code carries,
+    then writes `machine_id` and `apiary_public_key` into `runner.yaml`'s `server`
+    section. The answer contains the machine id, `approved: false` and `stored_secrets`,
+    the machine's stored-secrets flag; when the flag is set, `qory` writes the
+    `stored-secrets` marker (below). The machine awaits approval, and an owner or
+    administrator compares the fingerprint `qory` printed with the one the machines page
+    shows, and sees the settings the machine will get, before approving it.
+    `qory machine enrol --print` writes no file and prints `QORY_MACHINE_ID`,
+    `QORY_MACHINE_SECRET` and `QORY_APIARY_PUBLIC_KEY` for a CI's settings.
   - (b) **A pasted key.** `qory machine key` generates the secret, keeps it as above, and
     prints the public key and its fingerprint; with `--print` it writes no file and
     prints `QORY_MACHINE_SECRET` as well. An owner or administrator adds the machine in
@@ -437,15 +498,29 @@ placeholder is `placeholder_conflict`.
 
   A fingerprint is `base64url(SHA-256(raw public key)[:16])`, 22 characters, for the
   machine's key and the server's alike.
+- **A code and the server's key.** The server answers an enrolment under the key whose
+  fingerprint the code carries while it still holds that key. A change of the server's
+  key ends every outstanding code. The server keeps only the SHA-256 of a code; with 130
+  random bits a fast hash is enough.
 - **What enrolment refuses.** The server checks every public key it is given, enrolled,
-  pasted or sent for rotation: a canonical encoding, a point on the curve, not of small
-  order, and y ≠ 1, so u is defined (y = 1 is the identity, of small order already; the
-  check stays explicit because the conversion divides by 1 − y). Anything else is `409`
-  `machine_key_invalid`, the published fixture machine key included. A key that matches a
-  tombstone is `409` `machine_revoked`. Prime order needs no check of its own: the proof
-  of possession makes a key with a torsion component infeasible to enrol except by
-  chance, and even then it gives someone who already holds an enrolment code only what
-  enrolling a fresh key gives them.
+  pasted or sent for rotation, the pasted key included, which has no proof of
+  possession:
+  - a canonical encoding: decode, re-encode and compare the bytes, since a lenient
+    decoder such as `filippo.io/edwards25519` `SetBytes` accepts non-canonical encodings;
+  - a point on the curve;
+  - not of small order: [8]A is not the identity;
+  - of prime order: [ℓ]A is the identity, where ℓ is the order of the base point;
+  - y ≠ 1, so u is defined (y = 1 is the identity, of small order already; the check
+    stays explicit because the conversion divides by 1 − y).
+
+  Anything else is `409` `machine_key_invalid`, the published fixture machine key
+  included. The checks run on every path because a proof of possession proves nothing
+  for a key of small order: OpenSSL accepts the identity key with an all-zero signature
+  for any message. A key that matches a tombstone is `409` `machine_revoked`.
+- **Tombstones.** A tombstone holds a public key, its machine id and when the key was
+  retired: by revocation, by rotation or by the rejection of a pending key. It outlives
+  the deletion of its workspace and organisation, so the key never enrols again and the
+  id is never reused.
 - **Approval.** Every machine needs approval, and every new key of a machine needs
   approval before it is used. Until then every signed endpoint answers a request under
   that machine or that key with a signed `409` `machine_pending`, discovery included, and
@@ -454,28 +529,52 @@ placeholder is `placeholder_conflict`.
   with a code awaits approval; a pasted key is approved as it is entered. Approval always
   applies, so no setting of the server turns it off.
 - **Machine settings.** What the server sets per machine row: whether the machine may
-  receive stored secrets, off by default and enabled only by owners and administrators;
-  its rate limits; and its scope, one workspace or, in the commercial editions, an
-  organisation and selected workspaces of it. Discovery is per machine and lists
-  `secrets` only for a machine allowed stored secrets. A developer's own machine keeps
+  receive stored secrets, off by default and enabled only by owners and administrators,
+  with when it was last enabled; its rate limits; and its workspace. In 0.7.0 a machine
+  belongs to exactly one workspace in every edition, and a fleet that serves several
+  enrols once per workspace; scoping a machine to an organisation and selected
+  workspaces is a later option of the commercial editions, with an explicit rule for
+  choosing the workspace. Discovery is per machine and lists `secrets` only for a machine
+  allowed stored secrets. A developer's own machine keeps
   unwalled runs; a CI or shared machine receives stored secrets and runs walled. A fleet
   that wants one identity shares one machine secret through its secret store.
+- **Enabling stored secrets forces a rotation.** A secret an earlier unwalled agent read
+  must never unlock stored values, so the server seals only to a key approved at or
+  after the time the machine's stored-secrets flag was last enabled; that time is in the
+  machine row and its integrity code. A machine whose key is older gets `409`
+  `key_rotation_required` on the secrets request, and signed discovery lists
+  `secrets` and `key_rotation_required: true` for it. `qory` then writes the
+  `stored-secrets` marker before it generates the new key, so no unwalled run can see
+  that key, and rotates as below. A key that enrols, or is pasted, while the flag is
+  set is approved after it and needs no rotation.
 - **Rotation.** `qory machine rotate` generates a new secret, writes it to
-  `machine-secret.next`, mode `0600`, beside `machine-secret`, and posts the new public
-  key with a proof of possession by the new key, signed under the current secret (Wire
-  format). The new key needs approval; until then the current key keeps working, and a
-  later rotation replaces a new key that still awaits it. On approval the old key stays
-  valid for a fixed window of 24 hours, whatever the machine does, and then becomes a
-  tombstone; a request under the new key does not end it. An owner or administrator can
-  end the window early in the machines page, for example once a CI's secret store holds
-  the new secret. The machine id stays. Before each run while `machine-secret.next` exists, `qory` sends a discovery
-  request signed under the new key: a signed `409` `machine_pending` means the key awaits
-  approval, and the run uses the current secret; a signed `200` means it is approved, and
-  `qory` moves `machine-secret.next` over `machine-secret` and the run uses it. Any other
-  answer leaves both files as they are. A planned rotation therefore has no gap and no
-  failing run: every run or job started under the old key finishes within the window.
-  The one case left is a run longer than 24 hours that began before the approval.
-  Revocation, the action for a compromised key, is immediate and separate.
+  `machine-secret.next`, mode `0600`, beside `machine-secret`, prints the new key's
+  fingerprint, and posts the new public key with a proof of possession by the new key,
+  signed under the current secret (Wire format). The new key needs approval, given
+  after comparing that fingerprint with the machines page's; until then the current key
+  keeps working.
+  - Only the current key may rotate: during a window the old key's rotation request is
+    `401`. A second rotation while a new key awaits approval is `409`
+    `key_rotation_pending`; a repeat of the pending key's own request is answered as the
+    first was. An owner or administrator can reject a pending key without revoking the
+    machine, and a rejected key becomes a tombstone.
+  - On approval the old key stays valid for a fixed window of 24 hours, whatever the
+    machine does, and then becomes a tombstone; a request under the new key does not end
+    it. An owner or administrator can end the window early in the machines page, for
+    example once a CI's secret store holds the new secret. A machine has at most one old
+    key: approving a new key ends any window still open, and that old key becomes a
+    tombstone. The machine id stays.
+  - Before each run while `machine-secret.next` exists, `qory` sends a discovery request
+    signed under the new key: a signed `409` `machine_pending` means the key awaits
+    approval, and the run uses the current secret; a signed `200` means it is approved,
+    and `qory` moves `machine-secret.next` over `machine-secret` and the run uses it. Any
+    other answer leaves both files as they are. With the secret in `QORY_MACHINE_SECRET`
+    there is no file to promote: the operator rotates with `--print` and updates the
+    store, as for a CI machine.
+  - A planned rotation therefore has no gap and no failing run: every run or job started
+    under the old key finishes within the window. The one case left is a run longer than
+    24 hours that began before the approval. Revocation, the action for a compromised
+    key, is immediate and separate.
 - **Rotation on a CI machine.** The operator runs `qory machine rotate --print` with the
   current secret, which posts the new key, writes no file and prints the new
   `QORY_MACHINE_SECRET`; approves the new key in the machines page; within 24 hours,
@@ -485,11 +584,10 @@ placeholder is `placeholder_conflict`.
   matters: a job that signs with the new key before its approval is answered
   `machine_pending` and does not run.
 - **Revocation.** An owner or administrator revokes a machine in the machines page. A
-  revoked machine's requests do not verify, `401`, so the server seals nothing to it.
-  Its public key stays for good as a tombstone, with the machine id and when it was
-  revoked, so the key cannot enrol again and the id is never reused.
+  revoked machine's requests do not verify, `401`, so the server seals nothing to it, and
+  the runner reports the `401` as `unauthorized`. Its keys become tombstones.
 - **Unused machines.** The server may revoke a machine unused for a period it sets; the
-  machine then enrols again.
+  machine then enrols again with a new key, since the old one is a tombstone.
 - **What it protects, plainly.** The server stores public keys only, so reading its
   database no longer lets anyone act as a machine; writing to it could swap a public key,
   and the machine row's integrity code stops that (Decision 6). The machine key protects
@@ -507,14 +605,14 @@ every value the server stores for that machine.
   needs a wall: `server_needs_wall`, decided after the ping so the refusal reaches the
   server. Offline, a marker is the signal: when signed discovery lists `secrets`, `qory`
   writes an empty file `stored-secrets` next to `runner.yaml`, and while it exists `qory`
-  refuses every unwalled run, `--local` included; deleting the file restores unwalled
-  runs. In 0.7.0 stored secrets go only to walled runs; a credentials broker is a later
+  refuses every unwalled run, `--local` included, with the same code,
+  `server_needs_wall`; deleting the file restores unwalled runs. In 0.7.0 stored secrets go only to walled runs; a credentials broker is a later
   direction (Later: a credentials broker).
 - *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
   lies inside one of the runner's files, resolved through symbolic links:
   `mount_contains_runner_files`, with the path. The runner's files are:
-  - the directory of `runner.yaml` and `machine-secret`, when the runner file configures
-    a server;
+  - the directory of `runner.yaml` and `machine-secret`, whether or not the runner file
+    configures a server;
   - the directory of every integration program, every tool program, the `docker` command
     the wall runs and the wall's helper binary, the directory and not only the file, so
     an interpreter, a module or a configuration beside a program is covered too; a
@@ -552,7 +650,10 @@ every value the server stores for that machine.
   `hpke.DHKEM(ecdh.X25519())`, `hpke.HKDFSHA256()`, `hpke.AES256GCM()`; `NewRecipient`
   with `info`, then `Open` on the context with `aad`, since the single-shot `Open` takes
   no `aad`. The recipient's key is `DHKEM(ecdh.X25519()).NewPrivateKey` of the clamped
-  first 32 bytes of SHA-512(seed) (Decision 4). `NewSender` and `NewRecipient` refuse a
+  first 32 bytes of SHA-512(seed) (Decision 4). The server seals to the key the secrets
+  request verified under, so during a rotation's window a run that signs with the old
+  key receives an envelope it opens with the old key, and one that signs with the new
+  key an envelope for the new key. `NewSender` and `NewRecipient` refuse a
   low-order point; the server never meets one, because enrolment refuses an Ed25519 key
   of small order, and only such a key converts to a low-order u.
 - **Elixir.** `:crypto` alone implements base mode for this suite. The sealer converts the
@@ -562,9 +663,13 @@ every value the server stores for that machine.
   error independent of the OpenSSL build. Every seal uses a fresh ephemeral key; a seam
   that fixes it exists for the known-answer test only and is compiled out of production
   builds; a test checks that two seals of one plaintext have different `enc`.
-- **Encodings.** base64url without padding for every binary value. Enrolment and rotation
-  send the raw 32-byte Ed25519 public key. The server seals to its u-coordinate; no key
-  id travels, because the machine id implies the key.
+- **Encodings.** base64url without padding for every binary value, decoded strictly: a
+  value with padding, with a character of the standard alphabet (`+` or `/`), or with
+  non-zero bits after its last full byte is refused. Enrolment and rotation send the raw
+  32-byte Ed25519 public key. The server seals to its u-coordinate; no key id travels,
+  because the machine id and the request's signature imply the key.
+- **Signature verification.** Ed25519 everywhere is verified cofactorless, by RFC 8032,
+  refusing a non-canonical `R` and an `S` not below ℓ, as Go's `crypto/ed25519` does.
 - **Interoperability tests.** Each side checks its implementation against the CFRG
   `test-vectors.json` for this suite, base mode, the file Go vendors as
   `crypto/hpke/testdata/rfc9180.json`; the server's implementation passes it. Each side
@@ -583,7 +688,7 @@ every value the server stores for that machine.
   |---|---|
   | machine secret | `qms_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA`, the seed being bytes 1 to 32; machine id `mch_f1xt0re000000000` |
   | Ed25519 public key | `ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ`; fingerprint `ZbYGc9btiEvwHCwiLYKtoA` |
-  | X25519 private key | `cHiPGgzqABomMdrl0F29BiAI1bMPULnim-sqeCIokEQ`, the clamped first 32 bytes of SHA-512(seed) |
+  | X25519 private key | `cHiPGgzqABomMdrl0F29BiAI1bMPULnim-sqeCIokEQ`, the first 32 bytes of SHA-512(seed) with the clamping applied, as published |
   | X25519 public key | `SjgH0GTQdxgcwHCYnnaJHSDcpVWVSNwsd8GlAnOIKzg`, the u-coordinate of the Ed25519 public key |
   | ephemeral private key | `ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A` (bytes 33 to 64) |
   | run id, machine id, exp | `01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a`, `mch_f1xt0re000000000`, `1700000600` |
@@ -633,6 +738,13 @@ every value the server stores for that machine.
   | non-canonical: x = 0 with the sign bit set | `AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA` (y = 1), `7P________________________________________8` (y = p − 1) |
   | non-canonical: y = p, read as 0 | `7f_______________________________________38`, `7f________________________________________8` |
   | non-canonical: y = p + 1, read as 1 | `7v_______________________________________38`, `7v________________________________________8` |
+
+  A key with a torsion component passes the other checks and fails prime order:
+  `KH9r2npX9PKHPzv_Xl6pwmCmpjQ73zfHq800btWQTBE`, the fixture machine key plus the first
+  order-8 point above, canonical, on the curve, not of small order, and [ℓ]A not the
+  identity (verified with `filippo.io/edwards25519` and with big-integer arithmetic).
+  Enrolment refuses it, `machine_key_invalid`. The fixture machine key passes all five
+  checks and is refused only as a published fixture.
 
 - **Later.** X25519 is refused under `GODEBUG=fips140=only`. ML-KEM-768 with X25519,
   `0x647a`, is in the same Go package; it becomes another suite value, its ML-KEM key
@@ -691,8 +803,9 @@ whose exact bytes the server defines:
   no run;
 - an integrity code over each machine row: its id, its public key, and during a rotation
   the new key that awaits approval, or after the approval the old key and the end of its
-  window, its scope, its stored-secrets flag, its rate limits, its approval and whether
-  it is revoked. The server stores no secret of the machine, so
+  window, its workspace, its stored-secrets flag and when it was last enabled, its rate
+  limits, its approval and whether it is revoked. The server stores no secret of the
+  machine, so
   reading the database no longer lets anyone act as a machine; writing to it could swap
   a public key for one of the writer's own, and the code stops that, as it stops a
   writer who moves a machine to another workspace, enables stored secrets, approves a
@@ -701,19 +814,26 @@ whose exact bytes the server defines:
 - the machine row's code verified on every request, before the signature: a row whose
   code fails does not verify, `401`, unsigned, on every endpoint, so a writer cannot
   swap a key or un-revoke a machine for the GET or the events endpoint either;
+- an integrity code over each enrolment code row: the code's SHA-256, its workspace, the
+  settings the machine will get, its expiry and who issued it, so a writer cannot insert
+  a code that creates a machine of its choosing;
 - a per-row version inside the coded data, with the audit recording the current version
   of each row, so an older row restored over a newer one is detected unless the audit is
   rolled back with it;
 - audit of every change with before and after.
 
+Policy rules and variables carry no integrity code: they route no stored value, and the
+runner's deny list bounds what a variable can do.
+
 All codes use the same key, derived from the instance key with HKDF-SHA256. A connection
 or definition whose code fails refuses the render, and the holder keeps its last good
 rendering; a machine row whose code fails verifies nothing, so nothing is sealed to it.
 None of this stops a writer who has the instance key, nor a change made through the
-server's own pages, which is authorization's matter.
+server's own pages, which is authorisation's matter.
 
 **Who may route a value.** In 0.7.0 only owners and administrators may link a secret into
-a connection, define a custom service, or enable stored secrets on a machine. Linking
+a connection, define a custom service, edit variables, or enable stored secrets on a
+machine. Linking
 a secret needs the `secret.use` permission on it, which only owners and administrators
 hold. Finer roles are a later release.
 
@@ -730,8 +850,9 @@ the machine pins:
   Discovery for every verified machine lists the current public key, and during a
   rotation the next one too, `apiary_public_key: [{"alg": "ed25519", "public_key": "<32
   bytes, base64url>"}]`, for information only; the machines page shows it, and an
-  enrolment code carries its fingerprint. The published fixture signing key is refused
-  as a pin and as the server's key, as the fixture machine secret is.
+  enrolment code carries its fingerprint. The next key during a rotation is
+  `APIARY_SIGNING_SECRET_NEXT`. The published fixture signing key is refused as a pin and
+  as the server's key, as the fixture machine secret is.
 - The server signs every answer to a verified request with it, and every answer to an
   enrolment whose code it accepted: `X-Qory-Signature-Ed25519: <64 bytes, base64url>`,
   over the six lines of Signed answers. An answer to a request that did not verify, a
@@ -877,7 +998,30 @@ secrets:
       of: [api_key, oauth_token]
   reserves: [ANTHROPIC_AUTH_TOKEN]
   credential_files: [~/.claude/.credentials.json]
+  denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
+           ANTHROPIC_VERTEX_BASE_URL, ANTHROPIC_FOUNDRY_BASE_URL, ANTHROPIC_AWS_BASE_URL,
+           ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX,
+           CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_SHELL,
+           CLAUDE_CODE_SHELL_PREFIX, CLAUDE_ENV_FILE, CLAUDE_CONFIG_DIR,
+           CLAUDE_CODE_CLIENT_CERT, CLAUDE_CODE_CLIENT_KEY, CLAUDE_CODE_CERT_STORE]
 ```
+
+- **`denies`** lists variables the server may never set for the runtime; the runner leaves
+  such a variable out and reports it (Decision 1). For Claude Code, each name is checked
+  against its documentation's environment-variable reference and found in the
+  `claude` 2.1.288 binary:
+  - `ANTHROPIC_BASE_URL` and the `*_BASE_URL` of Amazon Bedrock, its Mantle endpoint,
+    Google Cloud's Agent Platform, Microsoft Foundry and Claude Platform on AWS move
+    where requests, and the model credential, go;
+  - `ANTHROPIC_CUSTOM_HEADERS` adds headers, an `Authorization` among them;
+  - `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and
+    `CLAUDE_CODE_USE_ANTHROPIC_AWS` switch to another provider and its credentials;
+  - `CLAUDE_CODE_SHELL` chooses the shell for Bash commands, `CLAUDE_CODE_SHELL_PREFIX`
+    wraps every command Claude Code starts, hooks included, and `CLAUDE_ENV_FILE` is a
+    script run before each Bash command;
+  - `CLAUDE_CONFIG_DIR` moves the settings, hooks included, and the credential file;
+  - `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY` and `CLAUDE_CODE_CERT_STORE`
+    change the client certificate and the trust of its TLS connections.
 
 - A declaration's `hosts` are exact DNS names, no wildcard, no IP literal; its `auth` is a
   scheme from the closed set; its optional `paths`, in the policy's path grammar, bound
@@ -963,14 +1107,14 @@ credential.
   to equal the connection's, else `integration_name_mismatch`, so a program registered
   under another name cannot answer for a connection. When the connection has a
   `version`, which a server's always has, `program_version` must equal it after removing
-  one leading `v`; `dev` never matches: `integration_version_mismatch`. This is a
-  compatibility check, not identity: `describe` is the program's own report
+  one leading `v`; `dev` never matches: `integration_version_mismatch`. This is a check
+  for equality, not of identity: `describe` is the program's own report
   about itself. Trust in the program rests on `qory`'s path and ownership checks; matching by
   name and version is enough, and a program digest recorded at install is a later option.
 - **Hosts** are `describe`'s `roles.credential.hosts`; a `*.` entry over a public suffix,
   the private section included, is `connection_host_public_suffix`. Scheme and paths come
   from the program's answer, `credential.schema.json`; a claim above the described hosts
-  is refused.
+  is refused, `integration_hosts_exceeded`.
 - **What the hosts bound.** For an integration, the hosts bound only where the proxy sets
   the credential the program produces. The program runs outside the wall and receives
   the raw value, and where it sends that value is the program's. The server chooses
@@ -980,8 +1124,9 @@ credential.
   `integration_argument_not_allowed`; and `settings`, per member a fixed value or
   `{pattern: <RE2>}`, a member the bound does not list being refused,
   `integration_settings_not_allowed`. A server-sent integration connection that
-  references a machine value needs an `arguments` bound; without one it is no run,
-  `integration_argument_not_allowed`. Before it writes standard input the runner also
+  references a machine value needs both bounds: without an `arguments` bound it is no
+  run, `integration_argument_not_allowed`, and without a `settings` bound its `settings`
+  must be `{}`, else `integration_settings_not_allowed`. Before it writes standard input the runner also
   validates the settings, with the secret values inlined so a required `writeOnly`
   member passes, against the program's own description, else
   `integration_settings_invalid`.
@@ -1117,8 +1262,10 @@ custom definitions on save and its built-in definitions in CI against the same f
 `secrets` is optional, `{url}` with `run.url`'s grammar, listed only for a machine allowed
 to receive stored secrets. `machine_key`, the same shape, is where the machine posts a new
 key (Rotation); it and `apiary_public_key` are listed for every verified machine, the key
-for information: a runner takes the key from its pin only. `run` is listed when the
-workspace has a policy, a connection or a variable.
+for information: a runner takes the key from its pin only. `key_rotation_required: true`
+is listed, beside `secrets`, for a machine whose key is older than its stored-secrets
+flag (Decision 4). `run` is listed when the workspace has a policy, a connection or a
+variable in force, its own or from a level above.
 
 ### The run configuration
 
@@ -1128,9 +1275,22 @@ policy the command passes, else observe everything: `dev.qory.run.policy_applied
 `source` `config` or `none` with `url` and `run_configuration`, a reload that brings a
 `security_policy` puts it in force and one that drops it puts the machine's back, and
 `--policy` keeps its meaning. Without `connections` the runner file's connections apply;
-a present `connections`, even `[]`, is the whole set. The request is the labels, and nothing else, as the query;
-labels the contract refuses are `400` `invalid_request` here and on the secrets request
-alike, decided by one resolver.
+a present `connections`, even `[]`, is the whole set. The request is the labels, and
+nothing else, as the query; labels the contract refuses are `400` `invalid_request` here
+and on the secrets request alike, decided by one resolver.
+
+**The holder and its variant.** The labels select a holder within the machine's
+workspace, and the server refuses a holder outside it, `409` `holder_out_of_scope`. The
+server stores a rendering, with its digest, per holder and variant. There are two
+variants: the full rendering, and one with every connection that references a stored
+value left out. The server picks the variant from the machine row's stored-secrets flag
+alone: the full one for a machine allowed stored secrets, the other for any other
+machine. No request member selects it, so a machine can never ask for the other one.
+`X-Qory-Run-Configuration` carries that variant's digest. The variant without stored
+values lists what it left out in `withheld`, by `id`, `kind` and `name`; the runner
+reports them in `policy_applied` as `connections_withheld`, and they raise no
+`connection_needs_wall` or `secrets_endpoint_missing`. When leaving them out leaves a
+required group of the run's runtime unmet, `runtime_secret_missing` applies as usual.
 
 ```json
 {"version": 1,
@@ -1158,6 +1318,11 @@ alike, decided by one resolver.
 ```json
 "connections": {"type": "array", "maxItems": 32, "items": {"oneOf": [
   {"$ref": "#/$defs/runtime"}, {"$ref": "#/$defs/integration"}, {"$ref": "#/$defs/service"}]}},
+"withheld": {"type": "array", "maxItems": 32, "items": {"type": "object",
+  "additionalProperties": false, "required": ["id", "kind", "name"],
+  "properties": {"id": {"$ref": "#/$defs/id"},
+                 "kind": {"enum": ["runtime", "integration", "service"]},
+                 "name": {"type": "string", "minLength": 1, "maxLength": 128}}}},
 "variables": {"type": "object", "maxProperties": 128,
   "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
   "additionalProperties": {"type": "object", "additionalProperties": false,
@@ -1209,6 +1374,10 @@ alike, decided by one resolver.
       "secrets": {"$ref": "#/$defs/secrets"}}}}
 ```
 
+A `maxLength` in the sketch counts characters, so it is not the check: the runner and the
+server count UTF-8 bytes, 4096 for a variable's value and for an integration's
+`argument`, and 1 to 16384 for a secret value (Endpoint rules).
+
 The runner file's connections follow the same shapes with three differences: `id` is
 `^[a-z0-9][a-z0-9_-]{0,63}$`, references are external only, and an integration's
 `repository` and `version` are optional. `auth.schema.json` is shared with the
@@ -1239,7 +1408,8 @@ id has a reference, and `headers.json`.
 `descriptor.schema.json` gains `secrets`: `declares`, a list of `{id, title, name, hosts,
 paths?, auth}`; `one_of`, a list of groups `{id, required?, of}`, `of` a list of declared
 ids, each id in at most one group;
-`reserves`, variable names; `credential_files`, paths, `~` for the runner's user's home.
+`reserves`, variable names; `denies`, variable names the server may never set for the
+runtime; `credential_files`, paths, `~` for the runner's user's home.
 Its `runtime` pattern becomes `^[a-z][a-z0-9-]{0,63}$`.
 
 ### Contract files the server vendors
@@ -1247,7 +1417,7 @@ Its `runtime` pattern becomes `^[a-z][a-z0-9-]{0,63}$`.
 All under `contracts/runner/v1`, so one pin covers them:
 
 - `runtimes.json`, generated from the built-in descriptors and checked in CI against
-  them: per runtime its `name`, a `title`, its `reserves`, its `credential_files`, its
+  them: per runtime its `name`, a `title`, its `reserves`, its `denies`, its `credential_files`, its
   declarations with `id`, `title`, `name`, `hosts`, `auth` with its `header`, and `paths`, and its `one_of`
   groups with `id`, `required` and `of`;
 - `denied-variables.json`, the built-in deny list of Decision 1, names and patterns;
@@ -1255,8 +1425,10 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `run-configuration.schema.json` and `policy.schema.json`, without `credentials`;
 - `auth.schema.json`;
 - `secrets-request.schema.json`, the secrets request's body;
-  `enrolment.schema.json`, the enrolment's body and its answer, with `approved`
-  required; and `machine-key.schema.json`, the rotation's body;
+  `secrets-answer.schema.json`, its answer, the envelope; `sealed-plaintext.schema.json`,
+  the plaintext the envelope opens to; `enrolment.schema.json`, the enrolment's body and
+  its answer, with `approved` and `stored_secrets` required; and
+  `machine-key.schema.json`, the rotation's body;
 - `events/run.refused.schema.json` and `events/run.policy_applied.schema.json`, with
   `connections` and `uses`;
 - `server.schema.json`, with `machine_id` and the required `apiary_public_key` pin, and
@@ -1264,7 +1436,7 @@ All under `contracts/runner/v1`, so one pin covers them:
 
 ### The machine and signed requests
 
-These replace §The server's access key, its secret and the HMAC. The server document,
+§The server's identity and request signing are the machine's. The server document,
 `server.schema.json` and `runner.yaml`'s `server` section, becomes:
 
 ```yaml
@@ -1275,16 +1447,14 @@ apiary_public_key:
   - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
 ```
 
-The machine secret is never in this document: `qory` reads it from `machine-secret`,
-`QORY_MACHINE_SECRET` or a file descriptor (Decision 4) and passes it through
-`session.Spec`. `qory` takes `machine_id` from `QORY_MACHINE_ID` when the section has
+The machine secret lives outside this document: `qory` reads it from a file descriptor,
+`QORY_MACHINE_SECRET` or `machine-secret`, in that order (Decision 4), and passes it
+through `session.Spec`. `qory` takes `machine_id` from `QORY_MACHINE_ID` when the section has
 none, and refuses to start when both are set, as for the pin.
 
-- **On every request** `X-Qory-Machine-Id` carries the machine id, in place of
-  `X-Qory-Access-Key`.
+- **On every request** `X-Qory-Machine-Id` carries the machine id.
 - **Every request is signed** with Ed25519 under the machine secret:
-  `X-Qory-Signature-Ed25519: <64 bytes, base64url>`, in place of `X-Qory-Signature-256`.
-  The signed message is §The server's canonical string with a domain line first, lines
+  `X-Qory-Signature-Ed25519: <64 bytes, base64url>`. The signed message is §The server's canonical string with a domain line first, lines
   joined by `\n`, with no newline after the last:
   - a GET, with `X-Qory-Timestamp` as before: `qory-request-ed25519-v1`, the method in
     upper case, the request target exactly as sent, the timestamp as sent;
@@ -1294,12 +1464,21 @@ none, and refuses to start when both are set, as for the pin.
     contain a timestamp of their own.
 - **Verification.** The server checks the id's shape, looks the machine up, verifies the
   machine row's integrity code (Decision 6), then verifies the signature under the
-  stored public key by RFC 8032, which refuses an `S` that is not below the group order.
-  Every failure is `401` with `{"error":"unauthorized"}`, as §The server describes, a
-  revoked machine's request included. A request from a machine that awaits approval, or
-  signed with a new key that awaits approval, verifies, and every signed endpoint answers
-  it with a signed `409` `machine_pending`, discovery and the events endpoint included
-  (Decision 4). During a rotation's 24-hour window the server verifies under either key.
+  stored public key, cofactorless (Decision 5). Every failure is `401` with
+  `{"error":"unauthorized"}`, as §The server describes, a revoked machine's request
+  included; the runner reports it as `unauthorized`. A request from a machine that awaits
+  approval, or signed with a new key that awaits approval, verifies, and every signed
+  endpoint answers it with a signed `409` `machine_pending`, discovery and the events
+  endpoint included (Decision 4). During a rotation's 24-hour window the server verifies
+  under either key, except at `machine_key.url`, which takes the current key only.
+- **Unsigned headers.** The signature covers the method, the target and the timestamp
+  of a GET, and the method, the target and the body of a POST. `User-Agent`,
+  `Content-Type`, `X-Qory-Contract-Version`, `X-Qory-Machine-Id`, `X-Qory-Delivery` and
+  `X-Qory-Run-Configuration` are unsigned. The server decides nothing from them that the
+  signed line or body does not carry: the machine id only selects the key the signature
+  must verify under, the contract version only lets the server refuse a revision it does
+  not implement, and the delivery id and the run-configuration digest of an events POST
+  are hints the signed events repeat.
 - **Known answers**, under the fixture machine secret (Decision 5):
   - `qory-request-ed25519-v1\nGET\n/.well-known/qory-configuration\n1700000000`, 70
     bytes: `xTbqkwnwSxxmTtpDtg6FeefC0spXbH6iGFXRtlVva6Y767zhfnqoHxGHfiPRbs6pudrASAx7kNi7Q8MxzYIIDQ`;
@@ -1321,47 +1500,63 @@ signature; the code and the proof authenticate it:
 
 ```json
 {"version": 1,
- "code": "qec_f1xt0re0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+ "code": "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
  "name": "build-01",
  "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
  "timestamp": 1700000000,
  "proof": "<64 bytes, base64url>"}
 ```
 
-- `code` is `qec_`, 26 lower-case Crockford base32 characters, 130 random bits, then `.`
-  and the fingerprint of the server's public key (Decision 4).
+- `code` is `qec_`, 26 Crockford base32 characters, 130 random bits, then `.` and the
+  fingerprint of the server's public key (Decision 4). `qory` sends it, and the proof
+  covers it, in its normalised form: the 26 characters in upper case, `I` and `L` read as
+  `1`, `O` as `0`, and hyphens removed, so a person may type it in either case and in
+  groups. The fingerprint is base64url and is never changed.
 - `name` is the machine's name for people, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, by default
   its host name.
 - `public_key` is the raw 32-byte Ed25519 public key.
 - `proof` is the Ed25519 signature under the new key of five lines joined by `\n`, with no
-  newline after the last: `qory-enrol-ed25519-v1`, the code, the public key as in the
-  body, the name, the timestamp.
+  newline after the last: `qory-enrol-ed25519-v1`, the normalised code, the public key as
+  in the body, the name, and the timestamp as the body's value in decimal seconds,
+  canonical as `exp` is.
 
-The server, in order, after the endpoint rules: accepts a code it issued, unused and
-unexpired, else `401`; accepts `timestamp` within ±300 seconds, else `401`; checks the key
-(Decision 4), else `409` `machine_key_invalid` or `machine_revoked`; verifies `proof`, else
-`409` `machine_key_invalid`. Then it consumes the code, creates the machine row with the
-code's workspace and settings, and answers `201`:
+The server's order at enrolment is its own, because the code that authenticates the
+request is in the body:
+
+1. `413`; `415`;
+2. `429` per source address;
+3. `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is not
+   JSON, fails its schema or has another `version`;
+4. `401` for a code it did not issue, or that is used or expired, the whole code compared,
+   fingerprint included; then `401` for a `timestamp` outside ±300 seconds;
+5. `429` per code;
+6. `409` `machine_key_invalid` or `machine_revoked` for the key (Decision 4), then `409`
+   `machine_key_invalid` for a `proof` that does not verify;
+7. `201`: the server creates the machine row with the code's workspace and settings, the
+   code is used, and the answer is
 
 ```json
 {"version": 1, "machine_id": "mch_f1xt0re000000000", "approved": false,
+ "stored_secrets": false,
  "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
 ```
 
-Every answer after the code is accepted is signed as Signed answers describes, line 3
-being the request's `proof` exactly as sent; a `401` is unsigned. `qory` verifies the
-answer under the key of `apiary_public_key` whose fingerprint the code carries, and
-refuses an answer that lists no such key or does not verify under it; only then does it
-write `machine_id` and `apiary_public_key`. Only a `201` consumes the code, so a replayed
-enrolment meets a used code, `401`.
+Steps 1 to 4 go out unsigned; from step 5 on every answer is signed as Signed answers
+describes, line 3 being the request's `proof` exactly as sent. A retry with the same code
+and the same public key while the code is valid receives the same `201`, signed with the
+retry's own proof as line 3, so a machine whose answer was lost still learns its id; any
+other use of a used code is `401`. `qory` verifies the answer under the key of
+`apiary_public_key` whose fingerprint the code carries, and refuses an answer that lists
+no such key or does not verify under it; only then does it write `machine_id` and
+`apiary_public_key`.
 
 Known answers, under the fixture machine secret and the fixture signing key: the five
 lines of the body above are 139 bytes, and `proof` is
-`Fnmi2gmWc9VX_AF577ntOUz00yYRVM1qojqyc9eApssPMMgfH8td2NbsbPSyOwuKbMc7pTKqTWau5Xix2fI6Aw`.
-The answer above, without spaces, is 165 bytes, SHA-256
-`ac117635264232feedf2dfc5136b7556c14fe4b658d6f798b102eeee1e085a56`; its six lines are 180
+`stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ`.
+The answer above, without spaces, is 188 bytes, SHA-256
+`302cd24078408f770cb541916c110c5c55e66af62d274e0bad3089d0ddea16bb`; its six lines are 180
 bytes, and `X-Qory-Signature-Ed25519` is
-`_T9Jz-_0K5i4iDXNDhlCCEwgq_r2Wnd9U2FieBpJnkbZkhKZzEXqnK2BrVGzhiVbYQSqIrfeCNKCCR6hwDXUDg`.
+`fn2dVDhIu0LW40hkHMSzcT6ft2_kG8vXIpXM8BMgVF2LTtB5CxZo2SCzG4g9bWqB67-yVfS7oK4ElzRO5ru6Cg`.
 
 ### Rotation
 
@@ -1376,12 +1571,15 @@ A signed POST to `machine_key.url`, under the current machine secret:
 
 `proof` is the Ed25519 signature under the new key of four lines joined by `\n`, with no
 newline after the last: `qory-rotate-ed25519-v1`, the machine id, the new public key as
-in the body, the timestamp. The server accepts `timestamp` within ±300 seconds, else
-`401`; checks the new key (Decision 4), else `409` `machine_key_invalid` or
-`machine_revoked`, a key equal to the current one being `machine_key_invalid`; verifies
-`proof`, else `409` `machine_key_invalid`. It keeps the key as the machine's new key, in
-place of one that still awaits approval, and answers `202` with `{"version": 1}`. A
-replayed rotation is harmless.
+in the body, and the timestamp as the body's value in decimal seconds. The request
+verifies under the machine's current key only; the old key of an open window gets `401`.
+After the endpoint rules' order, the server refuses, in order: a `timestamp` outside
+±300 seconds, `401`; a new key while another awaits approval, `409`
+`key_rotation_pending`, unless the request repeats that pending key, which is answered
+as the first request was; a key the checks refuse (Decision 4), `409`
+`machine_key_invalid` or `machine_revoked`, a key equal to the current one being
+`machine_key_invalid`; a `proof` that does not verify, `409` `machine_key_invalid`. It
+keeps the key as the machine's pending key and answers `202` with `{"version": 1}`.
 
 Known answer: a new key from the seed of bytes 97 to 128,
 `qms_YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4A`, public key
@@ -1413,27 +1611,31 @@ connection the run applies references a stored value:
 
 The server, in order, after the endpoint rules:
 
-1. accepts `timestamp` within ±300 seconds, else `401`;
+1. accepts `timestamp` within ±300 seconds, else `401`, unsigned;
 2. refuses a machine not allowed stored secrets: `409` `secrets_not_allowed`. A machine
    that awaits approval was answered `409` `machine_pending` before this step, and a
    revoked one did not authenticate, `401`;
-3. refuses a run whose row it has closed: `410` `run_closed`;
-4. resolves the holder the labels select, with the GET's resolver, and requires that
-   holder's current rendering, or one superseded at most 15 minutes ago, to have the
-   digest, else `410` `run_configuration_superseded`; that rendering's integrity code
-   must verify, else `503` `unavailable`, as on the GET;
-5. requires `connections` to be connections of that rendering, every one that is not a
+3. refuses a request whose key was approved before the machine's stored-secrets flag was
+   last enabled: `409` `key_rotation_required` (Decision 4);
+4. refuses a run whose row it has closed: `410` `run_closed`;
+5. resolves the holder the labels select, with the GET's resolver, within the machine's
+   workspace, else `409` `holder_out_of_scope`, and requires the current rendering of
+   that holder's variant for the machine, or one superseded at most 15 minutes ago, to
+   have the digest, else `410` `run_configuration_superseded`, a digest of the other
+   variant included; that rendering's integrity code must verify, else `503`
+   `unavailable`, as on the GET;
+6. requires `connections` to be connections of that rendering, every one that is not a
    runtime connection and at most one runtime connection, else `409`
    `run_connections_invalid`;
-6. applies the reseal rules (`409` `run_secrets_conflict`, `run_secrets_expired`);
-7. parses the rendering's stored bytes and collects the distinct pairs of secret id and
+7. applies the reseal rules (`409` `run_secrets_conflict`, `run_secrets_expired`);
+8. parses the rendering's stored bytes and collects the distinct pairs of secret id and
    value id that the listed connections reference with an id;
-8. for each pair, seals the stored value only when the secret still exists and has that
+9. for each pair, seals the stored value only when the secret still exists and has that
    value id, and, for a superseded rendering, the holder's current rendering still references
    the pair through the same connection. Any other pair is left out, and the runner
    refuses the run, `secret_unresolved`. The value sealed is the current one;
-9. seals to the machine's key, the u-coordinate of its Ed25519 public key, with a fresh
-   ephemeral key, `exp` its own time plus 600 seconds.
+10. seals to the key the request's signature verified under, the u-coordinate of that
+    Ed25519 public key, with a fresh ephemeral key, `exp` its own time plus 600 seconds.
 
 The answer, `200`:
 
@@ -1465,27 +1667,30 @@ For the enrolment path, `machine_key.url` and `secrets.url`:
 - **Sizes.** A request body at most 32 KiB, else `413`. The largest secrets request has
   16 labels with a 64-byte key and a 256-byte value, at most 1,606 bytes each once every
   byte of a value is escaped as `\u00XX`, 25,696 in all; 32 connection ids, 736 bytes;
-  and under 300 bytes besides: about 26.7 KiB. Without escapes it is about 6.3 KiB. The
+  and under 300 bytes besides: at most 26,732 bytes, about 26.1 KiB. Without escapes it is
+  at most 6,252 bytes, about 6.1 KiB. The
   secrets answer is at most 5 MiB: 512 KiB of values, every byte escaped at six bytes,
   is 3 MiB of plaintext and 4 MiB in base64url. A refusal body is at most 64 KiB.
-- **Members.** A member the schema does not define is refused. A POST's signature covers
-  its path, and each endpoint's strict schema refuses a body meant for another as well.
-  The runner decodes the envelope and the plaintext, and the server the request bodies,
-  with `encoding/json/v2` and `RejectUnknownMembers(true)`, since v2 ignores unknown
-  members by default; member names are compared with case, never relaxed; a value
-  decoded in part before an error is discarded; and `exp` is decoded as an unsigned
-  integer, so a negative one is refused.
-- **Order of refusals.** `413`; `415`; `400` `bad_request` for a header sent twice; `401`;
-  `409` `machine_pending`; `429`; `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is
-  not JSON, fails its schema, has another `version`, a `run_id` that is
-  not a canonical lower-case UUID, a malformed digest or labels the labels' rules refuse;
-  then each endpoint's own. Everything before `401` is unsigned; everything from `429` on
-  is signed.
+- **Members.** A member the schema does not define is refused, and so is a member name
+  twice in one object. A POST's signature covers its path, and each endpoint's strict
+  schema refuses a body meant for another as well. Member names are compared with case;
+  a value decoded in part before an error is discarded; and `exp` is decoded as an
+  unsigned integer, so a negative one is refused. The runner decodes the envelope and the
+  plaintext with `encoding/json/v2` and `RejectUnknownMembers(true)`, since v2 accepts
+  unknown members by default; a server whose decoder keeps the last of two members
+  checks for them itself.
+- **Order of refusals**, on every endpoint but enrolment (Enrolment has its own),
+  discovery, the run-configuration GET and the events endpoint included: `413`; `415`;
+  `400` `bad_request` for a header sent twice; `401`; `429`; `409` `machine_pending`;
+  `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is not
+  JSON, fails its schema, has another `version`, a `run_id` that is not a canonical
+  lower-case UUID, a malformed digest or labels the labels' rules refuse; `401` for a
+  `timestamp` outside ±300 seconds; then each endpoint's own. Every `401` is unsigned,
+  wherever it falls; every other answer from `429` on is signed.
 - **Rate limits** are the server's policy, per machine, and on the enrolment path per
   code and per source address. A `429` at run start is no
   run, `rate_limited`; an event POST's `429` is retried as today.
-- **Answer headers.** Answers of these two endpoints contain neither digest header. Every
-  signed answer contains `Cache-Control: no-store, no-transform`.
+- **Answer headers.** Answers of these three endpoints contain neither digest header.
 - **Counts.** At most 32 connections, 16 references per connection, 16 hosts and 32 paths
   per service, 32 distinct stored values and 512 KiB of values per secrets request, and
   a settings document of 64 KiB (65536 bytes) per integration. The server checks the counts per holder
@@ -1498,13 +1703,16 @@ For the enrolment path, `machine_key.url` and `secrets.url`:
   integrations, which goes on standard input, may contain line breaks, such as a PEM key.
   The server checks a value against every link when the value is saved and when a link
   is saved, such as an existing PEM key linked to a service connection; the runner checks
-  it where it uses it, `secret_value_invalid`. A variable's value is at most 4 KiB, with no
-  NUL, carriage return or line feed; all variables, names and values, at most 64 KiB. A
-  runner refuses a document over these limits, `run_configuration_invalid`.
+  it where it uses it, `secret_value_invalid`. A variable's value is at most 4096 bytes
+  of UTF-8, with no NUL, carriage return or line feed; a holder's resolved variables are
+  at most 128, and at most 64 KiB, names and values. The server refuses a save that would
+  take any holder over these limits, and a runner refuses a document over them,
+  `run_configuration_invalid`.
 
 ### info and aad
 
-`lp(x)` is `x`'s length as a u16 big-endian, then `x`.
+`lp(x)` is `x`'s length as a u16 big-endian, then `x`; `lp32(x)`, in the envelope's
+signature (Decision 6), is the same with a u32.
 
 | Input | Bytes |
 |---|---|
@@ -1514,7 +1722,8 @@ For the enrolment path, `machine_key.url` and `secrets.url`:
 With the example values, `info` is 44 bytes and `aad` 145. The set of connections is not
 in `aad`: the answer's signature binds the answer to the request that listed it, and the
 plaintext echoes it. The machine's public key is in neither: the KEM binds the
-recipient's public key into the shared secret, and the machine id implies the key.
+recipient's public key into the shared secret, and the machine id and the request's
+signature imply the key.
 
 ### The sealed plaintext
 
@@ -1529,7 +1738,8 @@ recipient's public key into the shared secret, and the machine id implies the ke
 
 - `run_configuration` equals the digest the runner computed, and `connections`, sorted,
   equals the set it sent. The pairs of `secret` and `value_id` are exactly the distinct
-  pairs those connections reference with an id, each once: a missing pair is
+  pairs those connections reference with an id, each once, sorted by `secret` and then by
+  `value_id`, a value without one first: a missing pair is
   `secret_unresolved` with the connections that reference it, an extra or repeated one,
   another digest or another set `secret_sealed_mismatch`.
 - A value follows the value rules above, for where it is used.
@@ -1550,14 +1760,15 @@ lines joined by `\n`, with no newline after the last:
 3. the request's `X-Qory-Signature-Ed25519` value exactly as sent, or for an enrolment
    the body's `proof`;
 4. the lower-case hex SHA-256 of the body as the server produced it, before any content
-   coding;
-5. the answer's `X-Qory-Configuration`, or empty;
-6. the answer's `X-Qory-Run-Configuration`, or empty.
+   coding, which for an empty body is the SHA-256 of the empty string;
+5. the answer's `X-Qory-Configuration`, or empty when the answer has none;
+6. the answer's `X-Qory-Run-Configuration`, or empty when the answer has none.
 
-This is the only answer signature: the server holds no secret shared with the machine,
-so the HMAC answer signature is gone. The server signs in a hook that runs before the
-answer is sent, over every answer to a verified request, `202`, `404` and `503` included.
-A `401`, and a `400`, `413` or `415` sent before verification, go out unsigned. Every
+The server holds no secret shared with the machine, so this is the only answer
+signature. The server signs in a hook that runs before the answer is sent, over every
+answer to a verified request, `202`, `404` and `503` included. Every `401` goes out
+unsigned, wherever it falls, and so does a `400`, `413` or `415` sent before
+verification. Every signed answer contains `Cache-Control: no-store, no-transform`. Every
 runner verifies the signature under its pinned `apiary_public_key`, so every machine
 with a server needs the pin (Decision 6).
 At run start the runner treats an answer without a valid signature as no run,
@@ -1566,9 +1777,10 @@ today, its headers unread; a reload's fetch without one fails the reload. A code
 body is reported only from a signed answer; a refusal body over 64 KiB counts as
 unsigned. The resend after a runner stops verifies signatures too. Line 3 binds the
 answer to its request, and through the request's signature to the machine that sent it.
-Ed25519 signatures are deterministic, so two identical GETs in one second, or two
-retries of one secrets POST, share a signature and receive the same bytes, and a swap is
-harmless.
+Ed25519 signatures are deterministic, so two identical GETs in one second share a request
+signature and receive the same bytes. Two retries of one secrets POST share a request
+signature too, and each answer seals afresh, so their bytes differ; either answer is
+bound to that request, and a swap between them is harmless.
 
 Two known answers under the fixture signing key, for the GET of discovery signed
 `xTbqkwnwSxxmTtpDtg6FeefC0spXbH6iGFXRtlVva6Y767zhfnqoHxGHfiPRbs6pudrASAx7kNi7Q8MxzYIIDQ`
@@ -1590,9 +1802,9 @@ under the fixture machine secret (The machine and signed requests):
 ### Coded refusals
 
 After verification, `409`, `410` (`run_configuration_superseded`, `run_closed`), `429`,
-`503` or `400`, `application/json`, signed: `{"error": "<code>", "names": ["…"]}`. `401`
-stays `{"error":"unauthorized"}`; `bad_request`, `413` and `415` are unsigned and reported
-by status only.
+`503` or `400`, `application/json`, signed: `{"error": "<code>", "names": ["…"]}`. Every
+`401` is `{"error":"unauthorized"}`, unsigned, and the runner reports it as
+`unauthorized`; `bad_request`, `413` and `415` are unsigned and reported by status only.
 
 ### Values at rest (guidance for the server)
 
@@ -1651,8 +1863,11 @@ further `policy_applied`. `dev.qory.run.egress` has `connection`, the id, in pla
 `names` lists the server's variables the run applies; `overridden` those, unlocked, whose
 value a machine value replaced; `locked` those, locked, that kept the server's value
 against a machine value; `denied` the server's variables left out: a denied name, a
-reserved name, a placeholder's name or one a `secrets.local` value reads. Each list is
-sorted and may be empty. With no
+reserved name, a placeholder's name, one a `secrets.local` value reads, or one the
+runtime's `Prepare` or the harness sets. Each list is sorted and may be empty. A
+top-level `connections_withheld` lists, by `id`, `kind` and `name`, the connections the
+server left out of the variant for a machine without stored secrets (The run
+configuration), and is empty otherwise. With no
 `security_policy`, `url` and `run_configuration` are allowed beside `source` `config` or
 `none`. No event contains a value.
 
@@ -1664,32 +1879,35 @@ Order at run start; the steps not listed are §Sequence's.
    `apiary_public_key_missing`, before any request. Every request is signed with the
    machine secret. Every answer's signature is verified under the pin before its body or
    headers are read.
-2. Discovery: a signed `409` `machine_pending` is no run, `machine_pending`. Ping. When
-   discovery lists `secrets` and the run has no wall:
-   `server_needs_wall`. When it lists `secrets`, the runner reports that to its caller,
-   and `qory` writes the `stored-secrets` marker (Decision 4).
+2. Discovery: a signed `409` `machine_pending` is no run, `machine_pending`; a `401` is
+   no run, `unauthorized`. Ping. When discovery lists `secrets` and the run has no wall:
+   `server_needs_wall`. When it lists `secrets`, or `key_rotation_required`, the runner
+   reports that to its caller, and `qory` writes the `stored-secrets` marker and, for
+   `key_rotation_required`, rotates (Decision 4).
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
    decode it with `encoding/json/v2`; validate it against the schema and the limits.
    Without `security_policy`, the machine's policy is the run's; without a
    `connections` member, or without a run configuration, the connections are the runner
-   file's.
+   file's. Keep `withheld` for the record.
 4. Check the connections: connections without a wall; duplicates; the runtime connection
    for the run's runtime kept and any other set aside; declarations and `one_of`, a
    required group included; hosts and `headers.json`; the mounts against the runner's
    files and the runtime's credential files; for each integration, the machine's
    `arguments` and `settings` bounds.
-5. When a connection the run applies references a stored value: no `secrets` section in
+5. For each integration connection: find the program, run `describe`, compare its name
+   and version, and read its hosts, which the steps below need. A `describe` that does
+   not start or does not answer is `integration_failed`.
+6. When a connection the run applies references a stored value: no `secrets` section in
    discovery is no run, `secrets_endpoint_missing`. Otherwise the secrets request with
    the applied connections; verify the envelope's signature under the pinned
-   `apiary_public_key`; check the envelope and open it with the machine's X25519 key;
-   check the plaintext.
-6. Resolve every external reference through the providers in order, and check each
-   machine value's `hosts` against where its connection sends it.
-7. For each integration connection: find the program, run `describe`, compare its name
-   and version, read its hosts, validate the settings against its description. A
-   `describe` that does not start or does not answer is `integration_failed`.
+   `apiary_public_key`; check the envelope and open it with the X25519 key of the
+   machine secret the request was signed with; check the plaintext.
+7. Resolve every external reference through the providers in order, and check each
+   machine value's `hosts` against where its connection sends it, an integration's
+   hosts being those `describe` reported.
 8. Check the hosts and the values together: `connection_host_conflict`, the value rules
-   for where each value goes; compute `hosts_denied`.
+   for where each value goes; validate each integration's settings, values inlined,
+   against its description; compute `hosts_denied`.
 9. Resolve the variables: leave out every denied or reserved name, every placeholder's
    name and every name a `secrets.local` value reads; apply the machine's level by
    precedence. Then check the environment: `variable_reserved`,
@@ -1702,7 +1920,8 @@ Order at run start; the steps not listed are §Sequence's.
     the image or the runtime's launch, is `start_failed`. The proxy receives the uses and
     the hosts it verifies against public roots only (`tls.public_roots_only`); the
     launch's environment is the run's and the variables resolved by precedence, then the
-    runner's own, the placeholders, and the runtime's other declared and reserved variables as empty.
+    runner's own, the placeholders, and the runtime's other declared and reserved
+    variables as empty.
 12. `dev.qory.run.started`, then `dev.qory.run.policy_applied`.
 
 Every no-run after an accepted ping, at steps 2 to 11, emits `dev.qory.run.refused` as
@@ -1720,20 +1939,24 @@ are unreferenced, since Go cannot wipe a string.
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
 | `rate_limited` | server, `429` | the machine's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing machine row is `401` |
-| `machine_key_invalid` | server, `409` | at enrolment or rotation: a public key that is not a canonical encoding of a point on the curve, is of small order, has y = 1, is the published fixture machine key or, at rotation, the current key; or a proof of possession that does not verify |
-| `machine_revoked` | server, `409` | at enrolment or rotation: the public key is a tombstone |
-| `machine_pending` | server, `409` | on every signed endpoint, discovery and events included: a request from a machine, or under a new key, that awaits approval |
+| `machine_key_invalid` | server, `409` | at enrolment, paste or rotation: a public key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, is the published fixture machine key or, at rotation, the current key; or a proof of possession that does not verify |
+| `machine_revoked` | server, `409` | at enrolment, paste or rotation: the public key is a tombstone, whether it was retired by revocation, rotation or rejection |
+| `machine_pending` | server, `409` | on every signed endpoint, discovery and events included, after `429`: a request from a machine, or under a new key, that awaits approval |
+| `key_rotation_pending` | server, `409` | a rotation while another new key awaits approval |
+| `key_rotation_required` | server, `409` | the secrets request under a key approved before the machine's stored-secrets flag was last enabled |
 | `secrets_not_allowed` | server, `409` | the machine is not allowed stored secrets |
+| `holder_out_of_scope` | server, `409` | the labels select a holder outside the machine's workspace, on the GET or the secrets request |
 | `run_closed` | server, `410` | the server has closed the run's row |
-| `run_configuration_superseded` | server, `410` | no rendering of the holder with that digest, current or within 15 minutes |
+| `run_configuration_superseded` | server, `410` | no rendering of the holder's variant for the machine with that digest, current or within 15 minutes; a digest of the other variant included |
 | `run_connections_invalid` | server, `409` | the listed connections are not those the rendering requires |
-| `run_secrets_conflict` | server, `409` | a reseal with another digest or set of connections |
+| `run_secrets_conflict` | server, `409` | a reseal with another digest, set of connections or verifying key |
 | `run_secrets_expired` | server, `409` | a reseal after the first payload's `exp` |
 | `secrets_endpoint_missing` | runner | a stored value referenced and discovery lists no `secrets` |
 | `envelope_signature_invalid` | runner | an envelope without a valid signature under the pinned `apiary_public_key` |
 | `apiary_public_key_missing` | runner | a server and no pinned `apiary_public_key`, decided before the first request |
-| `answer_unsigned` | runner | an answer at run start without a valid signature |
-| `server_needs_wall` | runner | discovery lists `secrets` and the run has no wall |
+| `answer_unsigned` | runner | an answer at run start without a valid signature, other than a `401` |
+| `unauthorized` | runner | a `401` at run start: the machine is unknown, revoked, or its key or row does not verify |
+| `server_needs_wall` | runner, and `qory` offline | discovery lists `secrets` and the run has no wall; or, decided by `qory`, an unwalled run, `--local` included, while the `stored-secrets` marker exists |
 | `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, or a `secrets.local` file |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
 | `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document |
@@ -1753,7 +1976,8 @@ are unreferenced, since Go cannot wipe a string.
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
 | `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern |
-| `integration_settings_not_allowed` | runner | a setting outside the machine's `settings` bound |
+| `integration_settings_not_allowed` | runner | a setting outside the machine's `settings` bound, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
+| `integration_hosts_exceeded` | runner | the program's answer claims hosts above those `describe` lists |
 | `integration_settings_invalid` | runner | the settings fail the program's own description |
 | `integration_settings_too_large` | runner | the settings document exceeds 65536 bytes (64 KiB), refused before the program starts |
 | `integration_failed` | runner | an integration's `describe` or `credential` does not start, exits non-zero or answers what its schema refuses |
@@ -1766,7 +1990,7 @@ are unreferenced, since Go cannot wipe a string.
 | `secret_sealed_invalid` | runner | the envelope does not open, an identifier is not the runner's, or the plaintext is malformed |
 | `secret_sealed_expired` | runner | `exp` passed by more than 300 s, or more than 900 s ahead |
 | `secret_sealed_mismatch` | runner | an extra or repeated value, another digest or another set of connections |
-| `variable_reserved` | runner | the run's environment passes a `QORY_` variable, `QORY_MACHINE_SECRET` among them, or a variable a `secrets.local` value reads into the enclosure |
+| `variable_reserved` | runner | the run's environment passes a `QORY_` variable, `QORY_MACHINE_SECRET` among them, or a variable a `secrets.local` value reads into the enclosure; the runner's own `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt |
 | `placeholder_conflict` | runner | the run passes a value for a placeholder, or a connection other than the runtime's sets a placeholder in a variable the runtime declares or reserves |
 
 ## Security considerations
@@ -1777,25 +2001,27 @@ are unreferenced, since Go cannot wipe a string.
 | A proxy between the runner and a destination host, whose authority the machine trusts | For a stored value, `tls.public_roots_only`, on by default: the proxy verifies that host against public roots only, so the authority the machine added receives nothing | It reads a machine value there, and a stored value on a machine that sets `tls.public_roots_only: false`: that leg is then ordinary TLS against the machine's trust store. An integration program's own connections use its own TLS settings |
 | The server's logs and answer caches | Ciphertext only; `Cache-Control: no-store` | — |
 | A read of the server's database | Values encrypted under a key derived from the instance key; the server stores machines' public keys only, so reading the database no longer lets anyone act as a machine | A reader with the instance key reads every stored value and, while `APIARY_SIGNING_SECRET` is unset, signs as the server |
-| A write to the server's database | Integrity codes over connections, custom definitions, every rendering and every machine row, with a per-row version, verified on every request and before sealing: a writer cannot swap a machine's public key, move a machine to another workspace, enable stored secrets, or insert or approve a machine; seals taken from the verified rendering's bytes; audit | A writer with the instance key, or a change through the server's own pages |
-| A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument and settings, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments` and `settings` bounds and the pin, required on every machine, are what remain |
-| A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services and enable stored secrets on a machine | Choosing the host is reading the value |
+| A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every machine row and every enrolment code, with a per-row version, verified on every request and before sealing: a writer cannot swap a machine's public key, move a machine to another workspace, enable stored secrets, insert a code, or insert or approve a machine; seals taken from the verified rendering's bytes; audit | A writer with the instance key, or a change through the server's own pages |
+| A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument and settings, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments` and `settings` bounds, both required for a server-sent integration with a machine value, and the pin, required on every machine, are what remain |
+| A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables and enable stored secrets on a machine | Choosing the host is reading the value |
+| Whoever may edit variables | Only owners and administrators; the deny list, the runtime's `denies` and the machine's `variables.deny` leave out what would run code, move a credential or change trust | Server variables reach unwalled runs too, and the deny list cannot be complete |
 | A holder of a machine secret, on the path | Every machine pins the server's key, so it forges no answer and no envelope; routing is bound to the document | It signs requests as that machine and opens what is sealed to it, as the next rows say |
 | A holder of the server's signing secret, on the path | Routing is bound to the document, so real values never go to a host it chooses; it holds no machine secret | It forges documents and seals values of its own choosing to every machine that pins the key, until the key is rotated and the pins with it |
 | A link removed while a run starts | A superseded rendering seals only what the current rendering still references through the same connection | — |
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
-| A machine, choosing labels | — | Repository scope is no boundary against a machine: a machine is scoped to its workspaces |
+| A machine, choosing labels | `holder_out_of_scope` keeps it within its one workspace | Repository scope is no boundary against a machine: a machine is scoped to its workspace |
+| A machine secret an unwalled agent read before stored secrets were enabled | Enabling the flag forces a rotation: the server seals only to a key approved after it, `key_rotation_required`, and `qory` writes the `stored-secrets` marker before it generates the new key | — |
 | A stolen enrolment code | Single use, valid for minutes, bound to one workspace and one machine's settings; until an owner or administrator approves the machine, after comparing fingerprints, every endpoint answers it `machine_pending`: no discovery, no run configuration, no variable, no stored value, no event accepted | An approval given without comparing the fingerprint |
-| A stolen machine secret | Stored secrets only for machines allowed them; revocation; rotation, whose new key needs approval; the recomputed digest binds values to the document the server rendered | Whoever has it is the machine and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so machine keys are rotated |
+| A stolen machine secret | Stored secrets only for machines allowed them; revocation; rotation under the current key only, whose new key needs approval after comparing its fingerprint; a second rotation refused while one is pending; the recomputed digest binds values to the document the server rendered | Whoever has it is the machine and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so machine keys are rotated |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
 | Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
 | An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing unwalled runs while `stored-secrets` exists; `mount_contains_runner_files`; `QORY_MACHINE_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
 | A model credential reaching the enclosure | `runtime_secret_conflict`; the runtime's other declared and reserved variables set to empty; `mount_contains_credential_files` | A credential file baked into the image |
 | A credential that mints credentials | A declaration's `paths`, `/v1/*` for Claude Code | A minting path inside the allowed paths gives the agent a readable credential; to verify for `api.anthropic.com` |
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
-| An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
-| A payload replayed | Run id, machine id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one digest and set; a new run id per attempt | — |
+| An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds, both required when a server-sent connection references a machine value; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
+| A payload replayed | Run id, machine id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one digest, set and key; a new run id per attempt | — |
 | A signed body sent to another endpoint | The request target in the request signature; strict schemas on every endpoint | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
 
@@ -1832,8 +2058,10 @@ are unreferenced, since Go cannot wipe a string.
   program starts, `integration_settings_too_large`; that a program that never reads does
   not stall the run; that no value reaches its arguments or environment; that a value it
   writes to standard error is reported redacted, its credential and every line of a
-  multi-line value included; and that a program whose `describe` reports another name is
-  refused.
+  multi-line value included; that a program whose `describe` reports another name is
+  refused; that an answer claiming hosts above `describe`'s is
+  `integration_hosts_exceeded`; and that a server-sent connection with a machine value
+  and no `settings` bound runs with `{}` and is refused with any other settings.
 - **Refused runs:** every no-run after an accepted ping emits `dev.qory.run.refused` as
   the run's last event, an integration that does not start (`integration_failed`) and a
   tool that does not listen (`tool_not_started`) included.
@@ -1853,23 +2081,41 @@ are unreferenced, since Go cannot wipe a string.
   old key verifies for 24 hours after the approval whatever requests the new key signs,
   and not after, unless an administrator ends the window earlier; a POST signed for one
   path fails at another.
+- **Key checks and enrolment:** enrolment, paste and rotation each refuse the torsion
+  key of Decision 5, `machine_key_invalid`; a base64url value with padding, a `+` or `/`,
+  or non-zero spare bits is refused; enrolment answers in its own order, with every
+  `401` unsigned; a code typed in lower case or with hyphens normalises to the published
+  fixture code; a retry with the same code and key gets the same `201`; the old key's
+  rotation request is `401`, a second rotation while one is pending is
+  `key_rotation_pending`, and a rejected key becomes a tombstone.
+- **Stored secrets enabled later:** the secrets request under a key approved before the
+  flag is `key_rotation_required`; `qory` writes the marker before it generates the new
+  key; during a window the server seals to the key the request verified under, and a
+  reseal under the other key is `run_secrets_conflict`.
+- **Variants:** a machine without stored secrets receives the rendering with every
+  stored-value connection left out and reports them in `connections_withheld`; a secrets
+  request with the other variant's digest is `410` `run_configuration_superseded`; labels
+  that select a holder outside the machine's workspace are `holder_out_of_scope`.
 - **Variables:** a machine value replaces an unlocked variable and yields to a locked
   one, each reported in `policy_applied`; every entry of the built-in deny list, in
   upper and lower case, and a name from `variables.deny`, is left out and reported, a
-  locked one included, and the run starts; a `QORY_` variable or a `secrets.local`
-  source passed into the enclosure from the run's environment is `variable_reserved`.
+  locked one included, and the run starts; a name from the runtime's `denies` is left
+  out the same way; a name the runtime's `Prepare` sets wins over a locked variable,
+  which is reported in `denied`; a `QORY_` variable or a `secrets.local` source passed
+  into the enclosure from the run's environment is `variable_reserved`, and
+  `QORY_RUN_ID` and `QORY_RUN_SOCKET` pass.
 - **Public roots:** a proxy test with a host whose certificate chains only to an
   authority the test adds to the machine's trust store: with `tls.public_roots_only`
   unset or `true`, a stored value is never sent there and `dev.qory.run.egress` records
   `dial_failed` with `wall:public-roots`; with `false`, the host receives it; a machine
   value reaches that host under either setting.
-- **Mounts:** a walled run refuses a mount of an integration program, a tool program, a
-  `secrets.local` file and `~/.claude/.credentials.json`, each through a symbolic link
-  too.
+- **Mounts:** a walled run refuses a mount of `runner.yaml`'s directory, with or without
+  a server, of an integration program, a tool program, a `secrets.local` file and
+  `~/.claude/.credentials.json`, each through a symbolic link too.
 
-## Upgrading
+## Setting up a machine
 
-0.7.0, as facts for the changelog:
+What a machine's owner sets up and meets in 0.7.0:
 
 - Connections decide every credential a run sends; the policy has no `credentials`. The
   runner file has `connections:`, `secrets.providers`, `secrets.local` and
@@ -1883,7 +2129,8 @@ are unreferenced, since Go cannot wipe a string.
   server stores only the public key. `qory machine enrol` enrols a machine with a code;
   `qory machine key` prints a public key to paste into the server's machines page;
   `qory machine rotate` replaces the key and keeps the machine id; the old key stays valid
-  for 24 hours after the approval, or until an administrator ends that window.
+  for 24 hours after the approval, or until an administrator ends that window. Enabling
+  stored secrets on a machine requires a new key, which `qory` creates itself.
 - A machine, and every new key of it, needs approval; until then every endpoint answers
   it `machine_pending`. Stored values are sealed to an approved machine and fetched from
   the secrets endpoint for the connections the run applies.
@@ -1895,8 +2142,8 @@ are unreferenced, since Go cannot wipe a string.
   `CLAUDE_CODE_OAUTH_TOKEN`. A walled run whose runtime has a required group and no
   connection that supplies it is refused, `runtime_secret_missing`.
 - Every run against a server that lists `secrets` needs a wall, and so does every run on a
-  machine with the `stored-secrets` marker. A mount of the runner's configuration directory, a program
-  the runner starts, a `secrets.local` file, a directory above any of them, or a
+  machine with the `stored-secrets` marker. A mount of the runner's configuration
+  directory, a program the runner starts, a `secrets.local` file, a directory above any of them, or a
   runtime's credential file, is refused.
 - A CI machine takes its secret from `QORY_MACHINE_SECRET` or a file descriptor, and
   `QORY_MACHINE_ID` and `QORY_APIARY_PUBLIC_KEY` from plain settings.
@@ -1984,7 +2231,7 @@ and version, with `describe`'s name required to match.
     port); setting values on port 443 only is a change to the proxy.
 15. **The request body limit is 32 KiB, not 16.** 16 KiB covers every measured request,
     6.2 to 10.3 KiB, but not 16 labels whose values are escaped byte by byte, about
-    26.7 KiB; 32 KiB covers the contract's own label limits.
+    26.1 KiB; 32 KiB covers the contract's own label limits.
 16. **Validating settings against the program's description** needs a JSON Schema
     validator on the program's `description.json` at run start; the runner has one
     (`santhosh-tekuri/jsonschema/v6`), whose errors quote values, so a settings error
@@ -1999,11 +2246,10 @@ and version, with `describe`'s name required to match.
     tests and the fixture check the conversion of the Ed25519 public key with
     `filippo.io/edwards25519` `Point.BytesMontgomery`, a new dependency of the runner's
     tests. The server needs the conversion and the small-order check in its own code.
-19. **§The server changes with the machine key.** `server.schema.json` loses `access_key`
-    and `secret` and gains `machine_id` and a required `apiary_public_key`;
-    `X-Qory-Access-Key` and `X-Qory-Signature-256` give way to `X-Qory-Machine-Id` and
-    `X-Qory-Signature-Ed25519`, on the events POST too; the HMAC known answers give way
-    to the Ed25519 ones of Wire format. Every receiver, the reference receiver included,
+19. **§The server is written for machines.** `server.schema.json` has `machine_id` and a
+    required `apiary_public_key`; every request, the events POST included, carries
+    `X-Qory-Machine-Id` and `X-Qory-Signature-Ed25519`; its known answers are the Ed25519
+    ones of Wire format. Every receiver, the reference receiver included,
     verifies Ed25519 requests and signs its answers with a key of its own.
 20. **Enrolment, the pasted key and rotation are `qory` commands**, `qory machine enrol`,
     `qory machine key` and `qory machine rotate`, with the `stored-secrets` marker; the
