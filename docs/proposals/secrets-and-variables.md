@@ -56,8 +56,16 @@ through `X-Qory-Contract-Version`.
   `connections`, even empty, is the server's whole set.
 - **Machine values** live in `secrets.local`, each with `hosts`, the most it may be sent
   to: `secret_hosts_exceeded` beyond them.
-- **Variables** are an object, name to value. A value at most 4 KiB, all variables at
-  most 64 KiB.
+- **Variables** are an object, name to `{value, locked}`. A value at most 4 KiB, all
+  variables at most 64 KiB. Levels resolve from organisation to machine, the more
+  specific winning unless a level above locks the variable; two sources for one name
+  never refuse a run (Decision 1).
+- **A deny list replaces `variables.accept`.** A machine accepts every variable except a
+  built-in list and its own `variables.deny`; a denied variable is left out and reported,
+  never a refusal. `variable_conflict`, `variable_not_accepted` and
+  `variable_secret_conflict` are gone.
+- **Stored secrets go only to walled runs** in 0.7.0; a credentials broker is a later
+  direction, not specified here.
 - **The secrets request** lists the connections the run applies; the server seals only
   their values, and the plaintext echoes the set. The plaintext lists values by secret id
   and value id, each once, beside the digest. Routing leaves the seal: the runner recomputes
@@ -68,8 +76,8 @@ through `X-Qory-Contract-Version`.
 - **Runtimes declare secrets** in their descriptor (`declares`, `one_of` groups that may
   be `required`, `reserves`, optional `paths`). A walled run is refused when its
   environment contains a variable the runtime declares or reserves, or when no connection
-  supplies a required group, and the wall sets every such variable the run does not use
-  to empty.
+  supplies a required group; a server variable with such a name is left out, and the
+  wall sets every such variable the run does not use to empty.
 - **Integrations** are started as `<program> <role> -- [arguments]` and receive their
   secrets as a settings document on standard input, always one document, `{}` when
   empty, written from a goroutine; anything they write to standard error is reported with every
@@ -169,7 +177,7 @@ through `X-Qory-Contract-Version`.
 
 ## Decisions
 
-### 1. Reserved names
+### 1. Variables: precedence, denied and reserved names
 
 **Variables reach the agent's process and nothing else.** The runner adds them to the
 launch's environment only: never to a tool, an integration, the relay, the daemon of a
@@ -177,39 +185,116 @@ Docker of the agent's own, or the `docker` command the wall runs on the machine.
 nested Docker helper starts `dockerd` with the system `PATH`, the proxy variables and the
 bundle only (Issues, item 3).
 
-**Behind a wall**, a variable with a reserved name is no run, `variable_reserved`, with
-the variable's name. The runner decides, before the launch, because it knows what it and
-the wall set. The list is a data file the server vendors, `reserved-variables.json`, so
-it refuses such a variable when it is saved; the names a machine sets through
-`Docker.CAEnv` are the machine's, so the server's check is partial.
+**Precedence.** A variable is set at levels, the more specific winning: the organisation
+(in the commercial editions), the workspace, the repository, all three resolved by the
+server, then the machine. There is no level per kind of run.
 
-| Reserved | Why |
-|---|---|
-| `PATH` | The enclosure resolves the program the launch starts through it; which program runs is the machine's choice (§Images) |
-| every name whose lower-case form ends in `_proxy`, in any case | the runner sets the proxy variables (§Sequence step 5), and any other proxy variable routes around them |
-| every name starting `QORY_`, compared without case | the runner's own, `QORY_MACHINE_SECRET` included |
-| `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `AWS_CA_BUNDLE`, and every name the machine's wall configuration sets in their place (`Docker.CAEnv`) | the wall points them at the run's bundle (§The wall) |
-| `DOCKER_CONFIG` | the wall sets it for a Docker of the agent's own |
-| a placeholder of this run: a declaration's `name` or an integration's | `variable_secret_conflict`: the enclosure gets the placeholder value there; a name the run's runtime declares or reserves is `runtime_secret_conflict`, which wins |
-| every variable the run's runtime declares or reserves | `runtime_secret_conflict` (Runtimes) |
-| every variable a `secrets.local` value reads (`env:`) | the machine's value, kept outside the enclosure |
+- The server sends each variable with its value and `locked`. A level that locks a
+  variable stops every level below it from overriding it; the server's resolution
+  honours locks among its own levels, and the runner honours `locked` for the machine's.
+- The machine's level is what the run sets on the machine: `wall.env` in `runner.yaml`,
+  `--env`, the harness's composed launch and what the runtime's `Prepare` sets, the names
+  a new `session.Spec` field lists (Issues, item 2).
+- A machine value replaces an unlocked variable. Where a machine value meets a locked
+  one, the server's value wins.
+- Two sources for one name never refuse a run. `dev.qory.run.policy_applied` reports, by
+  name only, every variable a machine value replaced and every locked one that kept the
+  server's value against a machine value (Events).
 
-`HOME` stays free behind a wall, and so do loader and interpreter variables (`LD_PRELOAD`,
-`DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `GIT_CONFIG_*`, `GIT_SSH_COMMAND`): inside the
-enclosure they affect the agent's own processes only, which the agent can set for itself
-anyway.
+**Denied names.** A machine accepts every variable the server sends except the names of a
+deny list: the built-in list below, and the names the machine's owner adds in the runner
+file, `variables.deny: [NAME, PREFIX_*]`.
 
-**Without a wall** a variable such as `NODE_OPTIONS`, `GIT_SSH_COMMAND`, `BASH_ENV`,
-`LD_PRELOAD` or a `HOME` in the checkout runs code on the developer's machine. No list of
-refusals is complete, so the machine lists what it accepts: `variables.accept` in the
-runner file, names only, empty by default. A variable outside it is no run,
-`variable_not_accepted`; the reserved list applies as well. An accepted variable replaces
-the value the session would inherit (Open question 3).
+- A denied variable is left out of the run and reported by name. The run is never
+  refused, and that holds for a locked variable too.
+- Matching ignores case, because programs read `http_proxy` and `HTTP_PROXY` alike; `*`
+  matches any run of characters.
+- The list applies to the server's variables only, never to what the machine sets
+  itself, and it applies with and without a wall.
+- The reason: in an unwalled run a server-sent `LD_PRELOAD` runs code as the developer,
+  and in a walled one these names would undo the wall's own set-up: its proxy, its trust
+  bundle, its Docker configuration and the program the launch starts.
+- No such list is complete; a machine's owner adds what else its tools read. The server
+  vendors the built-in list as `denied-variables.json` and refuses such a variable when
+  it is saved; the names a machine adds, and those it sets through `Docker.CAEnv`, are
+  the machine's, so the server's check is partial.
 
-**A variable the run itself sets** is no run, `variable_conflict`: a name `qory` lists
-through `wall.env`, `--env` or the harness's composed launch, or one the runtime's
-`Prepare` sets. The runner reads these names from a new `session.Spec` field (Issues,
-item 2; Open question 1).
+| Category | Name | Why |
+|---|---|---|
+| Loader | `LD_*` | the Linux loader loads libraries and audit modules from `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` |
+| Loader | `DYLD_*` | the same for the macOS loader |
+| Loader | `GCONV_PATH` | glibc loads character-set conversion modules from it |
+| Loader | `GLIBC_TUNABLES` | glibc parses it in every program at start-up, and its parser has had exploitable flaws |
+| Start-up, Node | `NODE_OPTIONS` | flags for every Node process, `--require` included |
+| Start-up, Node | `NODE_PATH` | where Node finds modules |
+| Start-up, Python | `PYTHONSTARTUP` | a file Python runs at interactive start |
+| Start-up, Python | `PYTHONPATH` | where Python finds modules |
+| Start-up, Python | `PYTHONHOME` | where Python finds its standard library |
+| Start-up, Python | `PYTHONINSPECT` | a prompt that reads input after a script ends |
+| Start-up, Python | `PYTHONUSERBASE` | the user site directory, whose `.pth` files run code |
+| Start-up, Perl | `PERL5OPT` | switches for every Perl, `-M` loading a module |
+| Start-up, Perl | `PERL5LIB`, `PERLLIB` | where Perl finds modules |
+| Start-up, Ruby | `RUBYOPT` | switches for every Ruby, `-r` loading a library |
+| Start-up, Ruby | `RUBYLIB` | where Ruby finds libraries |
+| Start-up, Java | `JAVA_TOOL_OPTIONS` | options every JVM reads, `-javaagent` included |
+| Start-up, Java | `_JAVA_OPTIONS` | the same, read by HotSpot |
+| Start-up, Java | `JDK_JAVA_OPTIONS` | the same, read by the `java` launcher |
+| Start-up, .NET | `DOTNET_STARTUP_HOOKS` | assemblies .NET runs before `Main` |
+| Start-up, .NET | `CORECLR_*` | `CORECLR_ENABLE_PROFILING` with `CORECLR_PROFILER_PATH` loads a native profiler |
+| Start-up, Erlang | `ERL_AFLAGS`, `ERL_ZFLAGS`, `ERL_FLAGS` | flags for every `erl`, `-eval` included |
+| Start-up, Erlang | `ERL_LIBS` | where Erlang finds applications |
+| Start-up, build tools | `GOFLAGS` | `-toolexec` runs a program for every step of a Go build |
+| Start-up, build tools | `RUSTC_WRAPPER` | Cargo runs it in place of the compiler |
+| Shell | `BASH_ENV` | a file bash runs at the start of every non-interactive shell |
+| Shell | `ENV` | the same for an interactive POSIX shell |
+| Shell | `PROMPT_COMMAND` | a command bash runs before each prompt |
+| Shell | `SHELLOPTS` | bash takes its options from it; `xtrace` with `PS4` runs commands |
+| Shell | `BASHOPTS` | bash takes its `shopt` options from it |
+| Shell | `IFS` | word splitting in a shell that inherits it |
+| Shell | `PS4` | expanded, command substitutions included, on every traced line |
+| Shell | `BASH_FUNC_*` | bash imports exported functions from it, which can replace any command |
+| Shell | `CDPATH` | moves a script's relative `cd` elsewhere |
+| Programs others start | `EDITOR`, `VISUAL` | git, crontab and others start it to edit a file |
+| Programs others start | `PAGER`, `MANPAGER` | started to page output |
+| Programs others start | `LESSOPEN`, `LESSCLOSE` | `less` runs them on every file it opens and closes |
+| Programs others start | `BROWSER` | started to open a URL |
+| Programs others start | `SSH_ASKPASS` | ssh runs it to read a passphrase |
+| Programs others start | `SUDO_ASKPASS` | sudo runs it with `-A` |
+| Git and SSH | `GIT_*` | `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_ASKPASS` and `GIT_CONFIG_*` start programs or change configuration, and `GIT_SSL_CAINFO` the trust |
+| Git and SSH | `SSH_AUTH_SOCK` | points ssh and git at an agent holding keys |
+| Docker | `DOCKER_*` | `DOCKER_HOST` and `DOCKER_CONFIG` choose the daemon and its credentials; the wall sets `DOCKER_CONFIG` for a Docker of the agent's own |
+| Routing and trust | `*_PROXY` | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `FTP_PROXY`: the runner sets the proxy variables (§Sequence step 5), and any other routes around them |
+| Routing and trust | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the trust store of OpenSSL and of Go; the wall points them at the run's bundle (§The wall) |
+| Routing and trust | `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE` | the trust of curl, Python Requests, Node and the AWS SDKs, which the wall sets the same way |
+| Routing and trust | `NODE_TLS_REJECT_UNAUTHORIZED` | `0` turns off certificate checks in Node |
+| Routing and trust | `GODEBUG` | its settings turn insecure TLS and X.509 behaviour back on in every Go program |
+| Routing and trust | every name `Docker.CAEnv` sets | the machine's own names for the run's bundle |
+| Identity and lookup | `PATH` | which program a name starts; the enclosure resolves the launch's program through it (§Images) |
+| Identity and lookup | `HOME` | where programs read their configuration: `.bashrc`, `.gitconfig`, `.npmrc` |
+| Identity and lookup | `SHELL` | the shell programs start for a command |
+| Identity and lookup | `USER`, `LOGNAME` | who programs take the user to be |
+| Identity and lookup | `TMPDIR` | where programs write temporary files, scripts among them |
+| Identity and lookup | `XDG_*` | where programs read configuration and data and keep runtime files |
+| Reserved, for completeness | `QORY_*` | the runner's own, `QORY_MACHINE_SECRET` included |
+| Reserved, for completeness | the run's runtime's `declares` and `reserves` | the stand-in or an empty value goes there (Runtimes) |
+
+`MALLOC_*` is not on the list: it changes glibc's allocator checks and loads no code.
+Package-manager settings, such as `PIP_INDEX_URL` or `npm_config_registry`, are not on
+the list either: they are ordinary variables a team sets for a mirror, and the egress
+policy bounds where they lead.
+
+**Also left out, the same way:** a server variable with the name of a placeholder of this
+run, a declaration's `name` or an integration's, where the placeholder wins; and one a
+`secrets.local` value reads (`env:`), whose machine value stays outside the enclosure.
+A lock never overrides a denied or reserved name: the reserve wins, and the variable is
+left out and reported.
+
+**The machine's own environment** keeps three refusals, because they keep the machine's
+secrets and the stand-ins out of the enclosure. A run whose environment passes a `QORY_`
+variable, or a variable a `secrets.local` value reads, into the enclosure is no run,
+`variable_reserved`. One whose environment contains a variable the run's runtime declares
+or reserves is `runtime_secret_conflict` (Runtimes). One that passes a value for a
+placeholder is `placeholder_conflict`.
 
 ### 2. Names, value ids and identity
 
@@ -357,13 +442,17 @@ item 2; Open question 1).
   order, and y ≠ 1, so u is defined (y = 1 is the identity, of small order already; the
   check stays explicit because the conversion divides by 1 − y). Anything else is `409`
   `machine_key_invalid`, the published fixture machine key included. A key that matches a
-  tombstone is `409` `machine_revoked`.
-- **Approval.** Every machine needs approval before the server seals anything to it, and
-  every new key of a machine needs approval before it replaces the current one. A machine
-  that awaits approval signs requests that verify, and the secrets request answers it
-  `409` `machine_pending`. A machine enrolled with a code awaits approval; a pasted key
-  is approved as it is entered. Approval always applies, so no setting of the server
-  turns it off.
+  tombstone is `409` `machine_revoked`. Prime order needs no check of its own: the proof
+  of possession makes a key with a torsion component infeasible to enrol except by
+  chance, and even then it gives someone who already holds an enrolment code only what
+  enrolling a fresh key gives them.
+- **Approval.** Every machine needs approval, and every new key of a machine needs
+  approval before it is used. Until then every signed endpoint answers a request under
+  that machine or that key with a signed `409` `machine_pending`, discovery included, and
+  the events endpoint accepts nothing: a machine that awaits approval receives no run
+  configuration, no variable and no stored value, and posts no event. A machine enrolled
+  with a code awaits approval; a pasted key is approved as it is entered. Approval always
+  applies, so no setting of the server turns it off.
 - **Machine settings.** What the server sets per machine row: whether the machine may
   receive stored secrets, off by default and enabled only by owners and administrators;
   its rate limits; and its scope, one workspace or, in the commercial editions, an
@@ -375,17 +464,27 @@ item 2; Open question 1).
   `machine-secret.next`, mode `0600`, beside `machine-secret`, and posts the new public
   key with a proof of possession by the new key, signed under the current secret (Wire
   format). The new key needs approval; until then the current key keeps working, and a
-  later rotation replaces a new key that still awaits it. On approval the old public key
-  becomes a tombstone and the machine id stays. Before each run while
-  `machine-secret.next` exists, `qory` sends a discovery request signed under the new
-  key: a signed answer means the key is approved, and `qory` moves `machine-secret.next`
-  over `machine-secret`; an unsigned `401` means it still awaits approval, and the run
-  uses the current secret. With `--print`, `qory machine rotate` writes no file and
-  prints the new `QORY_MACHINE_SECRET` for a CI's secret store. One race remains: a run
-  that started under the old key before the approval has every later request refused,
-  `401`, because the old key is now a tombstone. Its secrets request fails and that run
-  alone fails; the batches it could not deliver stay in `undelivered/` for the resend
-  under the promoted key.
+  later rotation replaces a new key that still awaits it. On approval the old key stays
+  valid until the machine's first verified request under the new key, or for 24 hours
+  after the approval, whichever comes first, and then becomes a tombstone. The machine id
+  stays. Before each run while `machine-secret.next` exists, `qory` sends a discovery
+  request signed under the new key: a signed `409` `machine_pending` means the key awaits
+  approval, and the run uses the current secret; a signed `200` means it is approved, and
+  `qory` moves `machine-secret.next` over `machine-secret` and the run uses it. Any other
+  answer leaves both files as they are. A planned rotation therefore has no gap.
+  Revocation, the action for a compromised key, is immediate and separate.
+- **Rotation on a CI machine.** The operator runs `qory machine rotate --print` with the
+  current secret, which posts the new key, writes no file and prints the new
+  `QORY_MACHINE_SECRET`; approves the new key in the machines page; then, within 24 hours,
+  puts the new secret in the CI's secret store. Jobs sign with the old key until the
+  store changes and with the new one after, so runs keep working throughout. The order
+  matters: a job that signs with the new key before its approval is answered
+  `machine_pending` and does not run.
+- **What remains of the race.** The first request under the new key ends the old key. A
+  run already under way with the old key at that moment, such as another job of a fleet
+  that shares the secret, or a second run on one machine, has its later requests refused,
+  `401`: a secrets request still to come fails, and the batches it could not deliver
+  stay in `undelivered/` for the resend.
 - **Revocation.** An owner or administrator revokes a machine in the machines page. A
   revoked machine's requests do not verify, `401`, so the server seals nothing to it.
   Its public key stays for good as a tombstone, with the machine id and when it was
@@ -396,9 +495,9 @@ item 2; Open question 1).
   database no longer lets anyone act as a machine; writing to it could swap a public key,
   and the machine row's integrity code stops that (Decision 6). The machine key protects
   stored values against TLS-terminating middleboxes, logs and the server's stored
-  answers. Approval is the control between a stolen enrolment code and the workspace's
-  stored values: whoever uses the code enrols a key of their own, and the server seals
-  nothing to it until it is approved. Whoever holds a machine's secret is that machine.
+  answers. Approval is the control between a stolen enrolment code and the workspace:
+  whoever uses the code enrols a key of their own, and every endpoint answers it
+  `machine_pending` until it is approved. Whoever holds a machine's secret is that machine.
 - **The machine secret** is 32 bytes from the system's random source; the contract
   requires it.
 
@@ -409,7 +508,9 @@ every value the server stores for that machine.
   needs a wall: `server_needs_wall`, decided after the ping so the refusal reaches the
   server. Offline, a marker is the signal: when signed discovery lists `secrets`, `qory`
   writes an empty file `stored-secrets` next to `runner.yaml`, and while it exists `qory`
-  refuses every unwalled run, `--local` included (Open question 2).
+  refuses every unwalled run, `--local` included; deleting the file restores unwalled
+  runs. In 0.7.0 stored secrets go only to walled runs; a credentials broker is a later
+  direction (Later: a credentials broker).
 - *Mounts.* Every walled run, `--local` included, refuses a mount that is, contains or
   lies inside one of the runner's files, resolved through symbolic links:
   `mount_contains_runner_files`, with the path. The runner's files are:
@@ -589,8 +690,8 @@ whose exact bytes the server defines:
 - an integrity code over each stored rendering, its body bytes and its digest, checked
   when serving the GET and again before sealing; a failure is `503` `unavailable` on both,
   no run;
-- an integrity code over each machine row: its id, its public key and a new key that
-  awaits approval during a rotation, its scope, its stored-secrets flag, its rate limits,
+- an integrity code over each machine row: its id, its public key, and during a rotation
+  the new key that awaits approval or the old key still valid after it, its scope, its stored-secrets flag, its rate limits,
   its approval and whether it is revoked. The server stores no secret of the machine, so
   reading the database no longer lets anyone act as a machine; writing to it could swap
   a public key for one of the writer's own, and the code stops that, as it stops a
@@ -802,8 +903,9 @@ secrets:
   connection whose placeholder is a variable the run's runtime declares or reserves is
   refused, `placeholder_conflict`: only the runtime connection sets those.
 - **Conflicts.** A walled run is refused when its environment, `Spec.Env` with
-  `wall.env`, `--env` and the harness's launch, or its variables contain a variable the
-  run's runtime declares or reserves: `runtime_secret_conflict`. For Claude Code these
+  `wall.env`, `--env` and the harness's launch, contains a variable the run's runtime
+  declares or reserves: `runtime_secret_conflict`. A server variable with such a name is
+  left out and reported (Decision 1). For Claude Code these
   are `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Claude
   Code reads `ANTHROPIC_AUTH_TOKEN` before `ANTHROPIC_API_KEY` before
   `CLAUDE_CODE_OAUTH_TOKEN`, so a stray value for another alternative would win over the
@@ -1047,7 +1149,8 @@ alike, decided by one resolver.
     "auth": {"scheme": "bearer", "secret": "auth"},
     "declares": [{"id": "auth", "title": "Sentry auth", "name": "SENTRY_AUTH"}],
     "secrets": {"auth": {"source": "external", "name": "SENTRY_AUTH"}}}],
- "variables": {"NODE_ENV": "test", "APP_REGION": "eu-west-1"}}
+ "variables": {"NODE_ENV": {"value": "test", "locked": false},
+               "APP_REGION": {"value": "eu-west-1", "locked": true}}}
 ```
 
 `connections` is in the server's order, which the record repeats. Schema sketch:
@@ -1057,7 +1160,10 @@ alike, decided by one resolver.
   {"$ref": "#/$defs/runtime"}, {"$ref": "#/$defs/integration"}, {"$ref": "#/$defs/service"}]}},
 "variables": {"type": "object", "maxProperties": 128,
   "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-  "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"}},
+  "additionalProperties": {"type": "object", "additionalProperties": false,
+    "required": ["value", "locked"],
+    "properties": {"value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"},
+                   "locked": {"type": "boolean"}}}},
 "$defs": {
   "id": {"type": "string", "pattern": "^con_[0-9a-hjkmnp-tv-z]{16}$"},
   "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
@@ -1144,8 +1250,7 @@ All under `contracts/runner/v1`, so one pin covers them:
   them: per runtime its `name`, a `title`, its `reserves`, its `credential_files`, its
   declarations with `id`, `title`, `name`, `hosts`, `auth` with its `header`, and `paths`, and its `one_of`
   groups with `id`, `required` and `of`;
-- `reserved-variables.json`, the names and prefixes of Decision 1 that do not depend on
-  the machine;
+- `denied-variables.json`, the built-in deny list of Decision 1, names and patterns;
 - `headers.json`;
 - `run-configuration.schema.json` and `policy.schema.json`, without `credentials`;
 - `auth.schema.json`;
@@ -1183,23 +1288,26 @@ none, and refuses to start when both are set, as for the pin.
   joined by `\n`, with no newline after the last:
   - a GET, with `X-Qory-Timestamp` as before: `qory-request-ed25519-v1`, the method in
     upper case, the request target exactly as sent, the timestamp as sent;
-  - a POST: `qory-request-ed25519-v1`, `POST`, then the raw request body. As before, a
-    POST's signature covers its body and not its path, and the secrets and rotation
-    bodies contain a timestamp of their own.
+  - a POST: `qory-request-ed25519-v1`, `POST`, the request target exactly as sent, then
+    the raw request body. A POST's signature covers its path and its body, so a body
+    signed for one endpoint fails at every other; the secrets and rotation bodies
+    contain a timestamp of their own.
 - **Verification.** The server checks the id's shape, looks the machine up, verifies the
   machine row's integrity code (Decision 6), then verifies the signature under the
   stored public key by RFC 8032, which refuses an `S` that is not below the group order.
   Every failure is `401` with `{"error":"unauthorized"}`, as §The server describes, a
-  revoked machine's request included. A machine that awaits approval verifies; only the
-  secrets request refuses it, `409` `machine_pending`.
+  revoked machine's request included. A request from a machine that awaits approval, or
+  signed with a new key that awaits approval, verifies, and every signed endpoint answers
+  it with a signed `409` `machine_pending`, discovery and the events endpoint included
+  (Decision 4). During a rotation's overlap the server verifies under either key.
 - **Known answers**, under the fixture machine secret (Decision 5):
   - `qory-request-ed25519-v1\nGET\n/.well-known/qory-configuration\n1700000000`, 70
     bytes: `xTbqkwnwSxxmTtpDtg6FeefC0spXbH6iGFXRtlVva6Y767zhfnqoHxGHfiPRbs6pudrASAx7kNi7Q8MxzYIIDQ`;
   - `qory-request-ed25519-v1\nGET\n/.well-known/qory-configuration?x=1\n1700000000`, 74
     bytes: `vjkr23kOtTgx4VpU4EA0atCPr9UnHGokJafehYimpDcGNml8Ti_2e0RGKvwQS-93n_vaOSQPiteyIUGsc-Q7Cg`;
-  - a POST of the fixture's secrets request, the 297-byte body below, SHA-256
-    `f104c0975354dd7cdae68b20b11c155471a83fa6752bb6aa486883f241659bd5`, a signed message
-    of 326 bytes: `iAI5HTHtuEpQxW4CMOQEyuLaUrC25kwh46nJw5YAdZ3UtSAM49U4b_Kyu1XKGRXiVvHIUapR3xMvuZ4Ye8scBQ`.
+  - a POST to `/v1/secrets` of the fixture's secrets request, the 297-byte body below,
+    SHA-256 `f104c0975354dd7cdae68b20b11c155471a83fa6752bb6aa486883f241659bd5`, a signed
+    message of 338 bytes: `CU8QKLsQ7KgbwvCnPazj33-oyxS-181aJ2hXQpNDe9NfsGonQYEiJdFPlQsmfOz8ysSxb8opUZ25jpRhAk9vBg`.
 
     ```json
     {"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","labels":{"forge":"github.com","repository":"acme/shop"},"run_configuration":"sha256=4a6a9f4309a202d3c8663b8e6ce1d6ffce29afcf1f3516397e79b2ad9987f768","connections":["con_7q2m4k9x0d3h8w1c","con_0b5n6t2r9y4f7j3s"],"timestamp":1700000000}
@@ -1306,27 +1414,26 @@ connection the run applies references a stored value:
 The server, in order, after the endpoint rules:
 
 1. accepts `timestamp` within ±300 seconds, else `401`;
-2. refuses a machine not allowed stored secrets: `409` `secrets_not_allowed`;
-3. refuses a machine that awaits approval: `409` `machine_pending`. The machine row's
-   integrity code was verified when the request was authenticated, and a revoked machine
-   does not authenticate, `401`;
-4. refuses a run whose row it has closed: `410` `run_closed`;
-5. resolves the holder the labels select, with the GET's resolver, and requires that
+2. refuses a machine not allowed stored secrets: `409` `secrets_not_allowed`. A machine
+   that awaits approval was answered `409` `machine_pending` before this step, and a
+   revoked one did not authenticate, `401`;
+3. refuses a run whose row it has closed: `410` `run_closed`;
+4. resolves the holder the labels select, with the GET's resolver, and requires that
    holder's current rendering, or one superseded at most 15 minutes ago, to have the
    digest, else `410` `run_configuration_superseded`; that rendering's integrity code
    must verify, else `503` `unavailable`, as on the GET;
-6. requires `connections` to be connections of that rendering, every one that is not a
+5. requires `connections` to be connections of that rendering, every one that is not a
    runtime connection and at most one runtime connection, else `409`
    `run_connections_invalid`;
-7. applies the reseal rules (`409` `run_secrets_conflict`, `run_secrets_expired`);
-8. parses the rendering's stored bytes and collects the distinct pairs of secret id and
+6. applies the reseal rules (`409` `run_secrets_conflict`, `run_secrets_expired`);
+7. parses the rendering's stored bytes and collects the distinct pairs of secret id and
    value id that the listed connections reference with an id;
-9. for each pair, seals the stored value only when the secret still exists and has that
+8. for each pair, seals the stored value only when the secret still exists and has that
    value id, and, for a superseded rendering, the holder's current rendering still references
    the pair through the same connection. Any other pair is left out, and the runner
    refuses the run, `secret_unresolved`. The value sealed is the current one;
-10. seals to the machine's key, the u-coordinate of its Ed25519 public key, with a fresh
-    ephemeral key, `exp` its own time plus 600 seconds.
+9. seals to the machine's key, the u-coordinate of its Ed25519 public key, with a fresh
+   ephemeral key, `exp` its own time plus 600 seconds.
 
 The answer, `200`:
 
@@ -1362,14 +1469,14 @@ For the enrolment path, `machine_key.url` and `secrets.url`:
   secrets answer is at most 5 MiB: 512 KiB of values, every byte escaped at six bytes,
   is 3 MiB of plaintext and 4 MiB in base64url. A refusal body is at most 64 KiB.
 - **Members.** A member the schema does not define is refused. A POST's signature covers
-  its body and not its path, so a body signed for one endpoint must fail at every other.
+  its path, and each endpoint's strict schema refuses a body meant for another as well.
   The runner decodes the envelope and the plaintext, and the server the request bodies,
   with `encoding/json/v2` and `RejectUnknownMembers(true)`, since v2 ignores unknown
   members by default; member names are compared with case, never relaxed; a value
   decoded in part before an error is discarded; and `exp` is decoded as an unsigned
   integer, so a negative one is refused.
 - **Order of refusals.** `413`; `415`; `400` `bad_request` for a header sent twice; `401`;
-  `429`; `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is
+  `409` `machine_pending`; `429`; `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is
   not JSON, fails its schema, has another `version`, a `run_id` that is
   not a canonical lower-case UUID, a malformed digest or labels the labels' rules refuse;
   then each endpoint's own. Everything before `401` is unsigned; everything from `429` on
@@ -1532,7 +1639,20 @@ order of the run's connections:
 name and value id, never a value; `uses` where and how the proxy sets each value;
 `hosts_denied` the connection's hosts the policy in force denies, recomputed in every
 further `policy_applied`. `dev.qory.run.egress` has `connection`, the id, in place of
-`credential`. A top-level `variables` lists the variables' names. With no
+`credential`. A top-level `variables` reports the variables by name, never a value:
+
+```json
+"variables": {"names": ["APP_REGION", "NODE_ENV"],
+              "overridden": ["NODE_ENV"],
+              "locked": ["APP_REGION"],
+              "denied": ["LD_PRELOAD"]}
+```
+
+`names` lists the server's variables the run applies; `overridden` those, unlocked, whose
+value a machine value replaced; `locked` those, locked, that kept the server's value
+against a machine value; `denied` the server's variables left out: a denied name, a
+reserved name, a placeholder's name or one a `secrets.local` value reads. Each list is
+sorted and may be empty. With no
 `security_policy`, `url` and `run_configuration` are allowed beside `source` `config` or
 `none`. No event contains a value.
 
@@ -1544,7 +1664,8 @@ Order at run start; the steps not listed are §Sequence's.
    `apiary_public_key_missing`, before any request. Every request is signed with the
    machine secret. Every answer's signature is verified under the pin before its body or
    headers are read.
-2. Discovery. Ping. When discovery lists `secrets` and the run has no wall:
+2. Discovery: a signed `409` `machine_pending` is no run, `machine_pending`. Ping. When
+   discovery lists `secrets` and the run has no wall:
    `server_needs_wall`. When it lists `secrets`, the runner reports that to its caller,
    and `qory` writes the `stored-secrets` marker (Decision 4).
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
@@ -1569,17 +1690,19 @@ Order at run start; the steps not listed are §Sequence's.
    `describe` that does not start or does not answer is `integration_failed`.
 8. Check the hosts and the values together: `connection_host_conflict`, the value rules
    for where each value goes; compute `hosts_denied`.
-9. Check the variables and the environment: without a wall `variables.accept`; the
-   reserved names; `runtime_secret_conflict`; `variable_conflict`; placeholders the run
-   passes a value for, `placeholder_conflict`.
+9. Resolve the variables: leave out every denied or reserved name, every placeholder's
+   name and every name a `secrets.local` value reads; apply the machine's level by
+   precedence. Then check the environment: `variable_reserved`,
+   `runtime_secret_conflict`, and placeholders the run passes a value for,
+   `placeholder_conflict`.
 10. Run each integration's `credential` with its settings document; check its answer. An
     integration that does not start or does not answer is `integration_failed`.
 11. Then §Sequence from the tools on. A tool that does not start or does not listen in
     time is `tool_not_started`; any other failure before the next step, such as the wall,
     the image or the runtime's launch, is `start_failed`. The proxy receives the uses and
     the hosts it verifies against public roots only (`tls.public_roots_only`); the
-    launch's environment is the run's, then the variables, then the runner's own, the
-    placeholders, and the runtime's other declared and reserved variables as empty.
+    launch's environment is the run's and the variables resolved by precedence, then the
+    runner's own, the placeholders, and the runtime's other declared and reserved variables as empty.
 12. `dev.qory.run.started`, then `dev.qory.run.policy_applied`.
 
 Every no-run after an accepted ping, at steps 2 to 11, emits `dev.qory.run.refused` as
@@ -1599,7 +1722,7 @@ are unreferenced, since Go cannot wipe a string.
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing machine row is `401` |
 | `machine_key_invalid` | server, `409` | at enrolment or rotation: a public key that is not a canonical encoding of a point on the curve, is of small order, has y = 1, is the published fixture machine key or, at rotation, the current key; or a proof of possession that does not verify |
 | `machine_revoked` | server, `409` | at enrolment or rotation: the public key is a tombstone |
-| `machine_pending` | server, `409` | the secrets request of a machine that awaits approval |
+| `machine_pending` | server, `409` | on every signed endpoint, discovery and events included: a request from a machine, or under a new key, that awaits approval |
 | `secrets_not_allowed` | server, `409` | the machine is not allowed stored secrets |
 | `run_closed` | server, `410` | the server has closed the run's row |
 | `run_configuration_superseded` | server, `410` | no rendering of the holder with that digest, current or within 15 minutes |
@@ -1625,7 +1748,7 @@ are unreferenced, since Go cannot wipe a string.
 | `runtime_connection_duplicate` | runner | two runtime connections for one runtime |
 | `runtime_secret_choice` | runner | more than one declaration of one `one_of` group |
 | `runtime_secret_missing` | runner | a walled run with no connection that supplies a required group; reported with the group's id |
-| `runtime_secret_conflict` | runner | the environment or the variables contain a variable the runtime declares or reserves |
+| `runtime_secret_conflict` | runner | the run's environment contains a variable the runtime declares or reserves |
 | `integration_missing` | runner | the machine has no integration of that name |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
@@ -1643,10 +1766,7 @@ are unreferenced, since Go cannot wipe a string.
 | `secret_sealed_invalid` | runner | the envelope does not open, an identifier is not the runner's, or the plaintext is malformed |
 | `secret_sealed_expired` | runner | `exp` passed by more than 300 s, or more than 900 s ahead |
 | `secret_sealed_mismatch` | runner | an extra or repeated value, another digest or another set of connections |
-| `variable_not_accepted` | runner | without a wall, a name outside `variables.accept` |
-| `variable_reserved` | runner | a reserved name, or `QORY_MACHINE_SECRET` or a variable a `secrets.local` value reads passed into the enclosure |
-| `variable_secret_conflict` | runner | a variable with a placeholder's name |
-| `variable_conflict` | runner | a variable the run or the runtime sets |
+| `variable_reserved` | runner | the run's environment passes a `QORY_` variable, `QORY_MACHINE_SECRET` among them, or a variable a `secrets.local` value reads into the enclosure |
 | `placeholder_conflict` | runner | the run passes a value for a placeholder, or a connection other than the runtime's sets a placeholder in a variable the runtime declares or reserves |
 
 ## Security considerations
@@ -1666,7 +1786,7 @@ are unreferenced, since Go cannot wipe a string.
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
 | A machine, choosing labels | — | Repository scope is no boundary against a machine: a machine is scoped to its workspaces |
-| A stolen enrolment code | Single use, valid for minutes, bound to one workspace and one machine's settings; the machine it enrols awaits approval, decided by comparing fingerprints, before anything is sealed to it | A machine that awaits approval fetches discovery and run configurations and posts events, as an approved one does |
+| A stolen enrolment code | Single use, valid for minutes, bound to one workspace and one machine's settings; until an owner or administrator approves the machine, after comparing fingerprints, every endpoint answers it `machine_pending`: no discovery, no run configuration, no variable, no stored value, no event accepted | An approval given without comparing the fingerprint |
 | A stolen machine secret | Stored secrets only for machines allowed them; revocation; rotation, whose new key needs approval; the recomputed digest binds values to the document the server rendered | Whoever has it is the machine and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so machine keys are rotated |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
 | Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
@@ -1676,7 +1796,7 @@ are unreferenced, since Go cannot wipe a string.
 | The agent in the enclosure | A placeholder in the environment, the value set outside on the kind's hosts only; `TRACE` and `TRACK` refused there | A host that sends a request's headers back returns the value (§Limits); `headers.json` keeps the common echoes out |
 | An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
 | A payload replayed | Run id, machine id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one digest and set; a new run id per attempt | — |
-| A signed body sent to another endpoint | Strict schemas on every endpoint | — |
+| A signed body sent to another endpoint | The request target in the request signature; strict schemas on every endpoint | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
 
 ## Tests and release gates
@@ -1727,8 +1847,16 @@ are unreferenced, since Go cannot wipe a string.
   and the fixture machine key; `qory` refuses a `machine-secret` that grants anything to
   the group or others, belongs to another user, or holds the fixture secret; `qory`
   refuses an enrolment answer that does not verify under the key the code's fingerprint
-  names; rotation promotes `machine-secret.next` only after a signed answer to a request
-  under the new key.
+  names; every signed endpoint, discovery and events included, answers a machine or key
+  that awaits approval with a signed `409` `machine_pending`; rotation promotes
+  `machine-secret.next` only after a signed `200` to a request under the new key, and
+  the old key verifies until that request or for 24 hours after the approval, and not
+  after; a POST signed for one path fails at another.
+- **Variables:** a machine value replaces an unlocked variable and yields to a locked
+  one, each reported in `policy_applied`; every entry of the built-in deny list, in
+  upper and lower case, and a name from `variables.deny`, is left out and reported, a
+  locked one included, and the run starts; a `QORY_` variable or a `secrets.local`
+  source passed into the enclosure from the run's environment is `variable_reserved`.
 - **Public roots:** a proxy test with a host whose certificate chains only to an
   authority the test adds to the machine's trust store: with `tls.public_roots_only`
   unset or `true`, a stored value is never sent there and `dev.qory.run.egress` records
@@ -1744,17 +1872,20 @@ are unreferenced, since Go cannot wipe a string.
 
 - Connections decide every credential a run sends; the policy has no `credentials`. The
   runner file has `connections:`, `secrets.providers`, `secrets.local` and
-  `variables.accept`.
+  `variables.deny`.
 - A run configuration may contain `connections` and `variables`, and may omit
-  `security_policy`.
+  `security_policy`. Each variable has a value and `locked`; a machine value replaces an
+  unlocked one, a locked one keeps the server's value, and a denied one is left out.
+  `dev.qory.run.policy_applied` reports each by name.
 - Each machine has one secret, `machine-secret` or `QORY_MACHINE_SECRET`: an Ed25519 key
   that signs its requests and, converted to X25519, opens the values sealed to it. The
   server stores only the public key. `qory machine enrol` enrols a machine with a code;
   `qory machine key` prints a public key to paste into the server's machines page;
-  `qory machine rotate` replaces the key and keeps the machine id.
-- Stored values are sealed to a machine once the server has approved it, and fetched
-  from the secrets endpoint for the connections the run applies. A new key needs approval
-  of its own.
+  `qory machine rotate` replaces the key and keeps the machine id; the old key stays valid
+  until the first request under the new one, or 24 hours after the approval.
+- A machine, and every new key of it, needs approval; until then every endpoint answers
+  it `machine_pending`. Stored values are sealed to an approved machine and fetched from
+  the secrets endpoint for the connections the run applies.
 - Every request is signed with the machine secret, `X-Qory-Machine-Id` and
   `X-Qory-Signature-Ed25519`; every answer of the server is signed with the server's key,
   and the runner verifies it.
@@ -1782,26 +1913,28 @@ are unreferenced, since Go cannot wipe a string.
 - A value of a multi-valued secret is addressed by `value_id`; a declaration's human name
   is `title`.
 - `dev.qory.run.refused` is new, emitted for every no-run after the ping;
-  `dev.qory.run.policy_applied` lists connections and variables' names.
+  `dev.qory.run.policy_applied` lists connections and reports the variables by name.
+
+## Later: a credentials broker
+
+A future direction, not specified here and not part of 0.7.0, where stored secrets go
+only to walled runs. A broker sets credentials on the agent's requests in one of two
+forms:
+
+- **A remote broker**, on another machine, sets credentials on the agent's requests, so
+  no secret reaches the agent's machine.
+- **A local broker**, on the agent's machine, is allowed only when the agent's user has
+  no root, no `sudo` and no membership of the `docker` group. The broker runs as another
+  user of the system, and a firewall rule lets only that user connect out.
+
+The contract separates which secret goes where, the connections, their hosts and the
+seal, from who sets it on a request, the runner's proxy today. A broker replaces only the
+second. Issues, item 21, lists what sits with the runner today and would move to a
+broker.
 
 ## Open questions for the user
 
-1. `variable_conflict` against the names the run sets: refuse (proposed), or let the
-   server's value win, or the run's?
-   Reviewer's safer answer: refuse.
-   The user wants flexibility here without refusals.
-2. `server_needs_wall`, scoped per machine, with `qory` refusing every unwalled run while
-   the `stored-secrets` marker exists: accept?
-   Reviewer's safer answer: accept; `qory`'s error states that deleting `stored-secrets`
-   restores unwalled runs.
-   The user wants an alternative in which no secret reaches the machine at all: a
-   credentials broker outside the machine.
-3. `variables.accept`: the server's side accepts it as drafted, names only. Agree?
-   Reviewer's safer answer: agree, and add a built-in list the machine can never accept:
-   `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `ENV`, `PYTHONSTARTUP`, `PERL5OPT`,
-   `RUBYOPT`, `GIT_*`, `*_PROXY`, `HOME`. Leaving such a variable out and reporting it,
-   instead of refusing the run, is equally safe.
-   The user wants it treated like policy.
+None.
 
 **For the server's side:** none open. Answered: the secrets request lists the
 connections the run applies, so the server seals for the run's runtime only; the digest
@@ -1815,7 +1948,7 @@ and version, with `describe`'s name required to match.
    winning. The run configuration and the plaintext go through `encoding/json/v2` first,
    and no error wraps either decoder's message.
 2. **`session.Spec.Env` does not separate what the run sets from what it inherits.**
-   `variable_conflict`, `variables.accept` and `runtime_secret_conflict` need the set
+   The machine's level of variable precedence and `runtime_secret_conflict` need the set
    names, `Prepare`'s included: a new `Spec` field.
 3. **Decision 1 relies on the nested Docker fixes**, not on `main` at 9838b7c.
 4. **`server_needs_wall` and the secret file reach only runs `qory` starts.** Any
@@ -1874,3 +2007,12 @@ and version, with `describe`'s name required to match.
 20. **Enrolment, the pasted key and rotation are `qory` commands**, `qory machine enrol`,
     `qory machine key` and `qory machine rotate`, with the `stored-secrets` marker; the
     runner module takes the machine secret through `session.Spec` and writes nothing.
+21. **Where the setter is tied to the routing.** A broker (Later: a credentials broker)
+    replaces who sets a value. Today the following sit with the runner on the agent's
+    machine and would move with it: the seal opens with the machine secret, which also
+    signs the runner's requests, so a machine that holds it can fetch every stored value;
+    `connection_needs_wall` and `server_needs_wall` require the runner's wall for any
+    connection or stored value; an integration program runs on the machine, outside the
+    wall, and receives raw values; `hosts_denied` and `uses` come from the proxy's own
+    decision function; and the proxy applies `tls.public_roots_only`, port 443 only and
+    the refusal of `TRACE` and `TRACK`.
