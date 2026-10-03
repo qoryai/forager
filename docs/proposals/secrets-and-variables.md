@@ -42,126 +42,116 @@ in an ordinary TLS connection verified against the machine's trust store.
 The contract is `v1`, revision 1, and describes the runner as it is; a later change goes
 through `X-Qory-Contract-Version`.
 
-## What changed against the 1076-line draft
+## What this changes in the contract
 
-- **The secrets list is gone.** `secrets` (name, `used_for`, `how`, `argument`, `source`,
-  `from`) leaves the run configuration; `how` and `used_for` leave the contract. "Used
-  for" is a note in the server, nothing more.
-- **Connections replace it**, and the policy's `credentials` with it. Three kinds,
-  `runtime`, `integration` and `service`; a connection references a stored value by id
-  (`sec_…`) and value id, or a machine value by name. Without a server, the runner file's
-  `connections:` has the same shapes: a machine's static credentials are service
-  connections, and a machine's adapter is an integration connection.
-- **The machine's connections** apply when a run configuration has no `connections`
-  member, as the machine's policy applies without `security_policy`; a present
-  `connections`, even empty, is the server's whole set.
-- **Machine values** live in `secrets.local`, each with `hosts`, the most it may be sent
-  to: `secret_hosts_exceeded` beyond them.
-- **Variables** are an object, name to `{value, locked}`. A value at most 4 KiB, all
-  variables at most 64 KiB. Levels resolve from organisation to machine, the more
-  specific winning unless a level above locks the variable; a run with two sources for
-  one name starts (Decision 1).
-- **A deny list replaces `variables.accept`.** A machine accepts every variable except a
-  built-in list and its own `variables.deny`; a denied variable is left out and reported,
-  and the run starts. `variable_conflict`, `variable_not_accepted` and
-  `variable_secret_conflict` are gone.
-- **Stored secrets go only to walled runs** in 0.7.0; a credentials broker is a later
-  direction, not specified here.
-- **The secrets request** lists the connections the run applies; the server seals only
-  their values, and the plaintext echoes the set. The plaintext lists values by secret id
-  and value id, each once, beside the digest. Routing leaves the seal: the runner recomputes
-  the run configuration's digest, which binds the values to the whole document
-  (Decision 6).
-- **Value rules** depend on where a value goes: header rules for runtime and service
-  values, any text for integration values, a PEM key included.
-- **Runtimes declare secrets** in their descriptor (`declares`, `one_of` groups that may
-  be `required`, `reserves`, optional `paths`). A walled run is refused when its
-  environment contains a variable the runtime declares or reserves, or when no connection
-  supplies a required group; a server variable with such a name is left out, and the
-  wall sets every such variable the run does not use to empty.
-- **Integrations** are started as `<program> <role> -- [arguments]` and receive their
-  secrets as a settings document on standard input, always one document, `{}` when empty,
-  written from a goroutine; anything they write to standard error is reported with every
-  value of that document, every line of 8 bytes or more of a multi-line value and the
-  returned credential redacted. `describe`'s name must equal the connection's, and its
-  version is checked for equality.
-- **Services** have exact hosts, no argument, and a scheme from the closed set; header
-  names are checked against a data file, `headers.json`.
-- **A host the policy denies** leaves the run running: the policy refuses requests there,
-  so the value stays unset there, and the host is reported in `hosts_denied`, decided by
-  the proxy's own function.
-- **Gone:** the capability header and its `409`, the seventh line of the answer
-  signature, every text about earlier runners, and the scope and precedence text: the
-  server resolves which connections apply, and the runner sees a flat list. The answer
-  vectors and the sealed fixture are recomputed.
-- **At rest** is the server's guidance, not contract. The server's integrity codes cover
-  connections, service definitions and every stored rendering. Organisation secrets are
-  not in 0.7.0.
-- **Ids** are `sec_`, `con_` or `ak_` and 16 lower-case Crockford base32 characters.
-- **The server's database** is covered: access key rows have integrity codes too,
-  verified on every request.
-- **The machine keeps more out of the wall:** a mount of a program the runner starts, a
-  `secrets.local` file or a runtime's credential file is refused, and a `secrets.local`
-  `env:` source stays outside the enclosure, the tools and the integrations.
-- **Integrations** can be bounded by the machine (`arguments`, `settings`), and their
-  settings are checked against their own description. A server-sent integration that
-  references a machine value needs both bounds.
-- **One secret per access key.** The HMAC secret and the runner key give way to one
-  access key secret, `QORY_ACCESS_KEY_SECRET` or the file `access-key-secret`: an Ed25519
-  key that signs every request and, converted to X25519, opens sealed values. The server
-  stores only its public key, so no request is signed with an HMAC, and a reader of the
-  server's database cannot act as an access key. A key enrols with a single-use code or
-  by an administrator pasting its public key; registration at every run start is gone.
-  The server seals nothing to a key before approval, a rotation or a re-key with an
-  administrator's code keeps the access key id, and a fleet may share one key
-  (Decision 4).
-- **Machines are instances.** A machine id, generated per instance and signed into every
-  request under the key, serves display, audit and per-instance events; authorisation
-  rests on the access key alone. One public key belongs to exactly one access key.
-- **Names say what they are.** A name ending in `_SECRET` is kept hidden; one ending in
-  `_PUBLIC_KEY` or `_ID` is safe to show. The runner has `QORY_ACCESS_KEY_ID`,
-  `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY`; the server has
-  `APIARY_ENCRYPTION_SECRET` and `APIARY_SIGNING_SECRET`. Third-party names, such as
-  `ANTHROPIC_API_KEY`, keep theirs.
-- **A pin of the server's key on every runner**: the server signs every answer and
-  every envelope with Ed25519, and every runner with a server pins the key,
-  `apiary_public_key` in `runner.yaml` or `QORY_APIARY_PUBLIC_KEY`, and verifies both.
-  A runner with a server and no pin is no run, `apiary_public_key_missing`. Enrolment
-  with a code installs the pin.
-- **Public roots for stored values**: the proxy verifies a host that receives a stored
-  value against public roots only, `tls.public_roots_only`, on by default.
-- **Every no-run after the ping** emits `dev.qory.run.refused`, a tool or an integration
-  that does not start included.
-- **Who may link**: only owners and administrators link a secret into a connection,
-  define a custom service, edit variables, create codes or enable stored secrets on an
-  access key.
-- **Enabling stored secrets forces a re-key**: the server seals only to a key it
-  received after the flag was last enabled, and only a re-key code from an owner or
-  administrator brings such a key, so stored values open only with a key received after
-  any agent could have read the old one (Decision 4).
-- **Labels are pinned per checkout**: a run whose derived labels differ from the
-  checkout's first run is no run, `labels_changed`, until the user confirms with
-  `--relabel` (Decision 4).
-- **An access key without stored secrets** receives the holder's rendering with every
-  connection that references a stored value left out, and the runner reports them by
-  name (Decision 6).
-- **One workspace per access key** in 0.7.0.
-- **Server variables reach unwalled runs only when the machine opts in**:
-  `variables.unwalled`, `ignore` by default (Decision 1).
-- **Git's author and committer variables are allowed**: the deny list gains an `except`
-  member for the six of them (Decision 1).
-- **Runtimes deny names**: a descriptor's `denies` lists variables the runner always
-  leaves out of the server's set for that runtime, such as Claude Code's endpoint and
-  shell variables.
-- **Value ids and titles**: a value of a multi-valued secret is addressed by `value_id`,
-  and a declaration's human name is `title`.
-- **Claude Code's declarations** have `paths: [/v1/*]` and `credential_files`.
-- **Limits:** request bodies 32 KiB, sealed values 512 KiB per request in an answer of at
-  most 5 MiB, settings documents 64 KiB; values set only on port 443.
-- **Resolved:** placeholders are the declarations' conventional names; names are
-  variable-style and identity is the id; an integration is matched by name and version;
-  the server seals only for the connections the run lists; the digest is the SHA-256 of
-  the stored bytes.
+Against `contracts/runner/v1/README.md` on main. The contract stays `v1`, revision 1,
+amended in place.
+
+**§The server: identity and signing**
+
+- The access key and its secret become an access key with an Ed25519 key (Decision 4).
+  The server document has `url`, `access_key_id` and the pin `apiary_public_key`; the
+  secret lives in `access-key-secret` or `QORY_ACCESS_KEY_SECRET`, in place of the
+  document's `secret` and `QORY_SERVER_SECRET`.
+- Requests are signed with Ed25519: `X-Qory-Access-Key-Id`, `X-Qory-Machine-Id` and
+  `X-Qory-Signature-Ed25519` take the place of `X-Qory-Access-Key` and the HMAC
+  `X-Qory-Signature-256`, and `X-Qory-Machine-Name` carries a display name. The request
+  strings, for a GET and for a POST, are defined here in full; a POST's covers its path
+  and its body. The HMAC known answers give way to the Ed25519 ones of Wire format.
+- Every answer to a verified request is signed with the server's Ed25519 key, which every
+  runner pins, and bound to the request by its signature (Signed answers). Every `401` is
+  unsigned.
+- A machine is an instance with a machine id, signed into every request for display,
+  audit and per-instance events; authorisation rests on the access key.
+- Access keys enrol with a code or by a pasted public key, need approval, rotate, and
+  re-key with an administrator's code: three new endpoints, enrolment, re-key and
+  `access_key.url` (Wire format).
+
+**§The server: documents**
+
+- Discovery gains `secrets`, `access_key`, `apiary_public_key`, `current_key`,
+  `pending_key` and `key_rotation_required`, and is per access key and verifying key.
+- The run configuration gains `connections`, `variables` and `withheld`, and
+  `security_policy` becomes optional. Its digest becomes normative: the runner recomputes
+  it, and the server keeps a rendering per holder and variant (Decision 6).
+- A new endpoint, `secrets.url`, returns stored values sealed with HPKE to the access
+  key, for the connections the run applies (Decisions 5 and 6).
+- The order of refusals and the coded refusals are defined for every endpoint, the
+  events endpoint included (Endpoint rules).
+
+**§The policy and §Credentials**
+
+- The policy's `credentials` moves to connections: a run's credentials come from its run
+  configuration's `connections`, else from the runner file's, and the policy keeps
+  `egress`, `tools` and `image`.
+- A credential definition's sources map onto connections. An `env` or `file` token is a
+  machine value in `secrets.local`, bounded by its `hosts`, sent through a service
+  connection. An `adapter` is an integration: a program of the integrations contract,
+  started as `<program> credential -- <argument>` with its settings on standard input,
+  whose answer, `credential.schema.json`, keeps its role.
+- A runtime declares the secrets it needs in its descriptor: `declares`, `one_of`,
+  `reserves`, `denies` and `credential_files` (Runtimes).
+- A host that receives a stored value is verified against public roots only
+  (`tls.public_roots_only`), and values are set on port 443 alone; `TRACE` and `TRACK`
+  are refused there.
+
+**Variables**
+
+- A run configuration's `variables` reach the agent's process, resolved by level and
+  `locked`, with a built-in deny list, the runtime's `denies` and the machine's
+  `variables.deny`; an unwalled run receives them only with `variables.unwalled: accept`
+  (Decision 1).
+
+**The runner file**
+
+- It gains `connections:`, `secrets.providers`, `secrets.local`, bounds on
+  `integrations:` (`arguments`, `settings`), `variables.deny`, `variables.unwalled`,
+  `machine.name` and `tls.public_roots_only`.
+- Its directory holds everything `qory` keeps for the server, the secret, `machine-id`,
+  the `stored-secrets` marker and the locks among them, and every walled run refuses a
+  mount of it.
+
+**§The wall**
+
+- A walled run refuses a mount of the runner's files and of a runtime's credential
+  files, sets the runtime's declared and reserved variables it leaves unused to empty,
+  and keeps a `secrets.local` source and the access key's variables out of the
+  enclosure.
+- A server that lists `secrets` requires a wall for every run, and so does a machine
+  with the `stored-secrets` marker.
+
+**§The events**
+
+- `dev.qory.run.refused` is new: every no-run after the ping emits it as the run's last
+  event.
+- `dev.qory.run.policy_applied` reports `connections`, `connections_withheld` and
+  `variables` in place of `credentials`, and allows `url` and `run_configuration` with
+  `source` `none`. `dev.qory.run.egress` names the `connection` in place of the
+  `credential`.
+
+**Refusal codes**
+
+- The server's codes for keys and secrets: `key_pending`, `key_invalid`,
+  `key_rotation_pending`, `key_rotation_required`, `secrets_not_allowed`, `run_closed`,
+  `run_configuration_superseded`, `run_connections_invalid`, `run_secrets_conflict`,
+  `run_secrets_expired`, and `bad_request` for a machine id.
+- The runner's codes for the pin, the answers, the wall, connections, runtimes,
+  integrations, secrets and variables, from `apiary_public_key_missing` to
+  `placeholder_conflict`, and `qory`'s `labels_changed` (Refusal codes).
+
+**Schemas and data files**
+
+- New: `secrets-request`, `secrets-answer`, `sealed-plaintext`, `enrolment`, `rekey`,
+  `access-key` and `auth` schemas, `events/run.refused`, and the data files
+  `headers.json`, `runtimes.json` and `denied-variables.json`.
+- Changed: `server`, `configuration`, `run-configuration`, `policy`, `descriptor`,
+  `events/run.policy_applied` and `events/run.egress`.
+
+**§Fixtures**
+
+- `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519 in
+  place of the published HMAC secret; `fixtures/sealed/` is new; the policy fixtures
+  select tools, with connections in the run configuration fixtures.
 
 ## The model
 
@@ -1038,10 +1028,10 @@ every value the server stores for that access key.
 digest, and the server seals from the verified rendering for the connections the run
 lists. The reasoning follows.
 
-**The question.** Base mode authenticates no sender: anyone with the access key's public key
-can seal. An earlier draft therefore put each value's routing inside the seal. Routing
-now lives in the connections, inside the signed run configuration whose digest is in
-`aad`.
+**The question.** Base mode authenticates no sender: anyone with the access key's public
+key can seal. One way to bind a value to where it goes is to put its routing inside the
+seal. This design puts routing in the connections instead, inside the signed run
+configuration whose digest is in `aad`.
 
 **For keeping routing in the seal.** It binds each value to its hosts under the access
 key, whatever happens to the document. But a connection's routing is more than a list of
