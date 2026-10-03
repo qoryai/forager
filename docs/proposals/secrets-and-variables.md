@@ -45,7 +45,8 @@ through `X-Qory-Contract-Version`.
 ## What this changes in the contract
 
 Against `contracts/runner/v1/README.md` on main. The contract stays `v1`, revision 1,
-amended in place.
+amended in place. README passages this amends gives the new wording passage by passage,
+Fixtures on main the fixtures, and Sources the sources.
 
 **§The server: identity and signing**
 
@@ -122,12 +123,14 @@ amended in place.
 
 **§The events**
 
-- `dev.qory.run.refused` is new: every no-run after the ping emits it as the run's last
-  event.
+- `dev.qory.run.refused` is new: every no-run after the ping emits it as the run's first
+  and last event, always sent, like the ping. Main's refusals before the start, of tools,
+  images and the run configuration's fetch, get codes of their own.
 - `dev.qory.run.policy_applied` reports `connections`, `connections_withheld` and
-  `variables` in place of `credentials`, and allows `url` and `run_configuration` with
-  `source` `none`. `dev.qory.run.egress` names the `connection` in place of the
-  `credential`.
+  `variables` in place of `credentials` and `terminated`, and allows `url` and
+  `run_configuration` with `source` `none`. `dev.qory.run.egress` names the `connection`
+  in place of the `credential`, gains `renewal_failed`, and records `wall:trace` and
+  `wall:public-roots` in `rule`, as main records `wall:own-address`.
 
 **Refusal codes**
 
@@ -152,6 +155,152 @@ amended in place.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519 in
   place of the published HMAC secret; `fixtures/sealed/` is new; the policy fixtures
   select tools, with connections in the run configuration fixtures.
+
+## README passages this amends
+
+Each line names a passage of the README on main and what it becomes.
+
+**Rules that change**
+
+- **§Versions.** Revision 1, amended in place, stands. Its list of sections gains
+  connections, variables, the secrets endpoint, enrolment and re-key, and access keys and
+  machines. The rest of §Versions is unchanged.
+- **§Limits, the server bullet.** "The secret authenticates the runner to the server.
+  Over `https`, TLS authenticates the server to the runner; over `http` to a loopback
+  address, nothing does" becomes: "The access key authenticates the runner to the
+  server. Every answer is signed under the key the runner pins, so the runner
+  authenticates the server over `https` and over loopback `http` alike."
+- **§The events, the first and last events.** `dev.qory.run.started` is the first event
+  and `dev.qory.run.exited` the last, except for a refused run, whose
+  `dev.qory.run.refused` is both its first and its last event.
+- **§The server, after a runner stops.** The resend adds `dev.qory.run.exited` with
+  `reason: runner_lost` only to a record that has `dev.qory.run.started` and no
+  `dev.qory.run.exited`.
+- **§The server, delivery.** "The server returns a status; the body is ignored" and
+  "nothing in an answer's body is read" become: "the runner reads a body's code only
+  from a signed answer".
+- **§The server, failure.** A missing or empty `X-Qory-Access-Key-Id` or
+  `X-Qory-Signature-Ed25519` is an unsigned `401`; a header sent twice is an unsigned
+  `400` before verification; a missing or malformed `X-Qory-Machine-Id` is a signed `400`
+  after it. "The server verifies with a constant-time comparison … and logs nothing about
+  the headers" becomes: "The server verifies the Ed25519 signature, logs nothing about the
+  signature header, and records the machine id and name as display data." The delivery
+  paragraph's "verifies the signature over the raw bytes with a constant-time comparison
+  before parsing" becomes "verifies the Ed25519 signature over the request string before
+  parsing".
+- **§The server, the secret.** "with the secret from `QORY_SERVER_SECRET` when the file
+  does not contain it" becomes: "with the access key secret from a file descriptor, else
+  `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`" (Decision 4).
+- **§Credentials and §Tools, a host outside the allow list.** Under `enforce`, a tool
+  whose host the allow list does not cover is no run, as on main. A connection whose
+  host the policy denies gets `hosts_denied`, and the run goes on, because denied egress
+  never ends a run. The two differ because a tool needs its host to work at all, while a
+  connection only adds a value to requests the policy already governs.
+- **§The policy, paths under `observe`.** Under `enforce`, a request outside a
+  connection's `paths` is refused; under `observe`, it passes without the value and is
+  recorded. The value is set only on a connection's own hosts, whatever the mode.
+
+**The old credential wording**
+
+- **§The boundary, duty 1.** "which of the machine's credentials the run may use"
+  becomes "which hosts and paths the run reaches"; credentials come from connections
+  (Decision 7). "Nothing in a policy grants" stands, and connections grant only within
+  the hosts the machine and the runtime allow.
+- **§The boundary, duty 3.** "keeps the credentials the run's policy selects" becomes
+  "keeps the values its connections supply"; "with the developer's own environment"
+  gains "and the server's variables only with `variables.unwalled: accept`".
+- **§Limits, the termination bullet.** "a host the run has a credential or path rules
+  for, or a tool serves" becomes "a host of a connection, a host with path rules, or a
+  host a tool serves", and "`dev.qory.run.policy_applied` lists those hosts as
+  `terminated`" becomes "lists them in its connections' `uses`, its tools' `hosts` and
+  its `paths`".
+- **§Limits, the enclosure bullet.** "one the policy selects stays outside" becomes "a
+  value a connection supplies stays outside", with `runtime_secret_conflict` (Runtimes).
+- **§Sequence, step 1.** The launch spec gains the connections, the providers and local
+  values, the integrations, the access key secret, the machine id, the variables and
+  `tls.public_roots_only`.
+- **§Sequence, step 5.** "Nothing else of the runner's enters the environment" gains:
+  "the variables, the placeholders and, in a walled run, the runtime's declared and
+  reserved variables as empty".
+- **§Sequence, behind a wall.** "starts the tools the policy selects" is preceded by:
+  "runs each integration's `credential`".
+- **§The policy and `policy.schema.json`'s description.** `credentials` leaves the table;
+  "a credential for it never apply", "the paths of the credential that is for it" and
+  "the proxy never sets a credential on it" name a connection; the schema's description
+  reads "a tool or an image it selects is one the machine defines".
+- **§Tools.** "as it selects credentials" becomes "as it selects images"; "in a
+  credential's grammar" becomes "in a connection id's grammar of the runner file";
+  "placeholders … as a credential's (§Credentials)" becomes "as a connection's"; "as for
+  a credential's host" becomes "as for a connection's host"; "a host a tool serves and a
+  credential is for" becomes "a host a tool serves and a connection covers",
+  `connection_host_conflict`; the record's "their hosts among `terminated`" becomes
+  "their `hosts`"; the refusals before the start take the codes of Events.
+- **§Images.** "as it selects credentials and tools" becomes "as it selects tools", and
+  "in a credential's grammar" becomes "in a tool's name grammar".
+- **§The wall.** "the proxy, the policy and the server's secret" becomes "the proxy, the
+  policy and the access key secret"; the guarantee "no credential the run's policy
+  selects" becomes "no value a connection supplies"; "When the run has an authority of
+  its own (§Credentials)" refers to §Connections at the proxy.
+- **§The runtime.** "A runtime defines six things" becomes seven, the secrets it
+  declares; the descriptor "has five parts" becomes six, `secrets` (Runtimes).
+
+## Fixtures on main
+
+**They go:**
+
+- `fixtures/policy/enforce-long-argument.yaml`: its `credentials` entry; the file keeps
+  its tool with a 4096-character argument.
+- `fixtures/invalid/policy-credential-argument-too-long.yaml`: the policy has no
+  `credentials`.
+- `fixtures/invalid/event-policy-applied-empty-credential-argument.json`:
+  `policy_applied` has no `credentials`.
+- `fixtures/server/https.yaml` and `fixtures/server/loopback.yaml`, with `access_key` and
+  `secret: fixture-secret-not-a-real-one`.
+- `fixtures/invalid/server-no-key.yaml`, about `access_key`.
+- The nine `fixtures/signed/*` files, signed with the HMAC secret.
+- In the recorded run `fixtures/run/0192a0b1-7c2d-7e3f-8a4b-5c6d7e8f9a0b/`, the
+  `credentials` of its `policy_applied` and the `credential` of its egress events.
+
+**They take their place:**
+
+- `fixtures/server/https.yaml` and `loopback.yaml`: `access_key_id` and
+  `apiary_public_key`, the fixture keys of Decision 5.
+- `fixtures/invalid/server-no-access-key-id.yaml`, `server-no-pin.yaml` and
+  `server-secret-member.yaml`: a server document without its id, without its pin, or
+  with a secret.
+- `fixtures/configuration/with-secrets.json` and `key-rotation-required.json`: discovery
+  with `secrets`, `access_key`, `apiary_public_key`, `current_key`, `pending_key` and,
+  in the second, `key_rotation_required`.
+- `fixtures/run-configuration/` documents with each kind of connection, with
+  `variables`, and the variant with `withheld`.
+- `fixtures/signed/*`, rebuilt in the new form (The access key and signed requests).
+- `fixtures/sealed/`, the sealed fixture of Decision 5.
+- `fixtures/invalid/` for what the schemas refuse: `run-configuration-variable-not-object`,
+  `run-configuration-connection-bad-id`, `secrets-request-unknown-member`,
+  `enrolment-code-lower-case`, `rekey-answer-no-pin`, `event-egress-credential` and
+  `event-policy-applied-credentials`.
+- `fixtures/run/<id>/`, the recorded run re-recorded with an integration connection.
+
+## Sources
+
+§Sources changes in two ways.
+
+- **Dropped as models:** RFC 2104 for HMAC, AWS Signature Version 4 for the access key
+  and secret pair, and GitHub's signature validation. GitHub's delivery headers and its
+  ten-second answer stay the model for `X-Qory-Delivery` and the events answer, and
+  OpenID Connect Discovery stays the model for discovery.
+- **Added:**
+  - [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html), Ed25519;
+  - [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html), HPKE, with the CFRG test
+    vectors, `test-vectors.json`;
+  - Thormarker, "On using the same key pair for Ed25519 and an X25519 based KEM", IACR
+    ePrint 2021/509;
+  - [machine-id(5)](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html),
+    for the keyed hash of the machine's identity;
+  - the IANA [HTTP Field Name Registry](https://www.iana.org/assignments/http-fields/)
+    and the Fetch standard's [forbidden request-header
+    names](https://fetch.spec.whatwg.org/#forbidden-request-header), for `headers.json`;
+  - the [Public Suffix List](https://publicsuffix.org/), for an integration's `*.` hosts.
 
 ## The model
 
@@ -548,8 +697,9 @@ a revoked access key gets `401`.
     deduplicated.
   - The server's live Machines page shows each machine of an access key: when it was
     last seen, its runs and its events. Heartbeats arrive during runs only. A machine is
-    running while `dev.qory.run.heartbeat` arrives within 3 × `interval_seconds`;
-    otherwise the server knows when it was last seen, and an idle machine looks like one
+    running until it misses two heartbeats in a row, that is, until no
+    `dev.qory.run.heartbeat` has arrived for 3 × `interval_seconds`; then the server knows
+    when it was last seen, and an idle machine looks like one
     that is switched off.
   - The server ignores machine headers at enrolment and re-keying, which no access key
     signs.
@@ -1259,8 +1409,9 @@ the machine pins:
   that header.
 - **Answer signatures are required.** Every runner refuses an answer without a valid
   signature under its pinned `apiary_public_key`, whatever the runner file contains.
-- **`TRACE` and `TRACK`** are refused with a `403`, rule `wall:trace`, on every host where
-  the proxy sets a value, because such a request returns its headers to the sender.
+- **`TRACE` and `TRACK`** are refused with a `403`, `decision: denied`, `outcome:
+  refused`, rule `wall:trace`, on every host where the proxy sets a value, because such a
+  request returns its headers to the sender.
   §Limits gains that sentence beside the echo service.
 
 ## Runtimes
@@ -1318,14 +1469,14 @@ secrets:
 
 - A declaration's `hosts` are exact DNS names, no wildcard, no IP literal; its `auth` is a
   scheme from the closed set; its optional `paths`, in the policy's path grammar, bound
-  the requests its value is set on. A credential that can mint credentials gives the
-  agent a readable one if the agent reaches the minting path, so a declaration bounds its
-  value with `paths`: Claude Code's are `/v1/*`. A request of the run to
-  `api.anthropic.com` outside `/v1/` is refused, not merely sent without the credential,
-  as on any host with paths, and the exact paths Claude Code needs are a release-gate
-  check. Whether `api.anthropic.com` serves a path that creates an API
-  key from an OAuth credential is to verify. Warning about an administrative key on save
-  is the server's matter.
+  the requests its value is set on. A credential that can mint credentials gives the agent
+  a readable one if the agent reaches the minting path, so a declaration bounds its value
+  with `paths`: Claude Code's are `/v1/*`. Under `enforce`, a request of the run to
+  `api.anthropic.com` outside `/v1/` is refused, as on any host with paths; under
+  `observe`, it passes without the value and is recorded. The exact paths Claude Code
+  needs are a release-gate check. Whether `api.anthropic.com` serves a path that creates
+  an API key from an OAuth credential is to verify. Warning about an administrative key on
+  save is the server's matter.
 - A group of `one_of` has an `id`, its declarations under `of`, and may be `required`.
   A runtime connection supplies at most one declaration of each group, else
   `runtime_secret_choice`; a declaration in no group is optional. A walled run of the
@@ -1336,7 +1487,8 @@ secrets:
   `connection_secret_unknown`.
 - **The stand-in.** The runner sets the placeholder value only in the chosen
   declaration's variable, and the proxy sets the value on its hosts by its scheme. The
-  placeholder can be any string: Claude Code accepts any format. Another
+  placeholder value is `qory-sets-the-credential-outside-the-enclosure`, as on main;
+  Claude Code accepts any format. Another
   connection whose placeholder is a variable the run's runtime declares or reserves is
   refused, `placeholder_conflict`: only the runtime connection sets those.
 - **Conflicts.** A walled run is refused when its environment, `Spec.Env` with
@@ -1410,6 +1562,21 @@ credential.
   the private section included, is `connection_host_public_suffix`. Scheme and paths come
   from the program's answer, `credential.schema.json`; a claim above the described hosts
   is refused, `integration_hosts_exceeded`.
+- **The answer** keeps main's `credential.schema.json`: `version`, `token`, `expires_at`,
+  `apply` with `hosts`, `scheme`, `username`, `header`, `token` and `paths`, and
+  `placeholders`. An `apply` entry's `header` is checked against `headers.json`, as a
+  service's is, `connection_header_reserved`. The placeholders an integration sets are
+  the ones its description lists under `roles.credential.placeholders`, so the runner
+  knows them before the program runs; an answer's `placeholders` must be among them.
+- **Timing and renewal** carry over from main's adapter. A program has a minute to
+  answer. The runner runs `credential` again five minutes before `expires_at`, and when a
+  host returns `401` to a request it set the credential on, at most once every thirty
+  seconds. A new answer changes the credential and nothing else; one that lists other
+  hosts, schemes or paths is refused and reported, and the old credential stays. A
+  renewal that fails leaves the old credential in use, and every later request it is set
+  on is a `dev.qory.run.egress` with `connection` and `renewal_failed: true`, until a
+  renewal succeeds; what the program wrote is reported, redacted, as the runner's lines.
+  `dev.qory.run.refused` covers the start alone.
 - **What the hosts bound.** For an integration, the hosts bound only where the proxy sets
   the credential the program produces. The program runs outside the wall and receives
   the raw value, and where it sends that value is the program's. The server chooses
@@ -1418,11 +1585,13 @@ credential.
   `arguments`, an RE2 pattern the argument must match whole, else
   `integration_argument_not_allowed`; and `settings`, per member a fixed value or
   `{pattern: <RE2>}`, a member the bound does not list being refused,
-  `integration_settings_not_allowed`. A server-sent integration connection that references
-  a machine value needs both bounds: without an `arguments` bound it is no run,
-  `integration_argument_not_allowed`, and without a `settings` bound its `settings` must
-  be `{}`, else `integration_settings_not_allowed`. Before it writes standard input the
-  runner also validates the settings, with the secret values inlined so a required
+  `integration_settings_not_allowed`; and `paths`, by host, the most paths the program's
+  answer may claim, a claim above it being `integration_hosts_exceeded`, as main's
+  definition bounded an adapter. A server-sent integration connection that references a
+  machine value needs both of the first two bounds: without an `arguments` bound it is no
+  run, `integration_argument_not_allowed`, and without a `settings` bound its `settings`
+  must be `{}`, else `integration_settings_not_allowed`. Before it writes standard input
+  the runner also validates the settings, with the secret values inlined so a required
   `writeOnly` member passes, against the program's own description, else
   `integration_settings_invalid`.
 
@@ -1519,15 +1688,18 @@ custom definitions on save and its built-in definitions in CI against the same f
   credential of an integration that received machine values only, is verified against the
   machine's trust store under either setting, because the machine chose it. A machine
   behind a TLS-inspecting proxy of its own sets `false` and accepts that its proxy reads
-  stored values. When a host fails verification against public roots, the proxy's
-  connection to it fails: `dev.qory.run.egress` records `dial_failed` with the rule
-  `wall:public-roots`, the value stays with the proxy, and the run goes on.
-- **A host the policy denies** leaves the run running: the policy refuses requests there,
-  so the value stays unset there; the host is
+  stored values. When a host fails verification against public roots, the proxy refuses
+  the request: `dev.qory.run.egress` records `decision: denied`, `outcome: refused` and
+  the rule `wall:public-roots`, the session gets a `403`, the value stays with the proxy,
+  and the run goes on.
+- **A host the policy denies** leaves the run running, because denied egress never ends
+  a run: the policy refuses requests there, so the value stays unset there; the host is
   listed in the connection's `hosts_denied`. The list comes from the proxy's own decision
-  function, the host lists and the path rules both, so the record and the proxy cannot
-  disagree. Under `observe`, every connection host that `deny` does not cover receives the
-  value.
+  function, the host lists and the path rules both, so the record and the proxy agree.
+  Under `observe`, every connection host that `deny` does not cover receives the value.
+  A tool differs: under `enforce`, a tool whose host the allow list does not cover is no
+  run, `tool_host_denied`, as on main, because a tool needs its host to work at all,
+  while a connection only adds a value to requests the policy already governs.
 - **Nested Docker.** A run with stored values may use a Docker of the agent's own: values
   stay outside the enclosure and so outside the containers the agent starts.
 - **One credential per host.** Two connections, or a connection and a tool, whose hosts
@@ -1535,7 +1707,10 @@ custom definitions on save and its built-in definitions in CI against the same f
   `connection_host_conflict`.
 - **Paths.** A service's or runtime declaration's `paths` and an integration's answer
   bound the requests the value is set on; the policy's path rules apply as well, and a
-  request passes when every list that exists has an entry that matches.
+  request passes when every list that exists has an entry that matches. Under `enforce`,
+  a request outside a connection's `paths` is refused; under `observe`, it passes without
+  the value and is recorded, as main's credential paths do. The value is set only on a
+  connection's own hosts, whatever the mode.
 - **Values.** A value set in a header, for a runtime or a service, follows the header
   rules of Endpoint rules, else `secret_value_invalid`; a value an integration receives
   on standard input is any text.
@@ -1788,19 +1963,20 @@ set, as for the pin.
     request target exactly as sent, then the raw request body. A POST's signature covers
     its path and its body, so a body signed for one endpoint fails at every other; the
     secrets and rotation bodies contain a timestamp of their own.
-- **Verification.** The server checks the access key id's shape, looks the access key
-  up, verifies the key row's integrity code (Decision 6), then builds the message from
-  the two headers, an absent one as an empty line, and verifies the signature under the
-  stored public key, cofactorless (Decision 5). Every failure is `401` with
+- **Verification.** The server checks the access key id's shape, looks the access key up,
+  verifies the key row's integrity code (Decision 6), then builds the message from the two
+  headers, an absent machine id as an empty line, and verifies the signature under the
+  stored public key, cofactorless (Decision 5). A missing or empty `X-Qory-Access-Key-Id`
+  or `X-Qory-Signature-Ed25519` is an unsigned `401`. Every failure is `401` with
   `{"error":"unauthorized"}`, as §The server describes, a revoked access key's request
-  included; the runner reports it as `unauthorized`. A request under a new access key
-  that awaits approval, its only key, verifies, and every signed endpoint answers it with
-  a signed `409` `key_pending`, discovery and the events endpoint included; at
+  included; the runner reports it as `unauthorized`. A request under a new access key that
+  awaits approval, its only key, verifies, and every signed endpoint answers it with a
+  signed `409` `key_pending`, discovery and the events endpoint included; at
   `access_key.url` it gets `401`. A pending key beside an approved current one, from a
   rotation or a re-key, gets `401` everywhere until it is approved (Decision 4). During
   the 24-hour window after a rotation or a re-key the server verifies under either key,
-  except at `access_key.url`, which takes the current key only. "A header sent twice" covers
-  `X-Qory-Access-Key-Id`, `X-Qory-Machine-Id`, `X-Qory-Signature-Ed25519` and
+  except at `access_key.url`, which takes the current key only. "A header sent twice"
+  covers `X-Qory-Access-Key-Id`, `X-Qory-Machine-Id`, `X-Qory-Signature-Ed25519` and
   `X-Qory-Timestamp`, and is answered before the `401`, unsigned.
 - **The machine id's shape.** After the `429` and before `409` `key_pending`, a machine
   id that is absent or outside `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` is `400`
@@ -1823,6 +1999,35 @@ set, as for the pin.
   delivery id and the run-configuration digest of an events POST are hints the signed
   events repeat. `X-Qory-Access-Key-Id` selects the key the signature must verify under,
   and is signed as well.
+- **Digest headers.** `X-Qory-Configuration` stays opaque to the runner, which compares
+  it only for change. The runner sends `X-Qory-Run-Configuration` on a POST whenever the
+  run uses a fetched run configuration, with or without `security_policy`, and the
+  server's answers carry the access key's variant's digest. The run configuration's
+  `ETag` is unchanged.
+- **The modes of a run.** With a server, events go to the server's `events.url` after a
+  signed discovery fetch and a ping, as on main. The policy comes from the run
+  configuration's `security_policy` when it has one, else the machine's; the
+  connections from its `connections` when it has the member, else the runner file's;
+  the variables from its `variables`. Stored values come from `secrets.url`, and keys
+  change through enrolment, re-key and `access_key.url`. With `--local`, or with no
+  server, everything comes from the machine.
+- **A plain receiver** still works. It serves discovery, the events endpoint and
+  `access_key.url`, and signs its answers under its own key, with no exemption. It may
+  accept only public keys pasted into its own configuration and skip enrolment codes,
+  and it lists no `secrets`. Its discovery lists `version`, `events`, `access_key`,
+  `apiary_public_key`, `current_key` and `pending_key`. The reference receiver in this
+  repository is such a receiver, and it answers labels the contract refuses with a signed
+  `400` `invalid_request`.
+- **`fixtures/signed/`** keeps its form: one request per file, `method`, `target`,
+  `headers`, `body`, `expect` and `note`, with `expect_code` for a coded refusal. The
+  headers are `X-Qory-Access-Key-Id`, `X-Qory-Machine-Id`, `X-Qory-Signature-Ed25519`,
+  `X-Qory-Timestamp` on a GET and `X-Qory-Contract-Version`, signed under the fixture
+  access key secret and machine id of Decision 5, with timestamps around `1700000000`.
+  The files: `get-configuration-valid`, `-bad-signature`, `-stale`,
+  `-no-machine-id` (`400`), `-header-twice` (`400`) and `-pending-key` (`409`
+  `key_pending`); `get-run-configuration-valid` and `-labels-valid`; `batch-valid`,
+  `-tampered`, `-replayed` and `-unknown-key`; `post-access-key-valid` (`202`) and
+  `-bad-proof` (`409` `key_invalid`).
 - **Known answers**, under the fixture access key secret and machine id (Decision 5):
   - the 115-byte message
     `qory-request-ed25519-v1\nak_f1xt0re000000000\nm_gYKDhIWGh4iJiouMjY6PkA\nGET\n/.well-known/qory-configuration\n1700000000`:
@@ -2255,8 +2460,9 @@ integrity codes of Decision 6.
 ### Events
 
 **`dev.qory.run.refused`**, new: emitted in place of `dev.qory.run.started` when a run
-does not start after the ping, as the run's last event; the runner waits up to fifteen
-seconds for its delivery. Data: `code`; `connection`, the connection's id, for every
+does not start after the ping, as the run's first and last event; the runner waits up
+to fifteen seconds for its delivery. It is always sent, like the ping, whatever
+`events.types` lists. Data: `code`; `connection`, the connection's id, for every
 refusal that concerns one; `names`, names alone; `providers` with `secret_unresolved`;
 `status` when the code came from the server. Every no-run after an accepted ping emits
 it, whatever stops the run: a refusal of Runner behaviour's checks, the wall check
@@ -2266,7 +2472,20 @@ does not listen in time, `tool_not_started`; and any other failure before
 `dev.qory.run.started`, such as the wall, the image or the runtime's launch,
 `start_failed`. For these three, `names` contains the integration's or the tool's name
 where there is one, and the error the caller receives contains the reason the program
-wrote.
+wrote. Main's other refusals before the start take codes too:
+
+| Case | Code |
+|---|---|
+| a tool the machine does not define | `tool_unknown` |
+| a tool selected twice, an argument its definition does not provide for, or a host two tools serve | `tool_invalid` |
+| under `enforce`, a tool host the allow list does not cover | `tool_host_denied` |
+| a value the run passes for a tool's placeholder | `placeholder_conflict` |
+| an image the machine does not define | `image_unknown` |
+| an image selected without a wall, defined twice, or a daemon without a runtime | `image_invalid` |
+| a fetch of the run configuration that answers other than `200`, with no code in a signed body | `fetch_failed`, with `status` |
+| a transport failure on that fetch | `fetch_failed`, without `status` |
+| a fetched `security_policy` the schema refuses | `run_configuration_invalid` |
+| a fetched `security_policy` and the command's `--policy` together | `policy_conflict` |
 
 **`dev.qory.run.policy_applied`** loses `credentials` and gains `connections`, in the
 order of the run's connections:
@@ -2283,11 +2502,20 @@ order of the run's connections:
    "hosts_denied": ["sentry.io"]}]
 ```
 
-`secrets` lists the references each connection received, by `id` for a stored value,
-name and value id; `uses` where and how the proxy sets each value;
-`hosts_denied` the connection's hosts the policy in force denies, recomputed in every
-further `policy_applied`. `dev.qory.run.egress` has `connection`, the id, in place of
-`credential`. A top-level `variables` reports the variables by name:
+`secrets` lists the references each connection received, by `id` for a stored value, name
+and value id; `uses` where and how the proxy sets each value; `hosts_denied` the
+connection's hosts the policy in force denies, recomputed in every further
+`policy_applied`. An integration connection's entry also records its `argument`, `version`
+and `repository`, so the record shows what each credential is minted for. `terminated`
+leaves `policy_applied`: `uses` and `hosts_denied` record the connections' hosts, and the
+tools' entries record theirs. `dev.qory.run.egress` has `connection`, the id, in place of
+`credential`, matching a run configuration's `^con_[0-9a-hjkmnp-tv-z]{16}$` or the runner
+file's `^[a-z0-9][a-z0-9_-]{0,63}$`, and `renewal_failed` (Integrations). `wall:trace` and
+`wall:public-roots` go in `rule`, as `wall:own-address` does on main: `decision: denied`,
+`outcome: refused`, and the session gets a `403`. The heartbeat schema's "a receiver that
+misses two in a row may consider the run lost" reads "misses two in a row, that is,
+receives none for 3 × `interval_seconds`", as Decision 4 says. A top-level `variables`
+reports the variables by name:
 
 ```json
 "variables": {"names": ["APP_REGION", "NODE_ENV"],
@@ -2401,14 +2629,16 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `server_needs_wall` | runner, and `qory` offline | with a server, after the ping: discovery lists `secrets` and the run has no wall; offline, decided by `qory` before the run: an unwalled run, `--local` included, while the `stored-secrets` marker exists |
 | `mount_contains_runner_files` | runner | a mount is, contains or lies inside the runner's configuration directory, the directory of an integration program, a tool program, the wall's `docker` command or helper, the `docker` configuration directory, or a `secrets.local` file |
 | `mount_contains_credential_files` | runner | a mount is or contains a file the run's runtime lists in `credential_files` |
-| `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document |
+| `run_configuration_invalid` | runner | the decoder, the schema or the limits refuse the document, a fetched `security_policy` included |
+| `fetch_failed` | runner | the run configuration's fetch answers other than `200` with no code in a signed body, reported with `status`, or fails in transport, without it |
+| `policy_conflict` | runner | a fetched `security_policy` and the command's `--policy` together |
 | `run_configuration_digest_mismatch` | runner | the recomputed digest differs from the header's |
 | `connection_needs_wall` | runner | a connection and no wall |
 | `connection_duplicate` | runner | two connections with one id |
 | `connection_secret_unknown` | runner | a reference under a key the kind does not declare, or an `auth` with an undeclared id |
 | `connection_host_invalid` | runner, and the server on save | a service or runtime host that is not an exact DNS name, such as an IP literal |
 | `connection_host_public_suffix` | runner | an integration's `*.` host over a public suffix |
-| `connection_header_reserved` | runner, and the server on save | a header name `headers.json` refuses |
+| `connection_header_reserved` | runner, and the server on save | a header name `headers.json` refuses, in a service, a runtime declaration or an integration's answer |
 | `connection_host_conflict` | runner | hosts of two connections, or of a connection and a tool, overlap |
 | `runtime_connection_duplicate` | runner | two runtime connections for one runtime |
 | `runtime_secret_choice` | runner | more than one declaration of one `one_of` group |
@@ -2424,6 +2654,11 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `integration_settings_too_large` | runner | the settings document exceeds 65536 bytes (64 KiB), refused before the program starts |
 | `integration_failed` | runner | an integration's `describe` or `credential` does not start, exits non-zero or answers what its schema refuses |
 | `tool_not_started` | runner | a tool exits before it listens, or does not listen in time |
+| `tool_unknown` | runner | a tool the machine does not define |
+| `tool_invalid` | runner | a tool selected twice, an argument its definition does not provide for, or a host two tools serve |
+| `tool_host_denied` | runner | under `enforce`, a tool host the allow list does not cover |
+| `image_unknown` | runner | an image the machine does not define |
+| `image_invalid` | runner | an image selected without a wall, defined twice, or a daemon without a runtime |
 | `start_failed` | runner | any other failure after the ping and before `dev.qory.run.started`, such as the wall, the image or the runtime's launch |
 | `secret_value_id_missing` | runner, and the server on save | a reference to a secret with several values without a value id |
 | `secret_unresolved` | runner | no provider resolves it, or the sealed list lacks it |
@@ -2574,16 +2809,16 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   `key_rotation_pending`, and a rejected key becomes a tombstone that stays refused when
   posted again; `qory` moves `.next` aside only when signed discovery shows that key
   neither current nor pending, and leaves both files on any unsigned answer.
-- **Key commands and codes:** `--print` leaves the marker as it is; a second `rekey` with the
-  same code within 15 minutes re-posts the pending key and gets the same `202`, and with
-  another code moves `.next` aside; a machine whose new key is pending keeps using its
-  current key; a retry of a re-key gets `approved: true` once its key is current and
-  `401` once it is retired; with a pin that holds none of a code's fingerprints,
-  `enrol` and `rekey` refuse before generating a key; a code whose fingerprints are not
-  the server's current and next keys' is `401`, the two-fingerprint known answer
-  included once the next key changes; a used code passes for a retry for 15 minutes
-  after its first use; a cancelled code is `401`; Settings refuses to enable stored
-  secrets on an access key that awaits approval.
+- **Key commands and codes:** `--print` leaves the marker as it is; a second `rekey` with
+  the same code within 15 minutes re-posts the pending key and gets the same `202`, and
+  with another code moves `.next` aside; a machine whose new key is pending keeps using
+  its current key; a retry of a re-key gets `approved: true` once its key is current and
+  `401` once it is retired; with a pin that holds none of a code's fingerprints, `enrol`
+  and `rekey` refuse before generating a key; a code whose fingerprints are not the
+  server's current and next keys' is `401`, the two-fingerprint known answer included once
+  the next key changes; a used code passes for a retry for 15 minutes after its first use;
+  a cancelled code is `401`; Settings refuses to enable stored secrets on an access key
+  that awaits approval.
 - **Stored secrets enabled later:** while the flag is set, the secrets request, and a
   rotation, under a key the server received before the flag's last enabling are
   `key_rotation_required`, whatever other keys the access key holds, the old key of a
@@ -2616,8 +2851,8 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   `QORY_RUN_ID` and `QORY_RUN_SOCKET` pass.
 - **Public roots:** a proxy test with a host whose certificate chains only to an
   authority the test adds to the machine's trust store: with `tls.public_roots_only`
-  unset or `true`, a stored value is never sent there and `dev.qory.run.egress` records
-  `dial_failed` with `wall:public-roots`; with `false`, the host receives it; a machine
+  unset or `true`, a stored value stays with the proxy and `dev.qory.run.egress` records
+  a refused request with `wall:public-roots`; with `false`, the host receives it; a machine
   value reaches that host under either setting.
 - **Labels:** a local checkout's second run with a changed origin is `labels_changed`,
   and runs after `--relabel`; a CI's explicit labels are used as given.
