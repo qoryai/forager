@@ -127,7 +127,7 @@ Fixtures on main the fixtures, and Sources the sources.
   and last event, always sent, like the ping. Main's refusals before the start, of tools,
   images and the run configuration's fetch, get codes of their own.
 - `dev.qory.run.policy_applied` reports `connections`, `connections_withheld` and
-  `variables` in place of `credentials` and `terminated`, and allows `url` and
+  `variables` in place of `credentials`, keeps `terminated`, and allows `url` and
   `run_configuration` with `source` `none`. `dev.qory.run.egress` names the `connection`
   in place of the `credential`, gains `renewal_failed`, and records `wall:trace` and
   `wall:public-roots` in `rule`, as main records `wall:own-address`.
@@ -148,7 +148,9 @@ Fixtures on main the fixtures, and Sources the sources.
   `access-key` and `auth` schemas, `events/run.refused`, and the data files
   `headers.json`, `runtimes.json` and `denied-variables.json`.
 - Changed: `server`, `configuration`, `run-configuration`, `policy`, `descriptor`,
-  `events/run.policy_applied` and `events/run.egress`.
+  `events/run.policy_applied`, and `events/run.egress`, whose `credential` becomes
+  `connection` and which gains `renewal_failed`, a boolean, true on a request whose
+  connection's last renewal failed.
 
 **§Fixtures**
 
@@ -211,9 +213,8 @@ Each line names a passage of the README on main and what it becomes.
   gains "and the server's variables only with `variables.unwalled: accept`".
 - **§Limits, the termination bullet.** "a host the run has a credential or path rules
   for, or a tool serves" becomes "a host of a connection, a host with path rules, or a
-  host a tool serves", and "`dev.qory.run.policy_applied` lists those hosts as
-  `terminated`" becomes "lists them in its connections' `uses`, its tools' `hosts` and
-  its `paths`".
+  host a tool serves"; `dev.qory.run.policy_applied` still lists those hosts as
+  `terminated`.
 - **§Limits, the enclosure bullet.** "one the policy selects stays outside" becomes "a
   value a connection supplies stays outside", with `runtime_secret_conflict` (Runtimes).
 - **§Sequence, step 1.** The launch spec gains the connections, the providers and local
@@ -233,8 +234,7 @@ Each line names a passage of the README on main and what it becomes.
   "placeholders … as a credential's (§Credentials)" becomes "as a connection's"; "as for
   a credential's host" becomes "as for a connection's host"; "a host a tool serves and a
   credential is for" becomes "a host a tool serves and a connection covers",
-  `connection_host_conflict`; the record's "their hosts among `terminated`" becomes
-  "their `hosts`"; the refusals before the start take the codes of Events.
+  `connection_host_conflict`; the refusals before the start take the codes of Events.
 - **§Images.** "as it selects credentials and tools" becomes "as it selects tools", and
   "in a credential's grammar" becomes "in a tool's name grammar".
 - **§The wall.** "the proxy, the policy and the server's secret" becomes "the proxy, the
@@ -2507,15 +2507,16 @@ and value id; `uses` where and how the proxy sets each value; `hosts_denied` the
 connection's hosts the policy in force denies, recomputed in every further
 `policy_applied`. An integration connection's entry also records its `argument`, `version`
 and `repository`, so the record shows what each credential is minted for. `terminated`
-leaves `policy_applied`: `uses` and `hosts_denied` record the connections' hosts, and the
-tools' entries record theirs. `dev.qory.run.egress` has `connection`, the id, in place of
-`credential`, matching a run configuration's `^con_[0-9a-hjkmnp-tv-z]{16}$` or the runner
-file's `^[a-z0-9][a-z0-9_-]{0,63}$`, and `renewal_failed` (Integrations). `wall:trace` and
-`wall:public-roots` go in `rule`, as `wall:own-address` does on main: `decision: denied`,
-`outcome: refused`, and the session gets a `403`. The heartbeat schema's "a receiver that
-misses two in a row may consider the run lost" reads "misses two in a row, that is,
-receives none for 3 × `interval_seconds`", as Decision 4 says. A top-level `variables`
-reports the variables by name:
+stays: the hosts where the proxy terminates TLS in this run, namely those a connection
+sets a value on, those a tool serves, and those with path rules; a host verified against
+public roots only is among them as a connection's host. `dev.qory.run.egress` has
+`connection`, the id, in place of `credential`, matching a run configuration's
+`^con_[0-9a-hjkmnp-tv-z]{16}$` or the runner file's `^[a-z0-9][a-z0-9_-]{0,63}$`, and
+`renewal_failed` (Integrations). `wall:trace` and `wall:public-roots` go in `rule`, as
+`wall:own-address` does on main: `decision: denied`, `outcome: refused`, and the session
+gets a `403`. The heartbeat schema's "a receiver that misses two in a row may consider the
+run lost" reads "misses two in a row, that is, receives none for 3 × `interval_seconds`",
+as Decision 4 says. A top-level `variables` reports the variables by name:
 
 ```json
 "variables": {"names": ["APP_REGION", "NODE_ENV"],
