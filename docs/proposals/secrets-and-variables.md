@@ -2584,7 +2584,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   `key_rotation_pending`, and a rejected key becomes a tombstone that stays refused when
   posted again; `qory` moves `.next` aside only when signed discovery shows that key
   neither current nor pending, and leaves both files on any unsigned answer.
-- **This round's rules:** `--print` leaves the marker as it is; a second `rekey` with the
+- **Key commands and codes:** `--print` leaves the marker as it is; a second `rekey` with the
   same code within 15 minutes re-posts the pending key and gets the same `202`, and with
   another code moves `.next` aside; a machine whose new key is pending keeps using its
   current key; a retry of a re-key gets `approved: true` once its key is current and
