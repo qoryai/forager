@@ -465,26 +465,25 @@ placeholder is `placeholder_conflict`.
   key with a proof of possession by the new key, signed under the current secret (Wire
   format). The new key needs approval; until then the current key keeps working, and a
   later rotation replaces a new key that still awaits it. On approval the old key stays
-  valid until the machine's first verified request under the new key, or for 24 hours
-  after the approval, whichever comes first, and then becomes a tombstone. The machine id
-  stays. Before each run while `machine-secret.next` exists, `qory` sends a discovery
+  valid for a fixed window of 24 hours, whatever the machine does, and then becomes a
+  tombstone; a request under the new key does not end it. An owner or administrator can
+  end the window early in the machines page, for example once a CI's secret store holds
+  the new secret. The machine id stays. Before each run while `machine-secret.next` exists, `qory` sends a discovery
   request signed under the new key: a signed `409` `machine_pending` means the key awaits
   approval, and the run uses the current secret; a signed `200` means it is approved, and
   `qory` moves `machine-secret.next` over `machine-secret` and the run uses it. Any other
-  answer leaves both files as they are. A planned rotation therefore has no gap.
+  answer leaves both files as they are. A planned rotation therefore has no gap and no
+  failing run: every run or job started under the old key finishes within the window.
+  The one case left is a run longer than 24 hours that began before the approval.
   Revocation, the action for a compromised key, is immediate and separate.
 - **Rotation on a CI machine.** The operator runs `qory machine rotate --print` with the
   current secret, which posts the new key, writes no file and prints the new
-  `QORY_MACHINE_SECRET`; approves the new key in the machines page; then, within 24 hours,
-  puts the new secret in the CI's secret store. Jobs sign with the old key until the
-  store changes and with the new one after, so runs keep working throughout. The order
+  `QORY_MACHINE_SECRET`; approves the new key in the machines page; within 24 hours,
+  puts the new secret in the CI's secret store; then, optionally, ends the window in the
+  machines page. Jobs sign with the old key until the store changes and with the new one
+  after, and both keys verify throughout the window, so runs keep working. The order
   matters: a job that signs with the new key before its approval is answered
   `machine_pending` and does not run.
-- **What remains of the race.** The first request under the new key ends the old key. A
-  run already under way with the old key at that moment, such as another job of a fleet
-  that shares the secret, or a second run on one machine, has its later requests refused,
-  `401`: a secrets request still to come fails, and the batches it could not deliver
-  stay in `undelivered/` for the resend.
 - **Revocation.** An owner or administrator revokes a machine in the machines page. A
   revoked machine's requests do not verify, `401`, so the server seals nothing to it.
   Its public key stays for good as a tombstone, with the machine id and when it was
@@ -691,8 +690,9 @@ whose exact bytes the server defines:
   when serving the GET and again before sealing; a failure is `503` `unavailable` on both,
   no run;
 - an integrity code over each machine row: its id, its public key, and during a rotation
-  the new key that awaits approval or the old key still valid after it, its scope, its stored-secrets flag, its rate limits,
-  its approval and whether it is revoked. The server stores no secret of the machine, so
+  the new key that awaits approval, or after the approval the old key and the end of its
+  window, its scope, its stored-secrets flag, its rate limits, its approval and whether
+  it is revoked. The server stores no secret of the machine, so
   reading the database no longer lets anyone act as a machine; writing to it could swap
   a public key for one of the writer's own, and the code stops that, as it stops a
   writer who moves a machine to another workspace, enables stored secrets, approves a
@@ -1299,7 +1299,7 @@ none, and refuses to start when both are set, as for the pin.
   revoked machine's request included. A request from a machine that awaits approval, or
   signed with a new key that awaits approval, verifies, and every signed endpoint answers
   it with a signed `409` `machine_pending`, discovery and the events endpoint included
-  (Decision 4). During a rotation's overlap the server verifies under either key.
+  (Decision 4). During a rotation's 24-hour window the server verifies under either key.
 - **Known answers**, under the fixture machine secret (Decision 5):
   - `qory-request-ed25519-v1\nGET\n/.well-known/qory-configuration\n1700000000`, 70
     bytes: `xTbqkwnwSxxmTtpDtg6FeefC0spXbH6iGFXRtlVva6Y767zhfnqoHxGHfiPRbs6pudrASAx7kNi7Q8MxzYIIDQ`;
@@ -1849,9 +1849,10 @@ are unreferenced, since Go cannot wipe a string.
   refuses an enrolment answer that does not verify under the key the code's fingerprint
   names; every signed endpoint, discovery and events included, answers a machine or key
   that awaits approval with a signed `409` `machine_pending`; rotation promotes
-  `machine-secret.next` only after a signed `200` to a request under the new key, and
-  the old key verifies until that request or for 24 hours after the approval, and not
-  after; a POST signed for one path fails at another.
+  `machine-secret.next` only after a signed `200` to a request under the new key; the
+  old key verifies for 24 hours after the approval whatever requests the new key signs,
+  and not after, unless an administrator ends the window earlier; a POST signed for one
+  path fails at another.
 - **Variables:** a machine value replaces an unlocked variable and yields to a locked
   one, each reported in `policy_applied`; every entry of the built-in deny list, in
   upper and lower case, and a name from `variables.deny`, is left out and reported, a
@@ -1882,7 +1883,7 @@ are unreferenced, since Go cannot wipe a string.
   server stores only the public key. `qory machine enrol` enrols a machine with a code;
   `qory machine key` prints a public key to paste into the server's machines page;
   `qory machine rotate` replaces the key and keeps the machine id; the old key stays valid
-  until the first request under the new one, or 24 hours after the approval.
+  for 24 hours after the approval, or until an administrator ends that window.
 - A machine, and every new key of it, needs approval; until then every endpoint answers
   it `machine_pending`. Stored values are sealed to an approved machine and fetched from
   the secrets endpoint for the connections the run applies.
