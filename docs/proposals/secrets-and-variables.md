@@ -128,9 +128,9 @@ through `X-Qory-Contract-Version`.
   that does not start included.
 - **Who may link**: only owners and administrators link a secret into a connection,
   define a custom service, edit variables or enable stored secrets on a machine.
-- **Enabling stored secrets forces a rotation**: the server seals only to a key approved
-  after the flag was last enabled, so a key an earlier unwalled agent could have read
-  never receives a stored value (Decision 4).
+- **Enabling stored secrets forces a rotation**: the server seals only to a key it
+  received after the flag was last enabled, so a key an earlier unwalled agent could
+  have read never receives a stored value (Decision 4).
 - **A machine without stored secrets** receives the holder's rendering with every
   connection that references a stored value left out, and reports them by name
   (Decision 6).
@@ -515,8 +515,11 @@ placeholder is `placeholder_conflict`.
 
   Anything else is `409` `machine_key_invalid`, the published fixture machine key
   included. The checks run on every path because a proof of possession proves nothing
-  for a key of small order: OpenSSL accepts the identity key with an all-zero signature
-  for any message. A key that matches a tombstone is `409` `machine_revoked`.
+  for a key of small order: OpenSSL accepts the identity key with R = identity and S = 0,
+  and the order-4 key y = 0 with an all-zero signature, for any message. Nor does a proof
+  replace the prime-order check: whoever knows a key's scalar can make a valid proof for
+  that key plus a torsion point in about one try in eight, since cofactorless
+  verification then accepts whenever 8 divides the challenge. A key that matches a tombstone is `409` `machine_revoked`.
 - **Tombstones.** A tombstone holds a public key, its machine id and when the key was
   retired: by revocation, by rotation or by the rejection of a pending key. It outlives
   the deletion of its workspace and organisation, so the key never enrols again and the
@@ -539,22 +542,39 @@ placeholder is `placeholder_conflict`.
   unwalled runs; a CI or shared machine receives stored secrets and runs walled. A fleet
   that wants one identity shares one machine secret through its secret store.
 - **Enabling stored secrets forces a rotation.** A secret an earlier unwalled agent read
-  must never unlock stored values, so the server seals only to a key approved at or
-  after the time the machine's stored-secrets flag was last enabled; that time is in the
-  machine row and its integrity code. A machine whose key is older gets `409`
-  `key_rotation_required` on the secrets request, and signed discovery lists
-  `secrets` and `key_rotation_required: true` for it. `qory` then writes the
-  `stored-secrets` marker before it generates the new key, so no unwalled run can see
-  that key, and rotates as below. A key that enrols, or is pasted, while the flag is
-  set is approved after it and needs no rotation.
+  must never unlock stored values, so the server seals only to a key it received, by
+  enrolment, paste or rotation, after the machine's stored-secrets flag was last
+  enabled. The machine row holds that time and the time it received each key it holds,
+  current, pending and old, all under its integrity code. Enabling the flag also rejects
+  any pending key, which becomes a tombstone, because it was received before.
+  - A machine whose current key is older gets `409` `key_rotation_required` on the
+    secrets request. Signed discovery lists `secrets` and `key_rotation_required: true`
+    to the current key only, and only while no eligible key is pending; otherwise the
+    member is omitted.
+  - When the secret is held in a file, `qory` then writes the `stored-secrets` marker
+    before it generates the new key, so no unwalled run can see that key, and rotates as
+    below; a `key_rotation_pending` answer to that rotation is no error. With the secret
+    in `QORY_MACHINE_SECRET` or a file descriptor, `qory` reports `key_rotation_required`
+    and the operator rotates with `--print`, as on a CI machine.
+  - `qory machine rotate` also writes the marker before it generates a key whenever
+    discovery lists `secrets`.
+  - A key enrolled or pasted while the flag is set is received after it and needs no
+    rotation. The server cannot know when a pasted key was generated, so the owner pastes
+    a key `qory machine key` generated for that machine and that purpose.
+  - The variant follows the flag alone, by intent. A machine with the flag and no
+    eligible key receives the full rendering and is refused at the secrets request,
+    `key_rotation_required`, which discovery has already announced, so the failure is
+    explicit rather than a run quietly missing its connections.
 - **Rotation.** `qory machine rotate` generates a new secret, writes it to
   `machine-secret.next`, mode `0600`, beside `machine-secret`, prints the new key's
   fingerprint, and posts the new public key with a proof of possession by the new key,
   signed under the current secret (Wire format). The new key needs approval, given
   after comparing that fingerprint with the machines page's; until then the current key
   keeps working.
-  - Only the current key may rotate: during a window the old key's rotation request is
-    `401`. A second rotation while a new key awaits approval is `409`
+  - Only the current key may rotate: the old key of an open window and the pending key
+    each get `401` there. A rotation that posts a key this machine holds or held, its
+    current key, the old key of an open window or one of its own tombstones, is
+    `machine_key_invalid`. A second rotation while a new key awaits approval is `409`
     `key_rotation_pending`; a repeat of the pending key's own request is answered as the
     first was. An owner or administrator can reject a pending key without revoking the
     machine, and a rejected key becomes a tombstone.
@@ -803,8 +823,9 @@ whose exact bytes the server defines:
   no run;
 - an integrity code over each machine row: its id, its public key, and during a rotation
   the new key that awaits approval, or after the approval the old key and the end of its
-  window, its workspace, its stored-secrets flag and when it was last enabled, its rate
-  limits, its approval and whether it is revoked. The server stores no secret of the
+  window, the time the server received each of those keys, its workspace, its
+  stored-secrets flag and when it was last enabled, its rate limits, its approval and
+  whether it is revoked. The server stores no secret of the
   machine, so
   reading the database no longer lets anyone act as a machine; writing to it could swap
   a public key for one of the writer's own, and the code stops that, as it stops a
@@ -850,13 +871,27 @@ the machine pins:
   Discovery for every verified machine lists the current public key, and during a
   rotation the next one too, `apiary_public_key: [{"alg": "ed25519", "public_key": "<32
   bytes, base64url>"}]`, for information only; the machines page shows it, and an
-  enrolment code carries its fingerprint. The next key during a rotation is
-  `APIARY_SIGNING_SECRET_NEXT`. The published fixture signing key is refused as a pin and
-  as the server's key, as the fixture machine secret is.
+  enrolment code carries its fingerprint. The published fixture signing key is refused
+  as a pin and as the server's key, in `APIARY_SIGNING_SECRET_NEXT` too, as the fixture
+  machine secret is.
+- **Rotating the server's key.**
+  1. The operator sets `APIARY_SIGNING_SECRET_NEXT`. The current key keeps signing, and
+     discovery and the enrolment answer list both public keys, current then next, so a
+     machine enrolled now pins both.
+  2. The operator adds the next public key to every other machine's pin out of band: in
+     `runner.yaml`, the image or the CI variable. A pin is a list, so both fit. The
+     runner never takes a key from discovery, because a stolen signing secret could
+     otherwise make itself permanent.
+  3. The switch: `APIARY_SIGNING_SECRET` takes the next value, and
+     `APIARY_SIGNING_SECRET_NEXT` is unset.
+  4. A code carries the fingerprint of the key that was signing when the code was made,
+     and every outstanding code ends at the switch.
+  5. A machine whose pin lacks the new key gets `answer_unsigned` until its pin is
+     updated.
 - The server signs every answer to a verified request with it, and every answer to an
   enrolment whose code it accepted: `X-Qory-Signature-Ed25519: <64 bytes, base64url>`,
-  over the six lines of Signed answers. An answer to a request that did not verify, a
-  `401` or a `400` before verification, is unsigned.
+  over the six lines of Signed answers. Every `401` is unsigned, wherever it falls, and
+  so is a `400` before verification.
 - The envelope gains `sig`, the 64-byte signature in base64url, over
   `lp32("qory envelope v1") ‖ lp32(suite) ‖ lp32(machine_id) ‖ lp32(run_id) ‖
   lp32(run_configuration) ‖ lp32(exp in canonical decimal) ‖ lp32(enc, raw) ‖
@@ -1280,14 +1315,22 @@ nothing else, as the query; labels the contract refuses are `400` `invalid_reque
 and on the secrets request alike, decided by one resolver.
 
 **The holder and its variant.** The labels select a holder within the machine's
-workspace, and the server refuses a holder outside it, `409` `holder_out_of_scope`. The
+workspace only; labels that select no holder there, such as a repository the workspace
+does not hold, get the workspace's baseline, as today. The
 server stores a rendering, with its digest, per holder and variant. There are two
 variants: the full rendering, and one with every connection that references a stored
 value left out. The server picks the variant from the machine row's stored-secrets flag
 alone: the full one for a machine allowed stored secrets, the other for any other
 machine. No request member selects it, so a machine can never ask for the other one.
-`X-Qory-Run-Configuration` carries that variant's digest. The variant without stored
-values lists what it left out in `withheld`, by `id`, `kind` and `name`; the runner
+On every answer that carries them, the GET's and the events endpoint's alike,
+`X-Qory-Run-Configuration` is the digest of the machine's variant, and
+`X-Qory-Configuration` that of the discovery document for the machine and the key the
+request verified under, so a machine without stored secrets reloads only when its own
+variant changes. The variant without stored values lists what it left out in `withheld`,
+by `id`, `kind` and `name`, and omits `withheld` when it left nothing out, so a holder
+without stored-value connections has one rendering, and one digest, for both variants.
+It keeps `connections`, even `[]`, whenever the full rendering has it, since an absent
+member would put the runner file's connections in force. The runner
 reports them in `policy_applied` as `connections_withheld`, and they raise no
 `connection_needs_wall` or `secrets_endpoint_missing`. When leaving them out leaves a
 required group of the run's runtime unmet, `runtime_secret_missing` applies as usual.
@@ -1511,7 +1554,12 @@ signature; the code and the proof authenticate it:
   fingerprint of the server's public key (Decision 4). `qory` sends it, and the proof
   covers it, in its normalised form: the 26 characters in upper case, `I` and `L` read as
   `1`, `O` as `0`, and hyphens removed, so a person may type it in either case and in
-  groups. The fingerprint is base64url and is never changed.
+  groups; `U` and every character outside Crockford's alphabet are refused, never
+  mapped. The fingerprint is base64url and is never changed. The schema's pattern is
+  `^qec_[0-9A-HJKMNP-TV-Z]{26}\.[A-Za-z0-9_-]{22}$`, so the server refuses a code not in
+  normalised form, `400` `invalid_request`, and builds the proof's second line from the
+  code as sent. The machines page may show a code in groups, `qec_F1XT-0RE0-…`, because
+  `qory` normalises.
 - `name` is the machine's name for people, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, by default
   its host name.
 - `public_key` is the raw 32-byte Ed25519 public key.
@@ -1523,12 +1571,13 @@ signature; the code and the proof authenticate it:
 The server's order at enrolment is its own, because the code that authenticates the
 request is in the body:
 
-1. `413`; `415`;
+1. `413`; `415`; `400` `bad_request` for a header sent twice;
 2. `429` per source address;
 3. `400` `unsupported_contract_version`; `400` `invalid_request` for a body that is not
-   JSON, fails its schema or has another `version`;
+   JSON, fails its schema, a code outside the pattern included, or has another `version`;
 4. `401` for a code it did not issue, or that is used or expired, the whole code compared,
-   fingerprint included; then `401` for a `timestamp` outside ±300 seconds;
+   fingerprint included; then `401` for a `timestamp` outside ±300 seconds. A used code
+   passes this step for a retry with the same public key while the code is valid;
 5. `429` per code;
 6. `409` `machine_key_invalid` or `machine_revoked` for the key (Decision 4), then `409`
    `machine_key_invalid` for a `proof` that does not verify;
@@ -1542,10 +1591,12 @@ request is in the body:
 ```
 
 Steps 1 to 4 go out unsigned; from step 5 on every answer is signed as Signed answers
-describes, line 3 being the request's `proof` exactly as sent. A retry with the same code
-and the same public key while the code is valid receives the same `201`, signed with the
-retry's own proof as line 3, so a machine whose answer was lost still learns its id; any
-other use of a used code is `401`. `qory` verifies the answer under the key of
+describes, line 3 being the request's `proof` exactly as sent. A retry still passes steps
+5 and 6, so a key since rejected, revoked or retired is `409` `machine_revoked`; it then
+receives a `201` for the same machine, built afresh, with the server's current
+`apiary_public_key` and `approved: false`, signed with the retry's own proof as line 3,
+so a machine whose answer was lost still learns its id. Any other use of a used code is
+`401`. `qory` verifies the answer under the key of
 `apiary_public_key` whose fingerprint the code carries, and refuses an answer that lists
 no such key or does not verify under it; only then does it write `machine_id` and
 `apiary_public_key`.
@@ -1572,14 +1623,17 @@ A signed POST to `machine_key.url`, under the current machine secret:
 `proof` is the Ed25519 signature under the new key of four lines joined by `\n`, with no
 newline after the last: `qory-rotate-ed25519-v1`, the machine id, the new public key as
 in the body, and the timestamp as the body's value in decimal seconds. The request
-verifies under the machine's current key only; the old key of an open window gets `401`.
-After the endpoint rules' order, the server refuses, in order: a `timestamp` outside
-±300 seconds, `401`; a new key while another awaits approval, `409`
-`key_rotation_pending`, unless the request repeats that pending key, which is answered
-as the first request was; a key the checks refuse (Decision 4), `409`
-`machine_key_invalid` or `machine_revoked`, a key equal to the current one being
-`machine_key_invalid`; a `proof` that does not verify, `409` `machine_key_invalid`. It
-keeps the key as the machine's pending key and answers `202` with `{"version": 1}`.
+verifies under the machine's current key only; the old key of an open window and the
+pending key each get `401`. After the endpoint rules' order, the server refuses, in
+order: a `timestamp` outside ±300 seconds, `401`; a new key while another awaits
+approval, `409` `key_rotation_pending`, unless the request repeats that pending key with
+a `proof` that verifies, which is answered as the first request was; a key the checks
+refuse (Decision 4), `409` `machine_key_invalid`; a key this machine already holds or
+held, its current key, the old key of an open window or one of its own tombstones,
+`409` `machine_key_invalid`; another tombstone, `409` `machine_revoked`; a `proof` that
+does not verify, `409` `machine_key_invalid`. It keeps the key as the machine's pending
+key, with the time it received it, and answers `202` with `{"version": 1}`. Uniqueness
+across machines is not decided yet (Open questions).
 
 Known answer: a new key from the seed of bytes 97 to 128,
 `qms_YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4A`, public key
@@ -1615,11 +1669,11 @@ The server, in order, after the endpoint rules:
 2. refuses a machine not allowed stored secrets: `409` `secrets_not_allowed`. A machine
    that awaits approval was answered `409` `machine_pending` before this step, and a
    revoked one did not authenticate, `401`;
-3. refuses a request whose key was approved before the machine's stored-secrets flag was
-   last enabled: `409` `key_rotation_required` (Decision 4);
+3. refuses a request whose key the server received before the machine's stored-secrets
+   flag was last enabled: `409` `key_rotation_required` (Decision 4);
 4. refuses a run whose row it has closed: `410` `run_closed`;
 5. resolves the holder the labels select, with the GET's resolver, within the machine's
-   workspace, else `409` `holder_out_of_scope`, and requires the current rendering of
+   workspace, and requires the current rendering of
    that holder's variant for the machine, or one superseded at most 15 minutes ago, to
    have the digest, else `410` `run_configuration_superseded`, a digest of the other
    variant included; that rendering's integrity code must verify, else `503`
@@ -1883,7 +1937,8 @@ Order at run start; the steps not listed are §Sequence's.
    no run, `unauthorized`. Ping. When discovery lists `secrets` and the run has no wall:
    `server_needs_wall`. When it lists `secrets`, or `key_rotation_required`, the runner
    reports that to its caller, and `qory` writes the `stored-secrets` marker and, for
-   `key_rotation_required`, rotates (Decision 4).
+   `key_rotation_required` with a file-held secret, rotates; otherwise it reports that
+   the operator rotates (Decision 4).
 3. When the configuration lists `run`: fetch the run configuration; recompute its digest;
    decode it with `encoding/json/v2`; validate it against the schema and the limits.
    Without `security_policy`, the machine's policy is the run's; without a
@@ -1939,13 +1994,12 @@ are unreferenced, since Go cannot wipe a string.
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member; labels the contract refuses |
 | `rate_limited` | server, `429` | the machine's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing machine row is `401` |
-| `machine_key_invalid` | server, `409` | at enrolment, paste or rotation: a public key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, is the published fixture machine key or, at rotation, the current key; or a proof of possession that does not verify |
-| `machine_revoked` | server, `409` | at enrolment, paste or rotation: the public key is a tombstone, whether it was retired by revocation, rotation or rejection |
+| `machine_key_invalid` | server, `409` | at enrolment, paste or rotation: a public key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, is the published fixture machine key or, at rotation, a key this machine holds or held: its current key, the old key of an open window or one of its own tombstones; or a proof of possession that does not verify |
+| `machine_revoked` | server, `409` | at enrolment, paste or rotation: the public key is a tombstone, whether it was retired by revocation, rotation or rejection; at rotation, another machine's |
 | `machine_pending` | server, `409` | on every signed endpoint, discovery and events included, after `429`: a request from a machine, or under a new key, that awaits approval |
 | `key_rotation_pending` | server, `409` | a rotation while another new key awaits approval |
-| `key_rotation_required` | server, `409` | the secrets request under a key approved before the machine's stored-secrets flag was last enabled |
+| `key_rotation_required` | server, `409` | the secrets request under a key the server received before the machine's stored-secrets flag was last enabled |
 | `secrets_not_allowed` | server, `409` | the machine is not allowed stored secrets |
-| `holder_out_of_scope` | server, `409` | the labels select a holder outside the machine's workspace, on the GET or the secrets request |
 | `run_closed` | server, `410` | the server has closed the run's row |
 | `run_configuration_superseded` | server, `410` | no rendering of the holder's variant for the machine with that digest, current or within 15 minutes; a digest of the other variant included |
 | `run_connections_invalid` | server, `409` | the listed connections are not those the rendering requires |
@@ -2010,8 +2064,8 @@ are unreferenced, since Go cannot wipe a string.
 | A link removed while a run starts | A superseded rendering seals only what the current rendering still references through the same connection | — |
 | Another runtime's credential | The secrets request lists one runtime connection, the run's own; the server seals nothing for any other | — |
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry: `secret_hosts_exceeded` | — |
-| A machine, choosing labels | `holder_out_of_scope` keeps it within its one workspace | Repository scope is no boundary against a machine: a machine is scoped to its workspace |
-| A machine secret an unwalled agent read before stored secrets were enabled | Enabling the flag forces a rotation: the server seals only to a key approved after it, `key_rotation_required`, and `qory` writes the `stored-secrets` marker before it generates the new key | — |
+| A machine, choosing labels | Labels resolve only within the machine's workspace | Repository scope is no boundary against a machine: a machine is scoped to its workspace |
+| A machine secret an unwalled agent read before stored secrets were enabled | Enabling the flag forces a rotation: the server seals only to a key it received after it, `key_rotation_required`; enabling it tombstones a pending key; `qory` writes the `stored-secrets` marker before it generates the new key | A pasted key generated before the flag and pasted after it; the owner pastes a key generated for the purpose |
 | A stolen enrolment code | Single use, valid for minutes, bound to one workspace and one machine's settings; until an owner or administrator approves the machine, after comparing fingerprints, every endpoint answers it `machine_pending`: no discovery, no run configuration, no variable, no stored value, no event accepted | An approval given without comparing the fingerprint |
 | A stolen machine secret | Stored secrets only for machines allowed them; revocation; rotation under the current key only, whose new key needs approval after comparing its fingerprint; a second rotation refused while one is pending; the recomputed digest binds values to the document the server rendered | Whoever has it is the machine and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so machine keys are rotated |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
@@ -2085,17 +2139,25 @@ are unreferenced, since Go cannot wipe a string.
   key of Decision 5, `machine_key_invalid`; a base64url value with padding, a `+` or `/`,
   or non-zero spare bits is refused; enrolment answers in its own order, with every
   `401` unsigned; a code typed in lower case or with hyphens normalises to the published
-  fixture code; a retry with the same code and key gets the same `201`; the old key's
-  rotation request is `401`, a second rotation while one is pending is
+  fixture code, and the server refuses a code outside the pattern, `U` included; a retry
+  with the same code and key gets a `201` for the same machine, built afresh, unless the
+  key has since been retired; the old key's and the pending key's rotation requests are
+  `401`, a rotation posting a key the machine holds or held is `machine_key_invalid`, a second rotation while one is pending is
   `key_rotation_pending`, and a rejected key becomes a tombstone.
-- **Stored secrets enabled later:** the secrets request under a key approved before the
-  flag is `key_rotation_required`; `qory` writes the marker before it generates the new
-  key; during a window the server seals to the key the request verified under, and a
+- **Stored secrets enabled later:** the secrets request under a key the server received
+  before the flag is `key_rotation_required`, even when that key was approved after it;
+  enabling the flag tombstones a pending key; discovery lists `key_rotation_required` to
+  the current key only and only while no eligible key is pending; `qory` writes the
+  marker before it generates the new key, and rotates by itself only from a file; during a window the server seals to the key the request verified under, and a
   reseal under the other key is `run_secrets_conflict`.
 - **Variants:** a machine without stored secrets receives the rendering with every
   stored-value connection left out and reports them in `connections_withheld`; a secrets
   request with the other variant's digest is `410` `run_configuration_superseded`; labels
-  that select a holder outside the machine's workspace are `holder_out_of_scope`.
+  naming a repository the workspace does not hold get the baseline; a holder whose
+  connections all reference stored values renders `connections: []` and `withheld` for a
+  machine without the flag; a holder without stored-value connections has one rendering
+  and one digest for both variants; and the events endpoint answers a machine without
+  stored secrets with its own variant's digest, so no reload follows.
 - **Variables:** a machine value replaces an unlocked variable and yields to a locked
   one, each reported in `policy_applied`; every entry of the built-in deny list, in
   upper and lower case, and a name from `variables.deny`, is left out and reported, a
@@ -2182,7 +2244,18 @@ broker.
 
 ## Open questions for the user
 
-None.
+Held for the user's decision:
+
+1. **An access key shared by many instances, or a machine.** The identity may be
+   renamed and reshaped. Held with it: signing the machine id as a line of every request
+   message, and refusing a public key that any other machine or tombstone holds.
+2. **`GIT_AUTHOR_*` and `GIT_COMMITTER_*`.** `GIT_*` denies `GIT_AUTHOR_NAME`,
+   `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, which teams set so
+   an agent's commits carry a bot identity, and which start no program. Keep them denied,
+   or list them as exceptions.
+3. **One workspace per machine** in 0.7.0, with organisation-scoped machines later.
+4. **Server variables in unwalled runs.** They reach unwalled runs, bounded by the deny
+   list; the alternative is to send them to walled runs only.
 
 **For the server's side:** none open. Answered: the secrets request lists the
 connections the run applies, so the server seals for the run's runtime only; the digest
