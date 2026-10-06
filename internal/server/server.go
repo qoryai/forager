@@ -292,10 +292,10 @@ func (c *Client) Check() error {
 }
 
 // http is the client every request goes through: the caller's, copied, or one with
-// Timeout, and in either case one that follows no redirect. Go copies a request's
-// headers to wherever a redirect points, so a followed 3xx would hand the access key
-// id, the signature and the timestamp to another host and take the answer from it. A
-// 3xx is a status like any other.
+// Timeout, and in either case one that follows no redirect and keeps no cookie. Go
+// copies a request's headers to wherever a redirect points, so a followed 3xx would
+// hand the access key id, the signature and the timestamp to another host and take the
+// answer from it. A 3xx is a status like any other.
 func (c *Client) http() *http.Client {
 	hc := &http.Client{Timeout: Timeout}
 	if c.HTTP != nil {
@@ -303,6 +303,7 @@ func (c *Client) http() *http.Client {
 		hc = &cp
 	}
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc.Jar = nil
 	return hc
 }
 
@@ -346,7 +347,10 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 		signed.Timestamp = accesskey.Timestamp(time.Now())
 		req.Header.Set(HeaderTimestamp, signed.Timestamp)
 	}
-	sig := c.Key.SignRequest(signed)
+	sig, err := c.Key.SignRequest(signed)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set(HeaderSignature, sig)
 	resp, err := c.http().Do(req)
 	if err != nil {

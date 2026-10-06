@@ -127,9 +127,10 @@ release may change what an existing document does, and says so under Upgrading.
   node's live instances are at its limit.
 - The reference receiver accepts the public keys its configuration holds, an access key
   awaiting approval among them, answers in the contract's order of refusals, a ping
-  whose `interval_seconds` is outside 1 to 300 being `invalid_request`, signs every
-  answer after verification under its own key, and closes a run, stops it, or refuses an
-  instance's ping where its hooks `Closed`, `Stop` and `Admit` say.
+  whose `interval_seconds` is outside 1 to 300 being `invalid_request`, and signs every
+  answer after verification under its own key, the `410` of its `Stop` among them. Its
+  new hooks `Closed` and `Admit` close a run with `run_closed` and refuse an instance's
+  ping with `instance_limit`.
 
 ### Changed
 

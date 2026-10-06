@@ -121,7 +121,8 @@ func signedGET(target string, k *accesskey.Key, ts string) *http.Request {
 	req.Header.Set(server.HeaderInstanceID, inst)
 	req.Header.Set(server.HeaderContractVersion, "1")
 	req.Header.Set(server.HeaderTimestamp, ts)
-	req.Header.Set(server.HeaderSignature, k.SignRequest(accesskey.Request{AccessKeyID: key, InstanceID: inst, Method: http.MethodGet, Target: target, Timestamp: ts}))
+	sig, _ := k.SignRequest(accesskey.Request{AccessKeyID: key, InstanceID: inst, Method: http.MethodGet, Target: target, Timestamp: ts})
+	req.Header.Set(server.HeaderSignature, sig)
 	return req
 }
 
@@ -134,7 +135,8 @@ func signedPOST(target string, k *accesskey.Key, body []byte) *http.Request {
 	req.Header.Set(server.HeaderContractVersion, "1")
 	req.Header.Set("Content-Type", server.ContentType)
 	req.Header.Set(server.HeaderDelivery, event.NewID())
-	req.Header.Set(server.HeaderSignature, k.SignRequest(accesskey.Request{AccessKeyID: key, InstanceID: inst, Method: http.MethodPost, Target: target, Body: body}))
+	sig, _ := k.SignRequest(accesskey.Request{AccessKeyID: key, InstanceID: inst, Method: http.MethodPost, Target: target, Body: body})
+	req.Header.Set(server.HeaderSignature, sig)
 	return req
 }
 
@@ -358,7 +360,8 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(string(b)))
 			sr.Body = b
 		}
-		r.Header.Set(server.HeaderSignature, fixtureKey.SignRequest(sr))
+		sig, _ := fixtureKey.SignRequest(sr)
+		r.Header.Set(server.HeaderSignature, sig)
 		return r
 	}
 	instance := func(id string, r *http.Request) *http.Request {

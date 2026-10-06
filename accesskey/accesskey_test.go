@@ -307,11 +307,14 @@ func TestRequestKnownAnswers(t *testing.T) {
 		} else {
 			r.Timestamp = v.Lines[5]
 		}
-		m := r.Message()
+		m, err := r.Message()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(m) != strings.Join(v.Lines, "\n") || len(m) != v.Length {
 			t.Errorf("%s: message of %d bytes:\n%s", v.Note, len(m), m)
 		}
-		if got := key.SignRequest(r); got != v.Signature {
+		if got, _ := key.SignRequest(r); got != v.Signature {
 			t.Errorf("%s: signature %s, want %s", v.Note, got, v.Signature)
 		}
 		pub := key.PublicKey()
@@ -858,5 +861,38 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 	}
 	if n != 4 {
 		t.Errorf("%d signed refusals; want 4", n)
+	}
+}
+
+// TestOnlyAGETOrAPOSTIsSigned pins that a request of another method has no request
+// string: it is not signed, and no signature verifies for it.
+func TestOnlyAGETOrAPOSTIsSigned(t *testing.T) {
+	key := keys(t).accessKey(t)
+	for _, method := range []string{"PUT", "DELETE", "HEAD", "", "get"} {
+		r := accesskey.Request{AccessKeyID: "ak_f1xt0re000000000", InstanceID: "i_x", Method: method, Target: "/"}
+		sig, err := key.SignRequest(r)
+		if method == "get" {
+			if err != nil {
+				t.Errorf("a GET in lower case: %v", err)
+			}
+			continue
+		}
+		if !errors.Is(err, accesskey.ErrMethod) || sig != "" {
+			t.Errorf("%q: %q, %v", method, sig, err)
+		}
+		get, _ := key.SignRequest(accesskey.Request{AccessKeyID: "ak_f1xt0re000000000", InstanceID: "i_x", Method: "GET", Target: "/"})
+		if key.PublicKey().VerifyRequest(r, get) {
+			t.Errorf("%q verifies", method)
+		}
+	}
+	for _, origin := range []string{"http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787"} {
+		r, _ := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+		if _, err := r.Post(context.Background(), nil, origin, "test"); err != nil && strings.Contains(err.Error(), "neither https") {
+			t.Errorf("%s is refused as an origin", origin)
+		}
+	}
+	r, _ := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	if _, err := r.Post(context.Background(), nil, "http://127.0.0.2:8787", "test"); err == nil || !strings.Contains(err.Error(), "neither https") {
+		t.Errorf("http to 127.0.0.2, which server.schema.json refuses: %v", err)
 	}
 }

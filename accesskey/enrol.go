@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -333,8 +332,8 @@ func checkOrigin(s string) error {
 	case "https":
 		return nil
 	case "http":
-		host := u.Hostname()
-		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		// The loopback hosts server.schema.json allows: localhost, 127.0.0.1 and [::1].
+		if host := u.Hostname(); host == "localhost" || host == "127.0.0.1" || host == "::1" {
 			return nil
 		}
 	}

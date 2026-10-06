@@ -54,9 +54,17 @@ type Request struct {
 	Body []byte
 }
 
-// Message returns the request string the signature covers.
-func (r Request) Message() []byte {
+// ErrMethod is the error of a request whose method is neither GET nor POST, the two
+// the contract signs.
+var ErrMethod = errors.New("the contract signs a GET or a POST, and no other method")
+
+// Message returns the request string the signature covers, or [ErrMethod] for a
+// method other than GET and POST.
+func (r Request) Message() ([]byte, error) {
 	method := strings.ToUpper(r.Method)
+	if method != http.MethodGet && method != http.MethodPost {
+		return nil, ErrMethod
+	}
 	var b bytes.Buffer
 	b.WriteString(RequestDomain + "\n" + r.AccessKeyID + "\n" + r.InstanceID + "\n" + method + "\n" + r.Target + "\n")
 	if method == http.MethodPost {
@@ -64,18 +72,30 @@ func (r Request) Message() []byte {
 	} else {
 		b.WriteString(r.Timestamp)
 	}
-	return b.Bytes()
+	return b.Bytes(), nil
 }
 
 // SignRequest returns X-Qory-Signature-Ed25519 for a request: its signature under the
-// access key, 64 bytes in base64url.
-func (k *Key) SignRequest(r Request) string { return encodeSignature(k.Sign(r.Message())) }
+// access key, 64 bytes in base64url, or [ErrMethod] for a method other than GET and
+// POST.
+func (k *Key) SignRequest(r Request) (string, error) {
+	m, err := r.Message()
+	if err != nil {
+		return "", err
+	}
+	return encodeSignature(k.Sign(m)), nil
+}
 
 // VerifyRequest reports whether signature, as X-Qory-Signature-Ed25519 contains it,
-// is the request's signature under the public key.
+// is the request's signature under the public key; a request of another method than
+// GET and POST verifies under none.
 func (p PublicKey) VerifyRequest(r Request, signature string) bool {
+	m, err := r.Message()
+	if err != nil {
+		return false
+	}
 	sig, err := decode(signature, ed25519.SignatureSize)
-	return err == nil && p.Verify(r.Message(), sig)
+	return err == nil && p.Verify(m, sig)
 }
 
 // Timestamp returns X-Qory-Timestamp for a moment: Unix seconds, UTC, a decimal
