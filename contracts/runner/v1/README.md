@@ -524,7 +524,7 @@ The types, one namespace. The runner's own:
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event; `elapsed_seconds` counts since the ping | `elapsed_seconds`, `interval_seconds` |
-| `dev.qory.run.exited` | the runtime exited; the result and the last event, or `dev.qory.run.refused` is for a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
+| `dev.qory.run.exited` | the runtime exited; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 | `dev.qory.run.refused` | the run did not start after the ping; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last | `code`, and when they apply `connection`, `names`, `providers`, `status` |
 
 The session's, produced by a descriptor from what the runtime reports:
@@ -644,17 +644,18 @@ runner finds every endpoint through the configuration document under it.
 
 **The access key.** The access key authenticates the runner to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
-padding, 47 characters, from the system's random source; the prefix lets secret
-scanners recognise it. The secret signs every request and is never sent, and the server
-stores only the public key. The server assigns the access key its id, `ak_` and 16
-lower-case Crockford base32 characters, when the key enrols (Enrolment, below). The
-secret lives outside this document and outside any repository, in the machine's
-configuration directory, its environment or a file descriptor; it is never in a checkout
-and never in an event. The fixtures sign with the published fixture access key of
+padding, 47 characters, from the system's random source; the prefix lets secret scanners
+recognise it. The secret signs every request and is never sent, and the server stores
+only the public key. The server assigns the access key its id, `ak_` and 16 lower-case
+Crockford base32 characters, when the key enrols (Enrolment, below). The secret lives
+outside this document and outside any repository, in the machine's configuration
+directory, its environment or a file descriptor; it is never in a checkout and never in
+an event. The fixtures sign with the published fixture access key of
 `fixtures/known-answers/keys.json`, under the id `ak_f1xt0re000000000`. `qory` refuses
 its secret, and the fixture signing keys as a pin; a server refuses its public key at
-enrolment, and the fixture signing keys as its own key. A fingerprint, of an access key's public key or of the
-server's, is `base64url(SHA-256(raw public key)[:16])`, 22 characters.
+enrolment, and the fixture signing keys as its own key. A fingerprint, of an access
+key's public key or of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22
+characters.
 
 **Nodes and instances.** An access key belongs to a node, `nd_`, a permanent machine
 that runs one instance at a time, or to a node pool, `np_`, whose instances share the
@@ -699,8 +700,8 @@ starts with three lines: `qory-request-ed25519-v1`, the access key id and the in
 id, exactly as the headers contain them, an absent instance id as an empty line. Then:
 
 - for a GET, the method in upper case; the request target exactly as sent, the path and
-  then `?` and the query only when the query is non-empty, nothing decoded, re-ordered or
-  normalised on either side; and the timestamp as sent in `X-Qory-Timestamp`, Unix
+  then `?` and the query only when the query is non-empty, nothing decoded, reordered
+  or normalised on either side; and the timestamp as sent in `X-Qory-Timestamp`, Unix
   seconds, UTC, a decimal integer. The server accepts the request when `|server now -
   timestamp| <= 300` seconds, in either direction.
 - for a POST, `POST`; the request target exactly as sent; then the raw request body. A
@@ -721,8 +722,8 @@ line in `fixtures/known-answers/signatures.json`:
   `H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ`;
 - the same with the target `/.well-known/qory-configuration?x=1`, 119 bytes:
   `XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ`;
-- a POST to `/v1/secrets` of the 297-byte body of `fixtures/sealed/secrets-request.json`,
-  a signed message of 383 bytes:
+- a POST to `/v1/secrets` of the 297-byte body of
+  `fixtures/sealed/secrets-request.json`, a signed message of 383 bytes:
   `evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw`.
 
 **A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
@@ -761,7 +762,8 @@ its headers unread, and a reload's fetch without one fails the reload. The runne
 a body's code only from a signed answer, and a refusal body over 64 KiB counts as
 unsigned. Two known answers under the fixture signing key, to the GET of discovery
 above: `200` with the 208-byte body of `fixtures/known-answers/discovery.json` and
-`X-Qory-Configuration: sha256=` and the hex SHA-256 of that body, six lines of 251 bytes,
+`X-Qory-Configuration: sha256=` and the hex SHA-256 of that body, six lines of 251
+bytes,
 `KR8RzAb1z5MnEj2SPYFrghfXqVdU7Da2Yu0qU1-VQhmuObVUiKLywh8FoTawEfg9u0VgOgFQJhutD3-w4a55Bg`;
 and `404` with an empty body and no digest, 180 bytes,
 `wtXEpqIYCRAH0I9P0wd1DxJxkury0OE566ADTu3bH2GWUP4-TAkNl3a5oKGP6ZVWsP8oPL-yJHuaOaxbNPU_Dg`.
@@ -773,7 +775,9 @@ order of refusals on discovery, the run configuration and the events endpoint: `
 `X-Qory-Instance-Id`, `X-Qory-Signature-Ed25519` and `X-Qory-Timestamp`, unsigned;
 `401`; `429`; `400` `bad_request` for an instance id absent or outside its pattern,
 signed; `409` `key_pending`; `400` `unsupported_contract_version`; `400`
-`invalid_request` for a body or labels the contract refuses; then each endpoint's own.
+`invalid_request` for a body or labels the contract refuses, a ping with
+`interval_seconds` above 300 included; `401` for a timestamp outside ±300 seconds;
+then each endpoint's own.
 The events endpoint's own, in order: deduplication, so a batch whose delivery id or
 event ids the server already accepted gets the same `2xx` again; `410` `run_closed` for
 an event of a run the server has closed; then, for a ping alone, `409`
@@ -875,10 +879,10 @@ run.
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
 events of one run, in sequence order, never empty. The runner cuts a batch at one
 hundred events, at one mebibyte, or after one second since its first event, whichever
-comes first; the ping is a batch of one, sent before anything else, with the
-heartbeat interval the run uses, `interval_seconds`, at most 300. A receiver verifies the
-Ed25519 signature over the request string before parsing, then deduplicates on each
-event's `id`, since delivery is at least once.
+comes first; the ping is a batch of one, sent before anything else, with the heartbeat
+interval the run uses, `interval_seconds`, at most 300. A receiver verifies the Ed25519
+signature over the request string before parsing, then deduplicates on each event's
+`id`, since delivery is at least once.
 
 The runner reads a body's code only from a signed answer:
 
@@ -918,19 +922,21 @@ same directory rather than blocking the runtime.
 **After a runner stops unexpectedly.** The run directory records what the server is
 still owed, without the runner that wrote it. `events.jsonl` is written as events
 happen. `delivered.log` beside it gets a line as each batch is accepted, the delivery id
-and the sequence of every event in it, and the one word `stopped` for a signed 410. `lock` is
-held by the runner for as long as it lives, by the kernel, so it is free once the runner
-is gone however it went. Sending a run again is the job's last step, whatever happens
-before it: refused while the lock is held; then what the run's wall leaves behind is
-removed, by the run's label; a record that has `dev.qory.run.started` and no
-`dev.qory.run.exited` gets one, numbered on from the last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`;
-and every event the server's filter selects that no accepted batch contained is posted,
-in order, in batches cut the same way, until the server accepts them or the runner stops
-retrying. The resend fetches the configuration document first, as a run does, posts
-to the URL it defines, and verifies every answer's signature under the pin. What is still not accepted is under `undelivered/` again. A
-receiver sees some events twice when the runner dies between an answer and its line, and
-discards them by `id` as any duplicate. Nothing of this recovers a machine that dies:
-the record is lost with it, and a receiver detects that from heartbeats that stop.
+and the sequence of every event in it, and the one word `stopped` for a signed 410.
+`lock` is held by the runner for as long as it lives, by the kernel, so it is free once
+the runner is gone however it went. Sending a run again is the job's last step, whatever
+happens before it: refused while the lock is held; then what the run's wall leaves
+behind is removed, by the run's label; a record that has `dev.qory.run.started` and no
+`dev.qory.run.exited` gets one, numbered on from the last event, with `state: failed`,
+`exit_code: -1` and `reason: runner_lost`; and every event the server's filter selects
+that no accepted batch contained is posted, in order, in batches cut the same way, until
+the server accepts them or the runner stops retrying. The resend fetches the
+configuration document first, as a run does, posts to the URL it defines, and verifies
+every answer's signature under the pin. What is still not accepted is under
+`undelivered/` again. A receiver sees some events twice when the runner dies between an
+answer and its line, and discards them by `id` as any duplicate. Nothing of this
+recovers a machine that dies: the record is lost with it, and a receiver detects that
+from heartbeats that stop.
 
 **The modes of a run:**
 
@@ -943,9 +949,9 @@ the record is lost with it, and a receiver detects that from heartbeats that sto
 A discovery fetch that fails, in transport, with a status other than `200`, with an
 answer that does not verify or with a document the schema refuses, or a ping not
 accepted: no run, and the error contains the URL, the status and the code when a signed
-answer contains one. A `run` section present and its fetch not returning `200`: no run. The
-command's `--policy`, a run's own policy under the machine's, keeps its meaning without
-a server; with a fetched run configuration the fetched policy is the policy, and
+answer contains one. A `run` section present and its fetch not returning `200`: no run.
+The command's `--policy`, a run's own policy under the machine's, keeps its meaning
+without a server; with a fetched run configuration the fetched policy is the policy, and
 `--policy` is refused with an error that states so.
 
 **The reference receiver** is the public package `receiver` of this module: a plain

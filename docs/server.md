@@ -17,9 +17,9 @@ example is in [the policy](policy.md#in-runneryaml).
 - `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
-  id and the pin; `qory access-key create` prints a public key for the server's owner to
-  paste. Either way the key awaits approval, and until then a run is refused with
-  `key_pending`.
+  id and the pin; the key awaits approval, and until then a run is refused with
+  `key_pending`. `qory access-key create` prints a public key for the server's owner to
+  paste, and a pasted key is approved as it is entered.
 - The run's policy comes from the server, when the server offers one.
 - With `server` set, the run starts only when the server answers the fetch and a ping,
   signed. So a run meant to be observed never runs unobserved.

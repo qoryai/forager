@@ -108,7 +108,7 @@ server:                         # how the node reports; without it, files only
   url: https://control-plane.example.com
   access_key_id: ak_f1xt0re000000000   # or QORY_ACCESS_KEY_ID in the environment
   apiary_public_key:                   # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
-    - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
+    - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 wall:
   adapter: docker
   image: agent:1                # or --image
