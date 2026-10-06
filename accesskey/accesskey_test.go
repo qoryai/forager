@@ -1,0 +1,686 @@
+package accesskey_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/runner/contracts"
+)
+
+// read reads one file of the contract, by its path under runner/v1.
+func read(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := fs.ReadFile(contracts.FS, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// load reads one JSON file of the contract into v.
+func load(t *testing.T, name string, v any) {
+	t.Helper()
+	if err := json.Unmarshal(read(t, name), v); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+}
+
+type fixtureKeys struct {
+	AccessKey struct {
+		Secret           string `json:"secret"`
+		AccessKeyID      string `json:"access_key_id"`
+		InstanceID       string `json:"instance_id"`
+		PublicKey        string `json:"public_key"`
+		Fingerprint      string `json:"fingerprint"`
+		X25519PrivateKey string `json:"x25519_private_key"`
+		X25519PublicKey  string `json:"x25519_public_key"`
+	} `json:"access_key"`
+	SigningKey     signingKey `json:"signing_key"`
+	NextSigningKey signingKey `json:"next_signing_key"`
+}
+
+type signingKey struct {
+	Seed        string `json:"seed"`
+	PublicKey   string `json:"public_key"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func keys(t *testing.T) fixtureKeys {
+	t.Helper()
+	var k fixtureKeys
+	load(t, "fixtures/known-answers/keys.json", &k)
+	return k
+}
+
+// accessKey is the fixture access key, read from its secret.
+func (k fixtureKeys) accessKey(t *testing.T) *accesskey.Key {
+	t.Helper()
+	key, err := accesskey.ParseSecret(k.AccessKey.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// signing is a fixture signing key of the server, from its seed.
+func (s signingKey) key(t *testing.T) *accesskey.Key {
+	t.Helper()
+	seed, err := base64.RawURLEncoding.DecodeString(s.Seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := accesskey.NewKey(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func (s signingKey) pin() accesskey.Pin {
+	return accesskey.Pin{{Alg: "ed25519", PublicKey: s.PublicKey}}
+}
+
+// TestFixtureAccessKey reproduces the fixture access key from its secret: the secret
+// read and written again, the public key, its fingerprint, the X25519 private key and
+// the X25519 public key both from the private key and as the u-coordinate of the
+// Ed25519 public key; and the fixture signing keys from their seeds.
+func TestFixtureAccessKey(t *testing.T) {
+	k := keys(t)
+	key := k.accessKey(t)
+	a := k.AccessKey
+	if key.Secret() != a.Secret {
+		t.Errorf("Secret = %s, want the one it was read from", key.Secret())
+	}
+	if got := key.PublicKey().String(); got != a.PublicKey {
+		t.Errorf("public key %s, want %s", got, a.PublicKey)
+	}
+	if got := key.Fingerprint(); got != a.Fingerprint {
+		t.Errorf("fingerprint %s, want %s", got, a.Fingerprint)
+	}
+	if got := base64.RawURLEncoding.EncodeToString(key.X25519PrivateKey()); got != a.X25519PrivateKey {
+		t.Errorf("X25519 private key %s, want %s", got, a.X25519PrivateKey)
+	}
+	if got := base64.RawURLEncoding.EncodeToString(key.X25519().Bytes()); got != a.X25519PrivateKey {
+		t.Errorf("X25519().Bytes() %s, want %s", got, a.X25519PrivateKey)
+	}
+	if got := base64.RawURLEncoding.EncodeToString(key.X25519().PublicKey().Bytes()); got != a.X25519PublicKey {
+		t.Errorf("X25519 public key from the private key %s, want %s", got, a.X25519PublicKey)
+	}
+	u, err := key.PublicKey().X25519()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := base64.RawURLEncoding.EncodeToString(u); got != a.X25519PublicKey {
+		t.Errorf("X25519 public key as the u-coordinate %s, want %s", got, a.X25519PublicKey)
+	}
+	if err := accesskey.CheckID(a.AccessKeyID); err != nil {
+		t.Error(err)
+	}
+	if err := accesskey.CheckInstanceID(a.InstanceID); err != nil {
+		t.Error(err)
+	}
+	if !key.PublicKey().Fixture() {
+		t.Error("the fixture access key is not reported as a fixture")
+	}
+	for _, s := range []signingKey{k.SigningKey, k.NextSigningKey} {
+		sk := s.key(t)
+		if got := sk.PublicKey().String(); got != s.PublicKey || sk.Fingerprint() != s.Fingerprint {
+			t.Errorf("signing key %s, fingerprint %s; want %s, %s", got, sk.Fingerprint(), s.PublicKey, s.Fingerprint)
+		}
+		if !sk.PublicKey().Fixture() || !s.pin().Fixture() {
+			t.Errorf("the fixture signing key %s is not reported as a fixture", s.PublicKey)
+		}
+	}
+	other, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.PublicKey().Fixture() {
+		t.Error("a generated key is reported as a fixture")
+	}
+}
+
+// TestKeyFormatsAsItsFingerprint pins that a key printed with any verb shows its
+// fingerprint and never its secret.
+func TestKeyFormatsAsItsFingerprint(t *testing.T) {
+	key := keys(t).accessKey(t)
+	secret := strings.TrimPrefix(key.Secret(), accesskey.SecretPrefix)
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+		got := fmt.Sprintf(verb, key)
+		if strings.Contains(got, secret) || !strings.Contains(got, key.Fingerprint()) {
+			t.Errorf("%s: %q", verb, got)
+		}
+	}
+}
+
+// TestParseSecretIsStrict pins that a secret is qak_ and the seed in base64url without
+// padding, decoded strictly, and that an error never contains the secret.
+func TestParseSecretIsStrict(t *testing.T) {
+	good := keys(t).AccessKey.Secret
+	encoded := strings.TrimPrefix(good, accesskey.SecretPrefix)
+	for name, s := range map[string]string{
+		"no prefix":         encoded,
+		"another prefix":    "qok_" + encoded,
+		"padding":           good + "=",
+		"standard alphabet": accesskey.SecretPrefix + strings.ReplaceAll(strings.ReplaceAll(encoded, "-", "+"), "_", "/") + "+",
+		"spare bits":        good[:len(good)-1] + "B",
+		"short":             good[:len(good)-2],
+		"line feed":         good[:20] + "\n" + good[20:],
+		"long":              good + "AAAA",
+	} {
+		_, err := accesskey.ParseSecret(s)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if strings.Contains(err.Error(), encoded[:10]) {
+			t.Errorf("%s: the error contains the secret: %v", name, err)
+		}
+	}
+	for name, s := range map[string]string{
+		"padding":    keys(t).AccessKey.PublicKey + "=",
+		"plus":       "+" + keys(t).AccessKey.PublicKey[1:],
+		"spare bits": keys(t).AccessKey.PublicKey[:42] + "B",
+	} {
+		if _, err := accesskey.ParsePublicKey(s); err == nil {
+			t.Errorf("public key with %s: accepted", name)
+		}
+	}
+}
+
+// TestGenerateMakesDistinctKeysThatRoundTrip pins that two generated keys differ and
+// that each reads back from its secret.
+func TestGenerateMakesDistinctKeysThatRoundTrip(t *testing.T) {
+	a, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Secret() == b.Secret() {
+		t.Fatal("two generated keys are the same")
+	}
+	if len(a.Secret()) != 47 {
+		t.Errorf("a secret is %d characters; want 47", len(a.Secret()))
+	}
+	again, err := accesskey.ParseSecret(a.Secret())
+	if err != nil || again.PublicKey() != a.PublicKey() {
+		t.Errorf("a secret does not read back to its key: %v", err)
+	}
+	if err := a.PublicKey().Check(); err != nil {
+		t.Errorf("a generated key fails the key checks: %v", err)
+	}
+}
+
+type signedVector struct {
+	Note       string   `json:"note"`
+	Body       string   `json:"body"`
+	BodyLength int      `json:"body_length"`
+	Lines      []string `json:"lines"`
+	Length     int      `json:"length"`
+	Signature  string   `json:"signature"`
+}
+
+type signatureVectors struct {
+	Requests  []signedVector `json:"requests"`
+	Enrolment []signedVector `json:"enrolment"`
+	Answers   []signedVector `json:"answers"`
+}
+
+func vectors(t *testing.T) signatureVectors {
+	t.Helper()
+	var v signatureVectors
+	load(t, "fixtures/known-answers/signatures.json", &v)
+	return v
+}
+
+// body returns the bytes of the file a vector lists, with a JSON file's surrounding
+// white space removed, or none for an empty name.
+func (v signedVector) body(t *testing.T) []byte {
+	t.Helper()
+	if v.Body == "" {
+		return nil
+	}
+	return bytes.TrimSpace(read(t, v.Body))
+}
+
+// TestRequestKnownAnswers signs the published GET and POST strings under the fixture
+// access key and instance id, and checks each string, its length and its signature
+// against the known answer. A POST's signature covers its path: the same body under
+// another target does not verify, and neither does a request whose access key id or
+// instance id line differs.
+func TestRequestKnownAnswers(t *testing.T) {
+	k := keys(t)
+	key := k.accessKey(t)
+	for _, v := range vectors(t).Requests {
+		r := accesskey.Request{AccessKeyID: k.AccessKey.AccessKeyID, InstanceID: k.AccessKey.InstanceID, Method: v.Lines[3], Target: v.Lines[4]}
+		if r.Method == http.MethodPost {
+			r.Body = []byte(v.Lines[5])
+			if file := v.body(t); !bytes.Equal(file, r.Body) {
+				t.Errorf("%s: the body's last line is not the file %s", v.Note, v.Body)
+			}
+		} else {
+			r.Timestamp = v.Lines[5]
+		}
+		m := r.Message()
+		if string(m) != strings.Join(v.Lines, "\n") || len(m) != v.Length {
+			t.Errorf("%s: message of %d bytes:\n%s", v.Note, len(m), m)
+		}
+		if got := key.SignRequest(r); got != v.Signature {
+			t.Errorf("%s: signature %s, want %s", v.Note, got, v.Signature)
+		}
+		pub := key.PublicKey()
+		if !pub.VerifyRequest(r, v.Signature) {
+			t.Errorf("%s: the known answer does not verify", v.Note)
+		}
+		for name, changed := range map[string]func(accesskey.Request) accesskey.Request{
+			"another target":      func(r accesskey.Request) accesskey.Request { r.Target = "/v1/events"; return r },
+			"another access key":  func(r accesskey.Request) accesskey.Request { r.AccessKeyID = "ak_0000000000000000"; return r },
+			"another instance id": func(r accesskey.Request) accesskey.Request { r.InstanceID = "i_other"; return r },
+			"no instance id":      func(r accesskey.Request) accesskey.Request { r.InstanceID = ""; return r },
+		} {
+			if pub.VerifyRequest(changed(r), v.Signature) {
+				t.Errorf("%s: verifies with %s", v.Note, name)
+			}
+		}
+	}
+}
+
+// TestAnswerKnownAnswers verifies the published answers under the fixture signing key,
+// as a runner pinning it does: 200 with the discovery body and its digest, 404 with an
+// empty body, and 201 to the enrolment request, whose third line is the proof. Each
+// is also signed again to the same bytes, and an answer with another status, another
+// body, another digest or another request's signature does not verify.
+func TestAnswerKnownAnswers(t *testing.T) {
+	k := keys(t)
+	signer := k.SigningKey.key(t)
+	pin := k.SigningKey.pin()
+	for _, v := range vectors(t).Answers {
+		body := v.body(t)
+		if len(body) != v.BodyLength {
+			t.Errorf("%s: body of %d bytes, want %d", v.Note, len(body), v.BodyLength)
+		}
+		var status int
+		fmt.Sscanf(v.Lines[1], "%d", &status)
+		a := accesskey.Answer{Status: status, RequestSignature: v.Lines[2], Body: body, Configuration: v.Lines[4], RunConfiguration: v.Lines[5]}
+		m := a.Message()
+		if string(m) != strings.Join(v.Lines, "\n") || len(m) != v.Length {
+			t.Errorf("%s: message of %d bytes:\n%s", v.Note, len(m), m)
+		}
+		if !pin.VerifyAnswer(a, v.Signature) {
+			t.Errorf("%s: does not verify under the pin", v.Note)
+		}
+		if got := signer.SignAnswer(a); got != v.Signature {
+			t.Errorf("%s: signed again %s, want %s", v.Note, got, v.Signature)
+		}
+		if k.NextSigningKey.pin().VerifyAnswer(a, v.Signature) {
+			t.Errorf("%s: verifies under another pin", v.Note)
+		}
+		for name, changed := range map[string]func(accesskey.Answer) accesskey.Answer{
+			"another status":    func(a accesskey.Answer) accesskey.Answer { a.Status = 500; return a },
+			"another body":      func(a accesskey.Answer) accesskey.Answer { a.Body = append(bytes.Clone(a.Body), ' '); return a },
+			"another digest":    func(a accesskey.Answer) accesskey.Answer { a.Configuration = "sha256=00"; return a },
+			"a run digest":      func(a accesskey.Answer) accesskey.Answer { a.RunConfiguration = "sha256=00"; return a },
+			"another request":   func(a accesskey.Answer) accesskey.Answer { a.RequestSignature = v.Signature; return a },
+			"no request at all": func(a accesskey.Answer) accesskey.Answer { a.RequestSignature = ""; return a },
+		} {
+			if pin.VerifyAnswer(changed(a), v.Signature) {
+				t.Errorf("%s: verifies with %s", v.Note, name)
+			}
+		}
+	}
+	// A pin lists both keys during a rotation; either verifies.
+	both := append(k.NextSigningKey.pin(), pin...)
+	a := vectors(t).Answers[0]
+	if !both.VerifyAnswer(accesskey.Answer{Status: 200, RequestSignature: a.Lines[2], Body: a.body(t), Configuration: a.Lines[4]}, a.Signature) {
+		t.Error("a pin of two keys does not verify an answer under the second")
+	}
+}
+
+// TestEnrolmentKnownAnswers builds the published enrolment requests from the fixture
+// access key, the code, the name and the timestamp, and checks each body and proof;
+// then verifies the published answer as qory does, under the key the code's first
+// fingerprint selects, and pins only the keys the code carries.
+func TestEnrolmentKnownAnswers(t *testing.T) {
+	k := keys(t)
+	key := k.accessKey(t)
+	for _, v := range vectors(t).Enrolment {
+		var want accesskey.EnrolmentRequest
+		if err := json.Unmarshal(v.body(t), &want); err != nil {
+			t.Fatal(err)
+		}
+		r, err := accesskey.NewEnrolmentRequest(key, v.Lines[1], v.Lines[3], time.Unix(1700000000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := r.ProofMessage()
+		if string(m) != strings.Join(v.Lines, "\n") || len(m) != v.Length {
+			t.Errorf("%s: proof message of %d bytes:\n%s", v.Note, len(m), m)
+		}
+		if *r != want {
+			t.Errorf("%s: request\n%+v\nwant\n%+v", v.Note, *r, want)
+		}
+		if !r.VerifyProof() {
+			t.Errorf("%s: the proof does not verify", v.Note)
+		}
+		changed := *r
+		changed.Name = "build-02"
+		if changed.VerifyProof() {
+			t.Errorf("%s: the proof verifies for another name", v.Note)
+		}
+	}
+	// The answer to the first request.
+	r, err := accesskey.NewEnrolmentRequest(key, vectors(t).Enrolment[0].Lines[1], "build-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans := vectors(t).Answers[2]
+	answer := accesskey.Answer{Status: http.StatusCreated, Body: ans.body(t)}
+	got, err := r.VerifyAnswer(answer, ans.Signature, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccessKeyID != "ak_f1xt0re000000000" || got.NodeID != "nd_f1xt0re000000000" || got.NodeKind != "node" || got.Approved || got.StoredSecrets {
+		t.Errorf("answer %+v", got)
+	}
+	if len(got.Pin) != 1 || got.Pin[0].PublicKey != k.SigningKey.PublicKey {
+		t.Errorf("pin %+v; want the fixture signing key alone", got.Pin)
+	}
+	// Signed by another key than the one the code names: refused.
+	other := k.NextSigningKey.key(t)
+	if _, err := r.VerifyAnswer(answer, other.SignAnswer(accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: answer.Body}), nil); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("an answer signed by a key the code does not name: %v", err)
+	}
+}
+
+// code returns the code of a refusal, or the error's text.
+func code(err error) string {
+	var r *accesskey.Refusal
+	if errors.As(err, &r) {
+		return r.Code
+	}
+	if err == nil {
+		return "nil"
+	}
+	return err.Error()
+}
+
+// TestEnrolmentAnswerPinsOnlyTheCodesKeys pins that, during a rotation, an answer that
+// lists two keys is pinned as far as the code carries them: a code with one
+// fingerprint pins one key, a code with both pins both.
+func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
+	k := keys(t)
+	key := k.accessKey(t)
+	signer := k.SigningKey.key(t)
+	body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"np_f1xt0re000000000","node_kind":"pool","approved":true,"stored_secrets":true,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"}]}`)
+	for _, c := range []struct {
+		code string
+		pins int
+	}{
+		{"qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint, 1},
+		{"qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint + "." + k.NextSigningKey.Fingerprint, 2},
+	} {
+		r, err := accesskey.NewEnrolmentRequest(key, c.code, "build-01", time.Unix(1700000000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: body}
+		got, err := r.VerifyAnswer(a, signer.SignAnswer(a), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Pin) != c.pins || got.NodeKind != "pool" || !got.StoredSecrets {
+			t.Errorf("%s: pinned %d keys, %+v", c.code, len(got.Pin), got)
+		}
+	}
+}
+
+// TestNormaliseCode pins the normalised form of an enrolment code: a code typed in
+// lower case or in groups normalises to the published one, I and L read as 1 and O as
+// 0, the fingerprints as issued; U, another character, a wrong length and a third
+// fingerprint are refused.
+func TestNormaliseCode(t *testing.T) {
+	const want = "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"
+	for _, in := range []string{
+		want,
+		"qec_f1xt0re0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qec_F1XT-0RE0-0000-0000-0000-0000-00.uoES-kuj1vk0sq0qoGlmAg",
+		"QEC_fixtore0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qec_FLXT0RE000000000000000000o.uoES-kuj1vk0sq0qoGlmAg",
+	} {
+		got, err := accesskey.NormaliseCode(in)
+		if err != nil || got != want {
+			t.Errorf("%s: %s, %v; want %s", in, got, err, want)
+		}
+	}
+	for _, in := range []string{
+		"qec_F1XT0RE000000000000000000U.uoES-kuj1vk0sq0qoGlmAg",
+		"qec_F1XT0RE00000000000000000*0.uoES-kuj1vk0sq0qoGlmAg",
+		"qec_F1XT0RE000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+		"qec_F1XT0RE0000000000000000000",
+		"qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A.52vzzF--Ic7qH_eZWi5K2A",
+		"qec_F1XT0RE0000000000000000000.uoES+kuj1vk0sq0qoGlmAg",
+		"qak_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg",
+	} {
+		if got, err := accesskey.NormaliseCode(in); err == nil {
+			t.Errorf("%s: accepted as %s", in, got)
+		}
+	}
+	two := "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A"
+	if got := accesskey.CodeFingerprints(two); len(got) != 2 || got[1] != "52vzzF--Ic7qH_eZWi5K2A" {
+		t.Errorf("fingerprints %v", got)
+	}
+}
+
+// TestPinCheckCode pins that a machine with a pin refuses a code whose fingerprints
+// name none of its keys, and that a machine without one accepts every code.
+func TestPinCheckCode(t *testing.T) {
+	k := keys(t)
+	code := "qec_F1XT0RE0000000000000000000." + k.SigningKey.Fingerprint
+	if err := k.SigningKey.pin().CheckCode(code); err != nil {
+		t.Error(err)
+	}
+	if err := (accesskey.Pin{}).CheckCode(code); err != nil {
+		t.Error(err)
+	}
+	if err := k.NextSigningKey.pin().CheckCode(code); err == nil {
+		t.Error("a code for another server's key is accepted")
+	}
+}
+
+// TestKeyChecks pins the five checks of a public key against the published list: the
+// eight points of small order and the six non-canonical encodings are refused, the
+// torsion key is refused as not of prime order, and the fixture access key passes, as
+// do generated keys. A pin with any refused key is refused.
+func TestKeyChecks(t *testing.T) {
+	var list struct {
+		SmallOrder   []struct{ Encoding string } `json:"small_order"`
+		NonCanonical []struct{ Encoding string } `json:"non_canonical"`
+		Torsion      struct{ Encoding string }   `json:"torsion"`
+	}
+	load(t, "fixtures/known-answers/small-order.json", &list)
+	check := func(enc string) error {
+		p, err := accesskey.ParsePublicKey(enc)
+		if err != nil {
+			t.Fatalf("%s: %v", enc, err)
+		}
+		return p.Check()
+	}
+	refused := func(enc, why string) {
+		err := check(enc)
+		if !errors.Is(err, accesskey.ErrKeyInvalid) || !strings.Contains(err.Error(), why) {
+			t.Errorf("%s: %v; want refused as %s", enc, err, why)
+		}
+		if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + enc + `"}]`)); err == nil {
+			t.Errorf("%s: accepted in a pin", enc)
+		}
+	}
+	for _, p := range list.SmallOrder {
+		refused(p.Encoding, "small order")
+	}
+	for _, p := range list.NonCanonical {
+		refused(p.Encoding, "not canonical")
+	}
+	refused(list.Torsion.Encoding, "prime order")
+	if err := check(keys(t).AccessKey.PublicKey); err != nil {
+		t.Errorf("the fixture access key: %v", err)
+	}
+	if len(list.SmallOrder) != 8 || len(list.NonCanonical) != 6 {
+		t.Errorf("%d small-order and %d non-canonical encodings; want 8 and 6", len(list.SmallOrder), len(list.NonCanonical))
+	}
+	if _, err := (accesskey.PublicKey{1}).X25519(); err == nil {
+		t.Error("the identity converts to an X25519 key")
+	}
+}
+
+// TestParsePin pins the pin's JSON form, the one QORY_APIARY_PUBLIC_KEY contains.
+func TestParsePin(t *testing.T) {
+	k := keys(t)
+	good := `[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]`
+	if p, err := accesskey.ParsePin([]byte(good)); err != nil || len(p) != 1 {
+		t.Errorf("%s: %v", good, err)
+	}
+	for _, bad := range []string{
+		`[]`,
+		`{}`,
+		`[{"alg":"rsa","public_key":"` + k.SigningKey.PublicKey + `"}]`,
+		`[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `","extra":1}]`,
+		`[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `","public_key":"` + k.NextSigningKey.PublicKey + `"}]`,
+		`[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]`,
+		`[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `="}]`,
+	} {
+		if _, err := accesskey.ParsePin([]byte(bad)); err == nil {
+			t.Errorf("%s: accepted", bad)
+		}
+	}
+}
+
+// TestInstanceID pins the instance id and its file: a new id is i_ and 24 characters
+// and passes the pattern; the file is the id and the keyed hash of the machine's
+// identity; a file read on the same machine yields its id, and one copied to another
+// machine, or holding an id outside the pattern, yields none.
+func TestInstanceID(t *testing.T) {
+	id, err := accesskey.NewInstanceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(id) != 24 || !strings.HasPrefix(id, "i_") || accesskey.CheckInstanceID(id) != nil {
+		t.Errorf("instance id %q", id)
+	}
+	if again, _ := accesskey.NewInstanceID(); again == id {
+		t.Error("two instance ids are the same")
+	}
+	machine := []byte("0123456789abcdef0123456789abcdef\n")
+	file := accesskey.InstanceFile(id, machine)
+	if got, ok := accesskey.ReadInstanceFile(file, machine); !ok || got != id {
+		t.Errorf("read back %q, %v", got, ok)
+	}
+	if _, ok := accesskey.ReadInstanceFile(file, []byte("fedcba9876543210fedcba9876543210")); ok {
+		t.Error("a file copied to another machine yields its id")
+	}
+	if _, ok := accesskey.ReadInstanceFile(accesskey.InstanceFile("-bad", machine), machine); ok {
+		t.Error("an id outside the pattern is read")
+	}
+	if _, ok := accesskey.ReadInstanceFile([]byte(id+"\n"), machine); ok {
+		t.Error("a file without the hash is read")
+	}
+	mac := accesskey.MachineHash(machine)
+	if len(mac) != 64 || mac != accesskey.MachineHash([]byte("0123456789abcdef0123456789abcdef")) {
+		t.Errorf("the machine's hash %q depends on the trailing line feed", mac)
+	}
+	sum := sha256.Sum256(machine)
+	if mac == hex.EncodeToString(sum[:]) {
+		t.Error("the machine's hash is not keyed")
+	}
+	for _, bad := range []string{"", "-x", ".x", "x y", strings.Repeat("a", 65), "é"} {
+		if accesskey.CheckInstanceID(bad) == nil {
+			t.Errorf("instance id %q accepted", bad)
+		}
+	}
+	if got := accesskey.DefaultName("build-01.ci.example"); got != "build-01.ci.example" {
+		t.Errorf("DefaultName = %q", got)
+	}
+	if got := accesskey.DefaultName("build_01!.ci.example"); got != "" {
+		t.Errorf("DefaultName of a name that fits nowhere = %q", got)
+	}
+	if got := accesskey.DefaultName(strings.Repeat("a", 60) + ".example.internal"); got != strings.Repeat("a", 60) {
+		t.Errorf("DefaultName of a long host = %q", got)
+	}
+}
+
+// TestPostEnrols posts an enrolment to a fake server signing under the fixture
+// signing key: a 201 verifies and pins; a 401 is unauthorized; a signed 409 is its
+// code for a machine whose pin holds the code's key and answer_unsigned for one
+// without; an answer under another key is answer_unsigned.
+func TestPostEnrols(t *testing.T) {
+	k := keys(t)
+	signer := k.SigningKey.key(t)
+	status, body := http.StatusCreated, bytes.TrimSpace(read(t, "fixtures/enrolment/answer.json"))
+	sign := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != accesskey.EnrolmentPath || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("X-Qory-Contract-Version") != "1" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		var req accesskey.EnrolmentRequest
+		if json.Unmarshal(b, &req) != nil || !req.VerifyProof() {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if sign && status != http.StatusUnauthorized {
+			w.Header().Set(accesskey.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: req.Proof, Body: body}))
+		}
+		w.WriteHeader(status)
+		w.Write(body)
+	}))
+	defer srv.Close()
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	got, err := r.Post(ctx, nil, srv.URL, "qory/test", nil)
+	if err != nil || got.AccessKeyID != "ak_f1xt0re000000000" || len(got.Pin) != 1 {
+		t.Fatalf("201: %+v, %v", got, err)
+	}
+	status, body = http.StatusUnauthorized, []byte(`{"error":"unauthorized"}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeUnauthorized {
+		t.Errorf("401: %v", err)
+	}
+	status, body = http.StatusConflict, []byte(`{"error":"key_limit"}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", k.SigningKey.pin()); code(err) != accesskey.CodeKeyLimit {
+		t.Errorf("signed 409 with a pin: %v", err)
+	}
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("signed 409 without a pin: %v", err)
+	}
+	sign = false
+	status, body = http.StatusCreated, bytes.TrimSpace(read(t, "fixtures/enrolment/answer.json"))
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("unsigned 201: %v", err)
+	}
+	if _, err := r.Post(ctx, nil, "http://qory.example", "qory/test", nil); err == nil {
+		t.Error("plain http to another host than loopback is accepted")
+	}
+}
