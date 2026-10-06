@@ -265,6 +265,37 @@ func shown(v string) string {
 // a schema or a JSON decoder can quote the value in its error.
 func ContainsSecret(v string) bool { return strings.Contains(strings.ToLower(v), SecretPrefix) }
 
+// DocumentContainsSecret reports whether a decoded document, as JSON or YAML decodes
+// to any, contains an access key secret in any string or member name. A reader checks
+// it after decoding as well as the raw bytes before, since an escape, \u0071 in JSON
+// or \x71 or a folded line in YAML, hides the secret from the bytes and not from the
+// decoded value a schema error quotes.
+func DocumentContainsSecret(doc any) bool {
+	switch v := doc.(type) {
+	case string:
+		return ContainsSecret(v)
+	case map[string]any:
+		for k, e := range v {
+			if ContainsSecret(k) || DocumentContainsSecret(e) {
+				return true
+			}
+		}
+	case map[any]any:
+		for k, e := range v {
+			if DocumentContainsSecret(k) || DocumentContainsSecret(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if DocumentContainsSecret(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // decode decodes base64url without padding strictly, to exactly n bytes: padding, a
 // character of the standard alphabet, a line break and non-zero bits after the last
 // full byte are refused.

@@ -640,3 +640,33 @@ func TestAServerDocumentWithASecretQuotesNothing(t *testing.T) {
 		t.Errorf("a pin's member name: %v", err)
 	}
 }
+
+// TestAnEscapedSecretQuotesNothing pins that a secret hidden from the bytes by an
+// escape, a JSON q, a YAML \x71, or a YAML double-quoted line break between qak
+// and the underscore, in a value or a member name, is refused with the fixed message
+// that does not contain it, as a secret in plain text is.
+func TestAnEscapedSecretQuotesNothing(t *testing.T) {
+	const rest = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"server.json": `{"version":1,"url":"https://qory.example","access_key_id":"qak_` + rest + `","apiary_public_key":` + pin + `}`,
+		"member.json": `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","qak_` + rest + `":1,"apiary_public_key":` + pin + `}`,
+		"x71.yaml":    "version: 1\nurl: https://qory.example\naccess_key_id: \"\\x71ak_" + rest + "\"\n",
+		"fold.yaml":   "version: 1\nurl: https://qory.example\naccess_key_id: \"qak\\\n  _" + rest + "\"\n",
+		"key.yaml":    "version: 1\nurl: https://qory.example\naccess_key_id: ak_f1xt0re000000000\n\"\\x71ak_" + rest + "\": 1\n",
+	} {
+		_, err := server.Read(name, []byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(err.Error(), rest[:12]) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, doc := range map[string]string{
+		"a public key":    `[{"alg":"ed25519","public_key":"qak_` + rest + `"}]`,
+		"a member's name": `[{"alg":"ed25519","qak_` + rest + `":"x"}]`,
+	} {
+		_, err := accesskey.ParsePin([]byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(err.Error(), rest[:12]) {
+			t.Errorf("a pin, %s: %v", name, err)
+		}
+	}
+}
