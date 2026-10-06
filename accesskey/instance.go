@@ -68,3 +68,24 @@ func ReadInstanceFile(b []byte, machineID []byte) (id string, ok bool) {
 	}
 	return lines[0], true
 }
+
+// The variables qory reads the access key's secret, its id and the pin from. They are
+// the runner's alone: no tool, credential program or agent receives them.
+const (
+	EnvSecret = "QORY_ACCESS_KEY_SECRET"
+	EnvID     = "QORY_ACCESS_KEY_ID"
+	EnvPin    = "QORY_APIARY_PUBLIC_KEY"
+)
+
+// WithoutVariables returns an environment, NAME=value entries, without [EnvSecret],
+// [EnvID] and [EnvPin]: the environment a program the runner starts receives.
+func WithoutVariables(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name != EnvSecret && name != EnvID && name != EnvPin {
+			out = append(out, kv)
+		}
+	}
+	return out
+}

@@ -37,7 +37,9 @@ type Spec struct {
 	Runtime runtimes.Runtime
 	// Command, Args, Env and Dir are what to start. A nil Env is the process's own, or
 	// nothing under a Wall, where only what Env lists goes in; an empty Dir is the
-	// working directory.
+	// working directory. The access key's variables, QORY_ACCESS_KEY_SECRET,
+	// QORY_ACCESS_KEY_ID and QORY_APIARY_PUBLIC_KEY, are left out either way, and out
+	// of every tool's and credential program's environment too.
 	Command string
 	Args    []string
 	Env     []string
@@ -779,9 +781,10 @@ func placeholders(names []string) []string {
 	return out
 }
 
-// environment is the session's environment: base with the runner's variables set,
-// replacing any of the same names.
+// environment is the session's environment: base without the access key's variables,
+// with the runner's variables set, replacing any of the same names.
 func environment(base []string, sets ...[]string) []string {
+	base = accesskey.WithoutVariables(base)
 	var extra []string
 	for _, s := range sets {
 		extra = append(extra, s...)
@@ -887,10 +890,11 @@ func sameTools(a, b []policy.Selected) bool {
 }
 
 // toolEnv is the environment a tool gets: the runner's own, without the variables the
-// machine's credentials are read from, which are the runner's to hold and no tool's.
+// machine's credentials and the access key are read from, which are the runner's to
+// hold and no tool's.
 func toolEnv(creds []Credential) []string {
 	var out []string
-	for _, kv := range os.Environ() {
+	for _, kv := range accesskey.WithoutVariables(os.Environ()) {
 		name, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(creds, func(c Credential) bool { return c.Env == name }) {
 			out = append(out, kv)
