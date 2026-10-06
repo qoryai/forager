@@ -20,7 +20,13 @@
     "runtime": {
       "description": "The runtime this describes, as the launch spec sets it: claude, codex.",
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]*$"
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "title": {
+      "description": "The runtime's display name: Claude Code. runtimes.json lists it beside the name.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
     },
     "runtime_version": {
       "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; the runner never checks the installed version.",
@@ -111,6 +117,72 @@
         }
       }
     },
+    "secrets": {
+      "description": "The secrets the runtime needs and the variables it keeps for itself. A runtime connection supplies a declaration's value; runtimes.json lists the secrets of every descriptor the contract ships.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "declares": {
+          "description": "The secrets the runtime reads, each from one variable, and where the proxy sets each value.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "name", "hosts", "auth"],
+            "properties": {
+              "id": {"description": "The key a runtime connection supplies the secret under.", "$ref": "#/$defs/declared"},
+              "title": {"description": "What the secret is, for a person choosing one.", "type": "string", "minLength": 1, "maxLength": 128},
+              "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/name"},
+              "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
+              "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
+              "auth": {
+                "description": "How the value is set on a request, a scheme from the closed set. The declaration's own value is the one secret it sets, so auth contains neither secret nor username_secret.",
+                "$ref": "auth.schema.json",
+                "not": {"anyOf": [{"required": ["secret"]}, {"required": ["username_secret"]}]}
+              }
+            }
+          }
+        },
+        "one_of": {
+          "description": "Groups of declarations, of which a runtime connection supplies at most one each. of lists declared ids, each id in at most one group. A required group needs one; a declaration in no group is optional.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "of"],
+            "properties": {
+              "id": {"$ref": "#/$defs/declared"},
+              "required": {"type": "boolean"},
+              "of": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/declared"}}
+            }
+          }
+        },
+        "reserves": {
+          "description": "Variables the runtime reads a credential from beside the declared ones. Only the runtime connection sets them.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/name"}
+        },
+        "denies": {
+          "description": "Variables the runner always leaves out of the server's set for the runtime, and reports: the ones that move where the runtime sends its requests and credentials, or change what it runs.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/name"}
+        },
+        "credential_files": {
+          "description": "Files in which the runtime keeps a credential of its own, ~ being the home of the user the runner runs as.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^(~/|/)."}
+        }
+      }
+    },
     "rules": {
       "description": "Evaluated in order against every record of the rule's source; the first rule whose match succeeds produces one event, and a record no rule matches produces nothing.",
       "type": "array",
@@ -196,5 +268,11 @@
         }
       }
     }
+  },
+  "$defs": {
+    "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+    "exact_host": {"type": "string", "maxLength": 253,
+      "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"}
   }
 }

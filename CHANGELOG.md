@@ -19,6 +19,27 @@ release may change what an existing document does, and says so under Upgrading.
   own stops the run when the wall writes the agent's docker configuration there, which
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
+- A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
+  and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
+  runtime that has one, and the descriptor schema holds `runtime` to the same bound.
+
+### Added
+
+- A runtime descriptor defines the secrets the runtime needs, under an optional
+  `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
+  paths and scheme; `one_of`, groups of which a runtime connection supplies one
+  declaration at most, and one of a required group; `reserves`; `denies`; and
+  `credential_files`. It also has an optional `title`. `auth.schema.json` defines the
+  scheme, `bearer`, `header` or `basic`. The runner checks the secrets when it reads a
+  descriptor; a run uses them once connections are in the contract.
+- The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
+  `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
+  under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the
+  variables that move its requests, credential, shell, settings or TLS trust, and lists
+  `~/.claude/.credentials.json`.
+- `contracts/runner/v1/runtimes.json` lists the secrets of every descriptor the contract
+  ships, for a server to vendor. `go generate ./contracts` writes it from the
+  descriptors, and `go test ./...` fails while the file differs from them.
 
 ### Changed
 
@@ -26,6 +47,9 @@ release may change what an existing document does, and says so under Upgrading.
   enforces a policy, walls the agent in with the secrets kept outside, and reports to a
   server. It shows that `qory run` starts the runner, and where a run's policy comes
   from. `docs/` contains the rest, one page per topic.
+- Contract `v1` revision 1 is amended in place: §The descriptor has six parts,
+  `secrets` among them, defines `title` and the bound on `runtime`, and describes
+  `runtimes.json`.
 - Contract `v1` revision 1 is amended in place again: §Images lists what `dockerd`
   starts among the programs in the system directories, and §The wall defines the
   daemon's environment, the owners and modes of `/run/qory` and the agent's docker

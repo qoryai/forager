@@ -13,6 +13,10 @@
 // source whose match holds produces one event, type and data, by copying values out of
 // the record. It matches and copies; it never computes, and there is nothing to
 // configure that would make it.
+//
+// A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
+// keeps for itself. [Runtimes] renders them, for every descriptor the contract ships,
+// as runtimes.json, the file a server vendors.
 package descriptor
 
 import (
@@ -30,11 +34,59 @@ import (
 type Descriptor struct {
 	Version        int       `yaml:"version" json:"version"`
 	Runtime        string    `yaml:"runtime" json:"runtime"`
+	Title          string    `yaml:"title" json:"title,omitempty"`
 	RuntimeVersion string    `yaml:"runtime_version" json:"runtime_version"`
 	Sources        Sources   `yaml:"sources" json:"sources"`
 	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
+	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Secrets is what the runtime needs of a run's secrets and the variables it keeps for
+// itself. Nil when the descriptor declares none.
+type Secrets struct {
+	// Declares is the secrets the runtime reads, each from one variable.
+	Declares []Declaration `yaml:"declares" json:"declares,omitempty"`
+	// OneOf is the groups of declarations of which a runtime connection supplies at
+	// most one each.
+	OneOf []Group `yaml:"one_of" json:"one_of,omitempty"`
+	// Reserves is the variables the runtime reads a credential from beside the declared
+	// ones.
+	Reserves []string `yaml:"reserves" json:"reserves,omitempty"`
+	// Denies is the variables the runner leaves out of the server's set for the runtime.
+	Denies []string `yaml:"denies" json:"denies,omitempty"`
+	// CredentialFiles is the files in which the runtime keeps a credential of its own,
+	// ~ being the home of the user the runner runs as.
+	CredentialFiles []string `yaml:"credential_files" json:"credential_files,omitempty"`
+}
+
+// Declaration is one secret the runtime reads: the variable it reads it from, and the
+// hosts, paths and scheme the proxy sets its value by.
+type Declaration struct {
+	ID    string   `yaml:"id" json:"id"`
+	Title string   `yaml:"title" json:"title"`
+	Name  string   `yaml:"name" json:"name"`
+	Hosts []string `yaml:"hosts" json:"hosts"`
+	// Paths bound the requests the value is set on; empty means every path.
+	Paths []string `yaml:"paths" json:"paths,omitempty"`
+	Auth  Auth     `yaml:"auth" json:"auth"`
+}
+
+// Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
+// the header of header, Username the fixed user of basic.
+type Auth struct {
+	Scheme   string `yaml:"scheme" json:"scheme"`
+	Header   string `yaml:"header" json:"header,omitempty"`
+	Username string `yaml:"username" json:"username,omitempty"`
+}
+
+// Group is a set of declarations of which a runtime connection supplies at most one,
+// and exactly one when Required.
+type Group struct {
+	ID       string   `yaml:"id" json:"id"`
+	Required bool     `yaml:"required" json:"required,omitempty"`
+	Of       []string `yaml:"of" json:"of"`
 }
 
 // Headless is the arguments that mean the runtime runs without an interface: started
@@ -121,7 +173,44 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if err := d.Secrets.check(); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
 	return &d, nil
+}
+
+// check holds the secrets to what the schema cannot express: declaration ids and group
+// ids are each distinct, and every id a group lists is a declared one, in one group at
+// most.
+func (s *Secrets) check() error {
+	if s == nil {
+		return nil
+	}
+	declared := map[string]bool{}
+	for _, d := range s.Declares {
+		if declared[d.ID] {
+			return fmt.Errorf("secrets: %s is declared twice", d.ID)
+		}
+		declared[d.ID] = true
+	}
+	groups := map[string]bool{}
+	grouped := map[string]string{}
+	for _, g := range s.OneOf {
+		if groups[g.ID] {
+			return fmt.Errorf("secrets: one_of %s is defined twice", g.ID)
+		}
+		groups[g.ID] = true
+		for _, id := range g.Of {
+			if !declared[id] {
+				return fmt.Errorf("secrets: one_of %s lists %s, which no declaration has as its id", g.ID, id)
+			}
+			if other, ok := grouped[id]; ok {
+				return fmt.Errorf("secrets: %s is in one_of %s and in %s", id, other, g.ID)
+			}
+			grouped[id] = g.ID
+		}
+	}
+	return nil
 }
 
 // Map applies the rules to one record: the first rule of the record's source whose
