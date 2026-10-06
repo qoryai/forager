@@ -8,10 +8,10 @@
     "X-Qory-Instance-Name": "build-01",
     "X-Qory-Contract-Version": "1",
     "X-Qory-Timestamp": "1700000000",
-    "X-Qory-Signature-Ed25519": "-mFA0RDygqEF8z5sQjxrj6lAp3YTSTgIbiimV8enFBNVW9jxk5CO3JLoBn-8wQW0_649yXDLugqTq6qPcA0iDQ"
+    "X-Qory-Signature-Ed25519": "mtmlv86V2fnqrT_Vy5QvHVuE72DpooTnn_fNRVDNixh7jQcw2hjdQiyAH3nvUTKis7HA239izxq2LJ4AOnrqBQ"
   },
   "body": null,
   "expect": 409,
   "expect_code": "key_pending",
-  "note": "The discovery fetch as ak_pend1ng000000000, an access key the receiver under test holds with the fixture public key and awaiting approval. The request verifies, and every signed endpoint answers it with a signed 409 key_pending, discovery included."
+  "note": "The discovery fetch as ak_pend1ng000000000, signed under the secret of the second fixture access key, pending_access_key in fixtures/known-answers/keys.json, which the receiver under test holds under that id as awaiting approval. The request verifies, and every signed endpoint answers it with a signed 409 key_pending, discovery included."
 }

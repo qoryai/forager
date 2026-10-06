@@ -167,7 +167,8 @@ release may change what an existing document does, and says so under Upgrading.
   `run_closed`.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
   `fixtures/signed/` has `get-configuration-no-instance-id`, `-header-twice` and
-  `-pending-key`, `batch-unknown-key` in place of `batch-wrong-key`, and
+  `-pending-key`, signed under a second fixture access key that `keys.json` lists as
+  `pending_access_key`, `batch-unknown-key` in place of `batch-wrong-key`, and
   `expect_code` for a coded refusal. `fixtures/invalid/` has
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
   `event-ping-interval-too-long` in place of `server-no-key`;

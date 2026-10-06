@@ -37,6 +37,7 @@ const (
 // receiver's own here.
 var (
 	fixtureKey = mustKey(accesskey.ParseSecret("qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"))
+	pendingKey = mustKey(accesskey.ParseSecret("qak_wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A"))
 	signingKey = mustKey(accesskey.NewKey([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`")))
 	pin        = accesskey.Pin{{Alg: "ed25519", PublicKey: signingKey.PublicKey().String()}}
 )
@@ -48,8 +49,8 @@ func mustKey(k *accesskey.Key, err error) *accesskey.Key {
 	return k
 }
 
-// keys is a lookup that knows the fixture access key, approved, and the same public key
-// under a second id awaiting approval, and counts how often it is asked.
+// keys is a lookup that holds the fixture access key, approved, and the pending fixture
+// access key awaiting approval, and counts how often it is called.
 func keys(asked *int) func(string) (receiver.AccessKey, bool) {
 	return func(k string) (receiver.AccessKey, bool) {
 		*asked++
@@ -57,7 +58,7 @@ func keys(asked *int) func(string) (receiver.AccessKey, bool) {
 		case key:
 			return receiver.AccessKey{PublicKey: fixtureKey.PublicKey()}, true
 		case pending:
-			return receiver.AccessKey{PublicKey: fixtureKey.PublicKey(), Pending: true}, true
+			return receiver.AccessKey{PublicKey: pendingKey.PublicKey(), Pending: true}, true
 		}
 		return receiver.AccessKey{}, false
 	}
@@ -360,7 +361,11 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(string(b)))
 			sr.Body = b
 		}
-		sig, _ := fixtureKey.SignRequest(sr)
+		signer := fixtureKey
+		if id == pending {
+			signer = pendingKey
+		}
+		sig, _ := signer.SignRequest(sr)
 		r.Header.Set(server.HeaderSignature, sig)
 		return r
 	}

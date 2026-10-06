@@ -51,6 +51,12 @@ type fixtureKeys struct {
 		X25519PrivateKey string `json:"x25519_private_key"`
 		X25519PublicKey  string `json:"x25519_public_key"`
 	} `json:"access_key"`
+	PendingAccessKey struct {
+		Secret      string `json:"secret"`
+		AccessKeyID string `json:"access_key_id"`
+		PublicKey   string `json:"public_key"`
+		Fingerprint string `json:"fingerprint"`
+	} `json:"pending_access_key"`
 	SigningKey     signingKey `json:"signing_key"`
 	NextSigningKey signingKey `json:"next_signing_key"`
 }
@@ -137,6 +143,13 @@ func TestFixtureAccessKey(t *testing.T) {
 	}
 	if !key.PublicKey().Fixture() {
 		t.Error("the fixture access key is not reported as a fixture")
+	}
+	pending, err := accesskey.ParseSecret(k.PendingAccessKey.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := k.PendingAccessKey; pending.PublicKey().String() != p.PublicKey || pending.Fingerprint() != p.Fingerprint || accesskey.CheckID(p.AccessKeyID) != nil || !pending.PublicKey().Fixture() {
+		t.Errorf("the pending fixture access key: %s, %s", pending.PublicKey(), pending.Fingerprint())
 	}
 	for _, s := range []signingKey{k.SigningKey, k.NextSigningKey} {
 		sk := s.key(t)

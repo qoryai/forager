@@ -969,9 +969,10 @@ no `secrets`. The module's own tests run the runner's client against it.
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
 a coded refusal as `expect_code`, and a `note` that explains why. Every signature in
 them is real, under the fixture access key secret as the fixture access key and
-instance; a receiver under test holds the fixture public key under
-`ak_f1xt0re000000000`, approved, and under `ak_pend1ng000000000`, awaiting approval, and
-sets its clock to `1700000000`, around which the timestamps are. A receiver written by
+instance, or for `get-configuration-pending-key` under the pending fixture access key of
+`keys.json`; a receiver under test holds the fixture access key under
+`ak_f1xt0re000000000`, approved, and the pending one under `ak_pend1ng000000000`,
+awaiting approval, and sets its clock to `1700000000`, around which the timestamps are. A receiver written by
 anyone else follows this section, replays those files, and may read that code.
 
 ## The runtime
