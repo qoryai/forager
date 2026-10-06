@@ -1,0 +1,22 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000002",
+    "source": "urn:qory:run:01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+    "type": "dev.qory.run.refused",
+    "subject": "01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a",
+    "time": "2026-09-16T12:00:01.000Z",
+    "sequence": "0000000002",
+    "dataschema": "https://qory.dev/contracts/runner/v1/events/run.refused.schema.json",
+    "data": {
+      "code": "secret_unresolved",
+      "connection": "con_5h1k8m3p6r0t4w9x",
+      "names": [
+        "SENTRY_AUTH"
+      ],
+      "providers": [
+        "local"
+      ]
+    }
+  }
+]

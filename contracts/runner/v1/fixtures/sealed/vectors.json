@@ -1,0 +1,16 @@
+{
+  "note": "The sealed fixture: run-configuration.json, its digest in secrets-request.json, the envelope in secrets-answer.json, sealed to the fixture access key of known-answers/keys.json with this fixed ephemeral key, and the plaintext it opens to in sealed-plaintext.json. info and aad are hex; the envelope's sig is under the fixture signing key, over the signed message whose length and SHA-256 are here. A second case alters aad, and the open fails.",
+  "ephemeral_private_key": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+  "info": "716f72792073656372657473207631000020000100020013616b5f66317874307265303030303030303030",
+  "info_length": 43,
+  "aad": "002430313932386634652d376333612d376432652d396231612d3366356536643763386239610013616b5f6631787430726530303030303030303000477368613235363d62393364373030393664633539393034343836323166613135386430646264383561333561343532323133343130306439656339386631363438363735656233000a31373030303030363030",
+  "aad_length": 144,
+  "run_configuration_length": 601,
+  "secrets_request_length": 297,
+  "secrets_request_sha256": "70db1ec6e820e06c1f21854021a63b8a4138c94eb6412ccc6005862bff04af39",
+  "plaintext_length": 386,
+  "ct_length": 402,
+  "ct_sha256": "85d845256d08dce672c671a7d3f1bb8a28181dd0311d0af7be047cc1a5f739cc",
+  "signed_length": 641,
+  "signed_sha256": "8df55b6e8391ada90f1524e043133a44025679b1125e71e89a22f6cf385cb973"
+}

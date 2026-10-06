@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "names": [
+    "AWS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "DOCKER_CERT_PATH",
+    "DOCKER_CONFIG",
+    "DOCKER_CONTEXT",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    "NODE_EXTRA_CA_CERTS",
+    "PATH",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE"
+  ],
+  "patterns": [
+    "*_PROXY",
+    "QORY_*"
+  ]
+}

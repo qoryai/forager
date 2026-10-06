@@ -20,6 +20,29 @@ release may change what an existing document does, and says so under Upgrading.
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
 
+### Added
+
+- Contract `v1` revision 1, amended in place, gains the files of a run's secrets and
+  variables that the server vendors: `secrets-request.schema.json`, the body of the
+  secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
+  HPKE to the access key; `sealed-plaintext.schema.json`, what the envelope opens to;
+  `enrolment.schema.json`, the enrolment request and its answer;
+  `events/run.refused.schema.json`, the data of `dev.qory.run.refused`, which
+  `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
+  list of variable names and patterns; and `headers.json`, the header names and prefixes
+  refused for a connection's header, from the IANA HTTP Field Name Registry, the Fetch
+  standard's forbidden request headers and the names the contract adds. The runner's
+  code is unchanged.
+- Fixtures with the known answers of the access key: `fixtures/sealed/`, an envelope
+  sealed to the fixture access key with its run configuration, secrets request and
+  plaintext; `fixtures/enrolment/`, two enrolment requests and the answer; and
+  `fixtures/known-answers/`, the fixture access key and signing keys, the request,
+  enrolment and answer signatures, the discovery body an answer covers, and the public
+  keys enrolment refuses. The contracts tests recompute every one with Go's standard
+  library: the keys from their seeds, the X25519 key from the access key, each
+  signature, the open with `crypto/hpke`, and the points of small order with integer
+  arithmetic.
+
 ### Changed
 
 - The README is short. It lists the runner's four jobs: it records the session,
