@@ -103,8 +103,14 @@ release may change what an existing document does, and says so under Upgrading.
   an enrolment request with its normalised code and proof, posts it and verifies the
   answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
   names; and makes the instance id with the two lines of
-  its file, the id and a keyed hash of the machine's identity. Its tests reproduce every
-  published known answer of the access key, the requests, the answers and enrolment.
+  its file, the id and a keyed hash of the machine's identity. It verifies under no key
+  the key checks refuse, refuses a document that contains a secret with
+  `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
+  fingerprint however it is printed. Its tests reproduce every published known answer
+  of the access key, the requests, the answers and enrolment.
+- No tool, credential program or agent receives `QORY_ACCESS_KEY_SECRET`,
+  `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the runner leaves them out of every
+  environment it starts a program with.
 - A server can close a run with a signed `410` `run_closed` to a delivery: the runner
   stops the runtime as at its time limit, records `dev.qory.run.exited` with
   `reason: run_closed` in the file sink and sends nothing further; before
