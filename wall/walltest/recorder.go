@@ -28,8 +28,8 @@ import (
 // RecorderArgs are the arguments that make the helper run a recorder.
 var RecorderArgs = []string{modeRecorder}
 
-// RecorderFile is the file, inside a recorder's container, that contains what it recorded:
-// one JSON document a line, each a request.
+// RecorderFile is the file, inside a recorder's container, that contains what it
+// recorded: one JSON document a line, each a request.
 const RecorderFile = "/tmp/walltest-recorded"
 
 // The ports a recorder listens on.
@@ -46,10 +46,11 @@ const (
 )
 
 // Recorder is an origin the suite reads back: the helper started with [RecorderArgs]
-// and [RecorderEnv] in a container of its own, not on this machine. It answers HTTPS on
-// 8443, with a certificate of the suite's authority for its own addresses, and HTTP on
-// 8080, with 200 and a body that is the same for every request, and records the method,
-// the host, the path and the headers of each request in [RecorderFile].
+// and [RecorderEnv] in a container of its own, which the proxy reaches over the network.
+// It answers HTTPS on 8443, with a certificate of the suite's authority for its own
+// addresses, and HTTP on 8080, with 200 and a body that is the same for every request,
+// and records the method, the host, the path and the headers of each request in
+// [RecorderFile].
 type Recorder struct {
 	// Host is the address the proxy reaches it on.
 	Host string
@@ -221,11 +222,11 @@ func serveRecorder() int {
 	return fail(<-errs)
 }
 
-// RecorderAnswer is the text of every answer a recorder makes.
-const RecorderAnswer = "the recorder answered"
+// recorderAnswer is the text of every answer a recorder makes.
+const recorderAnswer = "the recorder answered"
 
 // answer answers a request as the Messages API does, streamed when the request's body
-// asks for that, with [RecorderAnswer] as the text and the request's model as the model.
+// sets stream, with [recorderAnswer] as the text and the request's model as the model.
 func answer(w http.ResponseWriter, body []byte) {
 	var req struct {
 		Model  string `json:"model"`
@@ -238,7 +239,7 @@ func answer(w http.ResponseWriter, body []byte) {
 	usage := map[string]int{"input_tokens": 1, "output_tokens": 1}
 	message := map[string]any{"id": "msg_walltest", "type": "message", "role": "assistant", "model": req.Model, "stop_reason": nil, "stop_sequence": nil, "usage": usage}
 	if !req.Stream {
-		message["content"] = []any{map[string]string{"type": "text", "text": RecorderAnswer}}
+		message["content"] = []any{map[string]string{"type": "text", "text": recorderAnswer}}
 		message["stop_reason"] = "end_turn"
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(message)
@@ -250,7 +251,7 @@ func answer(w http.ResponseWriter, body []byte) {
 	for _, e := range []map[string]any{
 		{"type": "message_start", "message": message},
 		{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}},
-		{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": RecorderAnswer}},
+		{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": recorderAnswer}},
 		{"type": "content_block_stop", "index": 0},
 		{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 1}},
 		{"type": "message_stop"},

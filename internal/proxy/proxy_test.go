@@ -372,7 +372,8 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 // TestTerminateSetsTheCredentialAndHoldsThePaths pins termination: to a host a
 // credential is for, the proxy answers with the run's authority, sets the token on a
 // path the credential covers and nowhere else, denies the rest under enforce, records
-// every request, and leaves every other host a tunnel it does not read.
+// every request, and leaves every other host a tunnel the proxy passes through as
+// bytes.
 func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]string{}
@@ -584,7 +585,7 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 			model := httptest.NewTLSServer(http.HandlerFunc(record))
 			defer model.Close()
 			// The other host is localhost, which no credential is for: plain, and over
-			// TLS through a tunnel the proxy does not read.
+			// TLS through a tunnel the proxy passes through as bytes.
 			plain := httptest.NewServer(http.HandlerFunc(record))
 			defer plain.Close()
 			secure := httptest.NewTLSServer(http.HandlerFunc(record))
@@ -615,7 +616,7 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 			proxyURL, _ := url.Parse(p.URL())
 			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
 			// The tunnelled origin's certificate is for example.com and not localhost;
-			// the session verifies it, and the proxy never reads it.
+			// the session verifies it, through a tunnel the proxy passes through as bytes.
 			tunnel := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com"}}}
 			bearer, apiKey := "Bearer "+credential.Placeholder, credential.Placeholder
 			var answers []string

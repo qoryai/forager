@@ -111,7 +111,7 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 				t.Fatalf("the run did not start: %v\nstderr:\n%s", err, errs.String())
 			}
 			t.Logf("claude answered %q, exit %d; stderr %q", out.String(), res.ExitCode, errs.String())
-			if res.ExitCode != 0 || !strings.Contains(out.String(), RecorderAnswer) {
+			if res.ExitCode != 0 || !strings.Contains(out.String(), recorderAnswer) {
 				t.Errorf("claude exited %d with %q, want 0 and the recorder's answer", res.ExitCode, out.String())
 			}
 			after, err := exec.Command(command, "exec", name, "cat", RecorderFile).Output()
@@ -169,16 +169,15 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 				t.Error("the record contains no request through the proxy")
 			}
 			var where []string
-			for _, d := range []string{res.Dir, dir} {
-				filepath.WalkDir(d, func(path string, e fs.DirEntry, err error) error {
-					if err == nil && e.Type().IsRegular() {
-						if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
-							where = append(where, path)
-						}
+			// dir holds the run directory, res.Dir, under .qory/runs.
+			filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+				if err == nil && e.Type().IsRegular() {
+					if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
+						where = append(where, path)
 					}
-					return nil
-				})
-			}
+				}
+				return nil
+			})
 			if strings.Contains(out.String()+errs.String(), keyMark) {
 				where = append(where, "the output")
 			}

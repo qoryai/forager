@@ -19,11 +19,17 @@ release may change what an existing document does, and says so under Upgrading.
   own stops the run when the wall writes the agent's docker configuration there, which
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
-- `walltest.Options` has `Recorders`: three origins, each the helper started with
-  `walltest.RecorderArgs` and `walltest.RecorderEnv()` in a container of its own. An
-  adapter's test that passes none skips the checks of a runtime's key, and
-  `QORY_WALL_REQUIRE` turns those skips into failures. `TestDockerConforms` starts them
-  from `busybox:stable`.
+- `walltest.Options` has `Recorders`: three `walltest.Recorder` values, each the helper
+  started with `walltest.RecorderArgs` and `walltest.RecorderEnv()` in a container of
+  its own, in this order: the host of a runtime's API key, the host of its OAuth
+  credential, then a host the policy allows with no credential. A `Recorder` holds the
+  `Host` the proxy reaches it on and a `Recorded` function that returns the content of
+  `walltest.RecorderFile` in its container. An adapter's test that passes none skips
+  the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
+  and any other number than three fails the suite. With `Recorders`, `walltest.Run`
+  points the process's roots at the suite's authority with `SSL_CERT_FILE` for the rest
+  of the process, so the test binary verifies no other certificate, before `Run` or
+  after it. `TestDockerConforms` starts the recorders from `busybox:stable`.
 
 ### Added
 

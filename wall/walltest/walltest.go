@@ -89,7 +89,8 @@ const (
 // x-api-key, and its OAuth credential, set as a bearer, each a fake key in the suite's
 // own environment for a recorder of its own, with the variable Claude Code reads it
 // from inside as its stand-in. keyMark is in both keys and nowhere else: the full keys
-// are made when the suite runs, so not even the helper's binary contains them.
+// are made when the suite runs, so they exist only in the suite's environment while it
+// runs.
 const (
 	keyMark        = "-REAL-not-a-secret-"
 	apiKeyVar      = "QORY_WALLTEST_API_KEY"
@@ -210,7 +211,9 @@ type Options struct {
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
-	// which [EnvRequire] turns into failures.
+	// which [EnvRequire] turns into failures. With Recorders, Run points the process's
+	// roots at the suite's authority with SSL_CERT_FILE for the rest of the process: the
+	// test binary verifies no other certificate, before Run or after it.
 	Recorders []Recorder
 }
 
@@ -236,6 +239,9 @@ func Run(t *testing.T, o Options) {
 	t.Setenv(apiKeyVar, keys.api)
 	t.Setenv(oauthVar, keys.oauth)
 	var trusted error
+	if n := len(o.Recorders); n != 0 && n != 3 {
+		t.Fatalf("Recorders lists %d recorders; the suite takes three: the API key's host, the OAuth credential's host, and an allowed host with none", n)
+	}
 	if len(o.Recorders) == 3 {
 		trusted = trustRecorders(t)
 		for _, rec := range o.Recorders {
@@ -501,17 +507,16 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 	})
 	t.Run(names[4], func(t *testing.T) {
 		var where []string
-		for _, dir := range []string{r.res.Dir, r.dir} {
-			filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-				if err != nil || !d.Type().IsRegular() {
-					return nil
-				}
-				if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
-					where = append(where, path)
-				}
+		// r.dir holds the run directory, r.res.Dir, under .qory/runs.
+		filepath.WalkDir(r.dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
 				return nil
-			})
-		}
+			}
+			if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
+				where = append(where, path)
+			}
+			return nil
+		})
 		for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
 			if strings.Contains(s, keyMark) {
 				where = append(where, name)
