@@ -810,3 +810,63 @@ func TestDenyIsDecidedFirstInEitherMode(t *testing.T) {
 		t.Errorf("guarded: status %d, decision %+v", resp.StatusCode, d)
 	}
 }
+
+// TestNodePathsNarrowThePolicysPaths pins the node's path rules beside the policy's: a
+// request to a host both list must match an entry of each, and its rule is the
+// narrowest that matched; a miss of either is denied under enforce with no rule and
+// passed under observe; and the hosts of both are terminated, a host only the node
+// lists included.
+func TestNodePathsNarrowThePolicysPaths(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	for _, mode := range []policy.Mode{policy.Enforce, policy.Observe} {
+		t.Run(string(mode), func(t *testing.T) {
+			var o observer
+			p, err := proxy.Listen("", mode, []string{host, "localhost"}, nil, o.observe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(origin.Certificate())
+			p.TrustUpstream(roots)
+			p.NodePaths(map[string][]string{host: {"/repos/acme/*", "/user"}, "localhost": {"/only-the-node/*"}})
+			p.Terminate(ca, nil, map[string][]string{host: {"/repos/*", "/user"}}, nil)
+			if got := strings.Join(p.Terminated(), " "); !strings.Contains(got, host) || !strings.Contains(got, "localhost") {
+				t.Errorf("terminated %q", got)
+			}
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			for _, tc := range []struct {
+				path, rule string
+				both       bool
+			}{
+				{"/repos/acme/shop", "/repos/acme/*", true},
+				{"/user", "/user", true},
+				{"/repos/other/lib", "", false},
+				{"/elsewhere", "", false},
+			} {
+				resp, err := client.Get("https://" + net.JoinHostPort(host, port) + tc.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				d := o.last(t)
+				wantCode := 200
+				if !tc.both && mode == policy.Enforce {
+					wantCode = 403
+				}
+				if resp.StatusCode != wantCode || d.PathRule != tc.rule || d.Allowed != (wantCode == 200) {
+					t.Errorf("%s: %d, recorded %+v; want %d with the rule %q", tc.path, resp.StatusCode, d, wantCode, tc.rule)
+				}
+			}
+		})
+	}
+}

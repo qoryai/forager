@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/refusal"
 )
 
 // EnvListen names, in a tool's environment, the path of the Unix socket it listens on.
@@ -138,7 +139,7 @@ func Choose(defs []Definition, selected []policy.Selected) ([]Chosen, error) {
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
 		if i < 0 {
-			return nil, fmt.Errorf("the policy selects the tool %q, which this machine does not define", sel.Name)
+			return nil, refusal.New(refusal.ToolUnknown, []string{sel.Name}, "the policy selects the tool %q, which this machine does not define", sel.Name)
 		}
 		def := defs[i]
 		if slices.ContainsFunc(out, func(c Chosen) bool { return c.Name == def.Name }) {
