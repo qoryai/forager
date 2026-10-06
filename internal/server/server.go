@@ -1,25 +1,27 @@
-// Package server is the runner's client of the server contract, and what the
-// receiver shares with it: how a request is signed.
+// Package server is the runner's client of the server contract.
 //
 // The server is the document of contracts/runner/v1/server.schema.json: a URL, an
-// access key and a secret. [Read] validates one; the schema is the reader. A [Client]
-// speaks to the server the way the contract says: [Client.Discover] fetches the
-// configuration document with a signed GET and learns where events go and where the run
-// configuration is; [Client.RunConfiguration] fetches that; [Client.Deliver] posts one
-// signed batch and reads the digests the answer carries. Every request carries the
-// access key, the contract revision and the user agent, and the client logs nothing.
+// access key id and the pin, apiary_public_key, the server's keys every answer is
+// verified under. [Read] validates one; the schema is the reader. The access key's
+// secret lives outside the document, and a [Client] holds it as an [accesskey.Key]
+// with the instance id. A [Client] speaks to the server the way the contract says:
+// [Client.Discover] fetches the configuration document with a signed GET and learns
+// where events go and where the run configuration is; [Client.RunConfiguration]
+// fetches that; [Client.Deliver] posts one signed batch and reads the digests the
+// answer contains; [Client.Ping] posts the ping a run starts with. Every request
+// contains the access key id, the instance id and name, the contract revision and the
+// user agent, and is signed with Ed25519 under the access key. Every answer but a 401
+// is verified under the pin before its body or headers are read, and the client logs
+// nothing.
 //
-// [Sign] and [Verify] are the signature of a POST, over the raw body; [Canonical],
-// [SignGET] and [VerifyGET] the signature of a GET, over the canonical string. The
-// runner's sink and the reference receiver share these, so both sides hold one
-// definition of what a valid request is.
+// A refusal that means no run is an [*accesskey.Refusal] with its code: unauthorized
+// for a 401, answer_unsigned for an answer that does not verify, and the server's own
+// code from a signed answer's body, key_pending or instance_limit say.
 package server
 
 import (
+	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,18 +34,21 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 )
 
 // The headers of the contract and the content type of a delivery.
 const (
-	HeaderAccessKey        = "X-Qory-Access-Key"
+	HeaderAccessKeyID      = accesskey.HeaderAccessKeyID
+	HeaderInstanceID       = accesskey.HeaderInstanceID
+	HeaderInstanceName     = accesskey.HeaderInstanceName
+	HeaderSignature        = accesskey.HeaderSignature
+	HeaderTimestamp        = accesskey.HeaderTimestamp
+	HeaderConfiguration    = accesskey.HeaderConfiguration
+	HeaderRunConfiguration = accesskey.HeaderRunConfiguration
 	HeaderContractVersion  = "X-Qory-Contract-Version"
 	HeaderDelivery         = "X-Qory-Delivery"
-	HeaderSignature        = "X-Qory-Signature-256"
-	HeaderTimestamp        = "X-Qory-Timestamp"
-	HeaderConfiguration    = "X-Qory-Configuration"
-	HeaderRunConfiguration = "X-Qory-Run-Configuration"
 	ContentType            = "application/cloudevents-batch+json"
 )
 
@@ -64,13 +69,21 @@ const Window = 300 * time.Second
 // MaxDocument is the largest configuration or run configuration document read.
 const MaxDocument = 1 << 20
 
-// Config is the server document: where the runner reports, as whom, and the secret
-// that signs, which never travels.
+// MaxRefusal is the largest body of an answer other than a document: a larger one
+// counts as unsigned.
+const MaxRefusal = accesskey.MaxAnswer
+
+// MaxInterval is the longest heartbeat interval a ping may announce, in seconds.
+const MaxInterval = 300
+
+// Config is the server document: where the runner reports, as which access key, and
+// the server keys it pins. The access key's secret is outside it.
 type Config struct {
-	Version   int    `json:"version"`
-	URL       string `json:"url"`
-	AccessKey string `json:"access_key"`
-	Secret    string `json:"secret"`
+	Version     int    `json:"version"`
+	URL         string `json:"url"`
+	AccessKeyID string `json:"access_key_id"`
+	// ApiaryPublicKey is the pin: every answer is verified under one of its keys.
+	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
 
 // Error is a document that is not a server document. A run does not start on it.
@@ -85,9 +98,9 @@ func (e *Error) Error() string { return "server " + e.Name + ": " + e.Err.Error(
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// DocumentError is a document the server answered with 200 and the runner refuses:
-// the schema does, or its digest header is missing or misshapen. It tells a caller
-// that asking again gets the same, which a transport failure or another status does
+// DocumentError is a document the server answered with a signed 200 and the runner
+// refuses: the schema does, or its digest header is missing or misshapen. It means
+// that fetching again gets the same, which a transport failure or another status does
 // not.
 type DocumentError struct {
 	// What is the document's kind and URL the URL it was fetched from.
@@ -101,19 +114,42 @@ func (e *DocumentError) Error() string { return e.What + " " + e.URL + ": " + e.
 func (e *DocumentError) Unwrap() error { return e.Err }
 
 // Read reads a server document from bytes, YAML or JSON by name's extension, JSON
-// when it has none. A refused document is a [*Error] naming name.
+// when it has none. A document without a pin is an [*accesskey.Refusal] with the code
+// apiary_public_key_missing, decided before any request; any other refused document
+// is a [*Error] naming name.
 func Read(name string, b []byte) (*Config, error) {
 	c, err := Parse(name, b)
 	if err != nil {
+		var missing *accesskey.Refusal
+		if errors.As(err, &missing) {
+			return nil, err
+		}
 		return nil, &Error{Name: name, Err: err}
 	}
 	return c, nil
 }
 
-// Parse validates the bytes of a server document against the schema and decodes it.
+// Parse validates the bytes of a server document against the schema and decodes it,
+// and checks the pin's keys as [accesskey.Pin.Check] does.
 func Parse(name string, b []byte) (*Config, error) {
+	file := name
+	if !strings.Contains(file, ".") {
+		file += ".json"
+	}
+	doc, err := contracts.Decode(file, b)
+	if err != nil {
+		return nil, err
+	}
+	if m, ok := doc.(map[string]any); ok {
+		if pin, _ := m["apiary_public_key"].([]any); len(pin) == 0 {
+			return nil, &accesskey.Refusal{Code: accesskey.CodeApiaryPublicKeyMissing, Detail: "server " + name + ": no pinned apiary_public_key"}
+		}
+	}
 	var c Config
 	if err := decode(name, "server.schema.json", b, &c); err != nil {
+		return nil, err
+	}
+	if err := c.ApiaryPublicKey.Check(); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -145,13 +181,21 @@ func decode(name, schemaName string, b []byte, out any) error {
 }
 
 // Configuration is the configuration document the server answers discovery with:
-// where events go and which, and where the run configuration is, when the server
-// offers one. A section the runner does not know is ignored.
+// the access key's node, where events go and which, where the run configuration and
+// the stored secrets are, when the server offers them, and the server's keys. A
+// section the runner does not know is ignored.
 type Configuration struct {
-	Version int    `json:"version"`
-	Events  Events `json:"events"`
-	// Run is nil when the server names no run configuration.
-	Run *Run `json:"run,omitempty"`
+	Version int `json:"version"`
+	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
+	NodeID string `json:"node_id"`
+	Events Events `json:"events"`
+	// Run is nil when the server offers no run configuration.
+	Run *Endpoint `json:"run,omitempty"`
+	// Secrets is nil unless the access key is allowed stored secrets.
+	Secrets *Endpoint `json:"secrets,omitempty"`
+	// ApiaryPublicKey lists the server's keys, for information: a runner verifies under
+	// its pin alone.
+	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
 
 // Events is the events section: the URL to post to and the types wanted.
@@ -161,8 +205,9 @@ type Events struct {
 	Types []string `json:"types"`
 }
 
-// Run is the run section: where the run configuration is fetched from.
-type Run struct {
+// Endpoint is a section that defines one URL: where the run configuration is fetched
+// from, or where stored secrets are requested.
+type Endpoint struct {
 	URL string `json:"url"`
 }
 
@@ -195,47 +240,14 @@ type Digests struct {
 	RunConfiguration string
 }
 
-// Sign returns the signature header value of a body: "sha256=" and the hex HMAC
-// SHA-256 of the body keyed with the secret.
-func Sign(secret string, body []byte) string {
-	m := hmac.New(sha256.New, []byte(secret))
-	m.Write(body)
-	return "sha256=" + hex.EncodeToString(m.Sum(nil))
-}
-
-// Verify reports whether header is the signature of body under the secret, compared in
-// constant time.
-func Verify(secret string, body []byte, header string) bool {
-	return hmac.Equal([]byte(Sign(secret, body)), []byte(header))
-}
-
-// Canonical is the string a GET is signed over: the method upper case, the request
-// target exactly as sent, and the timestamp as sent, joined by newlines with none at
-// the end. The target is the path, then "?" and the query only when the query is
-// non-empty; nothing is normalised on either side.
-func Canonical(method, target, timestamp string) string {
-	return strings.ToUpper(method) + "\n" + target + "\n" + timestamp
-}
-
-// SignGET returns the signature header value of a GET: "sha256=" and the hex HMAC
-// SHA-256 of the canonical string keyed with the secret.
-func SignGET(secret, method, target, timestamp string) string {
-	return Sign(secret, []byte(Canonical(method, target, timestamp)))
-}
-
-// VerifyGET reports whether header is the signature of the GET under the secret,
-// compared in constant time.
-func VerifyGET(secret, method, target, timestamp, header string) bool {
-	return hmac.Equal([]byte(SignGET(secret, method, target, timestamp)), []byte(header))
-}
-
-// Timestamp is the timestamp header value for a moment: Unix seconds, UTC, as a
-// decimal integer.
-func Timestamp(now time.Time) string { return strconv.FormatInt(now.Unix(), 10) }
-
-// Client speaks to one server.
+// Client speaks to one server as one instance of one access key.
 type Client struct {
 	Config *Config
+	// Key is the access key, held from its secret; it signs every request.
+	Key *accesskey.Key
+	// InstanceID is X-Qory-Instance-Id, signed into every request; InstanceName is
+	// X-Qory-Instance-Name, for display, sent when not empty.
+	InstanceID, InstanceName string
 	// UserAgent is sent as User-Agent: qory-runner/<version>.
 	UserAgent string
 	// HTTP is the client used; nil means one with Timeout. Its redirect policy is
@@ -243,11 +255,39 @@ type Client struct {
 	HTTP *http.Client
 }
 
+// Check refuses a client that cannot make a request the contract allows: no server
+// document, no pin, which is apiary_public_key_missing, an access key id outside its
+// form, no access key, or an instance id or name outside their pattern. It sends
+// nothing.
+func (c *Client) Check() error {
+	if c.Config == nil {
+		return errors.New("no server document")
+	}
+	if len(c.Config.ApiaryPublicKey) == 0 {
+		return &accesskey.Refusal{Code: accesskey.CodeApiaryPublicKeyMissing, Detail: "the server document pins no apiary_public_key"}
+	}
+	if err := accesskey.CheckID(c.Config.AccessKeyID); err != nil {
+		return err
+	}
+	if c.Key == nil {
+		return errors.New("a server needs the access key's secret, and the run has none")
+	}
+	if err := accesskey.CheckInstanceID(c.InstanceID); err != nil {
+		return err
+	}
+	if c.InstanceName != "" {
+		if err := accesskey.CheckName(c.InstanceName); err != nil {
+			return fmt.Errorf("the instance's name: %w", err)
+		}
+	}
+	return nil
+}
+
 // http is the client every request goes through: the caller's, copied, or one with
 // Timeout, and in either case one that follows no redirect. Go copies a request's
-// headers to wherever a redirect points, so a followed 3xx would hand the access key,
-// the signature and the timestamp to another host and take the answer from it. A 3xx
-// is a status like any other.
+// headers to wherever a redirect points, so a followed 3xx would hand the access key
+// id, the signature and the timestamp to another host and take the answer from it. A
+// 3xx is a status like any other.
 func (c *Client) http() *http.Client {
 	hc := &http.Client{Timeout: Timeout}
 	if c.HTTP != nil {
@@ -258,50 +298,107 @@ func (c *Client) http() *http.Client {
 	return hc
 }
 
-// headers sets what every request carries.
-func (c *Client) headers(req *http.Request) {
-	req.Header.Set("User-Agent", c.UserAgent)
-	req.Header.Set(HeaderAccessKey, c.Config.AccessKey)
-	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
+// answer is what the server answered one request: its status and body, and whether
+// its signature verified under the pin. The headers of an answer that did not verify
+// are not kept.
+type answer struct {
+	status int
+	body   []byte
+	signed bool
+	header http.Header
 }
 
-// get makes one signed GET of u and returns the answer, whatever its status.
-func (c *Client) get(ctx context.Context, u string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// send signs one request and sends it, then reads the answer and verifies its
+// signature under the pin, bound to this request's signature. A GET carries the
+// timestamp; a POST's signature covers its body. A 401 is never signed, and a body
+// over max is read no further and counts as unsigned. An error is a transport failure:
+// no answer.
+func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
+	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	ts := Timestamp(time.Now())
-	c.headers(req)
-	req.Header.Set(HeaderTimestamp, ts)
-	req.Header.Set(HeaderSignature, SignGET(c.Config.Secret, req.Method, req.URL.RequestURI(), ts))
-	return c.http().Do(req)
-}
-
-// fetch makes one signed GET of a document, which must answer 200 with the digest
-// header named, validates the body against the schema and decodes it into out. The
-// error names the URL and the status.
-func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName string, out any) (string, error) {
-	resp, err := c.get(ctx, u)
+	if body == nil {
+		req.Body, req.ContentLength = nil, 0
+	}
+	if set != nil {
+		set(req.Header)
+	}
+	req.Header.Set("User-Agent", c.UserAgent)
+	req.Header.Set(HeaderAccessKeyID, c.Config.AccessKeyID)
+	req.Header.Set(HeaderInstanceID, c.InstanceID)
+	if c.InstanceName != "" {
+		req.Header.Set(HeaderInstanceName, c.InstanceName)
+	}
+	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
+	signed := accesskey.Request{AccessKeyID: c.Config.AccessKeyID, InstanceID: c.InstanceID, Method: method, Target: req.URL.RequestURI()}
+	if method == http.MethodPost {
+		signed.Body = body
+	} else {
+		signed.Timestamp = accesskey.Timestamp(time.Now())
+		req.Header.Set(HeaderTimestamp, signed.Timestamp)
+	}
+	sig := c.Key.SignRequest(signed)
+	req.Header.Set(HeaderSignature, sig)
+	resp, err := c.http().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w", what, u, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxDocument+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
+	if err != nil {
+		return nil, err
+	}
+	a := &answer{status: resp.StatusCode, body: b}
+	if resp.StatusCode == http.StatusUnauthorized || len(b) > max {
+		return a, nil
+	}
+	one := func(name string) (string, bool) {
+		v := resp.Header.Values(name)
+		return strings.Join(v, ""), len(v) <= 1
+	}
+	signature, ok1 := one(HeaderSignature)
+	conf, ok2 := one(HeaderConfiguration)
+	run, ok3 := one(HeaderRunConfiguration)
+	if ok1 && ok2 && ok3 && c.Config.ApiaryPublicKey.VerifyAnswer(accesskey.Answer{Status: resp.StatusCode, RequestSignature: sig, Body: b, Configuration: conf, RunConfiguration: run}, signature) {
+		a.signed, a.header = true, resp.Header
+	}
+	return a, nil
+}
+
+// refusal is the error of an answer at run start that is not the one wanted: a 401 is
+// unauthorized; an answer that did not verify is answer_unsigned; a signed answer is
+// the code its body contains, or, without one, an error naming its status.
+func (a *answer) refusal(what string) error {
+	switch {
+	case a.status == http.StatusUnauthorized:
+		return &accesskey.Refusal{Code: accesskey.CodeUnauthorized, Status: a.status, Detail: what}
+	case !a.signed:
+		return &accesskey.Refusal{Code: accesskey.CodeAnswerUnsigned, Status: a.status, Detail: what}
+	}
+	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
+		r.Detail = what
+		return r
+	}
+	return fmt.Errorf("%s: status %d", what, a.status)
+}
+
+// fetch makes one signed GET of a document, which must answer a signed 200 with the
+// digest header named, validates the body against the schema and decodes it into out.
+// The error names the URL and the status.
+func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName string, out any) (string, error) {
+	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w", what, u, err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s %s: status %d", what, u, resp.StatusCode)
+	if a.status != http.StatusOK || !a.signed {
+		return "", a.refusal(what + " " + u)
 	}
-	if len(body) > MaxDocument {
-		return "", &DocumentError{what, u, fmt.Errorf("the document is over %d bytes", MaxDocument)}
-	}
-	digest := resp.Header.Get(digestHeader)
+	digest := a.header.Get(digestHeader)
 	if digest == "" {
-		return "", &DocumentError{what, u, fmt.Errorf("the answer carries no %s header", digestHeader)}
+		return "", &DocumentError{what, u, fmt.Errorf("the answer contains no %s header", digestHeader)}
 	}
-	if err := decode(what+".json", schemaName, body, out); err != nil {
+	if err := decode(what+".json", schemaName, a.body, out); err != nil {
 		return "", &DocumentError{what, u, err}
 	}
 	return digest, nil
@@ -309,8 +406,13 @@ func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName st
 
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
-// the schema refuses, means no run; it names the URL.
+// the schema refuses, means no run; it names the URL. A 401 is unauthorized, a signed
+// 409 key_pending is key_pending, and an answer that does not verify is
+// answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
+	if err := c.Check(); err != nil {
+		return nil, "", err
+	}
 	var conf Configuration
 	digest, err := c.fetch(ctx, "configuration", strings.TrimSuffix(c.Config.URL, "/")+WellKnown, HeaderConfiguration, "configuration.schema.json", &conf)
 	if err != nil {
@@ -375,50 +477,79 @@ func CheckLabels(labels map[string]string) error {
 // digestShape is the shape of a server's digest as the events record it.
 var digestShape = regexp.MustCompile(`^sha256=[0-9a-f]{64}$`)
 
-// Deliver posts one body to the events URL as the delivery with the given id, with the
-// run's run configuration digest when it holds one, and returns the server's status and
-// the digests its answer carries. A transport failure or no answer within Timeout is an
-// error and no status.
-func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (int, Digests, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, eventsURL, strings.NewReader(string(body)))
-	if err != nil {
-		return 0, Digests{}, err
-	}
-	c.headers(req)
-	req.Header.Set("Content-Type", ContentType)
-	req.Header.Set(HeaderDelivery, deliveryID)
-	req.Header.Set(HeaderSignature, Sign(c.Config.Secret, body))
-	if runDigest != "" {
-		req.Header.Set(HeaderRunConfiguration, runDigest)
-	}
-	resp, err := c.http().Do(req)
-	if err != nil {
-		return 0, Digests{}, err
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-	return resp.StatusCode, Digests{Configuration: resp.Header.Get(HeaderConfiguration), RunConfiguration: resp.Header.Get(HeaderRunConfiguration)}, nil
+// Delivery is what the server answered one batch.
+type Delivery struct {
+	Status int
+	// Signed says the answer verified under the pin. An answer that did not is no
+	// answer: it is retried, and nothing else of it is read.
+	Signed bool
+	// Code is the refusal code a signed answer's body contains, empty when none.
+	Code string
+	// Digests are the digests a signed answer contains.
+	Digests Digests
 }
 
-// Accepted reports whether a status accepts a delivery.
-func Accepted(status int) bool { return status >= 200 && status < 300 }
+// Accepted reports whether the server accepted the batch: a signed 2xx.
+func (d Delivery) Accepted() bool { return d.Signed && d.Status >= 200 && d.Status < 300 }
 
-// Stop reports whether a status tells the runner to send nothing more for the run.
-func Stop(status int) bool { return status == http.StatusGone }
+// Closed reports whether the server closed the run: a signed 410 run_closed. The run
+// ends, as at its time limit, and nothing further is sent.
+func (d Delivery) Closed() bool {
+	return d.Signed && d.Status == http.StatusGone && d.Code == accesskey.CodeRunClosed
+}
 
-// ErrNotAccepted is the error of a ping the server did not accept.
+// Stop reports whether the server wants nothing more for the run: a signed 410. Its
+// events go on to the file sink alone.
+func (d Delivery) Stop() bool { return d.Signed && d.Status == http.StatusGone }
+
+// Deliver posts one body to the events URL as the delivery with the given id, with the
+// run's run configuration digest when it holds one, and returns what the server
+// answered. A transport failure or no answer within Timeout is an error.
+func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (Delivery, error) {
+	a, err := c.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
+		h.Set("Content-Type", ContentType)
+		h.Set(HeaderDelivery, deliveryID)
+		if runDigest != "" {
+			h.Set(HeaderRunConfiguration, runDigest)
+		}
+	})
+	if err != nil {
+		return Delivery{}, err
+	}
+	d := Delivery{Status: a.status, Signed: a.signed}
+	if a.signed {
+		d.Digests = Digests{Configuration: a.header.Get(HeaderConfiguration), RunConfiguration: a.header.Get(HeaderRunConfiguration)}
+		if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
+			d.Code = r.Code
+		}
+	}
+	return d, nil
+}
+
+// ErrNotAccepted is the error of a ping the server answered, signed, with neither a
+// 2xx nor a code.
 var ErrNotAccepted = errors.New("the server did not accept the ping")
 
 // Ping delivers a batch of one ping event to the events URL and returns nil only on a
-// 2xx. It is what makes a configured server fail closed: the run does not start
-// otherwise. The error names the URL and the status.
+// signed 2xx. It is what makes a configured server fail closed: the run does not start
+// otherwise. A 401 is unauthorized, an answer that does not verify answer_unsigned,
+// and a signed refusal its code, instance_limit or key_pending say, each an
+// [*accesskey.Refusal]; the error names the URL and the status.
 func (c *Client) Ping(ctx context.Context, eventsURL, deliveryID string, body []byte) error {
-	status, _, err := c.Deliver(ctx, eventsURL, deliveryID, body, "")
+	a, err := c.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
+		h.Set("Content-Type", ContentType)
+		h.Set(HeaderDelivery, deliveryID)
+	})
 	if err != nil {
 		return fmt.Errorf("ping %s: %w", eventsURL, err)
 	}
-	if !Accepted(status) {
-		return fmt.Errorf("ping %s: status %d: %w", eventsURL, status, ErrNotAccepted)
+	if a.signed && a.status >= 200 && a.status < 300 {
+		return nil
 	}
-	return nil
+	err = a.refusal("ping " + eventsURL)
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) {
+		return fmt.Errorf("%w: %w", err, ErrNotAccepted)
+	}
+	return err
 }

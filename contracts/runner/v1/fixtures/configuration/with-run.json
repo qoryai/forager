@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "node_id": "nd_f1xt0re000000000",
   "events": {
     "url": "https://qory.example/v1/events",
     "types": [
@@ -12,5 +13,8 @@
   },
   "run": {
     "url": "https://qory.example/v1/run-configuration"
-  }
+  },
+  "apiary_public_key": [
+    {"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}
+  ]
 }

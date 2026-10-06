@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/tool"
@@ -157,20 +158,22 @@ func bothDeny(ceiling, own []string) []string {
 
 // Server is the server document, contracts/runner/v1/server.schema.json, as the
 // caller hands it to the runner: the server whose configuration document says where
-// events go and where the run configuration is, the key the runner reports as, and the
-// secret that signs every request. The runner validates it, fetches the configuration
-// document, and posts a ping the server must accept, before anything starts.
+// events go and where the run configuration is, the access key the runner signs every
+// request as, and the pin, the server's keys every answer is verified under. The
+// access key's secret is outside the document: [Spec.AccessKey]. The runner validates
+// the document, fetches the configuration document, and posts a ping the server must
+// accept, before anything starts.
 type Server struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
 	// URL is the server's origin: https, or http to a loopback address; no path.
 	URL string `json:"url"`
-	// AccessKey names the runner to the server: "ak_" and 16 lowercase Crockford
-	// base32 characters.
-	AccessKey string `json:"access_key"`
-	// Secret signs every request; at least 16 characters, shared with the server and
-	// never sent.
-	Secret string `json:"secret"`
+	// AccessKeyID is the access key's id, "ak_" and 16 lower-case Crockford base32
+	// characters, which the server assigned when the key enrolled.
+	AccessKeyID string `json:"access_key_id"`
+	// ApiaryPublicKey is the pin: the server's Ed25519 public keys, one or more. A
+	// server without a pin is no run, apiary_public_key_missing, before any request.
+	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
 
 // Credential is one credential as the machine defines it, [Spec.Credentials]: a token

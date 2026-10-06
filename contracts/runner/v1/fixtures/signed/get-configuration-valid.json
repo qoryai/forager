@@ -2,13 +2,15 @@
   "method": "GET",
   "target": "/.well-known/qory-configuration",
   "headers": {
-    "User-Agent": "qory-runner/0.4.0",
-    "X-Qory-Access-Key": "ak_f1xt0re000000000",
+    "User-Agent": "qory-runner/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
     "X-Qory-Contract-Version": "1",
     "X-Qory-Timestamp": "1700000000",
-    "X-Qory-Signature-256": "sha256=0c895b2f1c1c62629e6298a59746b975ccae2e5156b01f733d2d7768f6eb55a2"
+    "X-Qory-Signature-Ed25519": "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ"
   },
   "body": null,
   "expect": 200,
-  "note": "The discovery fetch, signed at 1700000000 with the published secret under the published key; a receiver's clock is set to that second. The canonical string is GET, the target and the timestamp joined by newlines, with none at the end."
+  "note": "The discovery fetch, signed at 1700000000 under the fixture access key secret as the fixture access key and instance; a receiver's clock is set to that second. The request string is qory-request-ed25519-v1, the access key id, the instance id, GET, the target and the timestamp, joined by line feeds with none after the last. The signature is the published known answer."
 }

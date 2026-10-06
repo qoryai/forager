@@ -2,14 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration: where the runner posts its events, and where it fetches a run configuration when the server offers one. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where the runner posts its events, where it fetches a run configuration and requests stored secrets when the server offers them, and the server's keys. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "events"],
+  "required": ["version", "node_id", "events", "apiary_public_key"],
   "properties": {
     "version": {
       "description": "The document format. A runner refuses a version it does not read.",
       "const": 1
+    },
+    "node_id": {
+      "description": "The id of the access key's node, nd_, or node pool, np_, followed by 16 lower-case Crockford base32 characters. Listed for every verified access key, for display.",
+      "type": "string",
+      "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
     },
     "events": {
       "description": "Where the events go and which.",
@@ -46,6 +51,36 @@
           "type": "string",
           "format": "uri",
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        }
+      }
+    },
+    "secrets": {
+      "description": "Where stored secrets are requested, listed only for an access key allowed to receive them. A server that lists it requires a wall for every run against it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "description": "The endpoint the secrets request is posted to. https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        }
+      }
+    },
+    "apiary_public_key": {
+      "description": "The server's Ed25519 public keys, the current one and during a rotation the next one after it, listed for every verified access key for information: a runner verifies under its pin alone.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alg", "public_key"],
+        "properties": {
+          "alg": {"const": "ed25519"},
+          "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"}
         }
       }
     }

@@ -13,7 +13,8 @@
       "events": [
         "*"
       ],
-      "contract_version": 1
+      "contract_version": 1,
+      "interval_seconds": 30
     }
   }
 ]
