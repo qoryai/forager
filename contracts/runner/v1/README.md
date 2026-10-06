@@ -629,8 +629,8 @@ of the old size and the chunks after it to one of the new. On pipes there is no
 
 `server.schema.json`. The document the command passes to the runner, from the machine's
 own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
-with the access key secret from a file descriptor, else `QORY_ACCESS_KEY_SECRET`, else
-the file `access-key-secret`. The runner is a client of the server defined here and of
+with the access key secret from the file descriptor `--access-key-secret-fd <n>` names,
+else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. The runner is a client of the server defined here and of
 nothing else: it fetches the server's configuration, posts its events to the URL it
 defines, and takes the run's policy from the server when the server offers one. A server
 is a control plane, or a plain receiver that implements this section: discovery and the

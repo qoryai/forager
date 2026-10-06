@@ -234,8 +234,9 @@ Each line names a passage of the README on main and what it becomes.
   before parsing" becomes "verifies the Ed25519 signature over the request string before
   parsing".
 - **§The server, the secret.** "with the secret from `QORY_SERVER_SECRET` when the file
-  does not contain it" becomes: "with the access key secret from a file descriptor, else
-  `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`" (Decision 4).
+  does not contain it" becomes: "with the access key secret from the file descriptor
+  `--access-key-secret-fd <n>` names, else `QORY_ACCESS_KEY_SECRET`, else the file
+  `access-key-secret`" (Decision 4).
 - **§Credentials and §Tools, a host outside the allow list.** Under `enforce`, a tool
   whose host the allow list does not cover is no run, as on main. A connection whose
   host the policy denies gets `hosts_denied`, and the run goes on, because denied egress
@@ -665,10 +666,12 @@ runs with it.**
   is outside `qory`'s reach (Security considerations).
 - **The secret.** One line: `qak_` and the 32-byte Ed25519 seed in base64url without
   padding, 47 characters. The prefix lets secret scanners recognise it. `qory` generates
-  the seed from the system's random source and reads the secret from a file descriptor
-  it is given, else from `QORY_ACCESS_KEY_SECRET`, else from the file `access-key-secret`
-  in the runner file's directory, `$XDG_CONFIG_HOME/qory`, else `~/.config/qory`. The
-  variable wins over the file.
+  the seed from the system's random source and reads the secret from the file
+  descriptor `--access-key-secret-fd <n>` names, a flag of `qory run` and
+  `qory run resend`, else from `QORY_ACCESS_KEY_SECRET`, else from the file
+  `access-key-secret` in the runner file's directory, `$XDG_CONFIG_HOME/qory`, else
+  `~/.config/qory`. The descriptor wins over the variable, and the variable over the
+  file.
 - **The runner file's directory** holds everything `qory` keeps for the server: the
   runner file, `access-key-secret`, `instance-id`, the `stored-secrets` marker,
   `enrolment-pending`, the pinned labels under `labels/` and the lock files under
