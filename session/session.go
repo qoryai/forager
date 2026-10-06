@@ -71,6 +71,10 @@ type Spec struct {
 	// InstanceName is this instance's display name, sent in X-Qory-Instance-Name on
 	// every request to the Server, unsigned and for display alone; empty sends none.
 	InstanceName string
+	// Discovered, when not nil, is called once the Server's signed configuration
+	// document is read, before the ping, with what it lists of the access key: qory
+	// prints the node id. An error it returns is no run, and nothing more is sent.
+	Discovered func(Discovery) error
 	// Events, when not nil, gets every event as one JSON line as well, the line
 	// events.jsonl holds: a run with no receiver is followed on standard output this
 	// way. Local does not silence it.
@@ -173,6 +177,14 @@ type Result struct {
 	RunClosed bool
 }
 
+// Discovery is what the Server's configuration document lists of the run's access key.
+type Discovery struct {
+	// NodeID is the id of the access key's node, nd_, or node pool, np_.
+	NodeID string
+	// Secrets says the document lists secrets: the access key receives stored secrets.
+	Secrets bool
+}
+
 // Refusal is a run that did not start, and why: its refusal code, and the status of
 // the server's answer when the code came from one. A server's run, for one, is refused
 // with apiary_public_key_missing without a pin, unauthorized on a 401,
@@ -250,6 +262,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		if srv, err = discover(runCtx, cfg, spec); err != nil {
 			return nil, err
+		}
+		if spec.Discovered != nil {
+			if err := spec.Discovered(Discovery{NodeID: srv.conf.NodeID, Secrets: srv.conf.Secrets != nil}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	rt := spec.Runtime

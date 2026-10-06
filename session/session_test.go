@@ -513,10 +513,11 @@ func TestInvalidPolicyMeansNoRun(t *testing.T) {
 }
 
 // TestServerIsDiscoveredPingedAndDelivered pins the server side: the configuration
-// document is fetched first, the ping is the first event with the contract revision,
-// and every event reaches the store; with a server that refuses the discovery, no run
-// and no run directory; with one that refuses the ping, no run; with --local, the
-// server is not contacted.
+// document is fetched first and the caller's hook gets the node id it lists, the ping
+// is the first event with the contract revision, and every event reaches the store; a
+// hook that returns an error is no run, with no ping; with a server that refuses the
+// discovery, no run and no run directory; with one that refuses the ping, no run; with
+// --local, the server is not contacted.
 func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	c := newControl(t)
 	cfg := c.server()
@@ -524,9 +525,17 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	sp := spec(t, nil)
 	sp.Forwarder = nil
 	sp.Server = cfg
+	var discovered []session.Discovery
+	sp.Discovered = func(d session.Discovery) error {
+		discovered = append(discovered, d)
+		return nil
+	}
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(discovered) != 1 || discovered[0].NodeID != "nd_f1xt0re000000000" || discovered[0].Secrets {
+		t.Errorf("discovered %+v", discovered)
 	}
 	evs := events(t, res)
 	if evs[0]["type"] != "dev.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
@@ -541,6 +550,15 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	// Everything was accepted during the run, the ping too, so nothing is owed after it.
 	if again, err := session.Resend(context.Background(), resend(res.Dir, cfg)); err != nil || again.Sent != 0 || again.Closed || c.store.Count() != len(evs) {
 		t.Errorf("resend after a delivered run: %+v, %v", again, err)
+	}
+
+	pings := c.hits.Load()
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server = cfg
+	sp.Discovered = func(session.Discovery) error { return errors.New("the marker cannot be written") }
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "marker") || c.hits.Load() != pings+1 {
+		t.Errorf("a refusing discovery hook: %v, %d requests", err, c.hits.Load()-pings)
 	}
 
 	c.refuse.Store(500)

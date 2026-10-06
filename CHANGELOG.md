@@ -109,6 +109,9 @@ release may change what an existing document does, and says so under Upgrading.
   `reason: run_closed` in the file sink and sends nothing further; before
   `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
   `session.Result` has `RunClosed`.
+- `session.Spec` has `Discovered`, called once the server's signed configuration
+  document is read and before the ping, with the access key's `node_id` and whether the
+  document lists `secrets`; an error it returns is no run.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
   status: `apiary_public_key_missing` for a server without a pin, before any request;
   `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify;
