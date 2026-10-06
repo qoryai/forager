@@ -95,6 +95,29 @@ release may change what an existing document does, and says so under Upgrading.
   library: the keys from their seeds, the X25519 key from the access key, each
   signature, the open with `crypto/hpke`, and the points of small order with integer
   arithmetic.
+- The public package `accesskey` is the access key of the contract, for the runner and
+  for qory alike. It generates a key and reads and writes its secret, `qak_` and the
+  32-byte Ed25519 seed in base64url; derives the public key, its fingerprint and the
+  X25519 key; runs the five checks the contract requires of a public key; builds and
+  signs the GET and POST request strings; verifies a signed answer under a pin; builds
+  an enrolment request with its normalised code and proof, posts it and verifies the
+  answer under the key the code names; and makes the instance id with the two lines of
+  its file, the id and a keyed hash of the machine's identity. Its tests reproduce every
+  published known answer of the access key, the requests, the answers and enrolment.
+- A server can close a run with a signed `410` `run_closed` to a delivery: the runner
+  stops the runtime as at its time limit, records `dev.qory.run.exited` with
+  `reason: run_closed` in the file sink and sends nothing further; before
+  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
+  `session.Result` has `RunClosed`.
+- A run refused with a code is a `session.Refusal`, with the code and the server's
+  status: `apiary_public_key_missing` for a server without a pin, before any request;
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify;
+  `key_pending` while the access key awaits approval; and `instance_limit` when the
+  node's live instances are at its limit.
+- The reference receiver accepts the public keys its configuration holds, an access key
+  awaiting approval among them, answers in the contract's order of refusals, signs every
+  answer after verification under its own key, and closes a run, stops it, or refuses an
+  instance's ping where its hooks `Closed`, `Stop` and `Admit` say.
 
 ### Changed
 
@@ -110,6 +133,33 @@ release may change what an existing document does, and says so under Upgrading.
   daemon's environment, the owners and modes of `/run/qory` and the agent's docker
   configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
   that configuration.
+- Contract `v1` revision 1 is amended in place: the runner signs every request with an
+  access key, an Ed25519 key, and verifies every answer under the server's key it pins.
+  The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
+  no secret; `session.Server` has the same members, and `session.Spec` and
+  `session.ResendSpec` have `AccessKey`, `InstanceID` and `InstanceName`. Every request
+  contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
+  `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
+  but a `401` is signed under the server's key and bound to the request's signature,
+  and the runner reads its body and headers only once it verifies; during a run an
+  answer that does not verify is retried. §The server defines the access key, nodes
+  and instances, the pin, the request string, signed answers, the coded refusals and
+  their order, and enrolment.
+- Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
+  an access key allowed stored secrets.
+- `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
+  300. Heartbeats run from the accepted ping until the final event, and
+  `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
+  `run_closed`.
+- `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
+  `fixtures/signed/` has `get-configuration-no-instance-id`, `-header-twice` and
+  `-pending-key`, `batch-unknown-key` in place of `batch-wrong-key`, and
+  `expect_code` for a coded refusal. `fixtures/invalid/` has
+  `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
+  `event-ping-interval-too-long` in place of `server-no-key`;
+  `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
+  `node_id` and `apiary_public_key`; and the pings of `fixtures/batch/ping.json` and
+  of the recorded runs contain `interval_seconds`.
 
 ### Fixed
 

@@ -28,7 +28,8 @@ to N and no more. An addition is a new revision; a breaking change is `v2`. An a
 made while no released runner is in use goes into the revision the runner sends; the
 revision is raised only when a released runner is in use. Revision 1 is everything this
 document describes: the server (§The server), tools (§Tools) and images (§Images), where
-`container_runtime` and `docker` belong to an option that is experimental (§The wall).
+`container_runtime` and `docker` belong to an option that is experimental (§The wall),
+and nodes, access keys, instances and enrolment (§The server).
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility: while the module is
@@ -131,9 +132,9 @@ Stated so a receiver reads the record for what it is.
   and the egress record are the runner's own and are always there.
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a runner change, never a configuration change.
-- The server is trusted with what it is sent. The secret authenticates the runner to
-  the server. Over `https`, TLS authenticates the server to the runner; over `http` to a
-  loopback address, nothing does.
+- The server is trusted with what it is sent. The access key authenticates the runner to
+  the server. Every answer is signed under the key the runner pins, so the runner
+  authenticates the server over `https` and over loopback `http` alike.
 
 ## Sequence
 
@@ -141,16 +142,21 @@ One run, on a developer machine, with a server configured:
 
 1. The runner receives a launch spec: the program, its arguments, its environment and
    directory, whether the session is interactive, the policy document, the server
-   document, the egress the harness declared, and the runtime name. The spec comes
+   document with the access key secret and the instance id and name, the egress the
+   harness declared, and the runtime name. The spec comes
    from the `qory` command, which reads the policy and the server from its own
    configuration; the runner receives nothing about what composed it or where it was read.
 2. The runner creates a run id, a UUID version 7, and the run directory
    `.qory/runs/<id>/` in the checkout.
-3. It validates the server document once, when one is passed, and fetches the server's
-   configuration document with a signed `GET` (§The server). It posts one
-   `dev.qory.ping` to the events URL the document defines and waits for a 2xx. A fetch
-   that fails, a document the schema refuses, or a ping not accepted means the run does
-   not start: a run configured to be observed never runs unobserved by accident.
+3. It validates the server document once, when one is passed; without a pinned
+   `apiary_public_key` the run does not start, `apiary_public_key_missing`, before any
+   request. It fetches the server's configuration document with a signed `GET` (§The
+   server), and verifies every answer's signature under the pin before it reads the
+   body or the headers. It posts one `dev.qory.ping` to the events URL the document
+   defines and waits for a signed 2xx; heartbeats start once the ping is accepted. A
+   fetch that fails, a document the schema refuses, an answer that does not verify, or a
+   ping not accepted means the run does not start: a run configured to be observed never
+   runs unobserved by accident.
    The `--local` flag of the command runs with the file sink alone and contacts no
    server. With no server configured there is no fetch and no ping, and the run starts
    at once, files only.
@@ -178,7 +184,8 @@ One run, on a developer machine, with a server configured:
 8. While the program runs: every chunk of output is one `dev.qory.run.log`; on a
    pseudo-terminal every resize is one `dev.qory.run.resized`; every connection through
    the proxy is one `dev.qory.run.egress`; every record the descriptor matches is one
-   session event; every thirty seconds one `dev.qory.run.heartbeat`.
+   session event; every thirty seconds one `dev.qory.run.heartbeat`, from the accepted
+   ping with a server and from step 7 without one, until the final event.
 9. The program exits. The runner drains the socket, so a hook on the runtime's last
    event is still read, emits `dev.qory.run.exited`, waits up to fifteen seconds for the
    sinks to flush, reports what the server has not accepted, and returns the program's exit
@@ -187,7 +194,9 @@ One run, on a developer machine, with a server configured:
 A run may have a time limit. When the runtime still runs at the limit the runner stops
 it, and `dev.qory.run.exited` contains `reason: timeout` with the state `failed`; step 9
 is otherwise the same. A denied connection never ends a run; the limit is the one thing
-of the runner's that does.
+of the runner's that does. A server ends a run by closing it: a signed `410` with
+`run_closed` to a delivery stops the runtime as at the limit, and
+`dev.qory.run.exited` contains `reason: run_closed` (§The server).
 
 The runner stops a runtime the same way at the limit and when its own context ends: a
 signal that requests the runtime's exit, then SIGKILL after a grace. The signal is one of
@@ -508,14 +517,14 @@ The types, one namespace. The runner's own:
 
 | Type | When | Data |
 |---|---|---|
-| `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
-| `dev.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any |
+| `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version`, `interval_seconds` |
+| `dev.qory.run.started` | the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
-| `dev.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
-| `dev.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
+| `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event; `elapsed_seconds` counts since the ping | `elapsed_seconds`, `interval_seconds` |
+| `dev.qory.run.exited` | the runtime exited; the result and the last event, or `dev.qory.run.refused` is for a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 | `dev.qory.run.refused` | the run did not start after the ping; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last | `code`, and when they apply `connection`, `names`, `providers`, `status` |
 
 The session's, produced by a descriptor from what the runtime reports:
@@ -614,36 +623,107 @@ of the old size and the chunks after it to one of the new. On pipes there is no
 
 `server.schema.json`. The document the command passes to the runner, from the machine's
 own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
-with the secret from `QORY_SERVER_SECRET` when the file does not contain it. The runner is
-a client of the server defined here and of nothing else: it fetches the server's
-configuration, posts its events to the URL it defines, and takes the run's policy from the
-server when the server offers one. A server is a control plane, or a plain receiver
-that implements this section: discovery and the events endpoint are enough.
-Configuring one makes the run fail closed on the discovery fetch and on the ping.
+with the access key secret from a file descriptor, else `QORY_ACCESS_KEY_SECRET`, else
+the file `access-key-secret`. The runner is a client of the server defined here and of
+nothing else: it fetches the server's configuration, posts its events to the URL it
+defines, and takes the run's policy from the server when the server offers one. A server
+is a control plane, or a plain receiver that implements this section: discovery and the
+events endpoint are enough. Configuring one makes the run fail closed on the discovery
+fetch and on the ping.
 
 ```yaml
 version: 1
-url: https://qory.example            # https, or http to a loopback address; scheme and host[:port] only
-access_key: ak_f1xt0re000000000       # ak_ and 16 lower-case Crockford base32 characters
-secret: fixture-secret-not-a-real-one # at least 16 characters; signs, never sent
+url: https://qory.example             # https, or http to a loopback address; scheme and host[:port] only
+access_key_id: ak_f1xt0re000000000    # ak_ and 16 lower-case Crockford base32 characters
+apiary_public_key:                    # the pin: the server's Ed25519 keys, one or more
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
 ```
 
 `url` is the server's origin and nothing after it: no path, no query, no fragment. The
-runner finds every endpoint through the configuration document under it. The access key
-identifies the runner to the server and is sent in clear on every request; the secret
-signs and is never sent. The pair follows the model of an AWS access key id and its secret
-key. The secret lives outside any repository, in the machine's configuration or its
-environment; it is never in a checkout and never in an event, and the only one in a
-fixture is the published test secret, `fixture-secret-not-a-real-one`, under the
-published key `ak_f1xt0re000000000`.
+runner finds every endpoint through the configuration document under it.
+
+**The access key.** The access key authenticates the runner to the server. It is one
+Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
+padding, 47 characters, from the system's random source; the prefix lets secret
+scanners recognise it. The secret signs every request and is never sent, and the server
+stores only the public key. The server assigns the access key its id, `ak_` and 16
+lower-case Crockford base32 characters, when the key enrols (Enrolment, below). The
+secret lives outside this document and outside any repository, in the machine's
+configuration directory, its environment or a file descriptor; it is never in a checkout
+and never in an event. The fixtures sign with the published fixture access key of
+`fixtures/known-answers/keys.json`, under the id `ak_f1xt0re000000000`. `qory` refuses
+its secret, and the fixture signing keys as a pin; a server refuses its public key at
+enrolment, and the fixture signing keys as its own key. A fingerprint, of an access key's public key or of the
+server's, is `base64url(SHA-256(raw public key)[:16])`, 22 characters.
+
+**Nodes and instances.** An access key belongs to a node, `nd_`, a permanent machine
+that runs one instance at a time, or to a node pool, `np_`, whose instances share the
+access key, up to a limit the pool may set; each id is followed by 16 lower-case
+Crockford base32 characters. An instance is one running copy of `qory` with the access
+key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of every
+request, for display, audit, per-instance events and the instance limit; authorisation
+rests on the access key alone, and whoever holds the access key can claim any instance
+id. `qory` generates `i_` and 16 random bytes in base64url and keeps the id in the file
+`instance-id` with the HMAC-SHA256, keyed with `qory instance-id v1`, of the machine's
+identity, so a file copied to another machine yields a new id there. The instance's
+display name, the host name by default, is sent unsigned and serves display alone. A
+request under an access key that awaits approval verifies, and every endpoint answers it
+with a signed `409` `key_pending`. A ping from a new instance id beyond its node's limit
+is a signed `409` `instance_limit`, and that run does not start; an instance counts
+while one of its runs is live. A run is live from its accepted ping until its final
+event, `dev.qory.run.exited` or `dev.qory.run.refused`, or until no accepted event of
+the run has arrived for 3 × the `interval_seconds` its ping announced.
+
+**The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
+server's key can rotate. Every answer of the server, to discovery, to the run
+configuration and to every delivery, is verified under the pin before its body or its
+headers are read, and the runner takes keys from its pin alone. `qory` takes the pin
+from `QORY_APIARY_PUBLIC_KEY`, the same list written as JSON, when the section has none,
+and refuses to start when both are set; it takes `access_key_id` from
+`QORY_ACCESS_KEY_ID` the same way. A runner with a server and no pin is no run,
+`apiary_public_key_missing`, decided before the first request.
 
 **On every request** to the server:
 
 | Header | Value |
 |---|---|
 | `User-Agent` | `qory-runner/<version>` |
-| `X-Qory-Access-Key` | the access key |
+| `X-Qory-Access-Key-Id` | the access key id |
+| `X-Qory-Instance-Id` | the instance id |
+| `X-Qory-Instance-Name` | the instance's display name, unsigned, for display alone |
 | `X-Qory-Contract-Version` | the revision of this contract the runner implements, `1` |
+| `X-Qory-Signature-Ed25519` | the Ed25519 signature of the request string under the access key secret, 64 bytes in base64url without padding |
+
+**The request string** is lines joined by `\n`, with no newline after the last. It
+starts with three lines: `qory-request-ed25519-v1`, the access key id and the instance
+id, exactly as the headers contain them, an absent instance id as an empty line. Then:
+
+- for a GET, the method in upper case; the request target exactly as sent, the path and
+  then `?` and the query only when the query is non-empty, nothing decoded, re-ordered or
+  normalised on either side; and the timestamp as sent in `X-Qory-Timestamp`, Unix
+  seconds, UTC, a decimal integer. The server accepts the request when `|server now -
+  timestamp| <= 300` seconds, in either direction.
+- for a POST, `POST`; the request target exactly as sent; then the raw request body. A
+  POST's signature covers its path and its body, so a body signed for one endpoint fails
+  at every other. No timestamp is signed on a POST and no replay window is checked: a
+  replayed batch is a duplicate the receiver already discards by event id.
+
+The signature covers the access key id, the instance id, and the method, the target and
+the timestamp of a GET, or the method, the target and the body of a POST.
+`User-Agent`, `Content-Type`, `X-Qory-Contract-Version`, `X-Qory-Instance-Name`,
+`X-Qory-Delivery` and `X-Qory-Run-Configuration` are unsigned: the server takes every
+authorisation decision from the signed lines and the body. Three known answers, under
+the fixture access key secret and the instance id `i_gYKDhIWGh4iJiouMjY6PkA`, line by
+line in `fixtures/known-answers/signatures.json`:
+
+- the 115-byte message
+  `qory-request-ed25519-v1\nak_f1xt0re000000000\ni_gYKDhIWGh4iJiouMjY6PkA\nGET\n/.well-known/qory-configuration\n1700000000`:
+  `H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ`;
+- the same with the target `/.well-known/qory-configuration?x=1`, 119 bytes:
+  `XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ`;
+- a POST to `/v1/secrets` of the 297-byte body of `fixtures/sealed/secrets-request.json`,
+  a signed message of 383 bytes:
+  `evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw`.
 
 **A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
 One `POST` per batch to the events URL, with the headers above and:
@@ -652,53 +732,110 @@ One `POST` per batch to the events URL, with the headers above and:
 |---|---|
 | `Content-Type` | `application/cloudevents-batch+json` |
 | `X-Qory-Delivery` | a UUID per batch. A retry of the same batch contains the same id |
-| `X-Qory-Signature-256` | `sha256=` and the lower-case hex HMAC SHA-256 of the raw request body, keyed with the secret |
 | `X-Qory-Run-Configuration` | the server's digest of the run configuration the run uses, `sha256=<hex>`, when it uses a fetched one; absent otherwise |
 
-No timestamp is signed on a POST and no replay window is checked: a replayed batch is
-a duplicate the receiver already discards by event id.
+**A signed GET**, for the configuration document and the run configuration, contains
+`X-Qory-Timestamp` beside the headers above.
 
-**A signed GET**, for the configuration document and the run configuration:
+**Signed answers.** Every answer to a request that verified contains
+`X-Qory-Signature-Ed25519`, the Ed25519 signature under the server's signing key, 64
+bytes in base64url, of six lines joined by `\n`, with no newline after the last:
 
-| Header | Value |
-|---|---|
-| `X-Qory-Timestamp` | Unix seconds, UTC, a decimal integer |
-| `X-Qory-Signature-256` | `sha256=` and the lower-case hex HMAC SHA-256 of the canonical string, keyed with the secret |
+1. `qory-answer-ed25519-v1`;
+2. the status, three decimal digits;
+3. the request's `X-Qory-Signature-Ed25519` exactly as sent, or for an enrolment the
+   request's `proof`;
+4. the lower-case hex SHA-256 of the body as the server produced it, before any content
+   coding, which for an empty body is the SHA-256 of the empty string;
+5. the answer's `X-Qory-Configuration`, or empty when the answer has none;
+6. the answer's `X-Qory-Run-Configuration`, or empty when the answer has none.
 
-The canonical string is three lines joined by `\n`, with no newline after the last: the
-method in upper case; the request target exactly as sent, the path and then `?` and
-the query only when the query is non-empty, nothing decoded, re-ordered or normalised
-on either side; the timestamp as sent. The server accepts the request when
-`|server now - timestamp| <= 300` seconds, in either direction. The canonical string
-follows AWS Signature Version 4, reduced to what a request here has. Two known
-answers:
+The server signs every answer to a verified request, `202`, `404` and `503` included,
+and every signed answer contains `Cache-Control: no-store, no-transform`. Every `401`
+goes out unsigned, wherever it falls, and so does a `400`, `413` or `415` sent before
+verification. Line 3 binds the answer to its request, and through the request's
+signature to the access key and the instance that sent it. At run start the runner
+treats an answer without a valid signature under the pin as no run, `answer_unsigned`;
+during the run a delivery's answer without one is no answer, retried as any other with
+its headers unread, and a reload's fetch without one fails the reload. The runner reads
+a body's code only from a signed answer, and a refusal body over 64 KiB counts as
+unsigned. Two known answers under the fixture signing key, to the GET of discovery
+above: `200` with the 208-byte body of `fixtures/known-answers/discovery.json` and
+`X-Qory-Configuration: sha256=` and the hex SHA-256 of that body, six lines of 251 bytes,
+`KR8RzAb1z5MnEj2SPYFrghfXqVdU7Da2Yu0qU1-VQhmuObVUiKLywh8FoTawEfg9u0VgOgFQJhutD3-w4a55Bg`;
+and `404` with an empty body and no digest, 180 bytes,
+`wtXEpqIYCRAH0I9P0wd1DxJxkury0OE566ADTu3bH2GWUP4-TAkNl3a5oKGP6ZVWsP8oPL-yJHuaOaxbNPU_Dg`.
 
-- secret `test-secret`, canonical string `GET\n/.well-known/qory-configuration?x=1\n1700000000`:
-  `sha256=e8cc6260e2740e9282f2b45fa8bc590e3afe0e59eb53882b19cdb0f87a613c02`
-- the published secret, canonical string `GET\n/.well-known/qory-configuration\n1700000000`:
-  `sha256=0c895b2f1c1c62629e6298a59746b975ccae2e5156b01f733d2d7768f6eb55a2`
+**Coded refusals.** After verification, a `400`, `409`, `410`, `429` or `503` is
+`application/json`, signed, with the body `{"error": "<code>", "names": ["…"]}`. The
+order of refusals on discovery, the run configuration and the events endpoint: `413`;
+`415`; `400` `bad_request` for a header sent twice, of `X-Qory-Access-Key-Id`,
+`X-Qory-Instance-Id`, `X-Qory-Signature-Ed25519` and `X-Qory-Timestamp`, unsigned;
+`401`; `429`; `400` `bad_request` for an instance id absent or outside its pattern,
+signed; `409` `key_pending`; `400` `unsupported_contract_version`; `400`
+`invalid_request` for a body or labels the contract refuses; then each endpoint's own.
+The events endpoint's own, in order: deduplication, so a batch whose delivery id or
+event ids the server already accepted gets the same `2xx` again; `410` `run_closed` for
+an event of a run the server has closed; then, for a ping alone, `409`
+`instance_limit`.
 
 **Failure.** Every authentication failure is `401` with the body
-`{"error":"unauthorized"}` and nothing more: a header missing or empty, a key of the
-wrong shape, a key the server does not recognise or has revoked, a timestamp that is not an
-integer, a stale timestamp, a signature that does not match. The body never indicates which.
-A header sent twice is refused. The server verifies with a constant-time comparison,
-looks the key up only after its shape is checked, and logs nothing about the headers.
-A redirect is not followed: a 3xx is a status like any other.
+`{"error":"unauthorized"}` and nothing more, unsigned: a missing or empty
+`X-Qory-Access-Key-Id` or `X-Qory-Signature-Ed25519`, an access key id of the wrong
+shape, an access key the server does not recognise or has revoked, a timestamp that is
+not an integer, a stale timestamp, a signature that does not verify. The body never
+indicates which, and the runner reports every `401` as `unauthorized`. The server
+verifies the Ed25519 signature, cofactorless as RFC 8032 defines it, looks the access
+key up only after its id's shape is checked, logs nothing about the signature header,
+and records the instance id and name as display data. A redirect is not followed: a 3xx
+is a status like any other.
+
+**Enrolment.** A new access key gets its id by enrolment, `enrolment.schema.json`: a
+`POST` to `<url>/.well-known/qory-enrolment`, beside discovery's path, with an
+enrolment code an owner or administrator of the server created: `qec_`, 26 Crockford
+base32 characters, then `.` and the fingerprint of the server's key, and during a
+rotation of that key a second `.` and the next key's fingerprint. The body contains the
+code in its normalised form, the 26 characters in upper case with `I` and `L` read as
+`1`, `O` as `0` and hyphens removed; a name for the access key; the raw public key; a
+timestamp; and `proof`, the Ed25519 signature under the new key of five lines joined by
+`\n`: `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and
+the timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no request
+signature: the code and the proof authenticate it. The `201` answer contains the
+access key id, `node_id` with `node_kind`, `approved`, `stored_secrets` and the server's
+keys, signed as Signed answers describes with the request's `proof` as line 3; the
+machine verifies it under the listed key whose fingerprint the code carries first, and
+pins only the keys whose fingerprints the code carries. A `401` means the code was used,
+has expired or was cancelled; a signed `409` `key_invalid` refuses the key, and
+`key_limit` a node that already holds a key awaiting approval or two approved keys. The
+access key then awaits approval. In place of a code, an owner or administrator may paste
+a public key the machine printed into an existing node or node pool, where it is
+approved at once. The server checks every public key it is given: a canonical encoding,
+a point on the curve, not of small order, of prime order, and y ≠ 1;
+`fixtures/known-answers/small-order.json` lists keys it refuses. The known answers are
+`fixtures/enrolment/` and the enrolment lines of `signatures.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
-`GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery. The
-answer is `200`, `application/json`, with the header `X-Qory-Configuration:
-sha256=<hex>`, the server's digest of the document: opaque to the runner, which
-compares it byte for byte and never recomputes it.
+`GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
+access key. The answer is a signed `200`, `application/json`, with the header
+`X-Qory-Configuration: sha256=<hex>`, the server's digest of the document: opaque to the
+runner, which compares it byte for byte and never recomputes it.
 
 ```json
 {"version": 1,
+ "node_id": "nd_f1xt0re000000000",
  "events": {"url": "https://qory.example/v1/events", "types": ["*"]},
- "run": {"url": "https://qory.example/v1/run-configuration"}}
+ "run": {"url": "https://qory.example/v1/run-configuration"},
+ "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
 ```
 
-`version` and `events` are required. `events.url` is `https`, or `http` to a loopback
+`version`, `node_id`, `events` and `apiary_public_key` are required. `node_id` is the id
+of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
+display: `qory` prints it. `apiary_public_key` lists the server's current key, and
+during a rotation the next one, for information: a runner verifies under its pin alone.
+`secrets` is optional, `{url}` with `run.url`'s grammar, listed only for an access key
+allowed to receive stored secrets. Discovery lists no key endpoint: keys change through
+enrolment alone. A signed `409` `key_pending` is no run, `key_pending`, and a `401` no
+run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
 offers no run configuration, and the policy is the machine's. A top-level member the
@@ -738,17 +875,20 @@ run.
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
 events of one run, in sequence order, never empty. The runner cuts a batch at one
 hundred events, at one mebibyte, or after one second since its first event, whichever
-comes first; the ping is a batch of one, sent before anything else. A receiver verifies
-the signature over the raw bytes with a constant-time comparison before parsing, then
-deduplicates on each event's `id`, since delivery is at least once.
+comes first; the ping is a batch of one, sent before anything else, with the
+heartbeat interval the run uses, `interval_seconds`, at most 300. A receiver verifies the
+Ed25519 signature over the request string before parsing, then deduplicates on each
+event's `id`, since delivery is at least once.
 
-The server returns a status; the body is ignored:
+The runner reads a body's code only from a signed answer:
 
 | Status | Meaning |
 |---|---|
-| 2xx | accepted; the runner forgets the batch |
-| 410 | stop: the server requests nothing more for this run. The runner sends no further batch and the run continues on the file sink |
-| anything else, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
+| 2xx, signed | accepted; the runner forgets the batch |
+| 409 to the ping, signed, such as `instance_limit` | no run, with its code |
+| 410, signed, with `run_closed` | the run ends: the runner stops the runtime as at its time limit, records `dev.qory.run.exited` with `reason: run_closed` in the file sink, and sends nothing further. Before `dev.qory.run.started`, it stops the start and records `dev.qory.run.refused` with the code `run_closed` instead |
+| 410, signed, without that code | stop: the server requests nothing more for this run. The runner sends no further batch and the run continues on the file sink |
+| anything else, an answer that does not verify, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
 
 Every answer may contain `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
 digests in force: of the configuration document, and of the run configuration for the
@@ -756,8 +896,9 @@ run's labels. The runner compares each to the one it keeps. A different
 run-configuration digest means fetch the run configuration again and apply it; a
 different configuration digest means fetch the configuration document again and use
 its sections for the batches that follow: the events URL and the filter. A
-header absent means nothing. This is how a control plane changes a run's policy while
-it runs, and the whole of it: nothing in an answer's body is read.
+header absent means nothing, and so does a digest of an answer that does not verify.
+This is how a control plane changes a run's policy while it runs, and the whole of it:
+the runner reads a body's code only from a signed answer.
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
@@ -777,16 +918,16 @@ same directory rather than blocking the runtime.
 **After a runner stops unexpectedly.** The run directory records what the server is
 still owed, without the runner that wrote it. `events.jsonl` is written as events
 happen. `delivered.log` beside it gets a line as each batch is accepted, the delivery id
-and the sequence of every event in it, and the one word `stopped` for a 410. `lock` is
+and the sequence of every event in it, and the one word `stopped` for a signed 410. `lock` is
 held by the runner for as long as it lives, by the kernel, so it is free once the runner
 is gone however it went. Sending a run again is the job's last step, whatever happens
 before it: refused while the lock is held; then what the run's wall leaves behind is
-removed, by the run's label; a record with no `dev.qory.run.exited` gets one, numbered
-on from the last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`;
+removed, by the run's label; a record that has `dev.qory.run.started` and no
+`dev.qory.run.exited` gets one, numbered on from the last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`;
 and every event the server's filter selects that no accepted batch contained is posted,
 in order, in batches cut the same way, until the server accepts them or the runner stops
-retrying. The resend fetches the configuration document first, as a run does, and posts
-to the URL it defines. What is still not accepted is under `undelivered/` again. A
+retrying. The resend fetches the configuration document first, as a run does, posts
+to the URL it defines, and verifies every answer's signature under the pin. What is still not accepted is under `undelivered/` again. A
 receiver sees some events twice when the runner dies between an answer and its line, and
 discards them by `id` as any duplicate. Nothing of this recovers a machine that dies:
 the record is lost with it, and a receiver detects that from heartbeats that stop.
@@ -799,21 +940,29 @@ the record is lost with it, and a receiver detects that from heartbeats that sto
 | a server | the server's `events.url`, after a signed discovery fetch and a ping | the server's run configuration when it offers one, else the machine's policy |
 | a server and `--local` | files only; the server is not contacted | the machine's policy |
 
-A discovery fetch that fails, in transport, with a status other than `200` or with a
-document the schema refuses, or a ping not accepted: no run, and the error contains the
-URL and the status. A `run` section present and its fetch not returning `200`: no run. The
+A discovery fetch that fails, in transport, with a status other than `200`, with an
+answer that does not verify or with a document the schema refuses, or a ping not
+accepted: no run, and the error contains the URL, the status and the code when a signed
+answer contains one. A `run` section present and its fetch not returning `200`: no run. The
 command's `--policy`, a run's own policy under the machine's, keeps its meaning without
 a server; with a fetched run configuration the fetched policy is the policy, and
 `--policy` is refused with an error that states so.
 
-**The reference receiver** is the public package `receiver` of this module: a handler
-that serves discovery, verifies each request as this section defines, returns the digest
-headers, deduplicates and appends to a file. The module's own tests run the runner's
-client against it. `fixtures/signed/` is what any receiver is tested against: one
-request per file, `method`, `target`, `headers`, `body` (a string, or `null` for a
-GET), the status a receiver returns as `expect`, and a `note` that explains why. Every
-signature in them is real, under the published key and secret, and the timestamps are
-around `1700000000`, where a receiver under test sets its clock. A receiver written by
+**The reference receiver** is the public package `receiver` of this module: a plain
+receiver that serves discovery, the events endpoint and the run configuration, accepts
+the public keys pasted into its own configuration and skips enrolment, verifies each
+request and answers in the order this section defines, signs every answer after
+verification under its own key, returns the digest headers, deduplicates and appends to
+a file. Its discovery lists `version`, `node_id`, `events` and `apiary_public_key`, and
+no `secrets`. The module's own tests run the runner's client against it.
+`fixtures/signed/` is what any receiver is tested against: one request per file,
+`method`, `target`, `headers`, a header sent twice being a list of its values, `body`
+(a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
+a coded refusal as `expect_code`, and a `note` that explains why. Every signature in
+them is real, under the fixture access key secret as the fixture access key and
+instance; a receiver under test holds the fixture public key under
+`ak_f1xt0re000000000`, approved, and under `ak_pend1ng000000000`, awaiting approval, and
+sets its clock to `1700000000`, around which the timestamps are. A receiver written by
 anyone else follows this section, replays those files, and may read that code.
 
 ## The runtime
@@ -1002,7 +1151,7 @@ one, and `docker: true` when the enclosure has a daemon of its own.
 A wall is what makes a connection around the proxy fail. It is optional: with none, the
 runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
 the runtime runs in an **enclosure** and the session runner stays outside it with the
-proxy, the policy and the server's secret; the record is written from outside, and the
+proxy, the policy and the access key secret; the record is written from outside, and the
 enclosure sees the run directory read-only. A wall is built by an adapter, one per
 container interface; the contract's rules refer to no specific tool and define one list
 for all of them.
@@ -1158,11 +1307,11 @@ the option experimental.
 | Directory | Contains | Validated against |
 |---|---|---|
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
-| `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
-| `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define | `configuration.schema.json` |
+| `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
+| `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run that does not start | `batch.schema.json` |
-| `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver returns | the receiver, replaying each with its clock at `1700000000` |
+| `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/sealed/` | the sealed fixture: a run configuration, the secrets request that lists its digest, the envelope sealed to the fixture access key with a fixed ephemeral key, the plaintext it opens to, and `vectors.json` with `info`, `aad`, the ephemeral key and the lengths and SHA-256 of the ciphertext and of the envelope's signed message | `secrets-request.schema.json`, `secrets-answer.schema.json`, `sealed-plaintext.schema.json` and `run-configuration.schema.json`; the open with Go's `crypto/hpke`, and the envelope's signature under the fixture signing key |
@@ -1220,12 +1369,14 @@ Public sources this contract was written from, and nothing else:
   JSON lines of `--output-format stream-json`; the [sessions page](https://code.claude.com/docs/en/sessions)
   for the statement that the transcript format is internal, which is why no descriptor
   reads it.
-- The server: [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104.html) for HMAC;
-  [AWS Signature Version 4](https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html),
-  the model for the access key and secret pair and for a canonical string signed with a
-  timestamp; [OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)
+- The server: [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html), Ed25519, for the
+  access key, the request and answer signatures and the proof of enrolment; Thormarker,
+  "On using the same key pair for Ed25519 and an X25519 based KEM", IACR ePrint
+  2021/509, for the X25519 key of the same seed;
+  [machine-id(5)](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html),
+  for the keyed hash of the machine's identity beside the instance id;
+  [OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)
   §4, the model for a configuration document under `/.well-known/`; GitHub's
-  [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers),
-  [signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+  [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers)
   and [best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks),
-  the model for the delivery headers, the HMAC over the body and the ten-second answer.
+  the model for the delivery headers and the ten-second answer.
