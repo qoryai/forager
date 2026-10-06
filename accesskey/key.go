@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -70,14 +71,14 @@ func (k *Key) Secret() string {
 }
 
 // PublicKey returns the key's Ed25519 public key.
-func (k *Key) PublicKey() PublicKey {
+func (k Key) PublicKey() PublicKey {
 	var p PublicKey
 	copy(p[:], k.priv.Public().(ed25519.PublicKey))
 	return p
 }
 
 // Fingerprint returns the fingerprint of the key's public key.
-func (k *Key) Fingerprint() string { return k.PublicKey().Fingerprint() }
+func (k Key) Fingerprint() string { return k.PublicKey().Fingerprint() }
 
 // X25519PrivateKey returns the X25519 private key of the access key: the first 32
 // bytes of SHA-512 of the seed, clamped, the scalar Ed25519 signs with.
@@ -107,14 +108,15 @@ func (k *Key) X25519() *ecdh.PrivateKey {
 // [Answer.Message] and [EnrolmentRequest.ProofMessage] build them.
 func (k *Key) Sign(message []byte) []byte { return ed25519.Sign(k.priv, message) }
 
-// String returns "Ed25519 key" and the fingerprint of its public key.
-func (k *Key) String() string { return "Ed25519 key " + k.Fingerprint() }
+// String returns "Ed25519 key" and the fingerprint of its public key. It and Format
+// have value receivers, so a Key printed by value shows the same and no more.
+func (k Key) String() string { return "Ed25519 key " + k.Fingerprint() }
 
 // GoString returns what String returns.
-func (k *Key) GoString() string { return k.String() }
+func (k Key) GoString() string { return k.String() }
 
 // Format writes what String returns, whatever the verb.
-func (k *Key) Format(f fmt.State, _ rune) { fmt.Fprint(f, k.String()) }
+func (k Key) Format(f fmt.State, _ rune) { io.WriteString(f, k.String()) }
 
 // PublicKey is a raw 32-byte Ed25519 public key, written in base64url without padding.
 type PublicKey [ed25519.PublicKeySize]byte

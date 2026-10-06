@@ -159,9 +159,16 @@ func TestFixtureAccessKey(t *testing.T) {
 func TestKeyFormatsAsItsFingerprint(t *testing.T) {
 	key := keys(t).accessKey(t)
 	secret := strings.TrimPrefix(key.Secret(), accesskey.SecretPrefix)
+	seed, _ := base64.RawURLEncoding.DecodeString(secret)
+	seedHex := hex.EncodeToString(seed)
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
-		got := fmt.Sprintf(verb, key)
-		if strings.Contains(got, secret) || !strings.Contains(got, key.Fingerprint()) {
+		for _, v := range []any{key, *key, []*accesskey.Key{key}, struct{ K *accesskey.Key }{key}, struct{ K accesskey.Key }{*key}} {
+			got := fmt.Sprintf(verb, v)
+			if strings.Contains(got, secret) || strings.Contains(got, seedHex) || strings.Contains(got, "[1 2 3 4 5") {
+				t.Errorf("%s of %T: %q", verb, v, got)
+			}
+		}
+		if got := fmt.Sprintf(verb, key); !strings.Contains(got, key.Fingerprint()) {
 			t.Errorf("%s: %q", verb, got)
 		}
 	}
