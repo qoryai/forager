@@ -13,9 +13,11 @@ package runtimes
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/descriptor"
 )
 
@@ -29,8 +31,11 @@ type Runtime interface {
 	Version() string
 	// Prepare makes a launch one the runner can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the run directory, and returns
-	// the launch to start in place of the one given. A runtime with nothing to prepare
-	// returns the launch as it is.
+	// the launch to start in place of the one given. A program that waits for a person
+	// to approve a stand-in of [Attach.Placeholders] may be started through a script
+	// Prepare writes there, which records the approval where the program reads it and
+	// then starts the program. A runtime with nothing to prepare returns the launch as
+	// it is.
 	Prepare(Attach) (Launch, error)
 	// ReadsOutput reports whether the program's standard output, when the session runs
 	// on pipes, is JSON lines the runner hands to Map as records of [SourceOutput].
@@ -70,7 +75,46 @@ type Attach struct {
 	Forwarder []string
 	// Interactive says the session runs on a pseudo-terminal, not on pipes.
 	Interactive bool
+	// Placeholders are the variables the session sets to [Placeholder] in the
+	// program's environment, in place of a credential the proxy sets outside the
+	// enclosure. Empty without a wall.
+	Placeholders []string
 }
+
+// Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that
+// is no credential and says what it is to whoever reads it.
+const Placeholder = credential.Placeholder
+
+// Secrets is implemented by a runtime that declares the secrets it needs. It is
+// optional and checked by type assertion, so [Runtime] keeps its methods: a runtime
+// without it declares nothing.
+type Secrets interface {
+	// Secrets is what the runtime declares. The lists are the caller's to keep: a
+	// runtime returns a copy of its own.
+	Secrets() Declarations
+}
+
+// Declarations is what a runtime declares of a run's secrets, the secrets section of a
+// descriptor: Declares, the secrets it reads, each from one variable; OneOf, the
+// groups of them of which a runtime connection supplies one at most; Reserves, the
+// variables it reads a credential from beside the declared ones; Denies, the
+// variables the runner leaves out of a server's set for it; and CredentialFiles, the
+// files in which it keeps a credential of its own, ~ being the home of the user the
+// runner runs as.
+type Declarations = descriptor.Secrets
+
+// Declaration is one secret a runtime reads: its id, a title for a person, the
+// variable it is read from, the exact hosts and the optional paths its value is set
+// on, and how it is set.
+type Declaration = descriptor.Declaration
+
+// Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
+// the header of header, Username the fixed user of basic.
+type Auth = descriptor.Auth
+
+// Group is a set of declarations of which a runtime connection supplies one at most,
+// and exactly one when Required.
+type Group = descriptor.Group
 
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
@@ -206,3 +250,25 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 
 // Map applies the descriptor's rules.
 func (r *described) Map(rec Record) (string, map[string]any, bool) { return r.d.Map(rec) }
+
+// Secrets is the descriptor's secrets section, a copy; empty when it has none.
+func (r *described) Secrets() Declarations {
+	s := r.d.Secrets
+	if s == nil {
+		return Declarations{}
+	}
+	out := Declarations{
+		Reserves:        slices.Clone(s.Reserves),
+		Denies:          slices.Clone(s.Denies),
+		CredentialFiles: slices.Clone(s.CredentialFiles),
+	}
+	for _, d := range s.Declares {
+		d.Hosts, d.Paths = slices.Clone(d.Hosts), slices.Clone(d.Paths)
+		out.Declares = append(out.Declares, d)
+	}
+	for _, g := range s.OneOf {
+		g.Of = slices.Clone(g.Of)
+		out.OneOf = append(out.OneOf, g)
+	}
+	return out
+}

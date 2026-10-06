@@ -1,6 +1,7 @@
 package runtimes_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,61 @@ func TestTheDescriptorSaysWhichArgumentsMeanHeadless(t *testing.T) {
 		if _, err := runtimes.Described("other-agent.yaml", []byte(strings.Replace(other, "stop: {signal: SIGINT, grace: 45s}", bad, 1)), nil); err == nil {
 			t.Errorf("%s was read", bad)
 		}
+	}
+}
+
+// TestADescriptorDeclaresItsSecretsThroughTheOptionalInterface pins the Go API of a
+// runtime's secrets: a described runtime implements runtimes.Secrets with its
+// descriptor's section, empty when it has none; a bare one does not; and what a caller
+// does to the lists it receives changes nothing of the runtime's.
+func TestADescriptorDeclaresItsSecretsThroughTheOptionalInterface(t *testing.T) {
+	doc := other + `secrets:
+  declares:
+    - {id: key, title: A key, name: OTHER_KEY, hosts: [api.example.com], paths: [/v2/*], auth: {scheme: header, header: x-key}}
+    - {id: login, title: A login, name: OTHER_LOGIN, hosts: [api.example.com], auth: {scheme: bearer}}
+  one_of:
+    - {id: credential, required: true, of: [key, login]}
+  reserves: [OTHER_SESSION]
+  denies: [OTHER_BASE_URL]
+  credential_files: [~/.other/login.json]
+`
+	rt, err := runtimes.Described("other-agent.yaml", []byte(doc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := rt.(runtimes.Secrets)
+	if !ok {
+		t.Fatal("a described runtime does not implement runtimes.Secrets")
+	}
+	want := runtimes.Declarations{
+		Declares: []runtimes.Declaration{
+			{ID: "key", Title: "A key", Name: "OTHER_KEY", Hosts: []string{"api.example.com"}, Paths: []string{"/v2/*"}, Auth: runtimes.Auth{Scheme: "header", Header: "x-key"}},
+			{ID: "login", Title: "A login", Name: "OTHER_LOGIN", Hosts: []string{"api.example.com"}, Auth: runtimes.Auth{Scheme: "bearer"}},
+		},
+		OneOf:           []runtimes.Group{{ID: "credential", Required: true, Of: []string{"key", "login"}}},
+		Reserves:        []string{"OTHER_SESSION"},
+		Denies:          []string{"OTHER_BASE_URL"},
+		CredentialFiles: []string{"~/.other/login.json"},
+	}
+	got := s.Secrets()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("secrets\n%+v\nwant\n%+v", got, want)
+	}
+	got.Declares[0].Hosts[0] = "changed.example.com"
+	got.OneOf[0].Of[0] = "changed"
+	got.Reserves[0] = "CHANGED"
+	if again := s.Secrets(); !reflect.DeepEqual(again, want) {
+		t.Errorf("a change to the lists returned reached the runtime: %+v", again)
+	}
+
+	plain, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := plain.(runtimes.Secrets); !ok || !reflect.DeepEqual(s.Secrets(), runtimes.Declarations{}) {
+		t.Errorf("a descriptor without secrets declares %v", s)
+	}
+	if _, ok := runtimes.Bare("other-agent").(runtimes.Secrets); ok {
+		t.Error("a bare runtime declares secrets")
 	}
 }
