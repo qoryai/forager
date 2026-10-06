@@ -25,6 +25,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/socket"
@@ -35,9 +36,47 @@ import (
 )
 
 const (
-	testSecret = "fixture-secret-not-a-real-one"
-	testKey    = "ak_f1xt0re000000000"
+	testKey      = "ak_f1xt0re000000000"
+	testInstance = "i_test"
 )
+
+// The keys of the tests: the access key runs sign with, and the control's own signing
+// key, which runs pin; each fresh, so no published key is used.
+var (
+	testAccessKey = mustGenerate()
+	testSigner    = mustGenerate()
+	testPin       = accesskey.Pin{{Alg: "ed25519", PublicKey: testSigner.PublicKey().String()}}
+)
+
+func mustGenerate() *accesskey.Key {
+	k, err := accesskey.Generate()
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+// signedReply answers a request the way a server of the contract does, signed under
+// the test's signing key and bound to the request.
+func signedReply(w http.ResponseWriter, r *http.Request, status int, body string) {
+	a := accesskey.Answer{Status: status, RequestSignature: r.Header.Get(accesskey.HeaderSignature), Body: []byte(body),
+		Configuration: w.Header().Get(accesskey.HeaderConfiguration), RunConfiguration: w.Header().Get(accesskey.HeaderRunConfiguration)}
+	w.Header().Set(accesskey.HeaderSignature, testSigner.SignAnswer(a))
+	w.WriteHeader(status)
+	io.WriteString(w, body)
+}
+
+// refusal returns the code of a refusal, or the error's text.
+func refusal(err error) string {
+	var r *session.Refusal
+	if errors.As(err, &r) {
+		return r.Code
+	}
+	if err == nil {
+		return "nil"
+	}
+	return err.Error()
+}
 
 // control is a server of the contract for the tests: the reference receiver in front
 // of a store, whose configuration document names its own events endpoint and, when
@@ -47,8 +86,18 @@ type control struct {
 	store *receiver.File
 	// received is the store's file.
 	received string
-	// refuse, when set, is the status every request gets instead of an answer.
+	// refuse, when set, is the status every request gets instead of an answer,
+	// unsigned.
 	refuse atomic.Int32
+	// pending makes the access key one that awaits approval; closed makes every run
+	// closed; limit refuses every instance's ping.
+	pending, closed, limit atomic.Bool
+	// slow delays the run configuration's answer; closeOnFetch closes every run once
+	// the run configuration is fetched.
+	slow         atomic.Int64
+	closeOnFetch atomic.Bool
+	// closedAnswers counts the answers run_closed was given to.
+	closedAnswers atomic.Int32
 	// hits counts every request; discoveries the discovery fetches; fetches the run
 	// configuration fetches.
 	hits, discoveries, fetches atomic.Int32
@@ -65,15 +114,19 @@ type control struct {
 	labels map[string]string
 }
 
-// answering sets the run configuration digest on a delivery's answer.
+// answering sets the run configuration digest on a delivery's empty answer, and signs
+// the answer again over it.
 type answering struct {
 	http.ResponseWriter
-	digest string
+	digest    string
+	signature string
 }
 
 func (a answering) WriteHeader(code int) {
 	if a.Header().Get("X-Qory-Run-Configuration") != "" {
 		a.Header().Set("X-Qory-Run-Configuration", a.digest)
+		a.Header().Set(accesskey.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: code, RequestSignature: a.signature,
+			Configuration: a.Header().Get(accesskey.HeaderConfiguration), RunConfiguration: a.digest}))
 	}
 	a.ResponseWriter.WriteHeader(code)
 }
@@ -87,10 +140,21 @@ func newControl(t *testing.T) *control {
 	}
 	c := &control{store: store, received: received}
 	h := &receiver.Handler{
-		Keys:  func(k string) ([]string, bool) { return []string{testSecret}, k == testKey },
-		Store: store,
+		Keys: func(k string) (receiver.AccessKey, bool) {
+			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey(), Pending: c.pending.Load()}, k == testKey
+		},
+		Signer: testSigner,
+		Store:  store,
+		Closed: func(string) bool {
+			if c.closed.Load() {
+				c.closedAnswers.Add(1)
+				return true
+			}
+			return false
+		},
+		Admit: func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
-			doc := `{"version":1,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+			doc := `{"version":1,"node_id":"nd_f1xt0re000000000","apiary_public_key":` + string(must(json.Marshal(testPin))) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if c.run != nil {
@@ -116,6 +180,10 @@ func newControl(t *testing.T) *control {
 			c.mu.Lock()
 			c.query = r.URL.RawQuery
 			c.mu.Unlock()
+			if c.closeOnFetch.Load() {
+				c.closed.Store(true)
+			}
+			time.Sleep(time.Duration(c.slow.Load()) * time.Millisecond)
 		}
 		if code := c.refuse.Load(); code != 0 {
 			w.WriteHeader(int(code))
@@ -125,7 +193,7 @@ func newControl(t *testing.T) *control {
 		answered := c.answered
 		c.mu.Unlock()
 		if answered != "" && r.Method == http.MethodPost {
-			w = answering{w, answered}
+			w = answering{w, answered, r.Header.Get(accesskey.HeaderSignature)}
 		}
 		h.ServeHTTP(w, r)
 	}))
@@ -143,7 +211,20 @@ func (c *control) serve(policy, digest string) {
 }
 
 func (c *control) server() *session.Server {
-	return &session.Server{Version: 1, URL: c.srv.URL, AccessKey: testKey, Secret: testSecret}
+	return &session.Server{Version: 1, URL: c.srv.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin}
+}
+
+// resend is the spec of a resend of the run directory to the server, as the test's
+// instance.
+func resend(dir string, cfg *session.Server) session.ResendSpec {
+	return session.ResendSpec{Dir: dir, Server: cfg, AccessKey: testAccessKey, InstanceID: testInstance}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // TestMain lets the test binary stand in for a runtime, for the hook forwarder and for a
@@ -244,6 +325,9 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		Policy:        pol,
 		Forwarder:     []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
 		RunnerVersion: "test",
+		AccessKey:     testAccessKey,
+		InstanceID:    testInstance,
+		InstanceName:  "build-01",
 		Heartbeat:     10 * time.Millisecond,
 		Report:        func(l string) { t.Log("report:", l) },
 	}
@@ -437,20 +521,29 @@ func TestInvalidPolicyMeansNoRun(t *testing.T) {
 }
 
 // TestServerIsDiscoveredPingedAndDelivered pins the server side: the configuration
-// document is fetched first, the ping is the first event with the contract revision,
-// and every event reaches the store; with a server that refuses the discovery, no run
-// and no run directory; with one that refuses the ping, no run; with --local, the
-// server is not contacted.
+// document is fetched first and the caller's hook gets the node id it lists, the ping
+// is the first event with the contract revision, and every event reaches the store; a
+// hook that returns an error is no run, with no ping; with a server that refuses the
+// discovery, no run and no run directory; with one that refuses the ping, no run; with
+// --local, the server is not contacted.
 func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	c := newControl(t)
 	cfg := c.server()
 
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
+	var discovered []session.Discovery
+	sp.Discovered = func(d session.Discovery) error {
+		discovered = append(discovered, d)
+		return nil
+	}
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(discovered) != 1 || discovered[0].NodeID != "nd_f1xt0re000000000" || discovered[0].Secrets {
+		t.Errorf("discovered %+v", discovered)
 	}
 	evs := events(t, res)
 	if evs[0]["type"] != "dev.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
@@ -463,15 +556,24 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 		t.Errorf("a server with no run section: policy_applied %v", a)
 	}
 	// Everything was accepted during the run, the ping too, so nothing is owed after it.
-	if again, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, Server: cfg}); err != nil || again.Sent != 0 || again.Closed || c.store.Count() != len(evs) {
+	if again, err := session.Resend(context.Background(), resend(res.Dir, cfg)); err != nil || again.Sent != 0 || again.Closed || c.store.Count() != len(evs) {
 		t.Errorf("resend after a delivered run: %+v, %v", again, err)
+	}
+
+	pings := c.hits.Load()
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = cfg, time.Second
+	sp.Discovered = func(session.Discovery) error { return errors.New("the marker cannot be written") }
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "marker") || c.hits.Load() != pings+1 {
+		t.Errorf("a refusing discovery hook: %v, %d requests", err, c.hits.Load()-pings)
 	}
 
 	c.refuse.Store(500)
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "configuration "+c.srv.URL+"/.well-known/qory-configuration: status 500") {
+	sp.Server, sp.Heartbeat = cfg, time.Second
+	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "configuration "+c.srv.URL+"/.well-known/qory-configuration") || !strings.Contains(err.Error(), "status 500") {
 		t.Errorf("refused discovery: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 0 {
@@ -479,11 +581,11 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	}
 
 	c.refuse.Store(0)
-	refusePing := &session.Server{Version: 1, URL: c.srv.URL, AccessKey: "ak_0000000000000000", Secret: testSecret}
+	refusePing := &session.Server{Version: 1, URL: c.srv.URL, AccessKeyID: "ak_0000000000000000", ApiaryPublicKey: testPin}
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = refusePing
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "status 401") {
+	sp.Server, sp.Heartbeat = refusePing, time.Second
+	if _, err := session.Run(context.Background(), sp); refusal(err) != "unauthorized" || !strings.Contains(err.Error(), "status 401") {
 		t.Errorf("an unknown key: %v", err)
 	}
 	c.refuse.Store(0)
@@ -492,21 +594,21 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	c.mu.Unlock()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	sp.Labels = map[string]string{"forge": "example.test"}
 	pinged := false
 	stopPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/qory-configuration" {
 			w.Header().Set("X-Qory-Configuration", "sha256=x")
-			io.WriteString(w, `{"version":1,"events":{"url":"`+c.srv.URL+`/nowhere","types":["*"]}}`)
+			signedReply(w, r, 200, `{"version":1,"node_id":"nd_f1xt0re000000000","apiary_public_key":`+string(must(json.Marshal(testPin)))+`,"events":{"url":"`+c.srv.URL+`/nowhere","types":["*"]}}`)
 			return
 		}
 		pinged = true
 		w.WriteHeader(500)
 	}))
 	defer stopPing.Close()
-	sp.Server = &session.Server{Version: 1, URL: stopPing.URL, AccessKey: testKey, Secret: testSecret}
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ping "+c.srv.URL+"/nowhere: status 404") {
+	sp.Server, sp.Heartbeat = &session.Server{Version: 1, URL: stopPing.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin}, time.Second
+	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "ping "+c.srv.URL+"/nowhere") || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("refused ping: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 1 {
@@ -519,7 +621,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	before := c.hits.Load()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	sp.Local = true
 	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "dev.qory.ping")) != 0 || c.hits.Load() != before {
 		t.Errorf("local run: %v, the server was contacted %d times", err, c.hits.Load()-before)
@@ -540,7 +642,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	dir := t.TempDir()
 	sp := spec(t, &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}, "FAKE_ALLOWED_URL="+origin.URL+"/after")
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Labels = map[string]string{"forge": "github.com", "issue": "77", "repository": "acme/shop"}
 	// The runtime waits for the test's go-ahead, then reaches the origin.
 	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], filepath.Join(dir, "go")}
@@ -600,7 +702,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	c.mu.Unlock()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") {
 		t.Errorf("a run configuration that is not one: %v", err)
 	}
@@ -679,7 +781,7 @@ func TestAReloadIsAsStrictAsAStart(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))
 	sp := spec(t, nil, "FAKE_ALLOWED_URL="+origin.URL+"/after")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	w := startWaiting(t, sp)
 	waitFor(t, func() bool { return w.applied() == 1 })
 
@@ -1081,14 +1183,14 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	all := len(events(t, res))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	sent, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
+	sent, err := session.Resend(ctx, resend(res.Dir, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sent.Sent != all || sent.Undelivered != 0 || sent.Closed || store.Count() != all {
 		t.Errorf("first resend %+v, store holds %d of %d", sent, store.Count(), all)
 	}
-	if again, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg}); err != nil || again.Sent != 0 || store.Count() != all {
+	if again, err := session.Resend(ctx, resend(res.Dir, cfg)); err != nil || again.Sent != 0 || store.Count() != all {
 		t.Errorf("second resend %+v, %v, store holds %d", again, err, store.Count())
 	}
 
@@ -1106,7 +1208,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := store.Count()
-	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
+	sent, err = session.Resend(ctx, resend(res.Dir, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1136,7 +1238,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := session.Resend(ctx, session.ResendSpec{Dir: dir, Server: cfg}); !errors.Is(err, session.ErrRunning) {
+	if _, err := session.Resend(ctx, resend(dir, cfg)); !errors.Is(err, session.ErrRunning) {
 		t.Errorf("resend of a run that still goes: %v", err)
 	}
 	stop()
@@ -1251,5 +1353,219 @@ func TestPolicyUnderACeilingKeepsBothDenyLists(t *testing.T) {
 	}
 	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: observe\n  deny: [\"tracker.example:443\"]\n")); err == nil {
 		t.Error("a deny entry with a port was read")
+	}
+}
+
+// TestServerRefusalsAreCoded pins the refusals of a run with a server, each no run
+// with its code: no pin is apiary_public_key_missing before any request; a pin of
+// another key is answer_unsigned; an access key that awaits approval is key_pending at
+// discovery, before the ping; a refused instance is instance_limit at the ping, whose
+// record holds the ping alone; and a run without its access key, or with a heartbeat
+// interval the ping cannot announce, sends nothing.
+func TestServerRefusalsAreCoded(t *testing.T) {
+	c := newControl(t)
+	run := func(change func(*session.Spec)) (session.Spec, error) {
+		sp := spec(t, nil)
+		sp.Forwarder = nil
+		sp.Server, sp.Heartbeat = c.server(), time.Second
+		change(&sp)
+		_, err := session.Run(context.Background(), sp)
+		return sp, err
+	}
+	runs := func(sp session.Spec) int {
+		entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
+		return len(entries)
+	}
+	before := c.hits.Load()
+	for name, change := range map[string]func(*session.Spec){
+		"no pin":                            func(sp *session.Spec) { sp.Server.ApiaryPublicKey = nil },
+		"no access key":                     func(sp *session.Spec) { sp.AccessKey = nil },
+		"no instance id":                    func(sp *session.Spec) { sp.InstanceID = "" },
+		"a long heartbeat":                  func(sp *session.Spec) { sp.Heartbeat = 301 * time.Second },
+		"a heartbeat of a part of a second": func(sp *session.Spec) { sp.Heartbeat = 1500 * time.Millisecond },
+		"an odd instance name":              func(sp *session.Spec) { sp.InstanceName = "build 01" },
+	} {
+		sp, err := run(change)
+		if err == nil || runs(sp) != 0 || (name == "no pin" && refusal(err) != "apiary_public_key_missing") {
+			t.Errorf("%s: %v, %d run directories", name, err, runs(sp))
+		}
+	}
+	if n := c.hits.Load() - before; n != 0 {
+		t.Errorf("%d requests reached the server", n)
+	}
+	other := accesskey.Pin{{Alg: "ed25519", PublicKey: mustGenerate().PublicKey().String()}}
+	if sp, err := run(func(sp *session.Spec) { sp.Server.ApiaryPublicKey = other }); refusal(err) != "answer_unsigned" || runs(sp) != 0 {
+		t.Errorf("a pin of another key: %v", err)
+	}
+	c.pending.Store(true)
+	if sp, err := run(func(*session.Spec) {}); refusal(err) != "key_pending" || runs(sp) != 0 {
+		t.Errorf("a pending key: %v", err)
+	}
+	c.pending.Store(false)
+	c.limit.Store(true)
+	sp, err := run(func(*session.Spec) {})
+	var r *session.Refusal
+	if !errors.As(err, &r) || r.Code != "instance_limit" || r.Status != 409 || runs(sp) != 1 {
+		t.Fatalf("an instance beyond the limit: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
+	if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1,`) {
+		t.Errorf("the refused run's file:\n%s", evs)
+	}
+}
+
+// TestHeartbeatsRunFromTheAcceptedPing pins the heartbeat with a server: the ping
+// announces the interval, heartbeats start once the ping is accepted, so a slow start
+// is covered too, and elapsed_seconds counts from the ping.
+func TestHeartbeatsRunFromTheAcceptedPing(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, "sha256="+strings.Repeat("a", 64))
+	c.slow.Store(2500)
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	if evs[0]["type"] != "dev.qory.ping" || data(evs[0])["interval_seconds"] != 1.0 {
+		t.Fatalf("first event %v", evs[0])
+	}
+	beats := 0
+	for _, e := range evs[1:] {
+		if e["type"] == "dev.qory.run.started" {
+			break
+		}
+		if e["type"] != "dev.qory.run.heartbeat" {
+			t.Errorf("before run.started: %v", e["type"])
+		}
+		beats++
+	}
+	if beats < 2 {
+		t.Errorf("%d heartbeats before run.started, with a start of 2.5 s and an interval of 1 s", beats)
+	}
+	if last := evs[len(evs)-1]; last["type"] != "dev.qory.run.exited" {
+		t.Errorf("last event %v", last["type"])
+	}
+}
+
+// TestRunClosedStopsTheRuntime pins a signed 410 run_closed after the run started: the
+// runtime is stopped as at its time limit, run.exited has the reason run_closed and
+// the state failed, the result says so, and nothing after the closing answer reaches
+// the server: the file sink holds run.exited, the server's copy does not.
+func TestRunClosedStopsTheRuntime(t *testing.T) {
+	c := newControl(t)
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	sp.StopGrace = time.Second
+	go func() {
+		for c.store.Count() < 3 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		c.closed.Store(true)
+	}()
+	began := time.Now()
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(began); took > 15*time.Second {
+		t.Errorf("the run took %s after the server closed it", took)
+	}
+	if !res.RunClosed || res.TimedOut || res.State != "failed" || res.Signal != "SIGTERM" {
+		t.Errorf("result %+v", res)
+	}
+	evs := events(t, res)
+	exited := ofType(evs, "dev.qory.run.exited")
+	if len(exited) != 1 || data(exited[0])["reason"] != "run_closed" || data(exited[0])["state"] != "failed" || evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
+		t.Errorf("run.exited %v", exited)
+	}
+	b, _ := os.ReadFile(c.received)
+	if strings.Contains(string(b), "dev.qory.run.exited") {
+		t.Error("run.exited reached the server after it closed the run")
+	}
+	if again, err := session.Resend(context.Background(), resend(res.Dir, c.server())); err != nil || again.Sent != 0 {
+		t.Errorf("a resend of a closed run: %+v, %v", again, err)
+	}
+}
+
+// TestRunClosedBeforeTheStartIsRefused pins a signed 410 run_closed after the ping and
+// before run.started: the start stops, the run is a refusal with the code run_closed,
+// and the file sink, not the server, gets dev.qory.run.refused as the last event.
+func TestRunClosedBeforeTheStartIsRefused(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, "sha256="+strings.Repeat("b", 64))
+	c.closeOnFetch.Store(true)
+	c.slow.Store(2500)
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	_, err := session.Run(context.Background(), sp)
+	var r *session.Refusal
+	if !errors.As(err, &r) || r.Code != "run_closed" || r.Status != 410 {
+		t.Fatalf("a run closed before its start: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
+	if len(entries) != 1 {
+		t.Fatalf("%d run directories", len(entries))
+	}
+	evs := events(t, &session.Result{Dir: filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name())})
+	last := evs[len(evs)-1]
+	if last["type"] != "dev.qory.run.refused" || data(last)["code"] != "run_closed" || data(last)["status"] != 410.0 || len(ofType(evs, "dev.qory.run.started")) != 0 {
+		t.Errorf("the record ends with %v", last)
+	}
+	b, _ := os.ReadFile(c.received)
+	if strings.Contains(string(b), "dev.qory.run.refused") {
+		t.Error("run.refused reached the server after it closed the run")
+	}
+}
+
+// lineFunc is an events writer that hands each line to a function.
+type lineFunc func([]byte)
+
+func (f lineFunc) Write(b []byte) (int, error) { f(b); return len(b), nil }
+
+// TestRunClosedBeforeTheRuntimeStartsEndsTheRun pins the race between the start and a
+// close: a signed 410 run_closed that arrives after run.started and before the
+// runtime starts ends the run as a closed one, run.exited with the reason run_closed
+// and exit code -1, and a result with RunClosed, in place of an error that the
+// runtime did not start.
+func TestRunClosedBeforeTheRuntimeStartsEndsTheRun(t *testing.T) {
+	c := newControl(t)
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	once := sync.Once{}
+	sp.Events = lineFunc(func(line []byte) {
+		if !bytes.Contains(line, []byte(`"dev.qory.run.policy_applied"`)) {
+			return
+		}
+		once.Do(func() {
+			// Hold the start here, after run.started, until the server has closed the
+			// run and the runner has read the answer.
+			c.closed.Store(true)
+			for c.closedAnswers.Load() == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			time.Sleep(300 * time.Millisecond)
+		})
+	})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatalf("a run closed before its runtime started: %v", err)
+	}
+	if !res.RunClosed || res.ExitCode != -1 || res.Signal != "" || res.State != "failed" {
+		t.Errorf("result %+v", res)
+	}
+	evs := events(t, res)
+	exited := ofType(evs, "dev.qory.run.exited")
+	if len(exited) != 1 || data(exited[0])["reason"] != "run_closed" || data(exited[0])["exit_code"] != -1.0 {
+		t.Errorf("run.exited %v", exited)
 	}
 }

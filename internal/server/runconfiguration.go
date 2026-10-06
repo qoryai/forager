@@ -21,7 +21,7 @@ const MaxVariableValue = 4096
 // readRunConfiguration reads a run configuration document: through encoding/json/v2
 // first, which refuses a member name that appears twice and invalid UTF-8, then against
 // the schema, then against the limits the schema cannot state. Every refusal is a
-// [*refusal.Error] with [refusal.RunConfigurationInvalid] whose message contains where
+// refusal with [refusal.RunConfigurationInvalid] whose message contains where
 // in the document it is and which rule refused it, and never a value: a variable's
 // value may be anything the server holds, and no decoder's own message is wrapped,
 // since those quote what they refuse.

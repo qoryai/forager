@@ -32,8 +32,8 @@ nothing.
 - The checkout and the composed home are mounted at their own paths. The run's record is
   mounted read-only.
 - Nothing else of the node is visible inside.
-- The session runner, the policy and the server's secret stay outside, on the node. The
-  record is written from outside.
+- The session runner, the policy and the access key secret stay outside, on the node.
+  The record is written from outside.
 
 What every wall guarantees is in the contract's
 [wall section](../contracts/runner/v1/README.md#the-wall). The
@@ -106,8 +106,9 @@ egress:                         # what the agent may reach; without it, everythi
   allow: [api.anthropic.com, github.com, "*.githubusercontent.com"]
 server:                         # how the node reports; without it, files only
   url: https://control-plane.example.com
-  access_key: ak_f1xt0re000000000
-  secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
+  access_key_id: ak_f1xt0re000000000   # or QORY_ACCESS_KEY_ID in the environment
+  apiary_public_key:                   # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
+    - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 wall:
   adapter: docker
   image: agent:1                # or --image
@@ -148,7 +149,7 @@ is the container.
 A [`wall.Wall`](../wall/wall.go) in the spec starts the runtime in an enclosure. Its only
 route out leads to the proxy.
 
-- The session runner, the policy and the server's secret stay outside.
+- The session runner, the policy and the access key secret stay outside.
 - The run's record is read-only inside.
 
 The Docker adapter uses the `docker` command, and whatever engine it reaches:

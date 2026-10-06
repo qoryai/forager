@@ -95,8 +95,9 @@ egress:
   deny: [gist.github.com]               # denied in either mode, whatever allow says
 server:                                 # optional
   url: https://qory.example
-  access_key: ak_f1xt0re000000000
-  secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
+  access_key_id: ak_f1xt0re000000000   # or QORY_ACCESS_KEY_ID in the environment
+  apiary_public_key:                   # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
+    - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 ```
 
 - `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows

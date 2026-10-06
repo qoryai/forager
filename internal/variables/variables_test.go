@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/variables"
 )
@@ -198,7 +199,7 @@ func TestCheckRefusesWhatStaysOutside(t *testing.T) {
 			}
 			continue
 		}
-		var r *refusal.Error
+		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != tc.code || !slices.Equal(r.Names, tc.names) {
 			t.Errorf("%q, walled %v: %#v, want %s %q", tc.env, tc.walled, err, tc.code, tc.names)
 			continue

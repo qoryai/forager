@@ -8,7 +8,7 @@ It has two halves. One of them ships.
 ## The wall
 
 The wall starts the agent in a container with no route out except to the session
-runner's proxy. The policy, the record and the server's secret stay on the node.
+runner's proxy. The policy, the record and the access key secret stay on the node.
 
 It ships. The versions are the runner's:
 

@@ -105,7 +105,7 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
 - The agent starts in a container, on a network with no route out.
 - A relay leads to the proxy, and nowhere else.
-- The runner, the policy and the server's secret stay outside. The record is written
+- The runner, the policy and the access key secret stay outside. The record is written
   from outside.
 
 Credentials stay outside too. The machine defines them, and a run's policy selects them
@@ -127,7 +127,8 @@ Every event goes to files. With a server, the events it selects go there too:
 
 - Before the run starts, the runner fetches the server's configuration, signed. The run
   starts only when the server answers.
-- It posts them in batches, signed with an HMAC.
+- It posts them in batches. Every request is signed with the machine's access key, an
+  Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
 

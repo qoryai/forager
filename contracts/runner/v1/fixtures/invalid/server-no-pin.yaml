@@ -1,0 +1,5 @@
+# Every answer is verified under the pin; a server without one is refused,
+# apiary_public_key_missing, before the first request.
+version: 1
+url: https://qory.example
+access_key_id: ak_f1xt0re000000000

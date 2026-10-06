@@ -1,13 +1,16 @@
 // Package refusal is a run the runner refuses before it starts, with the refusal code
 // of the contract, contracts/runner/v1, that says why, and the names it concerns.
 //
-// An [Error] reads as a sentence for the caller's user and contains names alone: a
-// variable's name, a tool's, an image's, never a value.
+// A refusal is an [*accesskey.Refusal], the type of every refused run, the server's
+// codes included. Its Detail reads as a sentence for the caller's user and contains
+// names alone: a variable's name, a tool's, an image's, never a value.
 package refusal
 
 import (
 	"fmt"
 	"slices"
+
+	"github.com/qoryai/runner/accesskey"
 )
 
 // The codes the runner decides.
@@ -28,29 +31,25 @@ const (
 	PlaceholderConflict = "placeholder_conflict"
 )
 
-// Error is a refused run.
-type Error struct {
-	// Code is the contract's refusal code.
-	Code string
-	// Names are what the refusal concerns, sorted, each once: variables, tools, images.
-	// Nil when it concerns no name.
-	Names []string
-	// Err says why, for the caller's user.
-	Err error
+// Decides reports whether the runner decides the code, one of this package's: a
+// refusal of the run's own configuration rather than of an answer of the server's.
+func Decides(code string) bool {
+	switch code {
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved, PlaceholderConflict:
+		return true
+	}
+	return false
 }
 
-func (e *Error) Error() string { return e.Err.Error() }
-
-// Unwrap returns the reason.
-func (e *Error) Unwrap() error { return e.Err }
-
-// New is a refusal with the code, the names and the reason written as fmt writes it.
-func New(code string, names []string, format string, a ...any) *Error {
+// New is a refusal with the code, the names, sorted and each once, and the reason
+// written as fmt writes it, as its Detail. It is an [*accesskey.Refusal], the one type
+// of a run that does not start whatever decided it.
+func New(code string, names []string, format string, a ...any) *accesskey.Refusal {
 	var sorted []string
 	if len(names) > 0 {
 		sorted = slices.Clone(names)
 		slices.Sort(sorted)
 		sorted = slices.Compact(sorted)
 	}
-	return &Error{Code: code, Names: sorted, Err: fmt.Errorf(format, a...)}
+	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }

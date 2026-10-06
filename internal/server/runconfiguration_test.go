@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/refusal"
 )
 
@@ -63,7 +64,7 @@ func TestRunConfigurationRefusalsQuoteNoValue(t *testing.T) {
 			v := newVerified(t)
 			v.runDoc = tc.doc
 			_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil)
-			var r *refusal.Error
+			var r *accesskey.Refusal
 			if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid {
 				t.Fatalf("refused with %v", err)
 			}
@@ -74,5 +75,34 @@ func TestRunConfigurationRefusalsQuoteNoValue(t *testing.T) {
 				t.Errorf("the error %q does not contain %q", err, tc.where)
 			}
 		})
+	}
+}
+
+// TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies pins that the run
+// configuration's body is read only after its answer's signature verifies under the
+// pin: an answer unsigned, signed under another key or bound to another request is
+// answer_unsigned and yields no variables, whether its body is a valid document or one
+// the reader would refuse, and the error contains no value of it.
+func TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies(t *testing.T) {
+	for _, doc := range []string{
+		`{"version":1,"variables":{"NODE_ENV":"` + value + `"}}`,
+		`{"version":1,"variables":{"NODE_ENV":"` + value + `\n"}}`,
+	} {
+		for _, sign := range []string{"none", "other", "elsewhere"} {
+			v := newVerified(t)
+			v.runDoc, v.sign = doc, sign
+			rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil)
+			if rc != nil || code(err) != accesskey.CodeAnswerUnsigned {
+				t.Errorf("%s, %s: read %+v, %v; want answer_unsigned", sign, doc, rc, err)
+			}
+			if err != nil && strings.Contains(err.Error(), value) {
+				t.Errorf("%s: the error quotes the value: %v", sign, err)
+			}
+		}
+	}
+	v := newVerified(t)
+	v.runDoc = `{"version":1,"variables":{"NODE_ENV":"` + value + `"}}`
+	if rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil); err != nil || rc.Variables["NODE_ENV"] != value {
+		t.Errorf("a signed answer: %+v, %v", rc, err)
 	}
 }

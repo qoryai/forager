@@ -1,12 +1,14 @@
 {
   "method": "GET",
-  "target": "/v1/run-configuration?forge=github.com&issue=77&repository=acme%2Fshop",
+  "target": "/v1/run-configuration?forge=github.com\u0026issue=77\u0026repository=acme%2Fshop",
   "headers": {
-    "User-Agent": "qory-runner/0.5.0",
-    "X-Qory-Access-Key": "ak_f1xt0re000000000",
+    "User-Agent": "qory-runner/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
     "X-Qory-Contract-Version": "1",
     "X-Qory-Timestamp": "1700000000",
-    "X-Qory-Signature-256": "sha256=831dc019a0ab5dcc781cdb061f4a6381aa497b905bd010a828f16c6c1a3312ed"
+    "X-Qory-Signature-Ed25519": "vgv537AGwPBT0U1hY3VYf7SW3kO9OdiyhQKCUwGhWaSfS27dVuEvwPJep6V7xc07ucuzVky2TYpgxGgZC6NYAA"
   },
   "body": null,
   "expect": 200,

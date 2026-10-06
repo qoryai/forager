@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/ping.schema.json",
   "title": "dev.qory.ping",
-  "description": "Sent to the server's events endpoint before the runtime starts, when a server is configured. The server answers 2xx or the run does not start.",
+  "description": "Sent to the server's events endpoint before the runtime starts, when a server is configured. The server answers a signed 2xx or the run does not start; a run is live from its accepted ping until its final event, or until no accepted event has arrived for 3 × interval_seconds.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["runner_version", "events", "contract_version"],
+  "required": ["runner_version", "events", "contract_version", "interval_seconds"],
   "properties": {
     "runner_version": {"description": "The runner module version, as Go stamps it.", "type": "string", "minLength": 1},
     "events": {"description": "The event types the server receives, as its configuration lists them.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "contract_version": {"description": "The revision of this contract the runner implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1}
+    "contract_version": {"description": "The revision of this contract the runner implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
+    "interval_seconds": {"description": "The heartbeat interval the run uses, in seconds: heartbeats run from the accepted ping until the run's final event, so the server's liveness window follows the run's own value. A larger value fails the schema, a signed 400 invalid_request.", "type": "integer", "minimum": 1, "maximum": 300}
   }
 }

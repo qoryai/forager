@@ -33,6 +33,7 @@ const (
 	RunEgress     = "dev.qory.run.egress"
 	PolicyApplied = "dev.qory.run.policy_applied"
 	RunExited     = "dev.qory.run.exited"
+	RunRefused    = "dev.qory.run.refused"
 )
 
 // Prefix is what every type of the contract starts with; a descriptor's session types

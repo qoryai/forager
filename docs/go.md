@@ -49,7 +49,9 @@ with the tests.
 
 - how its launch is prepared,
 - what its records mean,
-- how it is stopped.
+- how it is stopped,
+- the secrets it declares, through the optional `runtimes.Secrets`; a runtime without
+  it declares nothing.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 

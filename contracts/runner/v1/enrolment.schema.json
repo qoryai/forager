@@ -2,16 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/enrolment.schema.json",
   "title": "Enrolment",
-  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, and its 201 answer: the request's body is $defs/request, the answer's $defs/answer, and a document is one of the two. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer is signed under the server's key, line 3 of the signed answer being the request's proof exactly as sent. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
+  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, its 201 answer and its signed refusals: the request's body is $defs/request, the answer's $defs/answer, a signed 409's $defs/refusal, and a document is one of the three. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer and every signed refusal are signed under the server's key, line 3 of the signed answer being the request's proof exactly as sent, and each lists the server's keys, so a machine without a pin verifies either under the key its code's first fingerprint names. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
   "oneOf": [
     {"$ref": "#/$defs/request"},
-    {"$ref": "#/$defs/answer"}
+    {"$ref": "#/$defs/answer"},
+    {"$ref": "#/$defs/refusal"}
   ],
   "$defs": {
     "public_key": {
       "description": "A raw 32-byte Ed25519 public key.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "server_keys": {
+      "description": "The server's signing keys: the current one, and during a rotation the next one after it. The machine verifies the answer or the refusal under the entry whose fingerprint the code carries first, and from a 201 pins only the entries whose fingerprints the code carries.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alg", "public_key"],
+        "properties": {
+          "alg": {"const": "ed25519"},
+          "public_key": {"$ref": "#/$defs/public_key"}
+        }
+      }
     },
     "request": {
       "title": "Enrolment request",
@@ -85,22 +102,7 @@
           "description": "The access key's stored-secrets flag, fixed when the key is created.",
           "type": "boolean"
         },
-        "apiary_public_key": {
-          "description": "The server's signing keys: the current one, and during a rotation the next one after it. The machine verifies the answer under the entry whose fingerprint the code carries first, and pins only the entries whose fingerprints the code carries.",
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 2,
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["alg", "public_key"],
-            "properties": {
-              "alg": {"const": "ed25519"},
-              "public_key": {"$ref": "#/$defs/public_key"}
-            }
-          }
-        }
+        "apiary_public_key": {"$ref": "#/$defs/server_keys"}
       },
       "allOf": [
         {
@@ -109,6 +111,18 @@
           "else": {"properties": {"node_id": {"pattern": "^np_"}}}
         }
       ]
+    },
+    "refusal": {
+      "title": "Enrolment refusal",
+      "description": "The body of a signed 409 at enrolment: key_invalid, a proof that does not verify or a key the server refuses, or key_limit, a node or node pool that already holds a key awaiting approval or two approved keys. It lists apiary_public_key, the same list in the same order as a 201 at that moment, current key first and during a rotation the next key after it, so the machine verifies the refusal as it verifies the 201: under the entry whose fingerprint its code carries first. A refusal sent unsigned, the 401 and every answer before the code is accepted, lists no key, and a machine acts on none by its status.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "apiary_public_key"],
+      "properties": {
+        "error": {"description": "The refusal code.", "type": "string", "enum": ["key_invalid", "key_limit"]},
+        "names": {"description": "The names the refusal concerns, when it concerns any.", "type": "array", "items": {"type": "string", "minLength": 1}},
+        "apiary_public_key": {"$ref": "#/$defs/server_keys"}
+      }
     }
   }
 }

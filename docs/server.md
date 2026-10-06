@@ -10,14 +10,22 @@ A server is a control plane, or a receiver of your own.
 For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the server. The
 example is in [the policy](policy.md#in-runneryaml).
 
-- The runner reports to the server, signed.
+- The runner reports to the server as an access key: `access_key_id` is its id, and
+  its secret, one line starting `qak_`, lives in the file `access-key-secret` beside
+  `runner.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
+  Ed25519 and is never sent.
+- `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
+  under it. A server without a pin is no run.
+- `qory access-key enrol` enrols a new key with a code from the server and writes the
+  id and the pin; the key awaits approval, and until then a run is refused with
+  `key_pending`. `qory access-key create` prints a public key for the server's owner to
+  paste, and a pasted key is approved as it is entered.
 - The run's policy comes from the server, when the server offers one. The node's
   policy, `Spec.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
-- `secret` can come from `QORY_SERVER_SECRET` in the environment instead of the file.
-- With `server` set, the run starts only when the server answers the fetch and a ping.
-  So a run meant to be observed never runs unobserved.
+- With `server` set, the run starts only when the server answers the fetch and a ping,
+  signed. So a run meant to be observed never runs unobserved.
 - `qory run --local` runs with the files alone.
 - Without `server`, the run writes files only.
 
@@ -27,13 +35,26 @@ A `session.Server` in the spec defines the server the runner reports to. The run
 
 1. fetches the server's configuration document, with a signed `GET` of
    `/.well-known/qory-configuration`;
-2. posts the events that document selects to the URL it defines, signed, with the
-   access key beside the signature;
+2. posts the events that document selects to the URL it defines, signed, after a
+   ping that announces the heartbeat interval; heartbeats run from the accepted ping;
 3. when the document contains a run configuration, fetches it, with every label of the
    run as its query. Its `security_policy`, narrowed by the node's policy, is the run's
    policy. Its `variables` are the server's variables for the run.
 
-The server decides which labels identify what the run works on.
+Every request is signed with the access key, the access key id and the instance id
+among the signed lines. Every answer is signed with the server's key and bound to the
+request, and the runner reads an answer only once it verifies under the pin. The
+server decides which labels identify what the run works on.
+
+## When the server refuses or closes a run
+
+A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a key the
+server does not hold, `key_pending` for a key that awaits approval, `instance_limit`
+when the node's live instances are at its limit, `answer_unsigned` for an answer that
+does not verify under the pin, and `apiary_public_key_missing` for a server without a
+pin. A server closes a running run with a signed `410` `run_closed`: the runner stops
+the runtime as at its time limit, records `reason: run_closed`, and sends nothing
+further.
 
 ## A policy that changes while the run goes
 

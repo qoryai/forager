@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/refusal"
@@ -412,7 +413,7 @@ func TestNarrowedToolsAreTheServersWithinTheNodes(t *testing.T) {
 			}
 			continue
 		}
-		var r *refusal.Error
+		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != refusal.ToolUnknown || !slices.Equal(r.Names, tc.unknown) {
 			t.Errorf("%s: %v, want tool_unknown %q", tc.node, err, tc.unknown)
 		}
@@ -443,7 +444,7 @@ func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
 		}
 	}
 	_, err := policy.Narrowed(fetched(t, doc("agent")), read(t, doc("other")))
-	var r *refusal.Error
+	var r *accesskey.Refusal
 	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{"agent"}) {
 		t.Errorf("two images: %v", err)
 	}

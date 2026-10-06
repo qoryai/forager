@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/session"
@@ -97,7 +98,7 @@ func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
 			c.serveDocument(serverVariables, "sha256="+strings.Repeat("1", 64))
 			sp := spec(t, nil)
 			out := dumpsEnv(t, &sp)
-			sp.Server = c.server()
+			sp.Server, sp.Heartbeat = c.server(), time.Second
 			sp.Variables = session.Variables{Own: []string{"LOG_LEVEL=node", "EDITOR=vi"}, Deny: []string{"APP_*"}, Unwalled: tc.unwalled}
 			if tc.walled {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
@@ -215,7 +216,7 @@ func TestTheNodesPolicyNarrowsTheServers(t *testing.T) {
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","localhost"]}}`, digest)
 	node := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}
 	sp := spec(t, node, "FAKE_ALLOWED_URL="+origin.URL+"/allowed", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)+"/denied")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +237,7 @@ func TestTheNodesPolicyNarrowsTheServers(t *testing.T) {
 
 	c.serveDocument(`{"version":1,"variables":{"NODE_ENV":"test"}}`, digest)
 	sp = spec(t, node)
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	res, err = session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +269,7 @@ func TestANarrowingThatRefusesIsNoRun(t *testing.T) {
 			c := newControl(t)
 			c.serveDocument(tc.doc, "sha256="+strings.Repeat("1", 64))
 			sp := spec(t, tc.node)
-			sp.Server = c.server()
+			sp.Server, sp.Heartbeat = c.server(), time.Second
 			sp.Wall, sp.Image = &openWall{}, "base"
 			sp.Images = []session.Image{{Name: "base", Ref: "example.com/base:1"}, {Name: "with-docker", Ref: "example.com/docker:1", Runtime: "sysbox-runc", Docker: true}}
 			sp.Tools = []session.Tool{{Name: "files", Command: []string{os.Args[0], toolMode}, Serves: []string{"files.internal"}}}

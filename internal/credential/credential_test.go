@@ -107,3 +107,20 @@ func TestAFileIsReadWhenItIsUsed(t *testing.T) {
 		t.Errorf("the token is %q after the file changed", got)
 	}
 }
+
+// TestAnAdapterReceivesNoAccessKeyVariable pins that the access key's variables, the
+// runner's alone, are not in an adapter's environment, while the runner's others are.
+func TestAnAdapterReceivesNoAccessKeyVariable(t *testing.T) {
+	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
+	t.Setenv("QORY_ACCESS_KEY_ID", "ak_f1xt0re000000000")
+	t.Setenv("QORY_APIARY_PUBLIC_KEY", "[]")
+	t.Setenv("ADAPTER_SEES", "yes")
+	check := `if [ -n "$QORY_ACCESS_KEY_SECRET$QORY_ACCESS_KEY_ID$QORY_APIARY_PUBLIC_KEY" ] || [ "$ADAPTER_SEES" != yes ]; then echo "the environment is wrong" >&2; exit 1; fi
+` + answerFor
+	defs := []Definition{{Name: "product", Adapter: []string{adapter(t, check), "${argument}"}, Argument: `[a-z0-9-]+/[a-z0-9-]+`, Hosts: []string{"*.example.com"}}}
+	held, err := Resolve(context.Background(), defs, []policy.Selected{{Name: "product", Argument: "acme/shop"}}, policy.Enforce, []string{"git.example.com", "api.git.example.com"}, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	held.Close()
+}

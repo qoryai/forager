@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.heartbeat.schema.json",
   "title": "dev.qory.run.heartbeat",
-  "description": "The run is alive. Sent every interval_seconds while the runtime runs; a receiver that misses two in a row may consider the run lost.",
+  "description": "The run is alive. Sent every interval_seconds from the accepted ping until the run's final event, so the start, from the ping to dev.qory.run.started, is covered too, or from dev.qory.run.started when the run has no server; a run is live from its accepted ping until its final event, or until no accepted event has arrived for 3 × interval_seconds.",
   "type": "object",
   "additionalProperties": false,
   "required": ["elapsed_seconds", "interval_seconds"],
   "properties": {
-    "elapsed_seconds": {"description": "Seconds since run.started.", "type": "integer", "minimum": 0},
+    "elapsed_seconds": {"description": "Seconds since the ping, or since dev.qory.run.started when the run has no server.", "type": "integer", "minimum": 0},
     "interval_seconds": {"description": "Seconds between heartbeats, so a receiver can detect a missed one.", "type": "integer", "minimum": 1}
   }
 }

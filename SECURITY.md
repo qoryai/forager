@@ -26,11 +26,12 @@ in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-
 
 - a session behind a wall reaches a host, or a path of a host, the run's policy denies;
 - a session reads a credential the runner keeps for it, the run's authority key, the
-  relay's secret or the server's secret;
+  relay's secret or the access key secret;
 - a session changes the run's record, or what the runner reports;
 - a run's policy, a descriptor or a credential adapter's answer makes the runner do
   something the binary does not already do, or widens what the machine's policy allows;
-- a receiver accepts a request the runner did not sign, by following this contract.
+- a receiver accepts a request the runner did not sign, by following this contract;
+- a runner accepts an answer the server did not sign.
 
 ## What is not
 

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"sync"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/server"
@@ -50,7 +51,7 @@ type live struct {
 
 // discover fetches the server's configuration document for a run.
 func discover(ctx context.Context, cfg *server.Config, spec Spec) (*live, error) {
-	client := &server.Client{Config: cfg, UserAgent: "qory-runner/" + spec.RunnerVersion}
+	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.RunnerVersion}
 	conf, digest, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +71,7 @@ func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, map[st
 	var fetched *policy.Loaded
 	if rc.SecurityPolicy != nil {
 		if fetched, err = policy.Read("run-configuration", rc.SecurityPolicy); err != nil {
-			return nil, nil, &refusal.Error{Code: refusal.RunConfigurationInvalid, Err: fmt.Errorf("run configuration %s: %w", runURL, err)}
+			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, nil, "run configuration %s: %v", runURL, err)
 		}
 		fetched.Source = "fetched"
 	}
@@ -217,8 +218,9 @@ func (l *live) pass() {
 		// again; a fetch the server did not answer is.
 		var document *server.DocumentError
 		var refused *policy.Error
-		var code *refusal.Error
-		if !errors.As(err, &document) && !errors.As(err, &refused) && !errors.As(err, &code) {
+		var code *accesskey.Refusal
+		decided := errors.As(err, &code) && refusal.Decides(code.Code)
+		if !errors.As(err, &document) && !errors.As(err, &refused) && !decided {
 			l.failed(err)
 			return
 		}
