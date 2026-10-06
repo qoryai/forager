@@ -251,15 +251,17 @@ func (p PublicKey) Fixture() bool {
 // access key secret, a secret pasted where another value belongs say, a phrase in its
 // place, so an error never contains a secret.
 func shown(v string) string {
-	if looksSecret(v) {
+	if ContainsSecret(v) {
 		return "(a value that contains an access key secret)"
 	}
 	return strconv.Quote(v)
 }
 
-// looksSecret reports whether a value contains what starts an access key secret, in
-// any case.
-func looksSecret(v string) bool { return strings.Contains(strings.ToLower(v), SecretPrefix) }
+// ContainsSecret reports whether a value contains what starts an access key secret,
+// qak_ in any case. A reader of a document a secret does not belong in, such as the
+// server document or a pin, refuses one that contains it with a fixed message, before
+// a schema or a JSON decoder can quote the value in its error.
+func ContainsSecret(v string) bool { return strings.Contains(strings.ToLower(v), SecretPrefix) }
 
 // decode decodes base64url without padding strictly, to exactly n bytes: padding, a
 // character of the standard alphabet, a line break and non-zero bits after the last
@@ -311,7 +313,7 @@ var nameShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // contains an access key secret fits the pattern and is refused too, since the name
 // travels in clear.
 func CheckName(name string) error {
-	if !nameShape.MatchString(name) || looksSecret(name) {
+	if !nameShape.MatchString(name) || ContainsSecret(name) {
 		return fmt.Errorf("the name %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(name))
 	}
 	return nil

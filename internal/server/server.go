@@ -130,8 +130,13 @@ func Read(name string, b []byte) (*Config, error) {
 }
 
 // Parse validates the bytes of a server document against the schema and decodes it,
-// and checks the pin's keys as [accesskey.Pin.Check] does.
+// and checks the pin's keys as [accesskey.Pin.Check] does. A document that contains an
+// access key secret anywhere is [accesskey.ErrSecretInDocument] before anything else
+// reads it, so no schema or decoder error quotes the secret.
 func Parse(name string, b []byte) (*Config, error) {
+	if accesskey.ContainsSecret(string(b)) {
+		return nil, accesskey.ErrSecretInDocument
+	}
 	file := name
 	if !strings.Contains(file, ".") {
 		file += ".json"

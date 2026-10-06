@@ -576,3 +576,33 @@ func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
 		}
 	}
 }
+
+// TestAServerDocumentWithASecretQuotesNothing pins that a secret pasted into the
+// server document, as the access key id, the url, a pin's public key or a member's
+// name, or into a pin, is refused with a fixed message that does not contain it.
+func TestAServerDocumentWithASecretQuotesNothing(t *testing.T) {
+	const secret = "qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"the access key id": `{"version":1,"url":"https://qory.example","access_key_id":"` + secret + `","apiary_public_key":` + pin + `}`,
+		"the url":           `{"version":1,"url":"https://` + secret + `","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `}`,
+		"a public key":      `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[{"alg":"ed25519","public_key":"` + secret + `"}]}`,
+		"a member's name":   `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","` + secret + `":1,"apiary_public_key":` + pin + `}`,
+		"upper case":        `{"version":1,"url":"https://qory.example","access_key_id":"` + strings.ToUpper(secret) + `","apiary_public_key":` + pin + `}`,
+	} {
+		_, err := server.Read("server.json", []byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:20])) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	yaml := "version: 1\nurl: https://qory.example\naccess_key_id: " + secret + "\n"
+	if _, err := server.Read("server.yaml", []byte(yaml)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("YAML: %v", err)
+	}
+	if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + secret + `"}]`)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("a pin: %v", err)
+	}
+	if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + secret + `":"x"}]`)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("a pin's member name: %v", err)
+	}
+}

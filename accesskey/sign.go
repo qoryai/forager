@@ -123,8 +123,13 @@ type Pin []ServerKey
 
 // ParsePin reads a pin written as JSON, the form QORY_APIARY_PUBLIC_KEY contains:
 // [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]. A member it does not
-// define is refused, and so is a member twice. It then runs [Pin.Check].
+// define is refused, and so is a member twice. It then runs [Pin.Check]. A pin that
+// contains an access key secret is [ErrSecretInDocument], whose message quotes
+// nothing.
 func ParsePin(b []byte) (Pin, error) {
+	if ContainsSecret(string(b)) {
+		return nil, ErrSecretInDocument
+	}
 	var p Pin
 	if err := jsonv2.Unmarshal(b, &p, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("the pin is not a list of {alg, public_key}: %w", err)
@@ -206,6 +211,10 @@ func (p Pin) Verify(message []byte, signature string) bool {
 // VerifyAnswer reports whether signature, as the answer's X-Qory-Signature-Ed25519
 // contains it, is the answer's signature under one of the pin's keys.
 func (p Pin) VerifyAnswer(a Answer, signature string) bool { return p.Verify(a.Message(), signature) }
+
+// ErrSecretInDocument is the error of a document that contains an access key secret
+// where none belongs: a fixed message, so the secret appears in no error.
+var ErrSecretInDocument = errors.New("the document contains an access key secret, which belongs in access-key-secret or QORY_ACCESS_KEY_SECRET and nowhere else")
 
 // encodeSignature writes a signature in base64url without padding.
 func encodeSignature(sig []byte) string { return base64.RawURLEncoding.EncodeToString(sig) }

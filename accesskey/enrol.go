@@ -319,7 +319,7 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 // checkOrigin refuses a server URL that is not an origin, https or http to a loopback
 // address, as the server document's url is.
 func checkOrigin(s string) error {
-	if looksSecret(s) {
+	if ContainsSecret(s) {
 		return errors.New("the server URL contains an access key secret")
 	}
 	u, err := url.Parse(s)

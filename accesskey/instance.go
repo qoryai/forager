@@ -32,7 +32,7 @@ func NewInstanceID() (string, error) {
 // which the server answers with a signed 400 bad_request, and one that contains an
 // access key secret, since the id travels in clear.
 func CheckInstanceID(id string) error {
-	if !nameShape.MatchString(id) || looksSecret(id) {
+	if !nameShape.MatchString(id) || ContainsSecret(id) {
 		return fmt.Errorf("the instance id %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(id))
 	}
 	return nil
