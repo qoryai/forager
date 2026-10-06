@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
 )
@@ -21,6 +22,9 @@ type live struct {
 	// labels are the run's, sent on every run configuration request.
 	labels map[string]string
 	report func(string)
+	// node is the node's policy, nil when the command passes none: it narrows every
+	// policy the server sends, and is the run's while the server sends none.
+	node   *policy.Loaded
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -56,19 +60,48 @@ func discover(ctx context.Context, cfg *server.Config, spec Spec) (*live, error)
 	return l, nil
 }
 
-// fetch fetches the run configuration at runURL for the run's labels and reads its
-// policy, which is then the run's, with the source fetched and the server's digest.
-func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, error) {
+// fetch fetches the run configuration at runURL for the run's labels and reads it: the
+// policy it puts in force, [inForce], and the server's variables, nil when it has none.
+func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, map[string]string, error) {
 	rc, digest, err := l.client.RunConfiguration(ctx, runURL, l.labels)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	pol, err := policy.Read("run-configuration", rc.SecurityPolicy)
+	var fetched *policy.Loaded
+	if rc.SecurityPolicy != nil {
+		if fetched, err = policy.Read("run-configuration", rc.SecurityPolicy); err != nil {
+			return nil, nil, &refusal.Error{Code: refusal.RunConfigurationInvalid, Err: fmt.Errorf("run configuration %s: %w", runURL, err)}
+		}
+		fetched.Source = "fetched"
+	}
+	pol, err := inForce(fetched, l.node, runURL, digest)
 	if err != nil {
-		return nil, fmt.Errorf("run configuration %s: %w", runURL, err)
+		return nil, nil, fmt.Errorf("run configuration %s: %w", runURL, err)
 	}
-	pol.Source, pol.URL, pol.RunConfiguration = "fetched", runURL, digest
-	return pol, nil
+	return pol, rc.Variables, nil
+}
+
+// inForce is the policy a run configuration puts in force. Without a security_policy it
+// is the node's, or none, beside the run configuration's URL and digest. With one, it
+// is the server's, narrowed by the node's when the command passes one.
+func inForce(fetched, node *policy.Loaded, url, digest string) (*policy.Loaded, error) {
+	var out policy.Loaded
+	switch {
+	case fetched == nil && node == nil:
+		out = *policy.None()
+	case fetched == nil:
+		out = *node
+	case node == nil:
+		out = *fetched
+	default:
+		narrowed, err := policy.Narrowed(fetched, node)
+		if err != nil {
+			return nil, err
+		}
+		out = *narrowed
+	}
+	out.URL, out.RunConfiguration = url, digest
+	return &out, nil
 }
 
 // holds records the digest of the run configuration put in force.
@@ -177,13 +210,15 @@ func (l *live) pass() {
 	if conf.Run == nil || !(fetchRun || (want.RunConfiguration != "" && want.RunConfiguration != runDigest && want.RunConfiguration != tried)) {
 		return
 	}
-	pol, err := l.fetch(l.ctx, conf.Run.URL)
+	// The variables are the run's from its start to its end: a reload leaves them.
+	pol, _, err := l.fetch(l.ctx, conf.Run.URL)
 	if err != nil {
 		// Only a document the server answered and the runner refuses is not asked for
 		// again; a fetch the server did not answer is.
 		var document *server.DocumentError
 		var refused *policy.Error
-		if !errors.As(err, &document) && !errors.As(err, &refused) {
+		var code *refusal.Error
+		if !errors.As(err, &document) && !errors.As(err, &refused) && !errors.As(err, &code) {
 			l.failed(err)
 			return
 		}

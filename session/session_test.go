@@ -147,7 +147,7 @@ func (c *control) server() *session.Server {
 }
 
 // TestMain lets the test binary stand in for a runtime, for the hook forwarder and for a
-// tool, so no real runtime and no shell script are needed: with QORY_TEST_RUNTIME set it
+// tool, so no real runtime and no shell script are needed: with FAKE_RUNTIME set it
 // acts as a runtime, with QORY_TEST_FORWARD set as the forwarder, and with toolMode as
 // its first argument as a tool.
 func TestMain(m *testing.M) {
@@ -158,7 +158,7 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		os.Exit(0)
-	case os.Getenv("QORY_TEST_RUNTIME") != "":
+	case os.Getenv("FAKE_RUNTIME") != "":
 		os.Exit(fakeRuntime())
 	case len(os.Args) > 2 && os.Args[1] == toolMode:
 		os.Exit(fakeTool(os.Args[2:]))
@@ -236,7 +236,7 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		Runtime:       claudeCode(t),
 		Command:       os.Args[0],
 		Args:          []string{"--settings", writeSettings(t, dir)},
-		Env:           append([]string{"QORY_TEST_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
+		Env:           append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
 		Dir:           dir,
 		Stdin:         strings.NewReader(""),
 		Stdout:        &out,

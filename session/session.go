@@ -19,6 +19,7 @@ import (
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
@@ -34,13 +35,22 @@ type Spec struct {
 	// one. Nil means a bare runtime named after the Command: the run is recorded, the
 	// session inside it is not.
 	Runtime runtimes.Runtime
-	// Command, Args, Env and Dir are what to start. A nil Env is the process's own, or
-	// nothing under a Wall, where only what Env lists goes in; an empty Dir is the
-	// working directory.
+	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string
 	Args    []string
-	Env     []string
-	Dir     string
+	// Env is the environment the run inherits, NAME=value: a nil Env is the process's
+	// own, or nothing under a Wall, where only what the run lists goes in. What the run
+	// sets over it is LaunchEnv and Variables, apart from it, so the runner distinguishes
+	// the node's variables and the harness's from what is merely inherited.
+	Env []string
+	Dir string
+	// LaunchEnv is what the harness's composed launch sets, NAME=value, over Env: the
+	// run's own names, like the ones the Runtime's preparation sets, so a server's
+	// variable of such a name is left out and reported as denied.
+	LaunchEnv []string
+	// Variables are the node's own variables, set over LaunchEnv, and how the run takes
+	// the variables of the server's run configuration.
+	Variables Variables
 	// Interactive says the caller has a terminal: the session runs on a pseudo-terminal
 	// attached to Stdin and Stdout, unless Args holds an argument the Runtime names as
 	// headless, -p for Claude Code, in which case it runs on pipes as if the caller had
@@ -50,9 +60,10 @@ type Spec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Policy is the run's policy; nil means no policy, mode observe. With a Server
-	// whose configuration document names a run configuration, the fetched policy is
-	// the policy and this one is ignored: a command refuses the pair before the run.
+	// Policy is the node's policy, the one the command passes; nil means none. Without
+	// a server's policy it is the run's, and none is mode observe. With a Server whose
+	// run configuration has a policy, it narrows that one: the node only takes away
+	// (contracts/runner/v1/README.md §The server).
 	Policy *Policy
 	// Server is the server the run reports to and takes its run configuration from;
 	// nil means files only, the machine's policy. Local ignores it: the server is not
@@ -162,6 +173,12 @@ const (
 	EnvSocket = socket.Env
 )
 
+// Refusal is a run the runner refused before it started: Code is the refusal code of
+// contracts/runner/v1/README.md, and Names the names it concerns, never a value. [Run]
+// returns one, wrapped or not, for each refusal that has a code, and errors.As finds
+// it.
+type Refusal = refusal.Error
+
 // MaxLabels is how many labels a run may carry.
 const MaxLabels = server.MaxLabels
 
@@ -194,17 +211,26 @@ const closeWait = 15 * time.Second
 // its exit is the result and not an error. The context ending stops the runtime.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
+	// node is the node's policy, the one the command passes: the run's while no server's
+	// policy is in force, and what narrows a server's.
+	var node *policy.Loaded
 	pol := policy.None()
 	var err error
 	if spec.Policy != nil {
 		b, _ := json.Marshal(spec.Policy)
-		if pol, err = policy.Read("policy", b); err != nil {
+		if node, err = policy.Read("policy", b); err != nil {
 			return nil, err
 		}
+		pol = node
+	}
+	if err := checkVariables(spec.Variables); err != nil {
+		return nil, err
 	}
 	// The server, when the run has one: discovered before anything else. The run
-	// configuration it names is fetched after the ping, and is then the policy.
+	// configuration it names is fetched after the ping; its policy, narrowed by the
+	// node's, is then the run's, and its variables are the run's for its whole life.
 	var srv *live
+	var served map[string]string
 	if !spec.Local && spec.Server != nil {
 		b, _ := json.Marshal(spec.Server)
 		cfg, err := server.Read("server", b)
@@ -214,6 +240,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if srv, err = discover(ctx, cfg, spec); err != nil {
 			return nil, err
 		}
+		srv.node = node
 	}
 	rt := spec.Runtime
 	if rt == nil {
@@ -287,10 +314,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		sinks = append(sinks, posts)
 		srv.posts = posts
 		defer srv.stop()
-		// The run configuration, when the server names one, is the policy: the
-		// machine's and the run's own are not merged with it.
+		// The run configuration, when the server names one: its policy, narrowed by the
+		// node's, or the node's own when it has none, and its variables.
 		if srv.conf.Run != nil {
-			if pol, err = srv.fetch(ctx, srv.conf.Run.URL); err != nil {
+			if pol, served, err = srv.fetch(ctx, srv.conf.Run.URL); err != nil {
 				sinks.Close(ctx)
 				return nil, err
 			}
@@ -299,7 +326,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 	}
 	allow := pol.Policy.Egress.Allow
-	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
+	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0) && spec.Wall == nil {
 		sinks.Close(ctx)
 		return nil, errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them")
 	}
@@ -338,6 +365,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		toolDefs[i] = tool.Definition(t)
 	}
 	chosen, err := choose(spec, toolDefs, pol, held)
+	if err != nil {
+		sinks.Close(ctx)
+		return nil, err
+	}
+	// The runtime prepares the launch before the variables are resolved, because what it
+	// sets is the runner's own and wins over a server's variable of the same name. The
+	// run directory goes in read-only, over whatever mount holds it: the settings are
+	// read from it, and the record in it is not the agent's to rewrite.
+	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
+	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}); err != nil {
+		sinks.Close(ctx)
+		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
+	}
+	vars, emptied, err := resolve(spec, rt, served, prepared, held, chosen)
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
@@ -388,12 +429,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// addresses are not its to reach.
 		px.Guard(pol.Policy.Egress.Allow)
 	}
+	// The node's path rules, beside a server's: fixed for the run, so a reload that
+	// brings a server's policy is narrowed by them as the start is.
+	if node != nil && srv != nil {
+		px.NodePaths(node.Policy.Egress.Paths)
+	}
 	// The run's authority: for the hosts a credential is for and the hosts with path
 	// rules, and behind a wall with a server always, since a reload may bring a run
 	// configuration with path rules or credentials, and the enclosure trusts only what
 	// it was given at start.
 	var authority []byte
-	if len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && srv != nil) {
+	if len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || (spec.Wall != nil && srv != nil) {
 		ca, err := proxy.NewCA(runID)
 		if err != nil {
 			sinks.Close(ctx)
@@ -427,26 +473,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
-	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
-	// The run directory goes in read-only, over whatever mount holds it: the settings
-	// are read from it, and the record in it is not the agent's to rewrite.
 	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
-	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}); err != nil {
-		sinks.Close(ctx)
-		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
-	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
-	// enclosure reaches them on.
+	// enclosure reaches them on. The environment is what the run inherits, then what the
+	// harness sets, the variables, what the runtime's preparation sets and the runner's
+	// own, each over the ones before, and behind a wall the placeholders and, empty,
+	// the runtime's declared and reserved variables no placeholder sets, so an image's
+	// own value for one does not reach the runtime.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
+		Env: environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
 	}
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen))),
+			Env:   environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
 			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
@@ -503,9 +546,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if pol.Source != "none" {
 			a["digest"] = pol.Digest
 		}
-		if pol.Source == "fetched" {
+		if pol.URL != "" {
 			a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 		}
+		if pol.Node != nil {
+			np := map[string]any{"digest": pol.Node.Digest}
+			if len(pol.Node.Paths) > 0 {
+				np["paths"] = pol.Node.Paths
+			}
+			a["node_policy"] = np
+		}
+		a["variables"] = map[string]any{"names": vars.Names, "denied": vars.Denied, "unwalled": vars.Unwalled, "node_ignored": vars.NodeIgnored}
 		if spec.Declared != nil {
 			a["harness_hosts"] = spec.Declared
 		}
@@ -758,9 +809,9 @@ func hold(ctx context.Context, spec Spec, defs []credential.Definition, pol *pol
 		return nil, err
 	}
 	for _, name := range held.Placeholders {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+		if passes(spec, name) {
 			held.Close()
-			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return held, nil
@@ -777,8 +828,8 @@ func choose(spec Spec, defs []tool.Definition, pol *policy.Loaded, held *credent
 		return nil, err
 	}
 	for _, name := range tool.Placeholders(chosen) {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
-			return nil, fmt.Errorf("%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
+		if passes(spec, name) {
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return chosen, nil
