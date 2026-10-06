@@ -27,6 +27,10 @@ const Version = "v1"
 // only once a released runner is in use.
 const Revision = 1
 
+// runtimes.json lists the secrets of the descriptors under runner/v1/runtimes, for a
+// server to vendor; it is written from them and never by hand.
+//go:generate go run ../internal/descriptor/runtimesjson runner/v1/runtimes.json
+
 //go:embed all:runner
 var embedded embed.FS
 

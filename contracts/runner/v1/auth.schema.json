@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/auth.schema.json",
+  "title": "Authentication scheme",
+  "description": "How the proxy sets a secret value on a request, from a closed set. bearer sets Authorization: Bearer and the value. header sets the header in header to the value. basic sets Authorization: Basic with a username, fixed in username or a secret in username_secret, and the value as the password. secret and username_secret are declared ids of the document that contains this one; a runtime declaration contains neither.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheme"],
+  "properties": {
+    "scheme": {"enum": ["bearer", "header", "basic"]},
+    "header": {"type": "string", "maxLength": 64, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"},
+    "username": {"type": "string", "minLength": 1, "pattern": "^[^:\\s]+$"},
+    "username_secret": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "secret": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}
+  },
+  "allOf": [
+    {"if": {"properties": {"scheme": {"const": "header"}}}, "then": {"required": ["header"]}, "else": {"not": {"required": ["header"]}}},
+    {"if": {"properties": {"scheme": {"const": "basic"}}},
+     "then": {"oneOf": [{"required": ["username"]}, {"required": ["username_secret"]}]},
+     "else": {"not": {"anyOf": [{"required": ["username"]}, {"required": ["username_secret"]}]}}}
+  ]
+}

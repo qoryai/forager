@@ -14,6 +14,7 @@
 # for it, so neither is here.
 version: 1
 runtime: claude
+title: Claude Code
 runtime_version: "2.1.273"
 sources:
   output:
@@ -36,6 +37,38 @@ sources:
 # started it, and the result line is read from its standard output.
 headless:
   args: ["-p", "--print"]
+# The model credential is an API key or an OAuth credential, one of the two. Claude Code
+# reads ANTHROPIC_AUTH_TOKEN before either, so it is reserved. The denied variables move
+# where requests and the credential go, add headers, switch to another provider, wrap or
+# replace the shell, move the settings and the credential file, or change the client
+# certificate and the trust of TLS connections; each is in the environment-variable
+# reference and in the 2.1.288 binary.
+secrets:
+  declares:
+    - id: api_key
+      title: Anthropic API key
+      name: ANTHROPIC_API_KEY
+      hosts: [api.anthropic.com]
+      paths: [/v1/*]
+      auth: {scheme: header, header: x-api-key}
+    - id: oauth_token
+      title: Claude OAuth credential
+      name: CLAUDE_CODE_OAUTH_TOKEN
+      hosts: [api.anthropic.com]
+      paths: [/v1/*]
+      auth: {scheme: bearer}
+  one_of:
+    - id: model_key
+      required: true
+      of: [api_key, oauth_token]
+  reserves: [ANTHROPIC_AUTH_TOKEN]
+  credential_files: [~/.claude/.credentials.json]
+  denies: [ANTHROPIC_BASE_URL, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
+           ANTHROPIC_VERTEX_BASE_URL, ANTHROPIC_FOUNDRY_BASE_URL, ANTHROPIC_AWS_BASE_URL,
+           ANTHROPIC_CUSTOM_HEADERS, CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX,
+           CLAUDE_CODE_USE_FOUNDRY, CLAUDE_CODE_USE_ANTHROPIC_AWS, CLAUDE_CODE_SHELL,
+           CLAUDE_CODE_SHELL_PREFIX, CLAUDE_ENV_FILE, CLAUDE_CONFIG_DIR,
+           CLAUDE_CODE_CLIENT_CERT, CLAUDE_CODE_CLIENT_KEY, CLAUDE_CODE_CERT_STORE]
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}
