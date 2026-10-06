@@ -1,0 +1,19 @@
+{
+  "specversion": "1.0",
+  "id": "7e1c0000-0000-7000-8000-000000000005",
+  "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "type": "dev.qory.run.policy_applied",
+  "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "time": "2026-09-16T12:00:00.125Z",
+  "sequence": "0000000003",
+  "dataschema": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json",
+  "data": {
+    "mode": "enforce",
+    "allow": ["api.example"],
+    "source": "config",
+    "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "node_policy": {
+      "digest": "sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  }
+}

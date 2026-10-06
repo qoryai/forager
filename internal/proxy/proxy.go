@@ -117,7 +117,9 @@ type Proxy struct {
 	token   atomic.Pointer[string]
 	refused func()
 	// term, when set, says which hosts the proxy terminates TLS for.
-	term        atomic.Pointer[terminator]
+	term atomic.Pointer[terminator]
+	// node are the node's path rules, set before term and fixed for the run.
+	node        map[string][]string
 	up          http.RoundTripper
 	upOnce      sync.Once
 	upstreamTLS *tls.Config

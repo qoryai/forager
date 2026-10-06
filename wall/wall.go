@@ -25,6 +25,13 @@ type Wall interface {
 	Prepare(ctx context.Context, req Request) (Enclosure, error)
 }
 
+// Setter is a wall that sets variables in the enclosure's environment itself, beside
+// the launch's: a server's variable of such a name is left out of the run.
+type Setter interface {
+	// Sets lists the names of the variables the wall sets.
+	Sets() []string
+}
+
 // Reaper is a wall that can remove what it left of a run whose runner died before it
 // closed the enclosure. It is asked only for a run known to be over.
 type Reaper interface {

@@ -27,9 +27,10 @@ defined up to N and ignores any other section, and a server may rely on the sect
 to N and no more. An addition is a new revision; a breaking change is `v2`. An addition
 made while no released runner is in use goes into the revision the runner sends; the
 revision is raised only when a released runner is in use. Revision 1 is everything this
-document describes: the server (§The server), tools (§Tools) and images (§Images), where
-`container_runtime` and `docker` belong to an option that is experimental (§The wall),
-and nodes, access keys, instances and enrolment (§The server).
+document describes: the server (§The server), a run's variables (§Variables), tools
+(§Tools) and images (§Images), where `container_runtime` and `docker` belong to an
+option that is experimental (§The wall), and nodes, access keys, instances and
+enrolment (§The server).
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility: while the module is
@@ -56,7 +57,8 @@ The runner's duties, in the order that matters when they conflict:
    list is denied as well. A denied attempt is recorded and the session continues; a
    denial never ends a run.
 3. **Credentials.** The session's environment and files contain none of the runner's. On
-   a developer machine the session runs with the developer's own environment. Behind a
+   a developer machine the session runs with the developer's own environment, and the
+   server's variables only when the launch spec accepts them (§Variables). Behind a
    wall the runner keeps the credentials the run's policy selects in memory, outside the
    enclosure, and its proxy sets each on the requests to the hosts it is for
    (§Credentials): the session reaches a code host and a model endpoint as itself, and
@@ -143,9 +145,10 @@ One run, on a developer machine, with a server configured:
 1. The runner receives a launch spec: the program, its arguments, its environment and
    directory, whether the session is interactive, the policy document, the server
    document with the access key secret and the instance id and name, the egress the
-   harness declared, and the runtime name. The spec comes
-   from the `qory` command, which reads the policy and the server from its own
-   configuration; the runner receives nothing about what composed it or where it was read.
+   harness declared, the node's variables, and the runtime name. The spec comes from
+   the `qory` command, which reads the policy and the server from its own
+   configuration; the runner receives nothing about what composed it or where it was
+   read.
 2. The runner creates a run id, a UUID version 7, and the run directory
    `.qory/runs/<id>/` in the checkout.
 3. It validates the server document once, when one is passed; without a pinned
@@ -162,8 +165,10 @@ One run, on a developer machine, with a server configured:
    at once, files only.
 4. It determines the policy. When the server's configuration contains a `run` section, it
    fetches the run configuration, with every label of the run as the query, and its
-   `security_policy` is the policy; anything but `200` is no run.
-   Otherwise the policy is the one the command passes. It validates the policy once.
+   `security_policy`, narrowed by the policy the command passes, is the policy, and its
+   `variables` are the server's (§Variables); anything but `200` is no run.
+   Otherwise, or when the run configuration has no `security_policy`, the policy is the
+   one the command passes. It validates the policy once.
    Refused by the schema: the run does not start. Absent: mode `observe`, everything
    allowed and recorded. Present: pinned, with the digest of its canonical JSON as its
    stamp. The allow list and the deny list are the policy's entries; the hosts the
@@ -172,7 +177,9 @@ One run, on a developer machine, with a server configured:
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
-   `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment.
+   `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment but
+   the variables (§Variables), the placeholders and, in a walled run, the runtime's
+   declared and reserved variables nothing else sets, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    the runner's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
@@ -268,6 +275,33 @@ egress:
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy contains no reference and defines no image (§Images) |
+
+**A node narrows a server's policy.** The server leads; the node only narrows. A node,
+through an agent that writes its configuration for example, is easier to compromise
+than the server, so on a node connected to a server what the node contributes can only
+take away from the run. The node's policy is the policy document of the launch spec,
+`Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
+narrowing. Without a server's `security_policy` the node's policy is the run's; with a
+server's policy and no node policy, the server's applies as it is.
+
+| Field | The run's |
+|---|---|
+| `egress.mode` | `enforce` when either side sets `enforce`, else `observe` |
+| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. The runner reports the entries of each side under `enforce` that every other such side's list covers, the server's first, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
+| `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
+| `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does: under `enforce` it is denied; under `observe` it passes; either way it is recorded with an empty `path_rule`. A request every such side matches is recorded with the narrowest entry that matched |
+| `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
+| `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run |
+| `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
+| `variables` | the server's; the node adds only names whose server value the run does not apply (§Variables) |
+
+`image` selects one thing, so its narrowing is agreement: two different selections are
+no run rather than a choice. The node's policy is fixed for the run: a reload replaces
+the server's side, and the run applies the new `security_policy` narrowed by the same
+node policy; the reload rules (§The server) hold for the result.
+`dev.qory.run.policy_applied` reports the run's `mode`, `allow` and `deny` as the table
+computes them, the server's `paths`, `source` `fetched` with the server's `url`,
+`digest` and `run_configuration`, and the node's policy as `node_policy` (§The events).
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declare, the command passes that list to the runner, and `dev.qory.run.policy_applied`
@@ -497,6 +531,88 @@ none. The runner reads no body, so what an invocation does beyond its method and
 path is not read by the runner, and the tool checks it; the runtime's hooks report the MCP call an agent makes
 (`dev.qory.session.tool_started`).
 
+## Variables
+
+A run's variables reach the agent's process alone. The runner adds them to the launch's
+environment; the tools, the relay, the agent's Docker daemon and the wall's `docker`
+command keep their own environment.
+
+**The server leads.** On a node connected to a server, the server's variables, the run
+configuration's `variables`, are the run's. The server resolves them among its own
+levels and sends the resolved values alone, a name and a value each. The node adds only
+names: its own variables, the ones the launch spec lists as the node's,
+`Spec.Variables.Own` in Go, apply for every name whose server value the run does not
+apply. A node value for a name whose server value the run applies, a name in `names`, is
+left out and reported in `policy_applied`'s `variables.node_ignored`, and the run
+starts. A server value the deny list leaves out, or one an unwalled run leaves out under
+`ignore`, leaves the node's own value in place, as without a server. Names are compared
+exactly between the node and the server; the deny list matches regardless of case. A
+node, through an agent that writes its configuration for example, is easier to
+compromise than the server, so the node only adds. Without a server, the node's own
+variables are the run's.
+
+The runtime's preparation (§The runtime) and the harness's composed launch,
+`Spec.LaunchEnv` in Go, set names that are the runner's own, not the node's. Such a name
+wins over the server's variable, which is left out and reported in `denied`, because the
+runtime needs it.
+
+**Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
+variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
+`ignore`, an unwalled run starts without them; they are left out and reported by name in
+`policy_applied`'s `variables.unwalled`. With `accept`, the deny list below applies, as
+in a walled run. The deny list protects the wall and the runner, not the developer, so
+`accept` opens the developer's shell to the server.
+
+**Denied names.** The runner leaves out of every walled run, and of an unwalled run with
+`accept`, a server variable whose name is on the deny list: the built-in list
+`denied-variables.json`, the run's runtime's `denies` (§The descriptor), and the names
+the node's owner adds in the launch spec, `Spec.Variables.Deny` in Go, such as `[NAME,
+PREFIX_*]`. Each built-in entry undermines the wall, the proxy or the runner. A denied
+variable is left out and reported by name in `variables.denied`, and the run starts. An
+entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character other
+than `*`. It matches a whole name: `*` matches any run of characters, the empty run
+included, anywhere in the entry. Matching ignores case, because programs read
+`http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1, "names":
+[...], "patterns": [...]}`, holds every row of the table but the two that depend on the
+node and the run: the names the wall sets for the run's bundle, and the runtime's
+`denies`, which `runtimes.json` lists.
+
+| Name | Why |
+|---|---|
+| `QORY_*` | the runner's own |
+| `*_PROXY`, `NO_PROXY` included, in any case | the runner sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
+| `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and a server value would replace it |
+| `SSL_CERT_DIR`, `GIT_SSL_CAPATH` | they point the same programs at another store beside the bundle the wall sets |
+| every name the wall sets for the run's bundle | the node's own names for the run's bundle |
+| `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | they choose the daemon a Docker of the agent's own reaches, and how |
+| `DOCKER_CONFIG` | the wall sets it for a Docker of the agent's own |
+| `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
+| the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
+
+**Also left out, the same way:** a server variable with the name of a placeholder of
+this run, where the placeholder wins; one the run's runtime declares or reserves, where
+the stand-in or an empty value goes; one a value of the machine's is read from, such as
+a credential's `env` (§Credentials), whose value stays outside the enclosure; and one
+the runtime's preparation, the harness or the wall sets.
+
+**The node's own environment** keeps two refusals, because they keep the node's secrets
+and the stand-ins out of the enclosure. A walled run whose environment, what it
+inherits, what the harness sets and the node's variables, passes a `QORY_` variable, or
+a variable a value of the machine's is read from, into the enclosure is no run,
+`variable_reserved`; `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets
+for the session, are exempt. A run that passes a value for a placeholder is no run,
+`placeholder_conflict`. A variable the run's runtime declares or reserves that the run
+passes as a node variable reaches the runtime as passed. Behind a wall, every variable
+the runtime declares or reserves that neither a placeholder, the run nor the runtime's
+preparation sets goes into the enclosure as an empty value, so an image's own `ENV`
+cannot set one.
+
+**Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
+value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
+The schema's `maxLength` counts characters, so the runner counts the bytes beside it. A
+document beyond them is `run_configuration_invalid`. The variables are fixed when the
+run starts: a reload leaves them as they were. Events carry their names alone.
+
 ## The events
 
 Every event is a [CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)
@@ -525,7 +641,7 @@ The types, one namespace. The runner's own:
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version`, `interval_seconds` |
 | `dev.qory.run.started` | the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any |
-| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
+| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
@@ -578,16 +694,29 @@ are required and what each contains. Values are copied from the runtime unchange
 enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
 
 `dev.qory.run.policy_applied` records where the policy comes from: `source` is `none`,
-`config` or `fetched`; `url` is where a fetched one was fetched from; `digest` is the
-runner's own hex sha256 of the policy document's canonical JSON, with `config` and
-`fetched`; `run_configuration` is the server's digest of the run configuration document
-as its header contained it, with `fetched`; `allow` and `deny` are the policy's two lists
-as written, `deny` the hosts denied by name in either mode. `dev.qory.run.egress` records
-what becomes of the connection in `outcome`: `connected`, the dial succeeded;
-`dial_failed`, allowed and the dial failed; `refused`, not dialled, because the policy
-or the wall's guard denied it, or closed by a reload. An event that is one request, a
-plain one or one inside a terminated connection, contains the proxy's `request_id` for
-it, and `status`, the status the host or the tool returned, when one did.
+`config` or `fetched`; `url` is where the run configuration was fetched from, and
+`run_configuration` the server's digest of it as its header contained it, with
+`fetched`, and with `config` or `none` when the run configuration has no
+`security_policy`; `digest` is the runner's own hex sha256 of the policy document's
+canonical JSON, with `config` and `fetched`; `allow` and `deny` are the policy's two
+lists as written, `deny` the hosts denied by name in either mode, and when the node's
+policy narrows a server's, the lists the narrowing computes (§The policy).
+`node_policy`, present when the run has both a fetched policy and a policy the command
+passes, contains its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785
+serialisation of that `policy.schema.json` document, and its `paths`, when it has any,
+so the record shows both sides of every path rule. `variables` reports the run's
+variables by name, never a value: `names`, the variables the run applies, the server's
+and the names the node adds; `denied`, the server's variables left out by the deny list
+or because the run sets that name otherwise; `unwalled`, the server's variables an
+unwalled run left out under `ignore`, then every one of them; `node_ignored`, the node's
+variables left out because the run applies the server's value for that name. Each list
+is sorted and may be empty, and each server variable is in exactly one of `names`,
+`denied` and `unwalled` (§Variables). `dev.qory.run.egress` records what becomes of the
+connection in `outcome`: `connected`, the dial succeeded; `dial_failed`, allowed and the
+dial failed; `refused`, not dialled, because the policy or the wall's guard denied it,
+or closed by a reload. An event that is one request, a plain one or one inside a
+terminated connection, contains the proxy's `request_id` for it, and `status`, the
+status the host or the tool returned, when one did.
 
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
 wrote it, terminal escapes included. On pipes the runtime's standard output and standard
@@ -632,10 +761,11 @@ own configuration: for `qory`, the `server` section of `~/.config/qory/runner.ya
 with the access key secret from the file descriptor `--access-key-secret-fd <n>` names,
 else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. The runner is a client of the server defined here and of
 nothing else: it fetches the server's configuration, posts its events to the URL it
-defines, and takes the run's policy from the server when the server offers one. A server
-is a control plane, or a plain receiver that implements this section: discovery and the
-events endpoint are enough. Configuring one makes the run fail closed on the discovery
-fetch and on the ping.
+defines, and takes the server's policy for the run, which the node's narrows, and the
+run's variables from the server when the server offers them. A server is a control
+plane, or a plain receiver that implements this section: discovery and the events
+endpoint are enough. Configuring one makes the run fail closed on the discovery fetch
+and on the ping.
 
 ```yaml
 version: 1
@@ -875,15 +1005,24 @@ quoted the second time.
 
 ```json
 {"version": 1,
- "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["api.example"]}}}
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["api.example"]}},
+ "variables": {"NODE_ENV": "test", "APP_REGION": "eu-west-1"}}
 ```
 
-`version` and `security_policy` are required; `security_policy` is a
-`policy.schema.json` document, and it is the policy: the runner does not merge it with
-the machine's or with the run's own. A member the runner does not recognise is ignored. The
-digest is the server's and opaque; the runner keeps it, sends it back on every POST,
-and never recomputes it. Anything but `200`, or a document the schema refuses, is no
-run.
+`version` is required; `security_policy` and `variables` are optional. `security_policy`
+is a `policy.schema.json` document, and it is the server's policy; the policy the
+command passes, when there is one, narrows it (§The policy, a node narrows). Without
+`security_policy` the policy the command passes is the run's, else observe everything,
+and `dev.qory.run.policy_applied` reports `url` and `run_configuration` beside `source`
+`config` or `none`; a reload that brings a `security_policy` puts it in force, narrowed
+by the command's, and one that drops it puts the command's back. `variables` are the
+server's variables for the run, a name and a string value each (§Variables). A member
+the runner does not recognise is ignored. The digest is the server's and opaque; the
+runner keeps it, sends it back on every POST, and never recomputes it. The runner reads
+the document with a decoder that refuses a member name that appears twice and invalid
+UTF-8, then against the schema and the limits, and its error states where in the
+document and which rule refused it, never a value. Anything but `200`, or a document the
+runner refuses, is no run, `run_configuration_invalid` for the latter.
 
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
 events of one run, in sequence order, never empty. The runner cuts a batch at one
@@ -952,7 +1091,7 @@ from heartbeats that stop.
 | The runner receives | Events go to | The policy comes from |
 |---|---|---|
 | nothing | files only | the machine's policy the command passes (`egress`), else observe everything |
-| a server | the server's `events.url`, after a signed discovery fetch and a ping | the server's run configuration when it offers one, else the machine's policy |
+| a server | the server's `events.url`, after a signed discovery fetch and a ping | the server's run configuration when it offers one, narrowed by the node's policy, else the node's policy |
 | a server and `--local` | files only; the server is not contacted | the machine's policy |
 
 A discovery fetch that fails, in transport, with a status other than `200`, with an
@@ -960,8 +1099,8 @@ answer that does not verify or with a document the schema refuses, or a ping not
 accepted: no run, and the error contains the URL, the status and the code when a signed
 answer contains one. A `run` section present and its fetch not returning `200`: no run.
 The command's `--policy`, a run's own policy under the machine's, keeps its meaning
-without a server; with a fetched run configuration the fetched policy is the policy, and
-`--policy` is refused with an error that states so.
+without a server. With a fetched run configuration, the policy document of the launch
+spec narrows the fetched policy (§The policy).
 
 **The reference receiver** is the public package `receiver` of this module: a plain
 receiver that serves discovery, the events endpoint and the run configuration, accepts
@@ -1351,7 +1490,7 @@ the option experimental.
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run that does not start | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
@@ -1380,7 +1519,9 @@ Public sources this contract was written from, and nothing else:
   `ETag`, §15.3.3, §15.5.2 and §15.5.11 for 202, 401 and 410;
   [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html)
   §3.2 for the absolute-form target a proxy receives. UUID version 7 from
-  [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html).
+  [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html). The JSON Canonicalization
+  Scheme of [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html) for the digest of a
+  node's policy, `node_policy`.
 - The proxy variables: [curl's environment](https://curl.se/docs/manpage.html#ENVIRONMENT),
   which reads `http_proxy` in lower case only; [Go's httpproxy](https://pkg.go.dev/golang.org/x/net/http/httpproxy),
   which reads both cases and exempts loopback; [Node's built-in proxy support](https://nodejs.org/api/http.html#built-in-proxy-support);

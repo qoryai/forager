@@ -234,11 +234,16 @@ func (c *Configuration) Wants(typ string) bool {
 	return false
 }
 
-// RunConfiguration is the run configuration document: the policy the run is under, as
-// the server's raw section, which the policy package reads.
+// RunConfiguration is the run configuration document: the server's policy for the run,
+// as the server's raw section, which the policy package reads, and the server's
+// variables.
 type RunConfiguration struct {
-	Version        int             `json:"version"`
-	SecurityPolicy json.RawMessage `json:"security_policy"`
+	Version int `json:"version"`
+	// SecurityPolicy is nil when the document has none: the node's policy is then the
+	// run's.
+	SecurityPolicy json.RawMessage `json:"security_policy,omitzero"`
+	// Variables are the server's variables, by name; nil when the document has none.
+	Variables map[string]string `json:"variables,omitzero"`
 }
 
 // Digests are what an answer says is in force: the server's digest of the
@@ -403,21 +408,33 @@ func (a *answer) refusal(what string) error {
 // digest header named, validates the body against the schema and decodes it into out.
 // The error names the URL and the status.
 func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName string, out any) (string, error) {
-	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
+	body, digest, err := c.fetchBody(ctx, what, u, digestHeader)
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %w", what, u, err)
+		return "", err
 	}
-	if a.status != http.StatusOK || !a.signed {
-		return "", a.refusal(what + " " + u)
-	}
-	digest := a.header.Get(digestHeader)
-	if digest == "" {
-		return "", &DocumentError{what, u, fmt.Errorf("the answer contains no %s header", digestHeader)}
-	}
-	if err := decode(what+".json", schemaName, a.body, out); err != nil {
+	if err := decode(what+".json", schemaName, body, out); err != nil {
 		return "", &DocumentError{what, u, err}
 	}
 	return digest, nil
+}
+
+// fetchBody makes one signed GET of a document, which must answer a signed 200 with
+// the digest header named, and returns its bytes and the digest. The bytes are
+// returned only once the answer's signature verifies under the pin, so nothing reads
+// a body the server did not sign. The error names the URL and the status.
+func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([]byte, string, error) {
+	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %w", what, u, err)
+	}
+	if a.status != http.StatusOK || !a.signed {
+		return nil, "", a.refusal(what + " " + u)
+	}
+	digest := a.header.Get(digestHeader)
+	if digest == "" {
+		return nil, "", &DocumentError{what, u, fmt.Errorf("the answer contains no %s header", digestHeader)}
+	}
+	return a.body, digest, nil
 }
 
 // Discover fetches the configuration document from the server's well-known path and
@@ -452,17 +469,20 @@ func (c *Client) RunConfiguration(ctx context.Context, runURL string, labels map
 		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
-	var rc RunConfiguration
-	digest, err := c.fetch(ctx, "run configuration", u.String(), HeaderRunConfiguration, "run-configuration.schema.json", &rc)
+	body, digest, err := c.fetchBody(ctx, "run configuration", u.String(), HeaderRunConfiguration)
 	if err != nil {
 		return nil, "", err
+	}
+	rc, err := readRunConfiguration(body)
+	if err != nil {
+		return nil, "", &DocumentError{"run configuration", u.String(), err}
 	}
 	// The digest is recorded in the run's events, whose schema holds it to this shape;
 	// it is not recomputed.
 	if !digestShape.MatchString(digest) {
 		return nil, "", &DocumentError{"run configuration", u.String(), fmt.Errorf("the %s header is not sha256= and 64 hex digits", HeaderRunConfiguration)}
 	}
-	return &rc, digest, nil
+	return rc, digest, nil
 }
 
 // MaxLabels is how many labels a run may carry.

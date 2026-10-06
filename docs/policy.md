@@ -47,17 +47,37 @@ A run has one policy. It comes from one of three places:
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
-  section. Then the runner fetches the run configuration, with the run's labels, and
-  its `security_policy` is the policy. It replaces the machine's policy, so it may
-  allow more than `runner.yaml` does. See [the server](server.md).
+  section. Then the runner fetches the run configuration, with the run's labels. Its
+  `security_policy` is the server's policy, and the node's policy narrows it.
 
-Which one applies:
+The node's policy is `Spec.Policy`, the policy the runner is passed: for `qory`, the
+machine's `egress` with the run's own under it. Which one applies:
 
-| The runner has         | The policy is                                           |
-| ---------------------- | ------------------------------------------------------- |
-| no server              | the run's own under the machine's, else the machine's   |
-| a server               | the server's run configuration, else the machine's      |
-| a server and `--local` | the run's own under the machine's, else the machine's   |
+| The runner has         | The policy is                                                           |
+| ---------------------- | ----------------------------------------------------------------------- |
+| no server              | the node's                                                              |
+| a server               | the server's, narrowed by the node's; the node's when the server has none |
+| a server and `--local` | the node's                                                              |
+
+## The node narrows the server's policy
+
+The server leads, and the node only takes away. A node is easier to compromise than the
+server, so what the node contributes can only narrow the run:
+
+| Field          | The run's                                                                 |
+| -------------- | ------------------------------------------------------------------------- |
+| `egress.mode`  | `enforce` when either side sets it                                        |
+| `egress.allow` | the hosts both sides allow; a side under `observe` allows every host      |
+| `egress.deny`  | both sides' entries                                                       |
+| `egress.paths` | a request to a host either side lists must match an entry of each side that lists it |
+| `tools`        | the server's selection, within the node's `tools` when it has that member |
+| `image`        | the one both select, or the one a side selects                            |
+
+- A tool the node's `tools` does not list is no run, `tool_unknown`. `tools: []` allows
+  none.
+- Two different images are no run, `image_unknown`.
+- The record reports the policy the table computes, and the node's policy as
+  `node_policy`: its digest and its paths.
 
 With no policy at all, the runner observes everything: every connection is allowed and
 recorded.
@@ -80,9 +100,8 @@ server:                                 # optional
     - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 ```
 
-- `egress` is the machine's policy. It applies when the server offers no run
-  configuration, and it is the ceiling on a run's own. See
-  [where the policy comes from](#where-the-policy-comes-from).
+- `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows
+  the server's. See [where the policy comes from](#where-the-policy-comes-from).
 - Without `egress`, and with no other policy, everything is allowed and recorded.
 - `server` defines the server the runner reports to. See [the server](server.md).
 

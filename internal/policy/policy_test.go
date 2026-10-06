@@ -1,15 +1,20 @@
 package policy_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/refusal"
 )
 
 // fixture is the bytes of a contract fixture.
@@ -99,8 +104,9 @@ func TestMatchFollowsTheGrammar(t *testing.T) {
 }
 
 // TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
-// or a suffix above it, a pattern under the same pattern or a suffix above it, and a
-// suffix never covers its own apex.
+// or a suffix above it, a pattern under the same pattern or a suffix above it, a suffix
+// never covers its own apex, and an IP literal stands under an identical entry alone,
+// as Match matches it.
 func TestCoversFollowsTheGrammar(t *testing.T) {
 	for _, c := range []struct {
 		entry, other string
@@ -110,7 +116,12 @@ func TestCoversFollowsTheGrammar(t *testing.T) {
 		{"*.github.com", "api.github.com", true}, {"*.github.com", "*.api.github.com", true},
 		{"*.github.com", "github.com", false}, {"api.github.com", "*.github.com", false},
 		{"*.github.com", "*.github.com", true}, {"github.com", "api.github.com", false},
+		{"*.0.0.1", "10.0.0.1", false}, {"10.0.0.1", "10.0.0.1", true},
+		{"*.0.0.1", "*.10.0.0.1", true}, {"::1", "::1", true}, {"*.1", "::1", false},
 	} {
+		if _, matched := policy.Match([]string{c.entry}, c.other); matched != c.want && !strings.HasPrefix(c.other, "*.") {
+			t.Errorf("Match([%q], %q) = %v, Covers wants %v", c.entry, c.other, matched, c.want)
+		}
 		if got := policy.Covers(c.entry, c.other); got != c.want {
 			t.Errorf("Covers(%q, %q) = %v", c.entry, c.other, got)
 		}
@@ -181,6 +192,10 @@ func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
 		if err := json.Unmarshal(fixture(t, path.Join("fixtures/run-configuration", d.Name())), &rc); err != nil {
 			t.Fatal(err)
 		}
+		if rc.SecurityPolicy == nil {
+			// A run configuration without a policy leaves the node's in force.
+			continue
+		}
 		l, err := policy.Read("run-configuration", rc.SecurityPolicy)
 		if err != nil {
 			t.Errorf("%s: %v", d.Name(), err)
@@ -245,5 +260,208 @@ func TestAnArgumentHasAtMost4096Characters(t *testing.T) {
 				t.Errorf("%s: an argument of %d characters: %v", kind, n, err)
 			}
 		}
+	}
+}
+
+// read reads a policy document of the test's own.
+func read(t *testing.T, doc string) *policy.Loaded {
+	t.Helper()
+	l, err := policy.Read("policy", []byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// fetched reads a server's policy as a run configuration brings it.
+func fetched(t *testing.T, doc string) *policy.Loaded {
+	t.Helper()
+	l := read(t, doc)
+	l.Source, l.URL, l.RunConfiguration = "fetched", "https://qory.example/v1/run-configuration", "sha256="+strings.Repeat("0", 64)
+	return l
+}
+
+func narrowed(t *testing.T, server, node string) *policy.Loaded {
+	t.Helper()
+	l, err := policy.Narrowed(fetched(t, server), read(t, node))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// TestNarrowedModeIsEnforceWhenEitherSideIs pins the mode row: enforce when either side
+// sets enforce, else observe.
+func TestNarrowedModeIsEnforceWhenEitherSideIs(t *testing.T) {
+	for _, tc := range []struct {
+		server, node string
+		want         policy.Mode
+	}{
+		{"observe", "observe", policy.Observe},
+		{"enforce", "observe", policy.Enforce},
+		{"observe", "enforce", policy.Enforce},
+		{"enforce", "enforce", policy.Enforce},
+	} {
+		l := narrowed(t, `{"version":1,"egress":{"mode":"`+tc.server+`"}}`, `{"version":1,"egress":{"mode":"`+tc.node+`"}}`)
+		if l.Policy.Egress.Mode != tc.want {
+			t.Errorf("server %s, node %s: %s", tc.server, tc.node, l.Policy.Egress.Mode)
+		}
+	}
+}
+
+// TestNarrowedAllowIsWhatBothSidesAllow pins the allow row: under enforce on both
+// sides, the entries of each side the other side's list covers, the server's first and
+// each once, which are exactly the hosts both allow; under enforce on one side, that
+// side's entries, since a side under observe allows every host; under observe on both,
+// the server's.
+func TestNarrowedAllowIsWhatBothSidesAllow(t *testing.T) {
+	server := `["api.example","*.github.com","sentry.io"]`
+	node := `["api.github.com","api.example","other.example"]`
+	for _, tc := range []struct {
+		server, node string
+		want         []string
+	}{
+		{"enforce", "enforce", []string{"api.example", "api.github.com"}},
+		{"enforce", "observe", []string{"api.example", "*.github.com", "sentry.io"}},
+		{"observe", "enforce", []string{"api.github.com", "api.example", "other.example"}},
+		{"observe", "observe", []string{"api.example", "*.github.com", "sentry.io"}},
+	} {
+		l := narrowed(t, `{"version":1,"egress":{"mode":"`+tc.server+`","allow":`+server+`}}`, `{"version":1,"egress":{"mode":"`+tc.node+`","allow":`+node+`}}`)
+		if !slices.Equal(l.Policy.Egress.Allow, tc.want) {
+			t.Errorf("server %s, node %s: %q, want %q", tc.server, tc.node, l.Policy.Egress.Allow, tc.want)
+		}
+	}
+	l := narrowed(t, `{"version":1,"egress":{"mode":"enforce","allow":["*.example"]}}`, `{"version":1,"egress":{"mode":"enforce","allow":["*.example","a.b.example"]}}`)
+	if want := []string{"*.example", "a.b.example"}; !slices.Equal(l.Policy.Egress.Allow, want) {
+		t.Errorf("an entry both sides list: %q, want %q", l.Policy.Egress.Allow, want)
+	}
+	l = narrowed(t, `{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, `{"version":1,"egress":{"mode":"enforce"}}`)
+	if l.Policy.Egress.Allow == nil || len(l.Policy.Egress.Allow) != 0 {
+		t.Errorf("a node that allows nothing: %q", l.Policy.Egress.Allow)
+	}
+}
+
+// TestNarrowedAllowTakesNoIPLiteralUnderAPattern pins the narrowing of a node's IP
+// literal under a server's pattern that ends like it: a server allow of *.0.0.1 does
+// not allow 10.0.0.1, so the hosts both allow are none, and a request to 10.0.0.1 is
+// denied.
+func TestNarrowedAllowTakesNoIPLiteralUnderAPattern(t *testing.T) {
+	l := narrowed(t, `{"version":1,"egress":{"mode":"enforce","allow":["*.0.0.1"]}}`, `{"version":1,"egress":{"mode":"enforce","allow":["10.0.0.1"]}}`)
+	if len(l.Policy.Egress.Allow) != 0 {
+		t.Errorf("allow %q, want none", l.Policy.Egress.Allow)
+	}
+	if _, ok := policy.Match(l.Policy.Egress.Allow, "10.0.0.1"); ok {
+		t.Error("10.0.0.1 is allowed")
+	}
+}
+
+// TestNarrowedDenyIsTheUnion pins the deny row: both sides' entries, the server's
+// first, each once, whatever the modes.
+func TestNarrowedDenyIsTheUnion(t *testing.T) {
+	l := narrowed(t, `{"version":1,"egress":{"mode":"observe","deny":["gist.github.com","tracker.example"]}}`, `{"version":1,"egress":{"mode":"observe","deny":["tracker.example","*.ads.example"]}}`)
+	if want := []string{"gist.github.com", "tracker.example", "*.ads.example"}; !slices.Equal(l.Policy.Egress.Deny, want) {
+		t.Errorf("deny %q, want %q", l.Policy.Egress.Deny, want)
+	}
+	l = narrowed(t, `{"version":1,"egress":{"mode":"observe"}}`, `{"version":1,"egress":{"mode":"observe"}}`)
+	if l.Policy.Egress.Deny != nil {
+		t.Errorf("no deny on either side: %q", l.Policy.Egress.Deny)
+	}
+}
+
+// TestNarrowedPathsKeepBothSides pins the paths row as the policy carries it: the run's
+// paths are the server's, which the record reports, and the node's go beside them, with
+// the node's digest, for the proxy to require both.
+func TestNarrowedPathsKeepBothSides(t *testing.T) {
+	node := read(t, `{"version":1,"egress":{"mode":"enforce","allow":["api.github.com"],"paths":{"api.github.com":["/repos/acme/*"]}}}`)
+	l, err := policy.Narrowed(fetched(t, `{"version":1,"egress":{"mode":"enforce","allow":["api.github.com"],"paths":{"api.github.com":["/repos/*"],"github.com":["/acme/*"]}}}`), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Policy.Egress.Paths) != 2 || l.Policy.Egress.Paths["api.github.com"][0] != "/repos/*" {
+		t.Errorf("the run's paths %v", l.Policy.Egress.Paths)
+	}
+	if l.Node == nil || l.Node.Digest != node.Canonical || l.Node.Paths["api.github.com"][0] != "/repos/acme/*" {
+		t.Errorf("the node's side %+v", l.Node)
+	}
+	if l.Source != "fetched" || l.URL == "" || l.RunConfiguration == "" || l.Digest == node.Digest {
+		t.Errorf("the narrowed policy lost the server's stamps: %+v", l)
+	}
+}
+
+// TestNarrowedToolsAreTheServersWithinTheNodes pins the tools row: without a tools
+// member the node leaves the server's selection as it is; with one, each selected tool
+// must be listed by name, and by argument when the node's entry has one, so an empty
+// list allows none, and a tool outside it is tool_unknown with its name. The
+// credentials are bounded the same way.
+func TestNarrowedToolsAreTheServersWithinTheNodes(t *testing.T) {
+	server := `{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files","argument":"acme/shop"},{"name":"search"}]}`
+	for _, tc := range []struct {
+		node    string
+		unknown []string
+	}{
+		{`{"version":1,"egress":{"mode":"observe"}}`, nil},
+		{`{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files"},{"name":"search"},{"name":"other"}]}`, nil},
+		{`{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files","argument":"acme/shop"},{"name":"search"}]}`, nil},
+		{`{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files","argument":"acme/lib"},{"name":"search"}]}`, []string{"files"}},
+		{`{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files"}]}`, []string{"search"}},
+		{`{"version":1,"egress":{"mode":"observe"},"tools":[]}`, []string{"files", "search"}},
+	} {
+		l, err := policy.Narrowed(fetched(t, server), read(t, tc.node))
+		if tc.unknown == nil {
+			if err != nil || len(l.Policy.Tools) != 2 || l.Policy.Tools[0].Argument != "acme/shop" {
+				t.Errorf("%s: %+v %v", tc.node, l, err)
+			}
+			continue
+		}
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ToolUnknown || !slices.Equal(r.Names, tc.unknown) {
+			t.Errorf("%s: %v, want tool_unknown %q", tc.node, err, tc.unknown)
+		}
+	}
+	if _, err := policy.Narrowed(fetched(t, `{"version":1,"egress":{"mode":"observe"},"credentials":[{"name":"model"}]}`), read(t, `{"version":1,"egress":{"mode":"observe"},"credentials":[]}`)); err == nil {
+		t.Error("a credential the node's empty list leaves out was selected")
+	}
+}
+
+// TestNarrowedImageIsOneBothAgreeOn pins the image row: the one both select, or the one
+// a side selects, or none, the machine's default; two different ones are
+// image_unknown.
+func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
+	doc := func(image string) string {
+		if image == "" {
+			return `{"version":1,"egress":{"mode":"observe"}}`
+		}
+		return `{"version":1,"egress":{"mode":"observe"},"image":"` + image + `"}`
+	}
+	for _, tc := range []struct{ server, node, want string }{
+		{"agent", "agent", "agent"},
+		{"agent", "", "agent"},
+		{"", "agent", "agent"},
+		{"", "", ""},
+	} {
+		if l := narrowed(t, doc(tc.server), doc(tc.node)); l.Policy.Image != tc.want {
+			t.Errorf("server %q, node %q: %q", tc.server, tc.node, l.Policy.Image)
+		}
+	}
+	_, err := policy.Narrowed(fetched(t, doc("agent")), read(t, doc("other")))
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{"agent"}) {
+		t.Errorf("two images: %v", err)
+	}
+}
+
+// TestCanonicalIsTheRFC8785Digest pins the digest a node's policy is reported by:
+// sha256= and the hex SHA-256 of the document's RFC 8785 serialisation, the same for
+// the document as YAML and as JSON in any member order.
+func TestCanonicalIsTheRFC8785Digest(t *testing.T) {
+	js := read(t, `{"egress":{"allow":["api.example"],"mode":"enforce"},"version":1,"tools":[]}`)
+	yaml, err := policy.Read("node.yaml", []byte("version: 1\ntools: []\negress:\n  mode: enforce\n  allow: [api.example]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(`{"egress":{"allow":["api.example"],"mode":"enforce"},"tools":[],"version":1}`))
+	want := "sha256=" + hex.EncodeToString(sum[:])
+	if js.Canonical != want || yaml.Canonical != want {
+		t.Errorf("JSON %s, YAML %s, want %s", js.Canonical, yaml.Canonical, want)
 	}
 }

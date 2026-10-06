@@ -436,8 +436,8 @@ func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
 		}
 	}
 	v.runDoc = `{"version":1}`
-	if _, _, err := c.RunConfiguration(context.Background(), run, nil); err == nil || !strings.Contains(err.Error(), "security_policy") {
-		t.Errorf("a run configuration without a policy: %v", err)
+	if rc, _, err := c.RunConfiguration(context.Background(), run, nil); err != nil || rc.SecurityPolicy != nil || rc.Variables != nil {
+		t.Errorf("a run configuration without a policy: %+v %v", rc, err)
 	}
 	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/missing", nil); err == nil || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("a run URL that does not answer: %v", err)

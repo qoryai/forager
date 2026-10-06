@@ -75,7 +75,7 @@ const (
 // credential on it or hand it to a tool. Every other host stays a tunnel it does not
 // read. The session runner calls it once, before anything connects. The tools are the
 // run's for as long as it lasts: a policy set later changes the paths and the
-// credentials, never the tools.
+// credentials, never the tools, nor the node's paths set with [Proxy.NodePaths].
 func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string, tools []Tool) {
 	for i := range tools {
 		sock := tools[i].Socket
@@ -88,8 +88,14 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 			DisableCompression: true,
 		}
 	}
-	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, tools: tools})
+	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
 }
+
+// NodePaths sets the path rules of the node's policy when it narrows a server's: a
+// request to a host they list must match one of them as well as the policy's own when
+// that lists the host too. They are fixed for the run; the caller sets them once,
+// before [Proxy.Terminate].
+func (p *Proxy) NodePaths(paths map[string][]string) { p.node = paths }
 
 // Terminated reports the hosts, as configured, the proxy terminates TLS for: under the
 // policy set last, when one was.
@@ -116,10 +122,12 @@ func (p *Proxy) Terminated() []string {
 			}
 		}
 	}
-	for h := range t.paths {
-		if !seen[h] {
-			seen[h] = true
-			out = append(out, h)
+	for _, side := range []map[string][]string{t.paths, t.node} {
+		for h := range side {
+			if !seen[h] {
+				seen[h] = true
+				out = append(out, h)
+			}
 		}
 	}
 	return out
@@ -130,6 +138,8 @@ type terminator struct {
 	ca    *CA
 	creds []Credential
 	paths map[string][]string
+	// node are the node's path rules, which narrow paths.
+	node  map[string][]string
 	tools []Tool
 }
 
@@ -167,39 +177,55 @@ func (t *terminator) credentialName(host string) string {
 	return ""
 }
 
-// rules are the policy's path rules for the host, and whether it has any.
-func (t *terminator) rules(host string) ([]string, bool) {
-	for pattern, rules := range t.paths {
-		if _, ok := policy.Match([]string{pattern}, host); ok {
-			return rules, true
+// rules are the path rules for the host of each side that lists it: the policy's, then
+// the node's. A request must match an entry of each.
+func (t *terminator) rules(host string) [][]string {
+	var out [][]string
+	for _, side := range []map[string][]string{t.paths, t.node} {
+		for pattern, rules := range side {
+			if _, ok := policy.Match([]string{pattern}, host); ok {
+				out = append(out, rules)
+				break
+			}
 		}
 	}
-	return nil, false
+	return out
 }
+
+// ruled reports whether either side has path rules for the host.
+func (t *terminator) ruled(host string) bool { return len(t.rules(host)) > 0 }
 
 // covers reports whether the host is one the proxy terminates.
 func (t *terminator) covers(host string) bool {
 	if t == nil {
 		return false
 	}
-	_, ruled := t.rules(host)
-	return ruled || t.credential(host) != nil || t.tool(host) != nil
+	return t.ruled(host) || t.credential(host) != nil || t.tool(host) != nil
 }
 
 // path decides one request's path. A path that could be read two ways is denied in
-// either mode; a path no rule matches is denied under enforce. The credential is set
-// only on a path its own rules match, whatever the mode: observing is no reason to hand
-// a token to a path nobody configured.
+// either mode; a path that misses the rules of a side that lists its host is denied
+// under enforce, with no rule. A path every such side matches has the narrowest entry
+// that matched as its rule. The credential is set only on a path its own rules match,
+// whatever the mode: observing is no reason to hand a credential to a path nobody
+// configured.
 func (t *terminator) path(host, escaped string) (clean, rule string, allowed, credentialed bool) {
 	clean, ok := policy.CleanPath(escaped)
 	if !ok {
 		return escaped, AmbiguousPath, false, false
 	}
 	allowed, credentialed = true, true
-	if rules, ruled := t.rules(host); ruled {
+	for _, rules := range t.rules(host) {
 		r, ok := policy.MatchPath(rules, clean)
-		rule = r
-		allowed = ok
+		switch {
+		case !ok:
+			allowed = false
+		case rule == "" || policy.CoversPath(rule, r):
+			rule = r
+		}
+	}
+	if !allowed {
+		rule = ""
 	}
 	if c := t.credential(host); c != nil && c.Paths != nil {
 		r, ok := policy.MatchPath(c.Paths, clean)
@@ -419,7 +445,7 @@ func (t *terminator) plainPath(host, escaped string) (string, string, bool) {
 	if t == nil {
 		return "", "", true
 	}
-	if _, ruled := t.rules(host); !ruled && t.credential(host) == nil && t.tool(host) == nil {
+	if !t.ruled(host) && t.credential(host) == nil && t.tool(host) == nil {
 		return "", "", true
 	}
 	clean, rule, allowed, _ := t.path(host, escaped)
@@ -450,7 +476,7 @@ func (t *terminator) failed(w http.ResponseWriter, r *http.Request, err error) {
 // what it names beyond its path is the tool's to check.
 func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, tl *Tool) {
 	rule := d.PathRule
-	if _, ruled := t.rules(d.Host); ruled && rule == "" {
+	if t.ruled(d.Host) && rule == "" {
 		// Observed and let through: the host has rules and none covers the path.
 		rule = NoPathRule
 	}

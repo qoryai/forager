@@ -8,7 +8,8 @@
 //
 // A policy narrows only. [Match] says which entry of a list, the allow list's or the
 // deny list's, covers a host, and [Covers] whether one entry stands above another,
-// which is how a policy is put under a ceiling. Nothing here grants: the widest a
+// which is how a policy is put under a ceiling. [Narrowed] is a server's policy with
+// the node's applied to it, which only takes away. Nothing here grants: the widest a
 // policy can be is the absent one.
 package policy
 
@@ -18,9 +19,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/runner/internal/jcs"
+	"github.com/qoryai/runner/internal/refusal"
 )
 
 // Mode is the egress mode of a policy.
@@ -36,10 +40,12 @@ const (
 
 // Policy is the policy document.
 type Policy struct {
-	Version     int        `json:"version"`
-	Egress      Egress     `json:"egress"`
-	Credentials []Selected `json:"credentials,omitempty"`
-	Tools       []Selected `json:"tools,omitempty"`
+	Version int    `json:"version"`
+	Egress  Egress `json:"egress"`
+	// Credentials and Tools are nil when the document has no such member, and empty
+	// when it has an empty list: a node's empty list allows none of a server's.
+	Credentials []Selected `json:"credentials,omitzero"`
+	Tools       []Selected `json:"tools,omitzero"`
 	// Image is the name of the machine's image the run starts in; empty is the
 	// machine's default.
 	Image string `json:"image,omitempty"`
@@ -77,6 +83,22 @@ type Loaded struct {
 	// server's digest of it, opaque, when Source is "fetched".
 	URL              string
 	RunConfiguration string
+	// Canonical is "sha256=" and the hex sha256 of the document's RFC 8785
+	// serialisation, when Source is "config": what dev.qory.run.policy_applied reports
+	// of a node's policy that narrows a server's.
+	Canonical string
+	// Node is the node's policy when it narrows a server's; nil otherwise.
+	Node *Node
+}
+
+// Node is the node's side of a policy that narrows a server's: what the record shows
+// of it, and its path rules, which every request to a host they list must match as
+// well as the server's.
+type Node struct {
+	// Digest is the node's policy's [Loaded.Canonical].
+	Digest string
+	// Paths are the node's path rules, nil when it has none.
+	Paths map[string][]string
 }
 
 // Error is a document that is not a policy. A run does not start on it.
@@ -100,7 +122,7 @@ func None() *Loaded {
 // when it has none, validates it and pins it with its digest. A refused document is a
 // [*Error] naming name.
 func Read(name string, b []byte) (*Loaded, error) {
-	p, err := Parse(name, b)
+	p, j, err := parse(name, b)
 	if err != nil {
 		return nil, &Error{Name: name, Err: err}
 	}
@@ -109,45 +131,161 @@ func Read(name string, b []byte) (*Loaded, error) {
 		return nil, &Error{Name: name, Err: err}
 	}
 	sum := sha256.Sum256(canonical)
-	return &Loaded{Policy: *p, Source: "config", Digest: hex.EncodeToString(sum[:])}, nil
+	c, err := jcs.Canonical(j)
+	if err != nil {
+		return nil, &Error{Name: name, Err: err}
+	}
+	jsum := sha256.Sum256(c)
+	return &Loaded{Policy: *p, Source: "config", Digest: hex.EncodeToString(sum[:]), Canonical: "sha256=" + hex.EncodeToString(jsum[:])}, nil
 }
 
 // Parse validates the bytes of a policy document against the schema and decodes it.
 // name chooses YAML or JSON by its extension, JSON when it has none.
 func Parse(name string, b []byte) (*Policy, error) {
+	p, _, err := parse(name, b)
+	return p, err
+}
+
+// parse is [Parse], returning the document as JSON as well.
+func parse(name string, b []byte) (*Policy, []byte, error) {
 	if !strings.Contains(name, ".") {
 		name += ".json"
 	}
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	schema, err := contracts.Compile("policy.schema.json")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	j, err := json.Marshal(doc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var p Policy
 	if err := json.Unmarshal(j, &p); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &p, nil
+	return &p, j, nil
+}
+
+// Narrowed is a server's policy, fetched, with the node's policy applied to it: the
+// node only narrows. Each field is computed as follows.
+//
+//   - The mode is enforce when either side's is.
+//   - The allow list is the hosts both sides allow, where a side in mode observe allows
+//     every host: under enforce on both sides, each side's entries that an entry of
+//     the other covers, the server's first, each once; under enforce on one side, that
+//     side's entries; under observe on both, the server's.
+//   - The deny list is both sides' entries, the server's first, each once.
+//   - The path rules are the server's, and the node's go to the proxy beside them as
+//     [Node.Paths]: a request to a host either side lists must match an entry of each
+//     side that lists it.
+//   - The tools are the server's selection, which the node's tools member bounds when
+//     the node's document has one: each selected tool must be listed in it by name, and
+//     by argument when the node's entry has one, so an empty list allows none. A tool
+//     outside it is refused with [refusal.ToolUnknown]. The credentials are bounded the
+//     same way.
+//   - The image is the one both select, or the one a side selects; two different ones
+//     are refused with [refusal.ImageUnknown]. Neither leaves the machine's default.
+//
+// The result keeps the fetched policy's source, digest and URL, with the node's side in
+// [Loaded.Node].
+func Narrowed(fetched, node *Loaded) (*Loaded, error) {
+	s, n := fetched.Policy, node.Policy
+	run := Policy{Version: s.Version, Egress: Egress{Mode: Observe, Paths: s.Egress.Paths}, Credentials: s.Credentials, Tools: s.Tools, Image: s.Image}
+	serverEnforces, nodeEnforces := s.Egress.Mode == Enforce, n.Egress.Mode == Enforce
+	if serverEnforces || nodeEnforces {
+		run.Egress.Mode = Enforce
+	}
+	switch {
+	case serverEnforces && nodeEnforces:
+		run.Egress.Allow = union(coveredBy(s.Egress.Allow, n.Egress.Allow), coveredBy(n.Egress.Allow, s.Egress.Allow))
+	case nodeEnforces:
+		run.Egress.Allow = slices.Clone(n.Egress.Allow)
+	default:
+		run.Egress.Allow = slices.Clone(s.Egress.Allow)
+	}
+	if run.Egress.Allow == nil {
+		run.Egress.Allow = []string{}
+	}
+	if len(s.Egress.Deny) > 0 || len(n.Egress.Deny) > 0 {
+		run.Egress.Deny = union(s.Egress.Deny, n.Egress.Deny)
+	}
+	if n.Tools != nil {
+		if out := outside(s.Tools, n.Tools); len(out) > 0 {
+			return nil, refusal.New(refusal.ToolUnknown, out, "the server's policy selects the tools %s, which the node's policy does not list", strings.Join(out, ", "))
+		}
+	}
+	if n.Credentials != nil {
+		if out := outside(s.Credentials, n.Credentials); len(out) > 0 {
+			return nil, fmt.Errorf("the server's policy selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
+		}
+	}
+	switch {
+	case s.Image != "" && n.Image != "" && s.Image != n.Image:
+		return nil, refusal.New(refusal.ImageUnknown, []string{s.Image}, "the server's policy selects the image %s and the node's policy the image %s", s.Image, n.Image)
+	case s.Image == "":
+		run.Image = n.Image
+	}
+	out := *fetched
+	out.Policy = run
+	out.Node = &Node{Digest: node.Canonical, Paths: n.Egress.Paths}
+	return &out, nil
+}
+
+// coveredBy are the entries of list an entry of other covers, in list's order.
+func coveredBy(list, other []string) []string {
+	var out []string
+	for _, entry := range list {
+		if slices.ContainsFunc(other, func(above string) bool { return Covers(above, entry) }) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// union is a's entries, then b's that a does not hold, each once.
+func union(a, b []string) []string {
+	out := []string{}
+	for _, entry := range slices.Concat(a, b) {
+		if !slices.Contains(out, entry) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// outside names the selections that no entry of bound lists: by name, and by argument
+// when the entry has one.
+func outside(selected, bound []Selected) []string {
+	var out []string
+	for _, sel := range selected {
+		if !slices.ContainsFunc(bound, func(b Selected) bool {
+			return b.Name == sel.Name && (b.Argument == "" || b.Argument == sel.Argument)
+		}) {
+			out = append(out, sel.Name)
+		}
+	}
+	return out
 }
 
 // Covers reports whether an allow entry covers another: a name is covered by the same
 // name or by a suffix pattern above it; a pattern is covered by the same pattern or by
 // a suffix pattern above it. "*.github.com" covers "api.github.com" and
-// "*.api.github.com", not "github.com".
+// "*.api.github.com", not "github.com". An IP literal is covered by an identical entry
+// alone, as [Match] matches it: "*.0.0.1" does not cover "10.0.0.1".
 func Covers(entry, other string) bool {
 	entry, other = strings.ToLower(entry), strings.ToLower(other)
 	if entry == other {
 		return true
+	}
+	if net.ParseIP(other) != nil {
+		return false
 	}
 	suffix, isPattern := strings.CutPrefix(entry, "*.")
 	if !isPattern {

@@ -20,7 +20,10 @@ example is in [the policy](policy.md#in-runneryaml).
   id and the pin; the key awaits approval, and until then a run is refused with
   `key_pending`. `qory access-key create` prints a public key for the server's owner to
   paste, and a pasted key is approved as it is entered.
-- The run's policy comes from the server, when the server offers one.
+- The run's policy comes from the server, when the server offers one. The node's
+  policy, `Spec.Policy`, narrows it. See
+  [the policy](policy.md#the-node-narrows-the-servers-policy).
+- The run's variables come from the server as well. See [variables](#variables).
 - With `server` set, the run starts only when the server answers the fetch and a ping,
   signed. So a run meant to be observed never runs unobserved.
 - `qory run --local` runs with the files alone.
@@ -35,7 +38,8 @@ A `session.Server` in the spec defines the server the runner reports to. The run
 2. posts the events that document selects to the URL it defines, signed, after a
    ping that announces the heartbeat interval; heartbeats run from the accepted ping;
 3. when the document contains a run configuration, fetches it, with every label of the
-   run as its query, and takes its `security_policy` as the run's policy.
+   run as its query. Its `security_policy`, narrowed by the node's policy, is the run's
+   policy. Its `variables` are the server's variables for the run.
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
@@ -55,7 +59,45 @@ further.
 ## A policy that changes while the run goes
 
 A server may answer a later batch with another digest. The runner then fetches the run
-configuration again, and puts it in force while the run goes.
+configuration again, and puts it in force while the run goes, narrowed by the same node
+policy. The variables stay as they were when the run started.
+
+## Variables
+
+A run configuration may contain `variables`: names and string values for the agent's
+process. The server leads:
+
+- The server's variables are the run's.
+- The node's own variables, `Spec.Variables.Own`, add names. A node variable for a name
+  the server sets is left out, and the record lists it as `node_ignored`.
+- A name on the deny list is left out, and listed as `denied`. The list is the
+  contract's [`denied-variables.json`](../contracts/runner/v1/denied-variables.json),
+  the runtime's `denies`, and `Spec.Variables.Deny`. It holds the runner's own names,
+  the proxy's, the trust store's, Docker's and `PATH`.
+- A name the runner, the runtime or the harness, `Spec.LaunchEnv`, sets itself is left
+  out the same way, as is one the runtime reads its credential from.
+- A run without a wall takes none of the server's variables, unless
+  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The record lists them as
+  `unwalled`.
+
+```go
+spec.Env = os.Environ()                        // what the run inherits
+spec.Variables = session.Variables{
+	Own:      []string{"LOG_LEVEL=debug"},      // the node's own; the server's win
+	Deny:     []string{"LEGACY_SETTING", "ACME_*"}, // names and patterns, in any case
+	Unwalled: session.UnwalledIgnore,          // or UnwalledAccept
+}
+```
+
+Behind a wall, the run refuses to pass in what stays outside:
+
+| The run passes                                   | The refusal               |
+| ------------------------------------------------ | ------------------------- |
+| a `QORY_` variable, or one a credential is read from | `variable_reserved`   |
+| a value for a placeholder                        | `placeholder_conflict`    |
+
+The record lists every variable by name, never a value. `Spec.Env` is what the run
+inherits, and the runner checks it, `Spec.LaunchEnv` and `Spec.Variables.Own` alike.
 
 ## A control plane
 

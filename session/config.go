@@ -8,7 +8,9 @@ import (
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/internal/variables"
 )
 
 // Policy is the run's policy document, contracts/runner/v1/policy.schema.json, as the
@@ -20,9 +22,12 @@ type Policy struct {
 	// Egress is the egress mode, the allow list and the deny list.
 	Egress PolicyEgress `json:"egress"`
 	// Credentials are the credentials of [Spec.Credentials] the run may use, by name.
-	Credentials []PolicyCredential `json:"credentials,omitempty"`
-	// Tools are the tools of [Spec.Tools] the run may reach, by name.
-	Tools []PolicyTool `json:"tools,omitempty"`
+	// Nil is no member; an empty list is a member that lists none, which as the node's
+	// policy beside a server's allows none of the server's.
+	Credentials []PolicyCredential `json:"credentials,omitzero"`
+	// Tools are the tools of [Spec.Tools] the run may reach, by name, nil and empty as
+	// for Credentials.
+	Tools []PolicyTool `json:"tools,omitzero"`
 	// Image is the name of the image of [Spec.Images] the run starts in; empty is the
 	// machine's default, [Spec.Image].
 	Image string `json:"image,omitempty"`
@@ -67,8 +72,14 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
 	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
+	if p.Credentials != nil {
+		out.Credentials = []PolicyCredential{}
+	}
 	for _, c := range p.Credentials {
 		out.Credentials = append(out.Credentials, PolicyCredential{Name: c.Name, Argument: c.Argument})
+	}
+	if p.Tools != nil {
+		out.Tools = []PolicyTool{}
 	}
 	for _, t := range p.Tools {
 		out.Tools = append(out.Tools, PolicyTool{Name: t.Name, Argument: t.Argument})
@@ -155,6 +166,39 @@ func bothDeny(ceiling, own []string) []string {
 	}
 	return out
 }
+
+// Variables are the node's variables and how a run takes the server's: for qory, the
+// runner file's variables section, wall.env and --env.
+//
+// The server leads. A server's variable reaches the agent's process alone, never a
+// tool, an integration, the relay or a Docker daemon, unless the run leaves it out: a
+// name on the deny list, which is the contract's denied-variables.json, the runtime's
+// denies and Deny; a variable the runtime declares or reserves; a placeholder's name;
+// a variable a value of the machine's is read from; a name the runtime's preparation,
+// LaunchEnv or the wall sets; and every one in a run without a wall unless Unwalled is
+// [UnwalledAccept]. dev.qory.run.policy_applied reports each by name, never a value.
+type Variables struct {
+	// Own are the node's own variables, NAME=value. Each applies when the run applies no
+	// server value of its name, and is left out, and reported, when it does. Without a
+	// server's variables they are all the run's.
+	Own []string
+	// Deny are names and patterns, in which * matches any run of characters, of
+	// variables the run leaves out of the server's, matched regardless of case: the
+	// runner file's variables.deny.
+	Deny []string
+	// Unwalled is how a run without a Wall takes the server's variables:
+	// [UnwalledAccept] applies them as a walled run does, after the deny list;
+	// [UnwalledIgnore], which empty means, leaves them all out. The deny list keeps the
+	// wall and the runner whole, not the developer's shell, which accept opens to the
+	// server.
+	Unwalled string
+}
+
+// The two values of [Variables.Unwalled].
+const (
+	UnwalledAccept = variables.Accept
+	UnwalledIgnore = variables.Ignore
+)
 
 // Server is the server document, contracts/runner/v1/server.schema.json, as the
 // caller hands it to the runner: the server whose configuration document says where
@@ -310,7 +354,7 @@ func image(spec Spec, selected string) (Image, error) {
 		return spec.Images[i], nil
 	}
 	if selected != "" {
-		return Image{}, fmt.Errorf("the policy selects the image %q, which this machine does not define", selected)
+		return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
 	}
 	return Image{Ref: spec.Image}, nil
 }
