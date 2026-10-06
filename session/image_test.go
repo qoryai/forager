@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
@@ -157,7 +158,7 @@ func TestAReloadKeepsTheRunsImage(t *testing.T) {
 	c.serve(fmt.Sprintf(withImage, "", "with-docker"), digest('1'))
 	w := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Wall, sp.Image, sp.Images = w, "base", images
 	run := startWaiting(t, sp)
 	waitFor(t, func() bool { return run.applied() == 1 })
@@ -185,7 +186,7 @@ func TestAReloadComparesTheImageItResolvesTo(t *testing.T) {
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
 	w := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Wall, sp.Image, sp.Images = w, "base", images
 	run := startWaiting(t, sp)
 	waitFor(t, func() bool { return run.applied() == 1 })

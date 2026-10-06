@@ -109,6 +109,8 @@ release may change what an existing document does, and says so under Upgrading.
   stops the runtime as at its time limit, records `dev.qory.run.exited` with
   `reason: run_closed` in the file sink and sends nothing further; before
   `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
+  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
+  run the same way, with exit code -1.
   `session.Result` has `RunClosed`.
 - `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
   `key_invalid` or `key_limit` with `apiary_public_key`, the same list in the same order
@@ -158,7 +160,8 @@ release may change what an existing document does, and says so under Upgrading.
 - Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
   an access key allowed stored secrets.
 - `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
-  300. Heartbeats run from the accepted ping until the final event, and
+  300; with a server, `session.Spec.Heartbeat` is a whole number of seconds, so the
+  ping announces the interval the heartbeats tick at. Heartbeats run from the accepted ping until the final event, and
   `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
   `run_closed`.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.

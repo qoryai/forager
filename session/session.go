@@ -152,8 +152,8 @@ type Spec struct {
 	// nothing.
 	Limits wall.Limits
 	// Heartbeat is the interval between heartbeats; zero means 30 seconds. With a
-	// Server, heartbeats run from the accepted ping, which announces the interval in
-	// whole seconds, at most 300; without one, from run.started.
+	// Server, heartbeats run from the accepted ping, which announces the interval, a
+	// whole number of seconds from 1 to 300; without one, from run.started.
 	Heartbeat time.Duration
 	// Report receives one line per thing the runner tells its user; nil means Stderr.
 	Report func(string)
@@ -259,8 +259,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		if spec.Heartbeat > server.MaxInterval*time.Second {
-			return nil, fmt.Errorf("the heartbeat interval %s is over the %d seconds a ping announces at most", spec.Heartbeat, server.MaxInterval)
+		if spec.Heartbeat > server.MaxInterval*time.Second || spec.Heartbeat%time.Second != 0 {
+			return nil, fmt.Errorf("the heartbeat interval %s is not a whole number of seconds from 1 to the %d a ping announces at most", spec.Heartbeat, server.MaxInterval)
 		}
 		if srv, err = discover(runCtx, cfg, spec); err != nil {
 			return nil, err
@@ -358,7 +358,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	var posts *sink.Server
 	var beatFrom time.Time
 	if srv != nil {
-		interval := int(math.Ceil(spec.Heartbeat.Seconds()))
+		interval := int(spec.Heartbeat / time.Second)
 		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": interval})
 		sinks.Write(ping)
 		body, _ := ping.JSON()
@@ -706,9 +706,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// A reload still in flight ends here: nothing of it goes after run.exited.
 		srv.stop()
 	}
-	if err != nil {
+	if err != nil && !closed {
 		sinks.Close(ctx)
 		return nil, err
+	}
+	// A runtime the close kept from starting has no status of its own: the run ends as
+	// a closed one, with -1.
+	if err != nil {
+		exit = exitStatus{code: -1}
 	}
 	state := "failed"
 	if exit.code == 0 && !closed {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
@@ -236,7 +237,7 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
 	ow := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Wall, sp.Image = ow, "example.com/agent:1"
 	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}
 	w := startWaiting(t, sp)

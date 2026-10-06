@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/session"
@@ -257,7 +258,7 @@ func TestAReloadKeepsTheRunsTools(t *testing.T) {
 	c.serve(fmt.Sprintf(withTools, ""), digest('1'))
 	sp, _ := toolSpec(t, filepath.Join(t.TempDir(), "tool-saw"))
 	sp.Policy = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	w := startWaiting(t, sp)
 	waitFor(t, func() bool { return w.applied() == 1 })
 

@@ -96,6 +96,8 @@ type control struct {
 	// the run configuration is fetched.
 	slow         atomic.Int64
 	closeOnFetch atomic.Bool
+	// closedAnswers counts the answers run_closed was given to.
+	closedAnswers atomic.Int32
 	// hits counts every request; discoveries the discovery fetches; fetches the run
 	// configuration fetches.
 	hits, discoveries, fetches atomic.Int32
@@ -143,8 +145,14 @@ func newControl(t *testing.T) *control {
 		},
 		Signer: testSigner,
 		Store:  store,
-		Closed: func(string) bool { return c.closed.Load() },
-		Admit:  func(string, string) bool { return !c.limit.Load() },
+		Closed: func(string) bool {
+			if c.closed.Load() {
+				c.closedAnswers.Add(1)
+				return true
+			}
+			return false
+		},
+		Admit: func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
 			doc := `{"version":1,"node_id":"nd_f1xt0re000000000","apiary_public_key":` + string(must(json.Marshal(testPin))) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
 			c.mu.Lock()
@@ -524,7 +532,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	var discovered []session.Discovery
 	sp.Discovered = func(d session.Discovery) error {
 		discovered = append(discovered, d)
@@ -555,7 +563,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	pings := c.hits.Load()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	sp.Discovered = func(session.Discovery) error { return errors.New("the marker cannot be written") }
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "marker") || c.hits.Load() != pings+1 {
 		t.Errorf("a refusing discovery hook: %v, %d requests", err, c.hits.Load()-pings)
@@ -564,7 +572,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	c.refuse.Store(500)
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "configuration "+c.srv.URL+"/.well-known/qory-configuration") || !strings.Contains(err.Error(), "status 500") {
 		t.Errorf("refused discovery: %v", err)
 	}
@@ -576,7 +584,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	refusePing := &session.Server{Version: 1, URL: c.srv.URL, AccessKeyID: "ak_0000000000000000", ApiaryPublicKey: testPin}
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = refusePing
+	sp.Server, sp.Heartbeat = refusePing, time.Second
 	if _, err := session.Run(context.Background(), sp); refusal(err) != "unauthorized" || !strings.Contains(err.Error(), "status 401") {
 		t.Errorf("an unknown key: %v", err)
 	}
@@ -586,7 +594,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	c.mu.Unlock()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	sp.Labels = map[string]string{"forge": "example.test"}
 	pinged := false
 	stopPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -599,7 +607,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer stopPing.Close()
-	sp.Server = &session.Server{Version: 1, URL: stopPing.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin}
+	sp.Server, sp.Heartbeat = &session.Server{Version: 1, URL: stopPing.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin}, time.Second
 	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "ping "+c.srv.URL+"/nowhere") || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("refused ping: %v", err)
 	}
@@ -613,7 +621,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	before := c.hits.Load()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = cfg
+	sp.Server, sp.Heartbeat = cfg, time.Second
 	sp.Local = true
 	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "dev.qory.ping")) != 0 || c.hits.Load() != before {
 		t.Errorf("local run: %v, the server was contacted %d times", err, c.hits.Load()-before)
@@ -634,7 +642,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	dir := t.TempDir()
 	sp := spec(t, &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}, "FAKE_ALLOWED_URL="+origin.URL+"/after")
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Labels = map[string]string{"forge": "github.com", "issue": "77", "repository": "acme/shop"}
 	// The runtime waits for the test's go-ahead, then reaches the origin.
 	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], filepath.Join(dir, "go")}
@@ -694,7 +702,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	c.mu.Unlock()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") {
 		t.Errorf("a run configuration that is not one: %v", err)
 	}
@@ -773,7 +781,7 @@ func TestAReloadIsAsStrictAsAStart(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))
 	sp := spec(t, nil, "FAKE_ALLOWED_URL="+origin.URL+"/after")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	w := startWaiting(t, sp)
 	waitFor(t, func() bool { return w.applied() == 1 })
 
@@ -1359,7 +1367,7 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 	run := func(change func(*session.Spec)) (session.Spec, error) {
 		sp := spec(t, nil)
 		sp.Forwarder = nil
-		sp.Server = c.server()
+		sp.Server, sp.Heartbeat = c.server(), time.Second
 		change(&sp)
 		_, err := session.Run(context.Background(), sp)
 		return sp, err
@@ -1370,11 +1378,12 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 	}
 	before := c.hits.Load()
 	for name, change := range map[string]func(*session.Spec){
-		"no pin":               func(sp *session.Spec) { sp.Server.ApiaryPublicKey = nil },
-		"no access key":        func(sp *session.Spec) { sp.AccessKey = nil },
-		"no instance id":       func(sp *session.Spec) { sp.InstanceID = "" },
-		"a long heartbeat":     func(sp *session.Spec) { sp.Heartbeat = 301 * time.Second },
-		"an odd instance name": func(sp *session.Spec) { sp.InstanceName = "build 01" },
+		"no pin":                            func(sp *session.Spec) { sp.Server.ApiaryPublicKey = nil },
+		"no access key":                     func(sp *session.Spec) { sp.AccessKey = nil },
+		"no instance id":                    func(sp *session.Spec) { sp.InstanceID = "" },
+		"a long heartbeat":                  func(sp *session.Spec) { sp.Heartbeat = 301 * time.Second },
+		"a heartbeat of a part of a second": func(sp *session.Spec) { sp.Heartbeat = 1500 * time.Millisecond },
+		"an odd instance name":              func(sp *session.Spec) { sp.InstanceName = "build 01" },
 	} {
 		sp, err := run(change)
 		if err == nil || runs(sp) != 0 || (name == "no pin" && refusal(err) != "apiary_public_key_missing") {
@@ -1400,7 +1409,7 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 		t.Fatalf("an instance beyond the limit: %v", err)
 	}
 	entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
-	if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1`) {
+	if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1,`) {
 		t.Errorf("the refused run's file:\n%s", evs)
 	}
 }
@@ -1411,11 +1420,10 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 func TestHeartbeatsRunFromTheAcceptedPing(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, "sha256="+strings.Repeat("a", 64))
-	c.slow.Store(300)
+	c.slow.Store(2500)
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = c.server()
-	sp.Heartbeat = 50 * time.Millisecond
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -1435,7 +1443,7 @@ func TestHeartbeatsRunFromTheAcceptedPing(t *testing.T) {
 		beats++
 	}
 	if beats < 2 {
-		t.Errorf("%d heartbeats before run.started, with a start of 300 ms and an interval of 50 ms", beats)
+		t.Errorf("%d heartbeats before run.started, with a start of 2.5 s and an interval of 1 s", beats)
 	}
 	if last := evs[len(evs)-1]; last["type"] != "dev.qory.run.exited" {
 		t.Errorf("last event %v", last["type"])
@@ -1450,7 +1458,7 @@ func TestRunClosedStopsTheRuntime(t *testing.T) {
 	c := newControl(t)
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "sleep 30"}
 	sp.StopGrace = time.Second
@@ -1495,7 +1503,7 @@ func TestRunClosedBeforeTheStartIsRefused(t *testing.T) {
 	c.slow.Store(2500)
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	_, err := session.Run(context.Background(), sp)
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != "run_closed" || r.Status != 410 {
@@ -1513,5 +1521,51 @@ func TestRunClosedBeforeTheStartIsRefused(t *testing.T) {
 	b, _ := os.ReadFile(c.received)
 	if strings.Contains(string(b), "dev.qory.run.refused") {
 		t.Error("run.refused reached the server after it closed the run")
+	}
+}
+
+// lineFunc is an events writer that hands each line to a function.
+type lineFunc func([]byte)
+
+func (f lineFunc) Write(b []byte) (int, error) { f(b); return len(b), nil }
+
+// TestRunClosedBeforeTheRuntimeStartsEndsTheRun pins the race between the start and a
+// close: a signed 410 run_closed that arrives after run.started and before the
+// runtime starts ends the run as a closed one, run.exited with the reason run_closed
+// and exit code -1, and a result with RunClosed, in place of an error that the
+// runtime did not start.
+func TestRunClosedBeforeTheRuntimeStartsEndsTheRun(t *testing.T) {
+	c := newControl(t)
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	once := sync.Once{}
+	sp.Events = lineFunc(func(line []byte) {
+		if !bytes.Contains(line, []byte(`"dev.qory.run.policy_applied"`)) {
+			return
+		}
+		once.Do(func() {
+			// Hold the start here, after run.started, until the server has closed the
+			// run and the runner has read the answer.
+			c.closed.Store(true)
+			for c.closedAnswers.Load() == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			time.Sleep(300 * time.Millisecond)
+		})
+	})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatalf("a run closed before its runtime started: %v", err)
+	}
+	if !res.RunClosed || res.ExitCode != -1 || res.Signal != "" || res.State != "failed" {
+		t.Errorf("result %+v", res)
+	}
+	evs := events(t, res)
+	exited := ofType(evs, "dev.qory.run.exited")
+	if len(exited) != 1 || data(exited[0])["reason"] != "run_closed" || data(exited[0])["exit_code"] != -1.0 {
+		t.Errorf("run.exited %v", exited)
 	}
 }
