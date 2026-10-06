@@ -1,0 +1,25 @@
+{
+  "note": "Ed25519 public keys enrolment and paste refuse, key_invalid. The points of small order are eight: their canonical encodings, which the small-order check refuses, and the six non-canonical encodings a lenient decoder accepts, which the canonical-encoding check refuses. The torsion key is the fixture access key plus the first order-8 point: canonical, on the curve, not of small order, and refused because it is not of prime order.",
+  "small_order": [
+    {"point": "identity, y = 1", "order": 1, "encoding": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    {"point": "order 2, y = p - 1", "order": 2, "encoding": "7P_______________________________________38"},
+    {"point": "order 4, y = 0", "order": 4, "encoding": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+    {"point": "order 4, y = 0", "order": 4, "encoding": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA"},
+    {"point": "order 8", "order": 8, "encoding": "xxdqcD1N2E-6PAt2DRBnDyogU_osOczGTsf9d5KsA3o"},
+    {"point": "order 8", "order": 8, "encoding": "xxdqcD1N2E-6PAt2DRBnDyogU_osOczGTsf9d5KsA_o"},
+    {"point": "order 8", "order": 8, "encoding": "JuiVj8KyJ7BFw_SJ8u-Y8NXfrAXTxjM5sTgCiG1T_AU"},
+    {"point": "order 8", "order": 8, "encoding": "JuiVj8KyJ7BFw_SJ8u-Y8NXfrAXTxjM5sTgCiG1T_IU"}
+  ],
+  "non_canonical": [
+    {"point": "x = 0 with the sign bit set, y = 1", "encoding": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA"},
+    {"point": "x = 0 with the sign bit set, y = p - 1", "encoding": "7P________________________________________8"},
+    {"point": "y = p, read as 0", "encoding": "7f_______________________________________38"},
+    {"point": "y = p, read as 0", "encoding": "7f________________________________________8"},
+    {"point": "y = p + 1, read as 1", "encoding": "7v_______________________________________38"},
+    {"point": "y = p + 1, read as 1", "encoding": "7v________________________________________8"}
+  ],
+  "torsion": {
+    "point": "the fixture access key plus the first order-8 point",
+    "encoding": "KH9r2npX9PKHPzv_Xl6pwmCmpjQ73zfHq800btWQTBE"
+  }
+}

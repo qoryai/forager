@@ -993,23 +993,23 @@ every value the server stores for that access key.
   | X25519 public key | `SjgH0GTQdxgcwHCYnnaJHSDcpVWVSNwsd8GlAnOIKzg`, the u-coordinate of the Ed25519 public key |
   | ephemeral private key | `ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A` (bytes 33 to 64) |
   | run id, access key id, exp | `01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a`, `ak_f1xt0re000000000`, `1700000600` |
-  | run configuration | the 601 bytes below, the two connections the plaintext lists; digest `sha256=b93d70096dc5990448621fa158d0dbd85a35a4522134100d9ec98f1648675eb3` |
+  | run configuration | the 604 bytes below, the two connections the plaintext lists; digest `sha256=929056dda41d0ee9b1234d338b76d3190eb01a91477a7196dd3f3db850d9b940` |
   | `info` (hex) | `716f72792073656372657473207631000020000100020013616b5f66317874307265303030303030303030`, 43 bytes |
-  | `aad` (hex) | `002430313932386634652d376333612d376432652d396231612d3366356536643763386239610013616b5f6631787430726530303030303030303000477368613235363d62393364373030393664633539393034343836323166613135386430646264383561333561343532323133343130306439656339386631363438363735656233000a31373030303030363030`, 144 bytes |
-  | plaintext | `{"version":1,"run_configuration":"sha256=b93d70096dc5990448621fa158d0dbd85a35a4522134100d9ec98f1648675eb3","connections":["con_0b5n6t2r9y4f7j3s","con_7q2m4k9x0d3h8w1c"],"values":[{"secret":"sec_3fz8k2m9q4w7x1d6","value":"fixture-value-not-a-real-one"},{"secret":"sec_9c4r7t2y5b8n1h3e","value_id":"production","value":"-----BEGIN FIXTURE-----\nnot-a-real-key\n-----END FIXTURE-----\n"}]}`, 386 bytes, the `\n` being JSON escapes |
+  | `aad` (hex) | `002430313932386634652d376333612d376432652d396231612d3366356536643763386239610013616b5f6631787430726530303030303030303000477368613235363d39323930353664646134316430656539623132333464333338623736643331393065623031613931343737613731393664643366336462383530643962393430000a31373030303030363030`, 144 bytes |
+  | plaintext | `{"version":1,"run_configuration":"sha256=929056dda41d0ee9b1234d338b76d3190eb01a91477a7196dd3f3db850d9b940","connections":["con_0b5n6t2r9y4f7j3s","con_7q2m4k9x0d3h8w1c"],"values":[{"secret":"sec_3fz8k2m9q4w7x1d6","value":"fixture-value-not-a-real-one"},{"secret":"sec_9c4r7t2y5b8n1h3e","value_id":"production","value":"-----BEGIN FIXTURE-----\nnot-a-real-key\n-----END FIXTURE-----\n"}]}`, 386 bytes, the `\n` being JSON escapes |
   | `enc` | `WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns` |
-  | `ct` | 402 bytes, SHA-256 `85d845256d08dce672c671a7d3f1bb8a28181dd0311d0af7be047cc1a5f739cc` |
+  | `ct` | 402 bytes, SHA-256 `4836408adbfb6eb40be734beacdcfd51534f9ef4da5f1d5716823524688a266c` |
 
   The run configuration:
 
   ```json
-  {"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","github.com","api.github.com"]}},"connections":[{"kind":"runtime","id":"con_7q2m4k9x0d3h8w1c","name":"claude","secrets":{"oauth_token":{"id":"sec_3fz8k2m9q4w7x1d6","name":"CLAUDE_OAUTH"}}},{"kind":"integration","id":"con_0b5n6t2r9y4f7j3s","name":"qory-github","source":"github.com/qoryai/qory-github","version":"1.4.0","ways":["credential"],"argument":"acme/shop","settings":{"app_id":"123456"},"secrets":{"private_key":{"id":"sec_9c4r7t2y5b8n1h3e","name":"GITHUB_APP_KEY","value_id":"production"}}}]}
+  {"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","github.com","api.github.com"]}},"connections":[{"kind":"runtime","id":"con_7q2m4k9x0d3h8w1c","name":"claude","secrets":{"oauth_token":{"id":"sec_3fz8k2m9q4w7x1d6","name":"CLAUDE_OAUTH"}}},{"kind":"integration","id":"con_0b5n6t2r9y4f7j3s","name":"github","source":"github.com/qoryai/qory-github","version":"1.4.0","ways":["credential"],"argument":"acme/shop","settings":{"app_id":"123456"},"secrets":{"private_key":{"id":"sec_9c4r7t2y5b8n1h3e","name":"GITHUB_APP_PRIVATE_KEY","value_id":"production"}}}]}
   ```
 
   `ct`:
 
   ```
-  lhQhSrBwqVESXVYLN44ttNMY3PZJUN1SV4XUz7kCx_ngnotLha21-V7r1TkY_5w7csNEYEe-jL8DqqlQfOoot9IJ2R-QmvrF3JCUQmKW-OAhGKl9LWJ59yjNCm0wg7ONd1lOJmN4qEvAAyDwr_MCCmJQhuhDwJ1B9_hZa_Yf2p0GlchdPzRPxCDGJMF4E2m9aj8ReeMTstBygjMZM0X6qYF-3uHUWTsRAcXJjxQ8jmAFhICqbFxhGMHQvsaZWIPO4Afc0otkI8sMCNhGY7c9JPQp5sbnlAQseRWJ4qu7Bf-igmRrIjiJW_HyS2gSfF2UplgOX9eYAvw_mYqmOt6KcG0aw9xE23CQueQ6HDHiorzyHUln-FhlhOQUFpiC5Ns_Ay-2hW-Gjua6AzVHgZuryC5hAmrJgKe4fsfShBhXeAVXP-tZLP7KDTu90fLpv8x6IdFDIkE_h5Gxq1d8LQzQK77DLEYLudFh-_0mVMXwo1AliGvhn9fYCMeJowTAs-drgZsragTm_BvEvDc8yA7Sa2GV
+  lhQhSrBwqVESXVYLN44ttNMY3PZJUN1SV4XUz7kCx_ngnotLha21-V6w3jNM_ZpvL5QUMha30OoO_KBUfe8q5dAEg0yWmquQ3ZWQE2fGrewiHq95eGR4_nqQCz1viLHeeVhGdG0v9B3DAyDwr_MCCmJQhuhDwJ1B9_hZa_Yf2p0GlchdPzRPxCDGJMF4E2m9aj8ReeMTstBygjMZM0X6qYF-3uHUWTsRAcXJjxQ8jmAFhICqbFxhGMHQvsaZWIPO4Afc0otkI8sMCNhGY7c9JPQp5sbnlAQseRWJ4qu7Bf-igmRrIjiJW_HyS2gSfF2UplgOX9eYAvw_mYqmOt6KcG0aw9xE23CQueQ6HDHiorzyHUln-FhlhOQUFpiC5Ns_Ay-2hW-Gjua6AzVHgZuryC5hAmrJgKe4fsfShBhXeAVXP-tZLP7KDTu90fLpv8x6IdFDIkE_h5Gxq1d8LQzQK77DLEYLudFh-_0mVMXwo1AliGvhn9fYCMeJowTAs-drgZv5yAz1vum5aTrvOwjyYjC4
   ```
 
   A second case alters `aad` and expects the open to fail.
@@ -1018,8 +1018,8 @@ every value the server stores for that access key.
   `QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A`, public key
   `rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc`, fingerprint `uoES-kuj1vk0sq0qoGlmAg`:
   the signed message is 641 bytes, SHA-256
-  `8df55b6e8391ada90f1524e043133a44025679b1125e71e89a22f6cf385cb973`, and `sig` is
-  `V2MlF_6TijhhamMtIv2rIlASUf1jcKMl_bmivBcfX7-jIfMw1569f0_f1BtNRX1eVmAU3v3qs1nxDihGET9GBQ`,
+  `19e7f4272035537b6e38e50ff94b579d8a4d22d070f96cf0530407d4d0aab471`, and `sig` is
+  `d7xmlkCLQLjdWy23vN_cLG03_Yb9eUpb0AHtrw1gZbOkZkxQKz1WenQpNPgTBB5fNSj623LcOTeza92iZ1fSAg`,
   verified with Go's `crypto/ed25519`, pyca/cryptography and libsodium.
 
   Every fixture published here is refused in production: `qory` refuses the fixture
@@ -1228,7 +1228,7 @@ the machine pins:
       SENTRY_AUTH:
         env: SENTRY_AUTH_SOURCE         # read once at run start
         hosts: [sentry.io]
-      GITHUB_APP_KEY:
+      GITHUB_APP_PRIVATE_KEY:
         hosts: [github.com, api.github.com]
         values:
           production: {file: ~/.config/qory/github-app-production.pem}   # read at each use
@@ -1273,11 +1273,11 @@ the machine pins:
       secrets: {auth: {source: external, name: SENTRY_AUTH}}
     - kind: integration
       id: github
-      name: qory-github
+      name: github
       ways: [credential]
       argument: acme/shop
       settings: {app_id: '123456'}
-      secrets: {private_key: {source: external, name: GITHUB_APP_KEY, value_id: production}}
+      secrets: {private_key: {source: external, name: GITHUB_APP_PRIVATE_KEY, value_id: production}}
   ```
 
 - **Connections alone select credentials.** `credentials` leaves `policy.schema.json`, and
@@ -1631,7 +1631,7 @@ program of the machine's produces a credential or serves hosts for a connection.
 
   ```yaml
   integrations:
-    qory-github:
+    github:
       path: /usr/local/bin/qory-github
       arguments: '^acme/[a-z0-9._-]+$'
       settings:
@@ -1851,10 +1851,10 @@ runtime unmet, `runtime_secret_missing` applies as usual.
  "connections": [
    {"kind": "runtime", "id": "con_7q2m4k9x0d3h8w1c", "name": "claude",
     "secrets": {"oauth_token": {"id": "sec_3fz8k2m9q4w7x1d6", "name": "CLAUDE_OAUTH"}}},
-   {"kind": "integration", "id": "con_0b5n6t2r9y4f7j3s", "name": "qory-github",
+   {"kind": "integration", "id": "con_0b5n6t2r9y4f7j3s", "name": "github",
     "source": "github.com/qoryai/qory-github", "version": "1.4.0", "ways": ["credential"],
     "argument": "acme/shop", "settings": {"app_id": "123456"},
-    "secrets": {"private_key": {"id": "sec_9c4r7t2y5b8n1h3e", "name": "GITHUB_APP_KEY", "value_id": "production"}}},
+    "secrets": {"private_key": {"id": "sec_9c4r7t2y5b8n1h3e", "name": "GITHUB_APP_PRIVATE_KEY", "value_id": "production"}}},
    {"kind": "service", "id": "con_5h1k8m3p6r0t4w9x", "name": "Sentry",
     "hosts": ["sentry.io"], "paths": ["/api/0/*"],
     "auth": {"scheme": "bearer", "secret": "auth"},
@@ -2107,11 +2107,11 @@ set, as for the pin.
   - the same with the target `/.well-known/qory-configuration?x=1`, 119 bytes:
     `XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ`;
   - a POST to `/v1/secrets` of the fixture's secrets request, the 297-byte body below,
-    SHA-256 `70db1ec6e820e06c1f21854021a63b8a4138c94eb6412ccc6005862bff04af39`, a signed
-    message of 383 bytes: `0meJ93_tpjmNJ3_uvIZJGcKBFPyUAs2nWsugSRddXdx1PLkTqNVR_c0TaEisjiWny4mK9UcTNNJIGIVuREt8Dg`.
+    SHA-256 `9d65ad02cafa08e4f6a32ee18f327b6ac2618d93f29bf30bd5c4ab511d95215e`, a signed
+    message of 383 bytes: `evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw`.
 
     ```json
-    {"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","labels":{"forge":"github.com","repository":"acme/shop"},"run_configuration":"sha256=b93d70096dc5990448621fa158d0dbd85a35a4522134100d9ec98f1648675eb3","connections":["con_7q2m4k9x0d3h8w1c","con_0b5n6t2r9y4f7j3s"],"timestamp":1700000000}
+    {"version":1,"run_id":"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a","labels":{"forge":"github.com","repository":"acme/shop"},"run_configuration":"sha256=929056dda41d0ee9b1234d338b76d3190eb01a91477a7196dd3f3db850d9b940","connections":["con_7q2m4k9x0d3h8w1c","con_0b5n6t2r9y4f7j3s"],"timestamp":1700000000}
     ```
 
 ### Enrolment
@@ -2517,11 +2517,14 @@ order of the run's connections:
    "secrets": [{"id": "sec_3fz8k2m9q4w7x1d6", "name": "CLAUDE_OAUTH"}],
    "uses": [{"hosts": ["api.anthropic.com"], "scheme": "bearer"}],
    "hosts_denied": []},
-  {"id": "con_0b5n6t2r9y4f7j3s", "kind": "integration", "name": "qory-github",
-   "source": "github.com/qoryai/qory-github", "forge_kind": "github",
+  {"id": "con_0b5n6t2r9y4f7j3s", "kind": "integration", "name": "github",
+   "source": "github.com/qoryai/qory-github",
    "version": "1.4.0", "ways": ["credential"], "argument": "acme/shop",
-   "secrets": [{"id": "sec_9c4r7t2y5b8n1h3e", "name": "GITHUB_APP_KEY", "value_id": "production"}],
-   "uses": [{"hosts": ["api.github.com", "github.com"], "scheme": "bearer"}],
+   "secrets": [{"id": "sec_9c4r7t2y5b8n1h3e", "name": "GITHUB_APP_PRIVATE_KEY", "value_id": "production"}],
+   "uses": [{"hosts": ["github.com"], "scheme": "basic",
+             "paths": ["/acme/shop.git/*", "/acme/shop/*"]},
+            {"hosts": ["api.github.com"], "scheme": "bearer",
+             "paths": ["/repos/acme/shop", "/repos/acme/shop/*", "/graphql"]}],
    "hosts_denied": []},
   {"id": "con_5h1k8m3p6r0t4w9x", "kind": "service", "name": "Sentry",
    "secrets": [{"name": "SENTRY_AUTH", "source": "external"}],
@@ -2534,8 +2537,7 @@ and value id; `uses` where and how the proxy sets each value; `hosts_denied` the
 connection's hosts the policy in force denies, recomputed in every further
 `policy_applied`. An integration connection's entry also records its `argument`,
 `version`, `source`, `forge_kind`, recorded when the connection has it, and `ways`, so
-the record shows what each
-credential is minted for and which roles ran. `terminated`
+the record shows what each credential is minted for and which roles ran. `terminated`
 stays: the hosts where the proxy terminates TLS in this run, namely those a connection
 sets a value on, those a tool serves, and those with path rules; a host verified against
 public roots only is among them as a connection's host. `dev.qory.run.egress` has

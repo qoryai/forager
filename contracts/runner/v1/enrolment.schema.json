@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/enrolment.schema.json",
+  "title": "Enrolment",
+  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, and its 201 answer: the request's body is $defs/request, the answer's $defs/answer, and a document is one of the two. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer is signed under the server's key, line 3 of the signed answer being the request's proof exactly as sent. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
+  "oneOf": [
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/answer"}
+  ],
+  "$defs": {
+    "public_key": {
+      "description": "A raw 32-byte Ed25519 public key.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+    },
+    "request": {
+      "title": "Enrolment request",
+      "description": "The body of the enrolment request. proof is the Ed25519 signature under the new key of five lines joined by a line feed, with none after the last: qory-enrol-ed25519-v1, code, public_key, name, and timestamp in canonical decimal.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "code", "name", "public_key", "timestamp", "proof"],
+      "properties": {
+        "version": {
+          "description": "The document format. A server refuses another version, 400 invalid_request.",
+          "const": 1
+        },
+        "code": {
+          "description": "The enrolment code in its normalised form: qec_ and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]).",
+          "type": "string",
+          "pattern": "^qec_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
+        },
+        "name": {
+          "description": "The access key's name for people, by default the host name of the machine that enrols it.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "public_key": {
+          "description": "The new access key's raw Ed25519 public key.",
+          "$ref": "#/$defs/public_key"
+        },
+        "timestamp": {
+          "description": "The machine's clock, in decimal seconds since the Unix epoch. The server accepts it within 300 seconds of its own. It is a JSON integer below 2^53, with no sign, fraction or exponent; the server checks the form when it decodes.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "proof": {
+          "description": "The proof of possession: the Ed25519 signature, 64 bytes, under the new key.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        }
+      }
+    },
+    "answer": {
+      "title": "Enrolment answer",
+      "description": "The 201 answer: the new access key's id, its node or node pool, its approval, its stored-secrets flag and the server's public keys. Every member is required.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "access_key_id", "node_id", "node_kind", "approved", "stored_secrets", "apiary_public_key"],
+      "properties": {
+        "version": {
+          "description": "The document format. A runner refuses a version it does not read.",
+          "const": 1
+        },
+        "access_key_id": {
+          "description": "The access key's id: ak_ and 16 lower-case Crockford base32 characters.",
+          "type": "string",
+          "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
+        },
+        "node_id": {
+          "description": "The id of the access key's node, nd_, or node pool, np_, followed by 16 lower-case Crockford base32 characters.",
+          "type": "string",
+          "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
+        },
+        "node_kind": {
+          "description": "node for an nd_ id, pool for an np_ id.",
+          "type": "string",
+          "enum": ["node", "pool"]
+        },
+        "approved": {
+          "description": "True once an owner or administrator has approved the access key. An access key enrolled with a code awaits approval.",
+          "type": "boolean"
+        },
+        "stored_secrets": {
+          "description": "The access key's stored-secrets flag, fixed when the key is created.",
+          "type": "boolean"
+        },
+        "apiary_public_key": {
+          "description": "The server's signing keys: the current one, and during a rotation the next one after it. The machine verifies the answer under the entry whose fingerprint the code carries first, and pins only the entries whose fingerprints the code carries.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["alg", "public_key"],
+            "properties": {
+              "alg": {"const": "ed25519"},
+              "public_key": {"$ref": "#/$defs/public_key"}
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"node_kind": {"const": "node"}}},
+          "then": {"properties": {"node_id": {"pattern": "^nd_"}}},
+          "else": {"properties": {"node_id": {"pattern": "^np_"}}}
+        }
+      ]
+    }
+  }
+}

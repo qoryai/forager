@@ -1,0 +1,24 @@
+{
+  "access_key": {
+    "note": "The fixture access key: its secret is qak_ and the seed, bytes 1 to 32, in base64url. The X25519 private key is the first 32 bytes of SHA-512(seed) with the clamping applied; the X25519 public key is the Montgomery u-coordinate of the Ed25519 public key. The instance id is i_ and bytes 129 to 144 in base64url. qory refuses this secret and the server refuses this key.",
+    "secret": "qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+    "access_key_id": "ak_f1xt0re000000000",
+    "instance_id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+    "fingerprint": "ZbYGc9btiEvwHCwiLYKtoA",
+    "x25519_private_key": "cHiPGgzqABomMdrl0F29BiAI1bMPULnim-sqeCIokEQ",
+    "x25519_public_key": "SjgH0GTQdxgcwHCYnnaJHSDcpVWVSNwsd8GlAnOIKzg"
+  },
+  "signing_key": {
+    "note": "The fixture signing key of the server, the seed being bytes 65 to 96. Refused as a pin and as the server's key.",
+    "seed": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A",
+    "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc",
+    "fingerprint": "uoES-kuj1vk0sq0qoGlmAg"
+  },
+  "next_signing_key": {
+    "note": "The fixture next signing key of the server, for a rotation, the seed being bytes 161 to 192. Refused as a pin and as the server's key.",
+    "seed": "oaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-v8A",
+    "public_key": "C0eCPnEJXdWb54rCccV27zifh7ZFYasHz5pOvNAtIEE",
+    "fingerprint": "52vzzF--Ic7qH_eZWi5K2A"
+  }
+}

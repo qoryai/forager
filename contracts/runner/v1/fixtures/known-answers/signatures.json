@@ -1,0 +1,63 @@
+{
+  "requests": [
+    {
+      "note": "A GET of discovery, signed under the fixture access key secret.",
+      "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "GET", "/.well-known/qory-configuration", "1700000000"],
+      "length": 115,
+      "signature": "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ"
+    },
+    {
+      "note": "The same GET with a query, signed under the fixture access key secret.",
+      "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "GET", "/.well-known/qory-configuration?x=1", "1700000000"],
+      "length": 119,
+      "signature": "XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ"
+    },
+    {
+      "note": "A POST of the fixture's secrets request to /v1/secrets, signed under the fixture access key secret; the last line is the body.",
+      "body": "fixtures/sealed/secrets-request.json",
+      "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "POST", "/v1/secrets", "{\"version\":1,\"run_id\":\"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"run_configuration\":\"sha256=929056dda41d0ee9b1234d338b76d3190eb01a91477a7196dd3f3db850d9b940\",\"connections\":[\"con_7q2m4k9x0d3h8w1c\",\"con_0b5n6t2r9y4f7j3s\"],\"timestamp\":1700000000}"],
+      "length": 383,
+      "signature": "evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw"
+    }
+  ],
+  "enrolment": [
+    {
+      "note": "The proof of the enrolment request, under the fixture access key secret; the proof is the body's.",
+      "body": "fixtures/enrolment/request.json",
+      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
+      "length": 139
+    },
+    {
+      "note": "The proof of an enrolment request with a code made during a rotation of the server's key, carrying both fingerprints.",
+      "body": "fixtures/enrolment/request-two-fingerprints.json",
+      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
+      "length": 162
+    }
+  ],
+  "answers": [
+    {
+      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, in a workspace with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
+      "body": "fixtures/known-answers/discovery.json",
+      "body_length": 208,
+      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "b6813bc64b11564b8a58b39b8d7ccdf947bcadcde5c1744dd01894f941a52862", "sha256=b6813bc64b11564b8a58b39b8d7ccdf947bcadcde5c1744dd01894f941a52862", ""],
+      "length": 251,
+      "signature": "KR8RzAb1z5MnEj2SPYFrghfXqVdU7Da2Yu0qU1-VQhmuObVUiKLywh8FoTawEfg9u0VgOgFQJhutD3-w4a55Bg"
+    },
+    {
+      "note": "404 to the GET of discovery above, with an empty body and no digest, signed under the fixture signing key.",
+      "body": "",
+      "body_length": 0,
+      "lines": ["qory-answer-ed25519-v1", "404", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "", ""],
+      "length": 180,
+      "signature": "wtXEpqIYCRAH0I9P0wd1DxJxkury0OE566ADTu3bH2GWUP4-TAkNl3a5oKGP6ZVWsP8oPL-yJHuaOaxbNPU_Dg"
+    },
+    {
+      "note": "201 to the enrolment request, signed under the fixture signing key; line 3 is the request's proof.",
+      "body": "fixtures/enrolment/answer.json",
+      "body_length": 241,
+      "lines": ["qory-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "9e98fc75fc9e34f965a455f963b660d39b7ed09859576beaa241c3cec1171e54", "", ""],
+      "length": 180,
+      "signature": "iV3ejKcT8WbcptqR-fHYVoNxrYLdXHXLVUpi1RDwbCZ3Vl7YzcBEwt6iWaHF-MszqdGAANz9lM9n2H5h-fqADw"
+    }
+  ]
+}

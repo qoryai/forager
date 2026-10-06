@@ -46,6 +46,7 @@
             "dev.qory.run.egress",
             "dev.qory.run.policy_applied",
             "dev.qory.run.exited",
+            "dev.qory.run.refused",
             "dev.qory.session.started",
             "dev.qory.session.prompt_submitted",
             "dev.qory.session.tool_started",
@@ -193,6 +194,19 @@
             },
             "data": {
               "$ref": "events/run.exited.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.refused"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/runner/v1/events/run.refused.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.refused.schema.json"
             }
           }
         },
