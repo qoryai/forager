@@ -516,6 +516,7 @@ The types, one namespace. The runner's own:
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
+| `dev.qory.run.refused` | the run did not start after the ping; in place of `dev.qory.run.started`, the first event after the ping and the last | `code`, and when they apply `connection`, `names`, `providers`, `status` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
@@ -1111,6 +1112,18 @@ suite in an enclosure with a daemon. The suite checks the list as the agent's us
 the enclosure's root reaches of the mounts the run lists is the open question that keeps
 the option experimental.
 
+## Files of secrets and variables
+
+| File | Defines |
+|---|---|
+| `secrets-request.schema.json` | the body of the signed POST to the configuration's `secrets.url` |
+| `secrets-answer.schema.json` | its answer, the envelope: the stored values sealed with HPKE to the access key, signed under the server's key |
+| `sealed-plaintext.schema.json` | the plaintext the envelope opens to |
+| `enrolment.schema.json` | the enrolment request's body and its answer |
+| `events/run.refused.schema.json` | the data of `dev.qory.run.refused`, a run that does not start after the ping, with its refusal code |
+| `denied-variables.json` | the built-in deny list of variables, `names` and `patterns`, each matching a whole name regardless of case, `*` matching any run of characters |
+| `headers.json` | the header names, `refused`, and prefixes, `refused_prefixes`, refused for a connection's header, in lower case: every field of the IANA HTTP Field Name Registry as updated on 2026-08-28; the Fetch standard's forbidden request headers as of 2026-10-06; `origin`, `content-type`, `x-request-id`, `x-correlation-id`, `forwarded`, `via`, `range`, `user-agent`, `referer`, `host`, `content-length`, `transfer-encoding`, `connection`, `keep-alive`, `te`, `trailer`, `upgrade`, `cookie` and `authorization`; and the prefixes `accept`, `if-`, `x-forwarded-`, `proxy-`, `sec-`, `x-qory-` and `qory-` |
+
 ## Fixtures
 
 | Directory | Contains | Validated against |
@@ -1125,23 +1138,11 @@ the option experimental.
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/sealed/` | the sealed fixture: a run configuration, the secrets request that lists its digest, the envelope sealed to the fixture access key with a fixed ephemeral key, the plaintext it opens to, and `vectors.json` with `info`, `aad`, the ephemeral key and the lengths and SHA-256 of the ciphertext and of the envelope's signed message | `secrets-request.schema.json`, `secrets-answer.schema.json`, `sealed-plaintext.schema.json` and `run-configuration.schema.json`; the open with Go's `crypto/hpke`, and the envelope's signature under the fixture signing key |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, and the answer | `enrolment.schema.json`; each proof under the fixture access key |
-| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 Every fixture is synthetic. No host name of anyone's infrastructure, no real secret, no
 recorded session of anyone's work.
-
-### Files of secrets and variables
-
-| File | Defines |
-|---|---|
-| `secrets-request.schema.json` | the body of the signed POST to the configuration's `secrets.url` |
-| `secrets-answer.schema.json` | its answer, the envelope: the stored values sealed with HPKE to the access key, signed under the server's key |
-| `sealed-plaintext.schema.json` | the plaintext the envelope opens to |
-| `enrolment.schema.json` | the enrolment request's body and its answer |
-| `events/run.refused.schema.json` | the data of `dev.qory.run.refused`, a run that does not start after the ping, with its refusal code |
-| `denied-variables.json` | the built-in deny list of variables, `names` and `patterns`, each matching a whole name regardless of case, `*` matching any run of characters |
-| `headers.json` | the header names, `refused`, and prefixes, `refused_prefixes`, refused for a connection's header, in lower case: every field of the IANA HTTP Field Name Registry as updated on 2026-08-28; the Fetch standard's forbidden request headers as of 2026-10-06; `origin`, `content-type`, `x-request-id`, `x-correlation-id`, `forwarded`, `via`, `range`, `user-agent`, `referer`, `host`, `content-length`, `transfer-encoding`, `connection`, `keep-alive`, `te`, `trailer`, `upgrade`, `cookie` and `authorization`; and the prefixes `accept`, `if-`, `x-forwarded-`, `proxy-`, `sec-`, `x-qory-` and `qory-` |
 
 ## Sources
 

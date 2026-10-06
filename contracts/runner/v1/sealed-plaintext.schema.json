@@ -35,7 +35,7 @@
         "properties": {
           "secret": {"description": "The secret's id: sec_ and 16 lower-case Crockford base32 characters.", "type": "string", "pattern": "^sec_[0-9a-hjkmnp-tv-z]{16}$"},
           "value_id": {"description": "The value's id within a secret with several values; absent for a secret with one value.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "value": {"description": "The value: UTF-8 text of 1 to 16384 bytes, with no NUL. A value set in a header also has no control character other than tab and no leading or trailing space or tab; the runner checks that where it uses the value.", "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\x00]+$"}
+          "value": {"description": "The value: UTF-8 text with no NUL. The schema bounds it at 16384 characters; the runner and the server hold it to 1 to 16384 bytes of UTF-8. A value set in a header also has no control character other than tab and no leading or trailing space or tab; the runner checks that where it uses the value.", "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\x00]+$"}
         }
       }
     }
