@@ -1,6 +1,8 @@
 // Package claude is Claude Code as a runtime of the runner: the contract's descriptor
-// for it, and the one thing of it that takes code, putting the forwarder into the
-// settings it reads its hooks from.
+// for it, and the one thing of it that takes code, the claude-settings installer. It
+// puts the forwarder into the settings Claude Code reads its hooks from and, for an
+// interactive session with the API key's stand-in, pre-approves the stand-in in the
+// configuration Claude Code reads, which it otherwise waits for a person to approve.
 package claude
 
 import (

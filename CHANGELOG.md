@@ -95,6 +95,42 @@ release may change what an existing document does, and says so under Upgrading.
   library: the keys from their seeds, the X25519 key from the access key, each
   signature, the open with `crypto/hpke`, and the points of small order with integer
   arithmetic.
+- A runtime declares its secrets in Go through `runtimes.Secrets`, an optional interface
+  checked by type assertion, whose `Secrets` method returns `runtimes.Declarations`: the
+  declarations, the `one_of` groups, and the reserved, denied and credential-file lists
+  of a descriptor's `secrets`. A described runtime implements it with a copy of its
+  descriptor's section, empty when the descriptor has none; a runtime without it
+  declares nothing. `runtimes.Declaration`, `runtimes.Group` and `runtimes.Auth` are the
+  parts.
+- `runtimes.Attach` has `Placeholders`: behind a wall, the variables the enclosure gets
+  the placeholder value in, a credential's and a tool's. `runtimes.Placeholder` is that
+  value.
+- Interactive Claude Code runs with an API key behind a wall. On a pseudo-terminal,
+  Claude Code waits for a person to approve the key in `ANTHROPIC_API_KEY` unless its
+  configuration lists the key's last 20 characters under
+  `customApiKeyResponses.approved`. When the session is interactive and
+  `ANTHROPIC_API_KEY` is a placeholder of the run, the `claude-settings` installer
+  writes `approve-key.sh` into the run directory and starts Claude Code through it with
+  `/bin/sh`, which such an image contains: the script adds the placeholder value's
+  entry, `utside-the-enclosure`, to `~/.claude.json`, or to the file Claude Code reads
+  in its place, inside the enclosure, and then starts Claude Code. A missing file
+  becomes one with the entry alone, mode 0600; an empty one gets the entry and keeps its
+  mode. A JSON object without `customApiKeyResponses` gets the entry as its first
+  member, and keeps every member and the bytes before and after its opening brace,
+  ending in one newline. Any other file, and a path that is neither a regular file nor
+  missing, stays as it is. The script writes to a temporary file beside the
+  configuration first and copies it over, through a link when the configuration is one;
+  whatever fails, the configuration keeps its content and Claude Code starts. The OAuth
+  credential, and every headless session, start Claude Code as before.
+- `TestDockerClaudeCodeThroughTheWall` also runs Claude Code interactively, on a
+  pseudo-terminal with a home of its own whose configuration has the onboarding done and
+  the workspace trusted, with the API key and with the OAuth credential. The test types
+  a prompt once Claude Code shows its input and leaves with `/exit`; with the API key,
+  Claude Code reaches its input with no approval prompt for the key, and the
+  configuration then holds the placeholder value's entry and every member it held
+  before. Every run sets `ANTHROPIC_AUTH_TOKEN` and the other credential's variable
+  empty, and the recorder receives the chosen credential's header alone, so Claude Code
+  reads an empty variable as unset and uses the placeholder.
 
 ### Changed
 
@@ -110,6 +146,17 @@ release may change what an existing document does, and says so under Upgrading.
   daemon's environment, the owners and modes of `/run/qory` and the agent's docker
   configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
   that configuration.
+- `dev.qory.run.started` records `command` and `args` as the runtime prepared them, as
+  the runner always did; `run.started.schema.json` and §Sequence now say so. For an
+  interactive Claude Code whose API key is a placeholder, `command` is `/bin/sh` and
+  `args` hold the script in the run directory, then `claude` and its arguments.
+- Contract `v1` revision 1 is amended in place again: a runtime in §The runtime defines
+  seven things, the secrets it declares among them, through `runtimes.Secrets` in Go;
+  its preparation receives the variables the enclosure gets the placeholder value in,
+  and may change the command and the arguments, so it may start the program through a
+  script it writes into the run directory. §The descriptor describes Claude Code's
+  approval of an API key and the script that pre-approves the placeholder value, and
+  §Sequence's steps 6 and 7 list the script.
 
 ### Fixed
 

@@ -9,8 +9,8 @@
   "properties": {
     "runtime": {"description": "The runtime's name: claude, codex.", "type": "string", "minLength": 1},
     "runtime_version": {"description": "The runtime version the runner's adapter for it, such as a descriptor, was written against; the runner never checks the installed version. Absent for a bare runtime, whose records the runner does not parse, and when the runtime's adapter reports no version.", "type": "string", "minLength": 1},
-    "command": {"description": "The program started, as passed to the runner.", "type": "string", "minLength": 1},
-    "args": {"description": "Its arguments, as passed. Environment is never reported.", "type": "array", "items": {"type": "string"}},
+    "command": {"description": "The program started, as the runtime prepared it.", "type": "string", "minLength": 1},
+    "args": {"description": "Its arguments, as the runtime prepared them. Environment is never reported.", "type": "array", "items": {"type": "string"}},
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "terminal": {

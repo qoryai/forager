@@ -431,7 +431,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The run directory goes in read-only, over whatever mount holds it: the settings
 	// are read from it, and the record in it is not the agent's to rewrite.
 	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
-	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}); err != nil {
+	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}
+	if enclosure != nil {
+		attach.Placeholders = append(slices.Clone(held.Placeholders), tool.Placeholders(chosen)...)
+	}
+	if prepared, err = rt.Prepare(attach); err != nil {
 		sinks.Close(ctx)
 		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
 	}
