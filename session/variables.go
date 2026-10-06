@@ -54,8 +54,8 @@ func nodePaths(pol *policy.Loaded) int {
 
 // resolve resolves the run's variables, the server's and the node's, and checks what
 // the run passes into the enclosure. It returns the resolution and, for a walled run,
-// the runtime's declared and reserved variables no placeholder sets, each as an empty
-// value.
+// the runtime's declared and reserved variables that neither a placeholder nor the run
+// sets, each as an empty value.
 func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, held *credential.Held, chosen []tool.Chosen) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
@@ -89,13 +89,18 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	if err != nil {
 		return variables.Resolved{}, nil, err
 	}
-	if err := variables.Check(slices.Concat(spec.Env, spec.LaunchEnv, vars.Env), spec.Wall != nil, runtimeNames, placeholderNames, machine); err != nil {
+	passed := slices.Concat(spec.Env, spec.LaunchEnv, vars.Env)
+	if err := variables.Check(passed, spec.Wall != nil, placeholderNames, machine); err != nil {
 		return variables.Resolved{}, nil, err
 	}
+	// Behind a wall, a variable the runtime declares or reserves that neither a
+	// placeholder nor the run sets goes in empty, so an image's own value for it does not
+	// reach the runtime. A value the run passes for one stays the agent's.
 	var emptied []string
 	if spec.Wall != nil {
+		set := names(passed)
 		for _, name := range runtimeNames {
-			if !slices.Contains(placeholderNames, name) {
+			if !slices.Contains(placeholderNames, name) && !slices.Contains(set, name) {
 				emptied = append(emptied, name+"=")
 			}
 		}

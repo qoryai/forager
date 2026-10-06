@@ -170,11 +170,11 @@ func TestTheBuiltinListIsTheContracts(t *testing.T) {
 // TestCheckRefusesWhatStaysOutside pins the refusals of a run's own environment, with
 // their codes and names and never a value: behind a wall, a QORY_ variable other than
 // the two the runner sets, in any case, and a variable a machine value is read from,
-// are variable_reserved; a variable the runtime declares or reserves is
-// runtime_secret_conflict; in any run, a value for a placeholder is
-// placeholder_conflict. Without a wall the first two pass.
+// are variable_reserved; in any run, a value for a placeholder is
+// placeholder_conflict. Without a wall the first pass, and a variable the runtime
+// reads its credential from passes either way.
 func TestCheckRefusesWhatStaysOutside(t *testing.T) {
-	runtime, placeholders, machine := claude.Runtime, []string{"GITHUB_TOKEN"}, []string{"SENTRY_AUTH_SOURCE"}
+	placeholders, machine := []string{"GITHUB_TOKEN"}, []string{"SENTRY_AUTH_SOURCE"}
 	secret := "a-value-no-error-quotes"
 	for _, tc := range []struct {
 		env    []string
@@ -185,13 +185,13 @@ func TestCheckRefusesWhatStaysOutside(t *testing.T) {
 		{[]string{"QORY_ACCESS_KEY_SECRET=" + secret, "QORY_SERVER_SECRET=" + secret}, true, refusal.VariableReserved, []string{"QORY_ACCESS_KEY_SECRET", "QORY_SERVER_SECRET"}},
 		{[]string{"qory_lower=" + secret}, true, refusal.VariableReserved, []string{"qory_lower"}},
 		{[]string{"SENTRY_AUTH_SOURCE=" + secret}, true, refusal.VariableReserved, []string{"SENTRY_AUTH_SOURCE"}},
-		{[]string{"ANTHROPIC_API_KEY=" + secret, "ANTHROPIC_AUTH_TOKEN=" + secret}, true, refusal.RuntimeSecretConflict, []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}},
+		{[]string{"ANTHROPIC_API_KEY=" + secret, "CLAUDE_CODE_OAUTH_TOKEN=" + secret}, true, "", nil},
 		{[]string{"GITHUB_TOKEN=" + secret}, true, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
 		{[]string{"GITHUB_TOKEN=" + secret}, false, refusal.PlaceholderConflict, []string{"GITHUB_TOKEN"}},
 		{[]string{"QORY_RUN_ID=x", "QORY_RUN_SOCKET=x", "NODE_ENV=test"}, true, "", nil},
 		{[]string{"QORY_SERVER_SECRET=" + secret, "ANTHROPIC_API_KEY=" + secret, "SENTRY_AUTH_SOURCE=" + secret}, false, "", nil},
 	} {
-		err := variables.Check(tc.env, tc.walled, runtime, placeholders, machine)
+		err := variables.Check(tc.env, tc.walled, placeholders, machine)
 		if tc.code == "" {
 			if err != nil {
 				t.Errorf("%q, walled %v: %v", tc.env, tc.walled, err)

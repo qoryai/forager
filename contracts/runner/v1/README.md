@@ -173,7 +173,7 @@ One run, on a developer machine, with a server configured:
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
    `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment but
    the variables (§Variables), the placeholders and, in a walled run, the runtime's
-   declared and reserved variables as empty.
+   declared and reserved variables the run does not set, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    the runner's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
@@ -579,17 +579,17 @@ the stand-in or an empty value goes; one a value of the machine's is read from, 
 a credential's `env` (§Credentials), whose value stays outside the enclosure; and one
 the runtime's preparation, the harness or the wall sets.
 
-**The node's own environment** keeps three refusals, because they keep the node's
-secrets and the stand-ins out of the enclosure. A walled run whose environment, what it
+**The node's own environment** keeps two refusals, because they keep the node's secrets
+and the stand-ins out of the enclosure. A walled run whose environment, what it
 inherits, what the harness sets and the node's variables, passes a `QORY_` variable, or
 a variable a value of the machine's is read from, into the enclosure is no run,
 `variable_reserved`; `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets
-for the session, are exempt. A walled run whose environment contains a variable the
-run's runtime declares or reserves is no run, `runtime_secret_conflict`: behind a wall
-the runtime's credential stays outside. A run that passes a value for a placeholder is
-no run, `placeholder_conflict`. Behind a wall, every variable the runtime declares or
-reserves that no placeholder sets goes into the enclosure as an empty value, so an
-image's own `ENV` cannot set one.
+for the session, are exempt. A run that passes a value for a placeholder is no run,
+`placeholder_conflict`. A variable the run's runtime declares or reserves that the run
+passes, through `wall.env` or `--env` for `qory`, reaches the runtime as passed. Behind
+a wall, every variable the runtime declares or reserves that neither a placeholder nor
+the run sets goes into the enclosure as an empty value, so an image's own `ENV` cannot
+set one.
 
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.

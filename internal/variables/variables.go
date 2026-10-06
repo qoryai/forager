@@ -5,8 +5,7 @@
 // and returns what the run applies with the names it left out and why, as
 // dev.qory.run.policy_applied reports them. [Check] refuses a run whose own environment
 // passes into the enclosure what must stay outside: the runner's own variables, a
-// variable a machine value is read from, a variable the runtime declares or reserves,
-// a value for a placeholder.
+// variable a machine value is read from, a value for a placeholder.
 //
 // The deny list is the contract's denied-variables.json, the run's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
@@ -135,12 +134,11 @@ func Resolve(r Run) (Resolved, error) {
 }
 
 // Check refuses a run whose own environment, env, NAME=value, passes into the
-// enclosure what stays outside. In a walled run: a QORY_ variable other than the two
+// enclosure what stays outside. In a walled run, a QORY_ variable other than the two
 // the runner sets for the session, or a variable a machine value is read from, is
-// [refusal.VariableReserved]; a variable the runtime declares or reserves is
-// [refusal.RuntimeSecretConflict]. In any run, a value for a placeholder is
+// [refusal.VariableReserved]. In any run, a value for a placeholder is
 // [refusal.PlaceholderConflict].
-func Check(env []string, walled bool, runtime, placeholders, machine []string) error {
+func Check(env []string, walled bool, placeholders, machine []string) error {
 	names := map[string]bool{}
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
@@ -162,9 +160,6 @@ func Check(env []string, walled bool, runtime, placeholders, machine []string) e
 			return own || slices.Contains(machine, n)
 		}); len(reserved) > 0 {
 			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, the runner's own or what a value of the machine's is read from", strings.Join(reserved, ", "))
-		}
-		if conflict := pick(func(n string) bool { return slices.Contains(runtime, n) }); len(conflict) > 0 {
-			return refusal.New(refusal.RuntimeSecretConflict, conflict, "the run passes %s into the enclosure, which the runtime reads its credential from; behind a wall the runtime's credential stays outside", strings.Join(conflict, ", "))
 		}
 	}
 	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {

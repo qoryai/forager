@@ -24,9 +24,6 @@ const (
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.
 	VariableReserved = "variable_reserved"
-	// RuntimeSecretConflict is a walled run whose environment contains a variable the
-	// run's runtime declares or reserves.
-	RuntimeSecretConflict = "runtime_secret_conflict"
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
 )

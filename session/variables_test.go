@@ -161,8 +161,8 @@ func mapsEqual(a, b map[string]string) bool {
 // TestWhatARunPassesInIsChecked pins the refusals of a run's own environment end to
 // end, each a session.Refusal with its code and names and no value: behind a wall, a
 // QORY_ variable of the node's and a variable a credential is read from are
-// variable_reserved, a variable the runtime declares is runtime_secret_conflict, and a
-// value for a credential's placeholder is placeholder_conflict.
+// variable_reserved, and a value for a credential's placeholder is
+// placeholder_conflict.
 func TestWhatARunPassesInIsChecked(t *testing.T) {
 	t.Setenv("MODEL_SOURCE", "the-credential-held-outside")
 	secret := "a-value-no-error-quotes"
@@ -174,7 +174,6 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 	}{
 		{"a QORY_ variable", func(sp *session.Spec) { sp.Variables.Own = []string{"QORY_SERVER_SECRET=" + secret} }, "variable_reserved", []string{"QORY_SERVER_SECRET"}},
 		{"what a credential is read from", func(sp *session.Spec) { sp.LaunchEnv = []string{"MODEL_SOURCE=" + secret} }, "variable_reserved", []string{"MODEL_SOURCE"}},
-		{"the runtime's key", func(sp *session.Spec) { sp.Env = append(sp.Env, "ANTHROPIC_API_KEY="+secret) }, "runtime_secret_conflict", []string{"ANTHROPIC_API_KEY"}},
 		{"a placeholder", func(sp *session.Spec) {
 			sp.Policy = &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Credentials: []session.PolicyCredential{{Name: "model"}}}
 			sp.Variables.Own = []string{"MODEL_TOKEN=" + secret}
@@ -281,5 +280,32 @@ func TestANarrowingThatRefusesIsNoRun(t *testing.T) {
 				t.Errorf("the error quotes a value: %v", err)
 			}
 		})
+	}
+}
+
+// TestAWalledRunPassesTheRuntimesKeyItLists pins the walled run that passes the
+// runtime's credential as a node variable, as wall.env and --env do: the value reaches
+// the agent as passed, and the runtime's other declared and reserved variables, which
+// neither a placeholder nor the run sets, are there empty.
+func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
+	sp := spec(t, nil)
+	out := dumpsEnv(t, &sp)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.Variables.Own = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit %d", res.ExitCode)
+	}
+	env := envOf(t, out)
+	if env["CLAUDE_CODE_OAUTH_TOKEN"] != "a-fake-credential" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN=%q, want the value the run passed", env["CLAUDE_CODE_OAUTH_TOKEN"])
+	}
+	for _, name := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		if value, ok := env[name]; !ok || value != "" {
+			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
+		}
 	}
 }

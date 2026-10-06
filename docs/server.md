@@ -70,7 +70,6 @@ Behind a wall, the run refuses to pass in what stays outside:
 | The run passes                                   | The refusal               |
 | ------------------------------------------------ | ------------------------- |
 | a `QORY_` variable, or one a credential is read from | `variable_reserved`   |
-| a variable the runtime reads its credential from, such as `ANTHROPIC_API_KEY` | `runtime_secret_conflict` |
 | a value for a placeholder                        | `placeholder_conflict`    |
 
 The record lists every variable by name, never a value. From Go, `Variables` in the

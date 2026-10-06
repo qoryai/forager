@@ -43,15 +43,14 @@ release may change what an existing document does, and says so under Upgrading.
   goes in `LaunchEnv`, and the node's own variables, for `qory` `wall.env` and `--env`,
   in `Variables.Own`, so the runner distinguishes them: a server's variable of a name in
   `LaunchEnv` is left out, and a node variable of a name the server sets is left out.
-- A walled run refuses to pass into the enclosure a variable the run's runtime declares
-  or reserves, for Claude Code `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and
-  `ANTHROPIC_AUTH_TOKEN`, with `runtime_secret_conflict`; and a `QORY_` variable other
-  than `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names,
-  with `variable_reserved`. Whether it comes from `Env`, `LaunchEnv` or `Variables.Own`
-  is the same. A model credential behind a wall is a credential the machine defines and
-  the policy selects, whose placeholder is the runtime's variable. Behind a wall, every
-  variable the runtime declares or reserves that no placeholder sets is in the
-  enclosure's environment as an empty value.
+- A walled run refuses to pass into the enclosure a `QORY_` variable other than
+  `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
+  `variable_reserved`, whether it comes from `Env`, `LaunchEnv` or `Variables.Own`.
+  Behind a wall, every variable the runtime declares or reserves that neither a
+  placeholder nor the run sets is in the enclosure's environment as an empty value, for
+  Claude Code `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`:
+  a value the run passes for one, through `wall.env` or `--env`, reaches the runtime as
+  before.
 - With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
   it, where the runner ignored it before: a caller that refused a policy of its own
   beside a server passes it now.
@@ -89,9 +88,8 @@ release may change what an existing document does, and says so under Upgrading.
   SHA-256 of its RFC 8785 serialisation, and its `paths`.
 - `session.Refusal` is a run refused before it starts, with the contract's refusal code
   and the names it concerns, never a value: `run_configuration_invalid`,
-  `variable_reserved`, `runtime_secret_conflict`, `placeholder_conflict`,
-  `tool_unknown` and `image_unknown`. `errors.As` finds it in the error `session.Run`
-  returns.
+  `variable_reserved`, `placeholder_conflict`, `tool_unknown` and `image_unknown`.
+  `errors.As` finds it in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
