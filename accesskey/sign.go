@@ -150,6 +150,13 @@ func ParsePin(b []byte) (Pin, error) {
 	if ContainsSecret(string(b)) {
 		return nil, ErrSecretInDocument
 	}
+	var doc any
+	if err := jsonv2.Unmarshal(b, &doc); err != nil {
+		return nil, errors.New("the pin is not a JSON list of {alg, public_key}")
+	}
+	if DocumentContainsSecret(doc) {
+		return nil, ErrSecretInDocument
+	}
 	var p Pin
 	if err := jsonv2.Unmarshal(b, &p, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("the pin is not a list of {alg, public_key}: %w", err)
