@@ -75,9 +75,6 @@ release may change what an existing document does, and says so under Upgrading.
   answer, each request carries the fake key in the credential's header and no stand-in,
   and the record lists one request through the proxy for each the recorder received,
   each to the recorder.
-
-### Added
-
 - Contract `v1` revision 1, amended in place, gains the files of a run's secrets and
   variables that the server vendors: `secrets-request.schema.json`, the body of the
   secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
