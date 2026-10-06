@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/socket"
 )
@@ -619,11 +620,20 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 type hostSystem struct{}
 
 func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
-	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+	return hostCommand(ctx, argv).CombinedOutput()
 }
 
 func (hostSystem) output(ctx context.Context, argv []string) ([]byte, error) {
-	return exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	return hostCommand(ctx, argv).Output()
+}
+
+// hostCommand is a command of the machine's the wall runs, the docker CLI say, with
+// the runner's environment without the access key's variables, which neither the CLI
+// nor a credential helper it starts receives.
+func hostCommand(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = accesskey.WithoutVariables(os.Environ())
+	return cmd
 }
 
 func (hostSystem) local(ip string) bool {

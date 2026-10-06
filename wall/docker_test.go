@@ -377,3 +377,20 @@ func TestDockerRefusesANestWithoutItsRuntime(t *testing.T) {
 		}
 	}
 }
+
+// TestTheDockerCLIReceivesNoAccessKeyVariable pins that a command the wall runs on the
+// machine, the docker CLI and the credential helpers it starts, has the runner's
+// environment without the access key's variables.
+func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
+	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
+	t.Setenv("QORY_ACCESS_KEY_ID", "ak_f1xt0re000000000")
+	t.Setenv("QORY_APIARY_PUBLIC_KEY", "[]")
+	t.Setenv("DOCKER_SEES", "yes")
+	out, err := hostSystem{}.output(context.Background(), []string{"env"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "QORY_ACCESS_KEY_") || strings.Contains(string(out), "QORY_APIARY_") || !strings.Contains(string(out), "DOCKER_SEES=yes") {
+		t.Errorf("the command's environment:\n%s", out)
+	}
+}
