@@ -21,6 +21,8 @@ const SettingsInstaller = "claude-settings"
 // document they hold there, or starts from an empty one when they name none, adds a
 // hook group per event under "hooks", writes the result as settings.json in the run
 // directory, and names that file instead. The file the launch passed is not modified.
+// An interactive launch whose API key is the run's stand-in is then started through
+// the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
 	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder)
@@ -28,7 +30,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 		return runtimes.Launch{}, err
 	}
 	launch.Args = args
-	return launch, nil
+	return approve(a, launch)
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string) ([]string, error) {
