@@ -130,7 +130,7 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 
 // TestSecretsFixturesValidate pins that every fixture of the sealed fixture and of
 // enrolment passes its schema: the secrets request, its answer, the plaintext, the run
-// configuration the request names, discovery, and the enrolment request and answer each
+// configuration the request lists, discovery, and the enrolment request and answer each
 // against the half of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
@@ -285,7 +285,7 @@ func (v signedVector) message(t *testing.T) []byte {
 	return m
 }
 
-// body returns the bytes of the file a vector names, or none for an empty name.
+// body returns the bytes of the file a vector lists, or none for an empty name.
 func (v signedVector) body(t *testing.T) []byte {
 	t.Helper()
 	if v.Body == nil {
@@ -302,7 +302,7 @@ func (v signedVector) body(t *testing.T) []byte {
 }
 
 // signs checks that sig is the signature under priv of m: it verifies under the public
-// key, and Ed25519 being deterministic, signing again gives the same bytes.
+// key, and Ed25519 being deterministic, signing again returns the same bytes.
 func signs(t *testing.T, what string, priv ed25519.PrivateKey, m []byte, sig string) {
 	t.Helper()
 	s := b64(t, sig)
@@ -447,7 +447,7 @@ func TestAnswerSignatures(t *testing.T) {
 			}
 			if err := json.Unmarshal(body, &e); err != nil || e.AccessKeyID != k.AccessKey.AccessKeyID ||
 				len(e.APIaryPublicKey) != 1 || e.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
-				t.Errorf("%s: the answer names %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
+				t.Errorf("%s: the answer contains %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
 			}
 		default:
 			t.Errorf("%s: status %q", a.Note, a.Lines[1])
@@ -507,11 +507,11 @@ type plaintext struct {
 }
 
 // TestSealedFixture pins the sealed fixture end to end: the run configuration's digest,
-// the secrets request that names it, info and aad built from the envelope's identifiers,
+// the secrets request that lists it, info and aad built from the envelope's identifiers,
 // enc from the fixed ephemeral key, the envelope's signature under the fixture signing
 // key, and the open: crypto/hpke with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
-// AES-256-GCM, NewRecipient with info and Open with aad, gives the published plaintext,
-// and an altered aad gives nothing. The plaintext holds the request's connections,
+// AES-256-GCM, NewRecipient with info and Open with aad, yields the published plaintext,
+// and with an altered aad fails. The plaintext contains the request's connections,
 // sorted, and the distinct pairs of secret and value id they reference with an id.
 func TestSealedFixture(t *testing.T) {
 	k := loadKeys(t)

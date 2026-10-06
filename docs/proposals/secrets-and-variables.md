@@ -2537,8 +2537,7 @@ and value id; `uses` where and how the proxy sets each value; `hosts_denied` the
 connection's hosts the policy in force denies, recomputed in every further
 `policy_applied`. An integration connection's entry also records its `argument`,
 `version`, `source`, `forge_kind`, recorded when the connection has it, and `ways`, so
-the record shows what each
-credential is minted for and which roles ran. `terminated`
+the record shows what each credential is minted for and which roles ran. `terminated`
 stays: the hosts where the proxy terminates TLS in this run, namely those a connection
 sets a value on, those a tool serves, and those with path rules; a host verified against
 public roots only is among them as a connection's host. `dev.qory.run.egress` has
