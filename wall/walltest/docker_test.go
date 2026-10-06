@@ -79,7 +79,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	var recorders []walltest.Recorder
 	for i := range 3 {
 		name := fmt.Sprintf("qory-walltest-recorder-%d-%d", os.Getpid(), i)
-		args := []string{"run", "--detach", "--rm", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
+		args := []string{"run", "--detach", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
 		for _, kv := range walltest.RecorderEnv() {
 			args = append(args, "--env", kv)
 		}

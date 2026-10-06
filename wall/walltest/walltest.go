@@ -211,11 +211,12 @@ type Options struct {
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
-	// which [EnvRequire] turns into failures. With Recorders, Run points the process's
-	// roots at the suite's authority alone, with SSL_CERT_FILE and SSL_CERT_DIR. The
-	// process reads its roots once, at its first verification of a certificate, so the
-	// test binary's first verification must come within Run; from then on, for the rest
-	// of the process, it trusts only the suite's authority.
+	// which [EnvRequire] turns into failures. With Recorders, Run points the roots of
+	// the process, and the programs it starts within Run, at the suite's authority
+	// alone, with SSL_CERT_FILE and SSL_CERT_DIR. The process reads its roots once, at
+	// its first verification of a certificate, so the test binary's first verification
+	// must come within Run; from then on, for the rest of the process, it trusts only
+	// the suite's authority.
 	Recorders []Recorder
 }
 
@@ -396,7 +397,12 @@ func Run(t *testing.T, o Options) {
 		if r.probe.OwnViaProxy != 200 || own.Load() == 0 || r.probe.MetaViaProxy != 403 {
 			t.Errorf("with 127.0.0.1 named in the allow list this machine's listener answered %d through the proxy, and the metadata address %d", r.probe.OwnViaProxy, r.probe.MetaViaProxy)
 		}
-		t.Run("no runtime's key in the record", func(t *testing.T) { checkNoKey(t, r) })
+		t.Run("no runtime's key in the record", func(t *testing.T) {
+			if len(o.Recorders) != 3 {
+				Skip(t, "the adapter's test starts no recorders")
+			}
+			checkNoKey(t, r)
+		})
 	})
 }
 

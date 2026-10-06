@@ -28,12 +28,14 @@ release may change what an existing document does, and says so under Upgrading.
   the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
   and a number other than none or three fails the suite. A recorder prints
   `walltest.RecorderReady` once it listens, and `walltest.AwaitRecorder` waits for that
-  line in its container's log. With `Recorders`, `walltest.Run` points the process's
-  roots at the suite's authority alone, with `SSL_CERT_FILE` and `SSL_CERT_DIR`. The
-  process reads its roots once, at its first verification of a certificate, so the test
-  binary's first verification must come within `Run`; from then on, for the rest of the
-  process, it trusts only the suite's authority. `TestDockerConforms` starts the
-  recorders from `busybox:stable`.
+  line in its container's log, and fails with the log at once when the container stops
+  first; a recorder's container started without `--rm` keeps that log. With
+  `Recorders`, `walltest.Run` points the roots of the process, and the programs it
+  starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
+  certificate, so the test binary's first verification must come within `Run`; from
+  then on, for the rest of the process, it trusts only the suite's authority.
+  `TestDockerConforms` starts the recorders from `busybox:stable`.
 
 ### Added
 

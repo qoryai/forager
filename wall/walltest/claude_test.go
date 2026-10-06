@@ -45,7 +45,7 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	}
 	helper := Helper(t)
 	name := fmt.Sprintf("qory-walltest-claude-recorder-%d", os.Getpid())
-	args := []string{"run", "--detach", "--rm", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
+	args := []string{"run", "--detach", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
 	for _, kv := range RecorderEnv() {
 		args = append(args, "--env", kv)
 	}

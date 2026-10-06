@@ -3,6 +3,7 @@ package walltest
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,29 +114,43 @@ func RecorderEnv() []string {
 const RecorderReady = "walltest recorder: listening"
 
 // AwaitRecorder waits up to 30 seconds for the recorder in the container name, which
-// command started, to print [RecorderReady] to the container's log, and fails the test
-// when the 30 seconds run out.
+// command started, to print [RecorderReady] to the container's log. It fails the test
+// with the log at once when the container stops first, and when the 30 seconds run
+// out. The container is started without --rm, so its log stays readable once it stops.
 func AwaitRecorder(t *testing.T, command, name string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var log []byte
 	for {
-		out, err := exec.Command(command, "logs", name).CombinedOutput()
-		if err == nil && bytes.Contains(out, []byte(RecorderReady)) {
+		state, err := exec.CommandContext(ctx, command, "inspect", "--format", "{{.State.Running}}", name).Output()
+		running := err == nil && strings.TrimSpace(string(state)) == "true"
+		if out, lerr := exec.CommandContext(ctx, command, "logs", name).CombinedOutput(); lerr == nil {
+			log = out
+		}
+		switch {
+		case running && bytes.Contains(log, []byte(RecorderReady)):
 			return
+		case ctx.Err() != nil:
+			t.Fatalf("the recorder %s printed no %q within 30 seconds; its log:\n%s", name, RecorderReady, log)
+		case err != nil:
+			t.Fatalf("the recorder %s: %v; its log:\n%s", name, err, log)
+		case !running:
+			t.Fatalf("the recorder %s stopped before it printed %q; its log:\n%s", name, RecorderReady, log)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the recorder %s printed no %q within 30 seconds: %v: %s", name, RecorderReady, err, out)
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// trustRecorders points this machine's roots, for the test's process, at the suite's
-// authority alone, with SSL_CERT_FILE at a file that holds it and SSL_CERT_DIR at an
-// empty directory, and returns the error of verifying a certificate of it. The process
-// reads its roots once, at its first verification of a certificate, so that
-// verification must come after this; from then on the process trusts only the suite's
-// authority.
+// trustRecorders points this machine's roots, for the process and the programs it
+// starts within Run, at the suite's authority alone, with SSL_CERT_FILE at a file that
+// holds it and SSL_CERT_DIR at an empty directory, and returns the error of verifying a
+// certificate of it. The process reads its roots once, at its first verification of a
+// certificate, so that verification must come after this; from then on the process
+// trusts only the suite's authority.
 func trustRecorders(t *testing.T) error {
 	t.Helper()
 	cert, key := authority()
