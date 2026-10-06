@@ -163,14 +163,15 @@ func (p Pin) Check() error {
 	return nil
 }
 
-// Keys returns the pin's public keys, leaving out an entry that is not a key.
+// Keys returns the pin's public keys, leaving out an entry that is not an ed25519 key
+// [PublicKey.Check] passes.
 func (p Pin) Keys() []PublicKey {
 	var out []PublicKey
 	for _, k := range p {
 		if k.Alg != "ed25519" {
 			continue
 		}
-		if pub, err := ParsePublicKey(k.PublicKey); err == nil {
+		if pub, err := ParsePublicKey(k.PublicKey); err == nil && pub.Check() == nil {
 			out = append(out, pub)
 		}
 	}

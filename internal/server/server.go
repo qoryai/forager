@@ -256,15 +256,18 @@ type Client struct {
 }
 
 // Check refuses a client that cannot make a request the contract allows: no server
-// document, no pin, which is apiary_public_key_missing, an access key id outside its
-// form, no access key, or an instance id or name outside their pattern. It sends
-// nothing.
+// document, no pin, which is apiary_public_key_missing, a pin [accesskey.Pin.Check]
+// refuses, an access key id outside its form, no access key, or an instance id or name
+// outside their pattern. It sends nothing.
 func (c *Client) Check() error {
 	if c.Config == nil {
 		return errors.New("no server document")
 	}
 	if len(c.Config.ApiaryPublicKey) == 0 {
 		return &accesskey.Refusal{Code: accesskey.CodeApiaryPublicKeyMissing, Detail: "the server document pins no apiary_public_key"}
+	}
+	if err := c.Config.ApiaryPublicKey.Check(); err != nil {
+		return err
 	}
 	if err := accesskey.CheckID(c.Config.AccessKeyID); err != nil {
 		return err

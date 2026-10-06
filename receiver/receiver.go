@@ -20,7 +20,9 @@
 // a ping's interval_seconds and a run.started's labels. A delivery it verified is
 // deduplicated on each event's id, handed to a [Store], and answered 202 with the
 // digests in force. [File] is a store that appends events to one JSON lines file and
-// remembers the ids it holds.
+// remembers the ids it holds. It keeps one store and one map of labels for every access
+// key alike, as a test needs; a server of many access keys scopes runs, event ids and
+// labels per access key, so one key's events never deduplicate or label another's.
 package receiver
 
 import (
@@ -54,6 +56,16 @@ const (
 	DefaultRunPath    = "/v1/run-configuration"
 )
 
+// unknownKey is the public key a request under an access key id the lookup does not
+// hold is verified under, and fails: a fixed key nobody signs with.
+var unknownKey = func() accesskey.PublicKey {
+	k, err := accesskey.NewKey(make([]byte, accesskey.SeedSize))
+	if err != nil {
+		panic(err)
+	}
+	return k.PublicKey()
+}()
+
 // timestampShape is a decimal integer, and nothing else.
 var timestampShape = regexp.MustCompile(`^[0-9]{1,19}$`)
 
@@ -66,7 +78,8 @@ type Store interface {
 }
 
 // AccessKey is one access key a receiver accepts: the public key its requests verify
-// under, pasted into the receiver's configuration, and whether it awaits approval.
+// under, pasted into the receiver's configuration, and whether it awaits approval. A
+// public key [accesskey.PublicKey.Check] refuses verifies no request.
 type AccessKey struct {
 	PublicKey accesskey.PublicKey
 	// Pending says the key awaits approval: its requests verify, and every endpoint
@@ -286,7 +299,9 @@ func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
 	}
 	key, ok := h.Keys(id)
 	if !ok {
-		return verified{}, false
+		// An unknown access key costs what a known one does, so the time of a 401
+		// says nothing of which access key ids exist.
+		key = AccessKey{PublicKey: unknownKey}
 	}
 	target := r.RequestURI
 	if target == "" {
@@ -298,7 +313,7 @@ func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
 	} else {
 		req.Timestamp = r.Header.Get(server.HeaderTimestamp)
 	}
-	if !key.PublicKey.VerifyRequest(req, sig) {
+	if !key.PublicKey.VerifyRequest(req, sig) || !ok {
 		return verified{}, false
 	}
 	return verified{key: key, signature: sig}, true

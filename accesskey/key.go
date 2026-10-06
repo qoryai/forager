@@ -147,9 +147,10 @@ func (p PublicKey) Fingerprint() string {
 
 // Verify reports whether sig is the Ed25519 signature of message under the key,
 // verified cofactorless by RFC 8032 as crypto/ed25519 verifies: a non-canonical R and
-// an S not below the group order fail.
+// an S not below the group order fail. A key [PublicKey.Check] refuses verifies
+// nothing, since a key of small order accepts signatures nobody made.
 func (p PublicKey) Verify(message, sig []byte) bool {
-	return len(sig) == ed25519.SignatureSize && ed25519.Verify(p[:], message, sig)
+	return len(sig) == ed25519.SignatureSize && p.Check() == nil && ed25519.Verify(p[:], message, sig)
 }
 
 // identityEncoding is the encoding of the identity point, y = 1.

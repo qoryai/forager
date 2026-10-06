@@ -3,6 +3,7 @@ package receiver_test
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -504,5 +505,24 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("%d lines in the file", n)
+	}
+}
+
+// TestAKeyOfSmallOrderVerifiesNoRequest pins that a public key the key checks refuse,
+// pasted into the receiver's configuration, verifies no request: the forged signature
+// R = identity, S = 0 under the identity key is an unsigned 401.
+func TestAKeyOfSmallOrderVerifiesNoRequest(t *testing.T) {
+	h, _, _ := handler(t, 1700000000)
+	identity, err := accesskey.ParsePublicKey("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Keys = func(string) (receiver.AccessKey, bool) { return receiver.AccessKey{PublicKey: identity}, true }
+	forged := make([]byte, 64)
+	forged[0] = 1
+	r := signedGET(server.WellKnown, fixtureKey, "1700000000")
+	r.Header.Set(server.HeaderSignature, base64.RawURLEncoding.EncodeToString(forged))
+	if rec := serve(h, r); rec.Code != 401 || rec.Header().Get(server.HeaderSignature) != "" {
+		t.Errorf("a forged request under the identity key: %d", rec.Code)
 	}
 }

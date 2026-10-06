@@ -3,6 +3,7 @@ package accesskey_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -721,6 +722,50 @@ func TestErrorsNeverQuoteASecret(t *testing.T) {
 	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(secret), accesskey.CheckInstanceID(secret), accesskey.CheckName(secret), accesskey.CheckNodeID(strings.ToUpper(secret))} {
 		if err == nil || strings.Contains(err.Error(), secret[4:]) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:])) {
 			t.Errorf("%d: %v", i, err)
+		}
+	}
+}
+
+// TestRefusedKeysVerifyNothing pins that a key the key checks refuse verifies no
+// signature, as a key and in a pin: the forged signature R = identity, S = 0, which
+// crypto/ed25519 accepts under the identity key for any message, and the same
+// signature under every other refused key, fail. A pin of such keys verifies nothing.
+func TestRefusedKeysVerifyNothing(t *testing.T) {
+	var list struct {
+		SmallOrder   []struct{ Encoding string } `json:"small_order"`
+		NonCanonical []struct{ Encoding string } `json:"non_canonical"`
+		Torsion      struct{ Encoding string }   `json:"torsion"`
+	}
+	load(t, "fixtures/known-answers/small-order.json", &list)
+	forged := make([]byte, 64)
+	forged[0] = 1
+	identity, _ := accesskey.ParsePublicKey(list.SmallOrder[0].Encoding)
+	if !ed25519.Verify(identity[:], []byte("any message"), forged) {
+		t.Fatal("crypto/ed25519 refuses the forged signature under the identity key; the test proves nothing")
+	}
+	encodings := []string{list.Torsion.Encoding}
+	for _, p := range list.SmallOrder {
+		encodings = append(encodings, p.Encoding)
+	}
+	for _, p := range list.NonCanonical {
+		encodings = append(encodings, p.Encoding)
+	}
+	for _, enc := range encodings {
+		pub, err := accesskey.ParsePublicKey(enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pin := accesskey.Pin{{Alg: "ed25519", PublicKey: enc}}
+		for _, m := range []string{"any message", "another", ""} {
+			if pub.Verify([]byte(m), forged) || pin.Verify([]byte(m), base64.RawURLEncoding.EncodeToString(forged)) {
+				t.Errorf("%s verifies a forged signature over %q", enc, m)
+			}
+		}
+		if pub.VerifyRequest(accesskey.Request{AccessKeyID: "ak_f1xt0re000000000", Method: "GET", Target: "/", Timestamp: "1"}, base64.RawURLEncoding.EncodeToString(forged)) {
+			t.Errorf("%s verifies a forged request", enc)
+		}
+		if len(pin.Keys()) != 0 {
+			t.Errorf("%s is among a pin's keys", enc)
 		}
 	}
 }

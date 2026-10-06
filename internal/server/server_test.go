@@ -102,8 +102,8 @@ func TestServerDocumentReads(t *testing.T) {
 }
 
 // TestClientCheck pins what a client refuses before it sends anything: no pin, which
-// is apiary_public_key_missing, no access key, and an instance id or name outside the
-// pattern.
+// is apiary_public_key_missing, a pin of a key the key checks refuse, no access key,
+// and an instance id or name outside the pattern.
 func TestClientCheck(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
@@ -112,7 +112,10 @@ func TestClientCheck(t *testing.T) {
 		return &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-runner/test"}
 	}
 	for name, c := range map[string]func(*server.Client){
-		"no pin":                 func(c *server.Client) { c.Config.ApiaryPublicKey = nil },
+		"no pin": func(c *server.Client) { c.Config.ApiaryPublicKey = nil },
+		"a pin of small order": func(c *server.Client) {
+			c.Config.ApiaryPublicKey = accesskey.Pin{{Alg: "ed25519", PublicKey: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
+		},
 		"no key":                 func(c *server.Client) { c.Key = nil },
 		"no instance id":         func(c *server.Client) { c.InstanceID = "" },
 		"an instance id too odd": func(c *server.Client) { c.InstanceID = "-x" },
