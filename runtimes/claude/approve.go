@@ -32,34 +32,49 @@ func approved() string {
 // configuration Claude Code reads, and then starts the command its arguments hold.
 // Claude Code reads ~/.claude/.config.json when that file exists and ~/.claude.json
 // otherwise, with CLAUDE_CONFIG_DIR, when set, in place of ~/.claude for the first and
-// of ~ for the second. A file that is missing or empty becomes a configuration holding
-// the approval alone, readable by its owner alone. A JSON object without
-// customApiKeyResponses gets the approval as its first member, and the rest of the file
-// stays as it was, byte for byte. A file that has customApiKeyResponses already, or is
-// no object, stays as it is, and Claude Code shows its approval prompt as it would
-// without the script. The script writes nothing else, and whatever it fails at, the
-// command starts.
+// of ~ for the second. A missing file becomes one with the entry alone, mode 0600; an
+// empty one gets the entry and keeps its mode. A JSON object without
+// customApiKeyResponses gets the entry as its first member and keeps every byte before
+// and after its opening brace, ending in one newline. A file with
+// customApiKeyResponses, one that is no object, and a path that is neither a regular
+// file nor missing, such as a FIFO, stay as they are; Claude Code then shows its
+// approval prompt unless that list approves the stand-in already. The new content goes
+// to a temporary file beside the configuration first and is then copied over it,
+// through a link when the configuration is one, and the temporary file is removed. The
+// script writes nothing else, and whatever it fails at, the command starts, with the
+// umask the script started with.
 const approveScript = `# Adds the approval of the stand-in Claude Code reads its API key from to the
 # configuration it reads, then starts it. Written by the runner for one run.
 approve() {
+	umask 077
 	base=${CLAUDE_CONFIG_DIR:-$HOME}
 	[ -n "$base" ] || return 0
 	f=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.config.json
 	[ -f "$f" ] || f=$base/.claude.json
+	[ -f "$f" ] || [ ! -e "$f" ] || return 0
 	entry='"customApiKeyResponses":{"approved":["@APPROVED@"],"rejected":[]}'
-	if [ ! -s "$f" ]; then
-		(umask 077 && printf '{%s}\n' "$entry" > "$f")
+	if [ -s "$f" ]; then
+		c=$(cat "$f") || return 0
+		case $c in *'"customApiKeyResponses"'*) return 0 ;; esac
+		lead=${c%%[![:space:]]*}
+		c=${c#"$lead"}
+		case $c in '{'*) ;; *) return 0 ;; esac
+		rest=${c#?}
+		case ${rest#"${rest%%[![:space:]]*}"} in '}'*) sep= ;; *) sep=, ;; esac
+		new=$(printf '%s{%s%s%s' "$lead" "$entry" "$sep" "$rest") || return 0
+	else
+		new="{$entry}"
+	fi
+	tmp=$f.qory-$$
+	[ ! -e "$tmp" ] || return 0
+	if ! (set -C && printf '%s\n' "$new" > "$tmp"); then
+		rm -f "$tmp"
 		return 0
 	fi
-	c=$(cat "$f") || return 0
-	case $c in *'"customApiKeyResponses"'*) return 0 ;; esac
-	c=${c#"${c%%[![:space:]]*}"}
-	case $c in '{'*) ;; *) return 0 ;; esac
-	rest=${c#?}
-	case ${rest#"${rest%%[![:space:]]*}"} in '}'*) sep= ;; *) sep=, ;; esac
-	printf '{%s%s%s\n' "$entry" "$sep" "$rest" > "$f"
+	cat "$tmp" > "$f"
+	rm -f "$tmp"
 }
-approve 2>/dev/null
+(approve) 2>/dev/null
 exec "$@"
 `
 

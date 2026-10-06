@@ -31,11 +31,11 @@ type Runtime interface {
 	Version() string
 	// Prepare makes a launch one the runner can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the run directory, and returns
-	// the launch to start in place of the one given. A program that waits for a person
-	// to approve a stand-in of [Attach.Placeholders] may be started through a script
-	// Prepare writes there, which records the approval where the program reads it and
-	// then starts the program. A runtime with nothing to prepare returns the launch as
-	// it is.
+	// the launch to start in place of the one given, command and arguments. A program
+	// that waits for a person to approve a stand-in of [Attach.Placeholders] may be
+	// started through a script Prepare writes there, which records the approval where
+	// the program reads it and then starts the program. A runtime with nothing to
+	// prepare returns the launch as it is.
 	Prepare(Attach) (Launch, error)
 	// ReadsOutput reports whether the program's standard output, when the session runs
 	// on pipes, is JSON lines the runner hands to Map as records of [SourceOutput].
@@ -76,8 +76,9 @@ type Attach struct {
 	// Interactive says the session runs on a pseudo-terminal, not on pipes.
 	Interactive bool
 	// Placeholders are the variables the session sets to [Placeholder] in the
-	// program's environment, in place of a credential the proxy sets outside the
-	// enclosure. Empty without a wall.
+	// program's environment: a credential's, whose value the proxy sets outside the
+	// enclosure, and a tool's, whose host the tool serves outside it. Empty without a
+	// wall.
 	Placeholders []string
 }
 

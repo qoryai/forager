@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,6 +127,9 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 		// unchanged lists files whose bytes stay as setup wrote them.
 		unchanged []string
 		env       func(home string) []string
+		// exact is the file's bytes afterwards when not empty, with ENTRY in place of
+		// the approval's member.
+		exact string
 	}{
 		{name: "missing", setup: func(t *testing.T, home string) (string, map[string]any) {
 			return filepath.Join(home, ".claude.json"), map[string]any{}
@@ -137,11 +141,15 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 		{name: "an empty object", setup: func(t *testing.T, home string) (string, map[string]any) {
 			write(t, filepath.Join(home, ".claude.json"), "  { \n }\n")
 			return filepath.Join(home, ".claude.json"), map[string]any{}
-		}},
+		}, exact: "  {ENTRY \n }\n"},
 		{name: "a person's own", setup: func(t *testing.T, home string) (string, map[string]any) {
 			write(t, filepath.Join(home, ".claude.json"), pretty)
 			return filepath.Join(home, ".claude.json"), decode(t, pretty)
-		}},
+		}, exact: "{ENTRY," + pretty[1:]},
+		{name: "space before and newlines after", setup: func(t *testing.T, home string) (string, map[string]any) {
+			write(t, filepath.Join(home, ".claude.json"), "\n\t{\"theme\":\"dark\"}\n\n\n")
+			return filepath.Join(home, ".claude.json"), map[string]any{"theme": "dark"}
+		}, exact: "\n\t{ENTRY,\"theme\":\"dark\"}\n"},
 		{name: "a link to a person's own", setup: func(t *testing.T, home string) (string, map[string]any) {
 			target := filepath.Join(home, "dotfiles", "claude.json")
 			os.MkdirAll(filepath.Dir(target), 0o755)
@@ -180,6 +188,25 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			os.Chmod(filepath.Join(home, ".claude.json"), 0o444)
 			return "", nil
 		}, unchanged: []string{".claude.json"}},
+		{name: "a FIFO", setup: func(t *testing.T, home string) (string, map[string]any) {
+			if out, err := exec.Command("mkfifo", filepath.Join(home, ".claude.json")).CombinedOutput(); err != nil {
+				t.Skipf("mkfifo: %v %s", err, out)
+			}
+			return "", nil
+		}},
+		{name: "a directory", setup: func(t *testing.T, home string) (string, map[string]any) {
+			os.Mkdir(filepath.Join(home, ".claude.json"), 0o755)
+			return "", nil
+		}},
+		{name: "no room for the temporary file", setup: func(t *testing.T, home string) (string, map[string]any) {
+			if os.Geteuid() == 0 {
+				t.Skip("root writes into a read-only directory")
+			}
+			write(t, filepath.Join(home, ".claude.json"), pretty)
+			os.Chmod(home, 0o555)
+			t.Cleanup(func() { os.Chmod(home, 0o755) })
+			return "", nil
+		}, unchanged: []string{".claude.json"}},
 		{name: "no home", setup: func(t *testing.T, home string) (string, map[string]any) {
 			return "", nil
 		}, env: func(string) []string { return []string{"HOME="} }},
@@ -191,12 +218,13 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			for _, f := range c.unchanged {
 				before[f], _ = os.ReadFile(filepath.Join(home, f))
 			}
-			var original []byte
+			var mode os.FileMode
 			existed := false
 			if file != "" {
-				_, err := os.Stat(file)
-				existed = err == nil
-				original, _ = os.ReadFile(file)
+				fi, err := os.Stat(file)
+				if existed = err == nil; existed {
+					mode = fi.Mode().Perm()
+				}
 			}
 
 			dir := t.TempDir()
@@ -226,6 +254,12 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 					t.Errorf("%s changed:\n%s", f, after)
 				}
 			}
+			filepath.WalkDir(home, func(path string, e fs.DirEntry, err error) error {
+				if err == nil && strings.Contains(e.Name(), ".qory-") {
+					t.Errorf("the temporary file %s stayed", path)
+				}
+				return nil
+			})
 			if file == "" {
 				return
 			}
@@ -245,14 +279,15 @@ func TestTheScriptApprovesTheStandInAndKeepsTheRest(t *testing.T) {
 			if !reflect.DeepEqual(doc, want) {
 				t.Errorf("the rest of the configuration is\n%v\nwant\n%v", doc, want)
 			}
-			// The rest of a person's file stays byte for byte, after the new member.
-			if len(original) > 0 && strings.HasPrefix(string(original), "{\n") && !strings.HasSuffix(string(got), string(original[1:])) {
-				t.Errorf("the file is not the approval and then the file as it was:\n%s", got)
+			entry := `"customApiKeyResponses":{"approved":["` + approvedEntry + `"],"rejected":[]}`
+			if want := strings.Replace(c.exact, "ENTRY", entry, 1); c.exact != "" && string(got) != want {
+				t.Errorf("the file is\n%q\nwant\n%q", got, want)
 			}
 			if !existed {
-				if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
-					t.Errorf("a new configuration is %v, %v; want 0600", fi.Mode().Perm(), err)
-				}
+				mode = 0o600
+			}
+			if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != mode {
+				t.Errorf("the configuration's mode is %v, %v; want %v", fi.Mode().Perm(), err, mode)
 			}
 			if fi, err := os.Lstat(filepath.Join(home, ".claude.json")); c.name == "a link to a person's own" && (err != nil || fi.Mode()&os.ModeSymlink == 0) {
 				t.Error("the link was replaced by a file")
