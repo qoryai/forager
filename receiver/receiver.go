@@ -57,7 +57,9 @@ const (
 )
 
 // unknownKey is the public key a request under an access key id the lookup does not
-// hold is verified under, and fails: a fixed key nobody signs with.
+// hold is verified under: a fixed public key, of the zero seed, used only so such a
+// request spends the time a known one does. The request is refused whatever the
+// verification says.
 var unknownKey = func() accesskey.PublicKey {
 	k, err := accesskey.NewKey(make([]byte, accesskey.SeedSize))
 	if err != nil {
