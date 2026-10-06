@@ -370,10 +370,9 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 }
 
 // TestTerminateSetsTheCredentialAndHoldsThePaths pins termination: to a host a
-// credential is for, the proxy answers with the run's authority, sets the token on a
-// path the credential covers and nowhere else, denies the rest under enforce, records
-// every request, and leaves every other host a tunnel the proxy passes through as
-// bytes.
+// credential is for, the proxy answers with the run's authority, sets the credential
+// on a path it covers and nowhere else, denies the rest under enforce, records every
+// request, and leaves every other host a tunnel the proxy passes through as bytes.
 func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]string{}
