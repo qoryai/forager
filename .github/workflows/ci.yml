@@ -99,6 +99,17 @@ jobs:
           docker rm -f $(docker ps -aq) 2>/dev/null || true
           sudo apt-get install -y ./sysbox.deb
           docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
+          # The package returns before sysbox-fs and sysbox-mgr listen, and a container
+          # started before then fails. Wait up to 60 seconds for both sockets.
+          for sock in /run/sysbox/sysfs.sock /run/sysbox/sysmgr.sock; do
+            for _ in $(seq 60); do
+              test -S "$sock" && continue 2
+              sleep 1
+            done
+            systemctl status sysbox sysbox-fs sysbox-mgr --no-pager || true
+            echo "::error::Sysbox socket $sock is missing after 60 seconds"
+            exit 1
+          done
 
       - name: Run the suite against Docker, with a Docker inside
         # QORY_WALL_REQUIRE turns a skip into a failure, as in the wall job.
