@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "security_policy": {
+    "version": 1,
+    "egress": {
+      "mode": "enforce",
+      "allow": ["api.example", "github.com", "*.github.com"]
+    }
+  },
+  "variables": {
+    "NODE_ENV": "test",
+    "APP_REGION": "eu-west-1",
+    "FEATURE_FLAGS": ""
+  }
+}

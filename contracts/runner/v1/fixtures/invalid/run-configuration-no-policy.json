@@ -1,7 +1,0 @@
-{
-  "version": 1,
-  "egress": {
-    "mode": "enforce",
-    "allow": ["api.example"]
-  }
-}

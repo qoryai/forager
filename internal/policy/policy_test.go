@@ -181,6 +181,10 @@ func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
 		if err := json.Unmarshal(fixture(t, path.Join("fixtures/run-configuration", d.Name())), &rc); err != nil {
 			t.Fatal(err)
 		}
+		if rc.SecurityPolicy == nil {
+			// A run configuration without a policy leaves the node's in force.
+			continue
+		}
 		l, err := policy.Read("run-configuration", rc.SecurityPolicy)
 		if err != nil {
 			t.Errorf("%s: %v", d.Name(), err)
