@@ -523,7 +523,7 @@ The types, one namespace. The runner's own:
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
-| `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event; `elapsed_seconds` counts since the ping | `elapsed_seconds`, `interval_seconds` |
+| `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the ping, or since `dev.qory.run.started` when the run has no server | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.run.exited` | the runtime exited; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 | `dev.qory.run.refused` | the run did not start after the ping; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last | `code`, and when they apply `connection`, `names`, `providers`, `status` |
 

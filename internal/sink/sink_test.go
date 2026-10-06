@@ -288,3 +288,42 @@ func TestRunClosedDropsTheBatchesQueuedBeforeIt(t *testing.T) {
 		t.Errorf("%d deliveries, %d calls, closed %v, %d undelivered", s.hits.Load(), calls.Load(), w.RunClosed(), w.Undelivered())
 	}
 }
+
+// TestAStopCarriesNoDigests pins that the digests of a signed 410 reach no caller: a
+// run_closed answer that carries a new run configuration digest leads to no reload,
+// and no request reaches the server after it.
+func TestAStopCarriesNoDigests(t *testing.T) {
+	s := newStation(t, nil, func(string) bool { return true })
+	s.srv.Config.Handler = digestOn410(s.srv.Config.Handler)
+	var digests atomic.Int32
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, func(server.Digests) { digests.Add(1) }, nil)
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	waitFor(t, w.RunClosed)
+	hits := s.hits.Load()
+	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
+	w.Close(context.Background())
+	if digests.Load() != 0 || s.hits.Load() != hits || hits != 1 {
+		t.Errorf("%d digests handed on, %d requests, %d after the close", digests.Load(), hits, s.hits.Load()-hits)
+	}
+}
+
+// digestOn410 sets a run configuration digest on the receiver's answers, signed
+// again over it, as a server whose 410 carries a changed digest.
+func digestOn410(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(resigning{ResponseWriter: w, sig: r.Header.Get(server.HeaderSignature)}, r)
+	})
+}
+
+type resigning struct {
+	http.ResponseWriter
+	sig string
+}
+
+func (r resigning) WriteHeader(status int) {
+	r.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("e", 64))
+	a := accesskey.Answer{Status: status, RequestSignature: r.sig, Body: []byte(`{"error":"run_closed"}`), Configuration: r.Header().Get(server.HeaderConfiguration), RunConfiguration: r.Header().Get(server.HeaderRunConfiguration)}
+	r.Header().Set(server.HeaderSignature, signer.SignAnswer(a))
+	r.ResponseWriter.WriteHeader(status)
+}

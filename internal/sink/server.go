@@ -215,9 +215,9 @@ func (w *Server) next() ([]queued, bool) {
 // deliver posts one batch until it is accepted, the server says stop, or the sink's
 // context ends; then it spools what was not accepted. An answer whose signature does
 // not verify under the pin is no answer, retried like a transport failure. The digests
-// of every signed answer go to the caller. A signed 410 stops the deliveries; with
-// run_closed it also closes the run, which the caller hears of once. A batch queued
-// before the stop is dropped, as one written after it is.
+// of every signed answer but a 410 go to the caller. A signed 410 stops the
+// deliveries; with run_closed it also closes the run, which the caller hears of once.
+// A batch queued before the stop is dropped, as one written after it is.
 func (w *Server) deliver(batch []queued) {
 	w.mu.Lock()
 	stopped := w.stopped
@@ -236,7 +236,8 @@ func (w *Server) deliver(batch []queued) {
 		}
 		d, err := w.client.Deliver(ctx, w.target.Load().URL, id, body, digest)
 		cancel()
-		if err == nil && d.Signed && w.onDigests != nil {
+		// A stop ends the run's deliveries, so its digests are no reason to reload.
+		if err == nil && d.Signed && !d.Stop() && w.onDigests != nil {
 			w.onDigests(d.Digests)
 		}
 		switch {
