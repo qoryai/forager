@@ -1227,6 +1227,11 @@ the machine pins:
           staging:    {file: ~/.config/qory/github-app-staging.pem}
   ```
 
+  A `file:` value is the file's content with exactly one trailing line ending, `\n` or
+  `\r\n`, removed, so a file written with `echo` holds the value it was written with.
+  Every other byte stays as the file holds it, and the value rules of Endpoint rules
+  apply to the result.
+
 - **The bound.** A connection that sends a machine value to a host its `hosts` do not
   cover is no run, `secret_hosts_exceeded`, whether the connection comes from the server
   or from the runner file. The hosts compared are the service's, the runtime declaration's
@@ -2342,7 +2347,10 @@ For the enrolment path and `secrets.url`:
   integrations, which goes on standard input, may contain line breaks, such as a PEM key.
   The server checks a value against every link when the value is saved and when a link
   is saved, such as an existing PEM key linked to a service connection; the runner checks
-  it where it uses it, `secret_value_invalid`. A variable's value is at most 4096 bytes
+  it where it uses it, `secret_value_invalid`. For a machine value read from a
+  `secrets.local` `file:`, the runner first removes exactly one trailing line ending,
+  `\n` or `\r\n`, and these rules apply to the rest: a header value keeps refusing every
+  other carriage return and line feed. A variable's value is at most 4096 bytes
   of UTF-8, with no NUL, carriage return or line feed; a holder's resolved variables are
   at most 128, and at most 64 KiB, names and values. The server refuses a save that would
   take any holder over these limits, and a runner refuses a document over them,
