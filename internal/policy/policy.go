@@ -277,11 +277,15 @@ func outside(selected, bound []Selected) []string {
 // Covers reports whether an allow entry covers another: a name is covered by the same
 // name or by a suffix pattern above it; a pattern is covered by the same pattern or by
 // a suffix pattern above it. "*.github.com" covers "api.github.com" and
-// "*.api.github.com", not "github.com".
+// "*.api.github.com", not "github.com". An IP literal is covered by an identical entry
+// alone, as [Match] matches it: "*.0.0.1" does not cover "10.0.0.1".
 func Covers(entry, other string) bool {
 	entry, other = strings.ToLower(entry), strings.ToLower(other)
 	if entry == other {
 		return true
+	}
+	if net.ParseIP(other) != nil {
+		return false
 	}
 	suffix, isPattern := strings.CutPrefix(entry, "*.")
 	if !isPattern {

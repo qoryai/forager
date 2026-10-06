@@ -103,8 +103,9 @@ func TestMatchFollowsTheGrammar(t *testing.T) {
 }
 
 // TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
-// or a suffix above it, a pattern under the same pattern or a suffix above it, and a
-// suffix never covers its own apex.
+// or a suffix above it, a pattern under the same pattern or a suffix above it, a suffix
+// never covers its own apex, and an IP literal stands under an identical entry alone,
+// as Match matches it.
 func TestCoversFollowsTheGrammar(t *testing.T) {
 	for _, c := range []struct {
 		entry, other string
@@ -114,7 +115,12 @@ func TestCoversFollowsTheGrammar(t *testing.T) {
 		{"*.github.com", "api.github.com", true}, {"*.github.com", "*.api.github.com", true},
 		{"*.github.com", "github.com", false}, {"api.github.com", "*.github.com", false},
 		{"*.github.com", "*.github.com", true}, {"github.com", "api.github.com", false},
+		{"*.0.0.1", "10.0.0.1", false}, {"10.0.0.1", "10.0.0.1", true},
+		{"*.0.0.1", "*.10.0.0.1", true}, {"::1", "::1", true}, {"*.1", "::1", false},
 	} {
+		if _, matched := policy.Match([]string{c.entry}, c.other); matched != c.want && !strings.HasPrefix(c.other, "*.") {
+			t.Errorf("Match([%q], %q) = %v, Covers wants %v", c.entry, c.other, matched, c.want)
+		}
 		if got := policy.Covers(c.entry, c.other); got != c.want {
 			t.Errorf("Covers(%q, %q) = %v", c.entry, c.other, got)
 		}
@@ -331,6 +337,20 @@ func TestNarrowedAllowIsWhatBothSidesAllow(t *testing.T) {
 	l = narrowed(t, `{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, `{"version":1,"egress":{"mode":"enforce"}}`)
 	if l.Policy.Egress.Allow == nil || len(l.Policy.Egress.Allow) != 0 {
 		t.Errorf("a node that allows nothing: %q", l.Policy.Egress.Allow)
+	}
+}
+
+// TestNarrowedAllowTakesNoIPLiteralUnderAPattern pins the narrowing of a node's IP
+// literal under a server's pattern that ends like it: a server allow of *.0.0.1 does
+// not allow 10.0.0.1, so the hosts both allow are none, and a request to 10.0.0.1 is
+// denied.
+func TestNarrowedAllowTakesNoIPLiteralUnderAPattern(t *testing.T) {
+	l := narrowed(t, `{"version":1,"egress":{"mode":"enforce","allow":["*.0.0.1"]}}`, `{"version":1,"egress":{"mode":"enforce","allow":["10.0.0.1"]}}`)
+	if len(l.Policy.Egress.Allow) != 0 {
+		t.Errorf("allow %q, want none", l.Policy.Egress.Allow)
+	}
+	if _, ok := policy.Match(l.Policy.Egress.Allow, "10.0.0.1"); ok {
+		t.Error("10.0.0.1 is allowed")
 	}
 }
 
