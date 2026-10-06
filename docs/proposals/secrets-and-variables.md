@@ -1613,8 +1613,10 @@ program of the machine's produces a credential or serves hosts for a connection.
   `placeholder_conflict`: a tool's `placeholders`, a credential answer's `placeholders`
   and a service declaration's `name` alike. The server refuses the same on save, for
   the names it knows then.
-- **The machine's bounds.** An entry of `integrations:` may bound what a server chooses:
-  `ways`, the roles the node allows, a server-chosen role outside it being
+- **The machine's bounds.** An entry of `integrations:` may bound what a server chooses.
+  The bounds apply to server-sent connections; a connection of the runner file is the
+  node owner's own and meets each role's description alone. The bounds are `ways`,
+  the roles the node allows, a server-chosen role outside it being
   `integration_way_not_allowed`, and an absent bound narrowing nothing, since the server
   leads; `arguments`, an RE2 pattern the argument must match whole, else
   `integration_argument_not_allowed`; and `settings`, per member a fixed value or
@@ -2629,8 +2631,8 @@ Order at run start; the steps not listed are §Sequence's.
 4. Check the connections: connections without a wall; duplicates; the runtime connection
    for the run's runtime kept and any other set aside; declarations and `one_of`, a
    required group included; hosts and `headers.json`; the mounts against the runner's
-   files and the runtime's credential files; for each integration, the machine's
-   `arguments` and `settings` bounds.
+   files and the runtime's credential files; for each server-sent integration, the
+   machine's `ways`, `arguments` and `settings` bounds.
 5. For each integration connection: find the program, run `describe`, compare its name and
    version, its `source` against the `integrations:` entry's,
    `integration_source_mismatch`, and the description's tool role,
@@ -2739,7 +2741,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `integration_source_mismatch` | runner | the connection's `source` differs from the one the node's `integrations:` entry records, or the SHA-256 of `describe`'s output differs from its recorded `description_sha256` |
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
-| `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern or a chosen role's `argument` pattern, or the connection passes an argument to a role that takes none |
+| `integration_argument_not_allowed` | runner | the argument of a server-sent connection does not match the machine's `arguments` pattern, or the argument does not match a chosen role's `argument` pattern |
 | `integration_settings_not_allowed` | runner | a role's document with a name outside that role's `settings`, or a connection setting or secret that no chosen role lists; a `<name>_file` setting in a server-sent connection; a setting outside the machine's `settings` bound, or a server value that differs from the bound's fixed value for that member, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
 | `integration_hosts_exceeded` | runner | the program's answer claims hosts above those `describe` lists |
 | `integration_settings_invalid` | runner | a role's document that lacks a name of the role's `required`, fails the description's `settings` schema, or holds both `<name>` and `<name>_file` |
