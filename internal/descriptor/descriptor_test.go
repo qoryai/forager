@@ -172,7 +172,8 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares
 // and one_of, every one present; per declaration id, title, name, hosts, auth with its
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
-// when it has some; per group id, required and of. Every built-in descriptor is one runtime, in name order.
+// when it has some; per group id, required and of. Every built-in descriptor is one
+// runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {

@@ -29,10 +29,9 @@ release may change what an existing document does, and says so under Upgrading.
   `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
   paths and scheme; `one_of`, groups of which a runtime connection supplies one
   declaration at most, and one of a required group; `reserves`; `denies`; and
-  `credential_files`. It also has an optional `title`, and its `runtime` name is at most
-  64 characters. `auth.schema.json` defines the scheme, `bearer`, `header` or `basic`.
-  The runner checks the secrets when it reads a descriptor; a run uses them once
-  connections are in the contract.
+  `credential_files`. It also has an optional `title`. `auth.schema.json` defines the
+  scheme, `bearer`, `header` or `basic`. The runner checks the secrets when it reads a
+  descriptor; a run uses them once connections are in the contract.
 - The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
   `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
   under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the
