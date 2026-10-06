@@ -1146,11 +1146,10 @@ with a key of its own. Base mode authenticates no sender, so the runner opens on
 envelope the server signed and reads only answers the server signed, both under a key
 the machine pins:
 
-- The server has an Ed25519 signing key of its own: `APIARY_SIGNING_SECRET` when it is set,
-  which overrides the default, else one derived from the server's encryption key,
-  `APIARY_ENCRYPTION_SECRET`, with HKDF-SHA256 under a label of its own, distinct from the
-  integrity key's. The server's documentation recommends setting `APIARY_SIGNING_SECRET`,
-  so a rotation of the server's encryption key does not break the pins. Discovery for
+- The server has an Ed25519 signing key of its own, `APIARY_SIGNING_SECRET`, which it
+  requires: the server starts only with it set, and it is independent of the server's
+  encryption key, `APIARY_ENCRYPTION_SECRET`, so a rotation of the encryption key leaves
+  the pins as they are. Discovery for
   every verified access key lists the current public key, and during a rotation the next
   one too,
   `apiary_public_key: [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]`, for
@@ -2765,7 +2764,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A TLS-terminating middlebox between the runner and the server, without the access key secret or the server's signing secret | It cannot read a stored value; it cannot alter the connections, the policy, the variables or the digests, nor replay an older answer; it cannot move a request to another access key, since the key's id is a signed line and one public key belongs to one access key; `no-transform` keeps a proxy from re-coding a signed answer | It reads the document. At the start it can only refuse; during a run, dropping answers keeps the policy in force |
 | A proxy between the runner and a destination host, whose authority the machine trusts | For a stored value, and a credential minted from one, public roots only, always: the proxy verifies that host against public roots only, so the authority the machine added receives nothing | It reads a machine value there. An integration program's own connections use its own TLS settings |
 | The server's logs and answer caches | Ciphertext only; `Cache-Control: no-store` | — |
-| A read of the server's database | Values encrypted under a key derived from the server's encryption key; the server stores access keys' public keys only, so a reader of the database cannot act as an access key | A reader with the server's encryption key reads every stored value and, while `APIARY_SIGNING_SECRET` is unset, signs as the server |
+| A read of the server's database | Values encrypted under a key derived from the server's encryption key; the server stores access keys' public keys only, so a reader of the database cannot act as an access key | A reader with the server's encryption key reads every stored value; signing as the server takes `APIARY_SIGNING_SECRET`, a separate key the database does not hold |
 | A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every key row and every code, with a per-row version, verified on every request and before sealing: a writer cannot swap an access key's public key, move an access key to another node or a node to another workspace, set the stored-secrets flag, raise an instance limit, insert a code, or insert or approve an access key; seals taken from the verified rendering's bytes; audit | A writer with the server's encryption key, or a change through the server's own pages |
 | A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument, settings and `ways`, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments`, `settings` and `ways` bounds, the first two required for a server-sent integration with a machine value, the refusal of a `<name>_file` setting from a server, so it cannot point a program at a file of the node's, installing only on the owner's command, and the pin, required on every machine, are what remain |
 | A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables, create codes and set an access key's stored-secrets flag | Choosing the host is reading the value |
