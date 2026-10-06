@@ -26,8 +26,9 @@ import (
 // sets outside, against a recorder that answers as the Messages API, which
 // ANTHROPIC_BASE_URL points Claude Code at. Claude Code answers with the recorder's
 // text; every request the recorder gets carries the key in the credential's header and
-// no stand-in; the record lists every request to the recorder, with the credential, and
-// none to another host; and the run's directory and output contain no key.
+// no stand-in; the record lists one request through the proxy for each the recorder
+// received, each to the recorder with the credential; and the run's directory and
+// output contain no key.
 // QORY_WALL_CLAUDE_IMAGE selects an image with claude on its PATH; without it the test
 // is skipped.
 func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
@@ -53,6 +54,7 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 		t.Fatalf("the recorder: %v: %s", err, out)
 	}
 	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	AwaitRecorder(t, command, name)
 	ip, err := exec.Command(command, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -165,8 +167,8 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 					t.Errorf("the run reached beyond the recorder, or without the credential: %v", e.Data)
 				}
 			}
-			if egress == 0 {
-				t.Error("the record contains no request through the proxy")
+			if egress != len(reqs) {
+				t.Errorf("the record lists %d requests through the proxy, and the recorder received %d", egress, len(reqs))
 			}
 			var where []string
 			// dir holds the run directory, res.Dir, under .qory/runs.

@@ -212,8 +212,10 @@ type Options struct {
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
 	// which [EnvRequire] turns into failures. With Recorders, Run points the process's
-	// roots at the suite's authority with SSL_CERT_FILE for the rest of the process: the
-	// test binary verifies no other certificate, before Run or after it.
+	// roots at the suite's authority alone, with SSL_CERT_FILE and SSL_CERT_DIR. The
+	// process reads its roots once, at its first verification of a certificate, so the
+	// test binary's first verification must come within Run; from then on, for the rest
+	// of the process, it trusts only the suite's authority.
 	Recorders []Recorder
 }
 
@@ -394,6 +396,7 @@ func Run(t *testing.T, o Options) {
 		if r.probe.OwnViaProxy != 200 || own.Load() == 0 || r.probe.MetaViaProxy != 403 {
 			t.Errorf("with 127.0.0.1 named in the allow list this machine's listener answered %d through the proxy, and the metadata address %d", r.probe.OwnViaProxy, r.probe.MetaViaProxy)
 		}
+		t.Run("no runtime's key in the record", func(t *testing.T) { checkNoKey(t, r) })
 	})
 }
 
@@ -505,27 +508,32 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 			}
 		}
 	})
-	t.Run(names[4], func(t *testing.T) {
-		var where []string
-		// r.dir holds the run directory, r.res.Dir, under .qory/runs.
-		filepath.WalkDir(r.dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.Type().IsRegular() {
-				return nil
-			}
-			if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
-				where = append(where, path)
-			}
+	t.Run(names[4], func(t *testing.T) { checkNoKey(t, r) })
+}
+
+// checkNoKey checks that the run's directory, its output and what the runner reported
+// contain no runtime's key.
+func checkNoKey(t *testing.T, r result) {
+	t.Helper()
+	var where []string
+	// r.dir holds the run directory, r.res.Dir, under .qory/runs.
+	filepath.WalkDir(r.dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
 			return nil
-		})
-		for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
-			if strings.Contains(s, keyMark) {
-				where = append(where, name)
-			}
 		}
-		if len(where) != 0 {
-			t.Errorf("a key is in %v", where)
+		if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
+			where = append(where, path)
 		}
+		return nil
 	})
+	for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
+		if strings.Contains(s, keyMark) {
+			where = append(where, name)
+		}
+	}
+	if len(where) != 0 {
+		t.Errorf("a key is in %v", where)
+	}
 }
 
 // hosts are the addresses a run's probe is told.

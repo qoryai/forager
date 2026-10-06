@@ -88,6 +88,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 			t.Fatalf("a recorder: %v: %s", err, out)
 		}
 		t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+		walltest.AwaitRecorder(t, command, name)
 		ip, err := exec.Command(command, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name).Output()
 		if err != nil {
 			t.Fatal(err)

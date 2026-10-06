@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -46,11 +47,11 @@ const (
 )
 
 // Recorder is an origin the suite reads back: the helper started with [RecorderArgs]
-// and [RecorderEnv] in a container of its own, which the proxy reaches over the network.
-// It answers HTTPS on 8443, with a certificate of the suite's authority for its own
-// addresses, and HTTP on 8080, with 200 and a body that is the same for every request,
-// and records the method, the host, the path and the headers of each request in
-// [RecorderFile].
+// and [RecorderEnv] in a container of its own, which the proxy reaches over the
+// network. It answers HTTPS on 8443, with a certificate of the suite's authority for
+// its own addresses, and HTTP on 8080; on both ports it answers as the Messages API,
+// with a fixed text. It records the method, the host, the path and the headers of each
+// request in [RecorderFile], and prints [RecorderReady] once it listens on both ports.
 type Recorder struct {
 	// Host is the address the proxy reaches it on.
 	Host string
@@ -107,9 +108,33 @@ func RecorderEnv() []string {
 	return []string{envAuthority + "=" + base64.StdEncoding.EncodeToString(cert.Raw), envAuthorityKey + "=" + base64.StdEncoding.EncodeToString(der)}
 }
 
+// RecorderReady is the line a recorder prints once it listens on both ports.
+const RecorderReady = "walltest recorder: listening"
+
+// AwaitRecorder waits up to 30 seconds for the recorder in the container name, which
+// command started, to print [RecorderReady] to the container's log, and fails the test
+// when the 30 seconds run out.
+func AwaitRecorder(t *testing.T, command, name string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		out, err := exec.Command(command, "logs", name).CombinedOutput()
+		if err == nil && bytes.Contains(out, []byte(RecorderReady)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the recorder %s printed no %q within 30 seconds: %v: %s", name, RecorderReady, err, out)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // trustRecorders points this machine's roots, for the test's process, at the suite's
-// authority alone, and returns the error of verifying a certificate of it: the process
-// reads its roots once, at the first verification, from SSL_CERT_FILE when it is set.
+// authority alone, with SSL_CERT_FILE at a file that holds it and SSL_CERT_DIR at an
+// empty directory, and returns the error of verifying a certificate of it. The process
+// reads its roots once, at its first verification of a certificate, so that
+// verification must come after this; from then on the process trusts only the suite's
+// authority.
 func trustRecorders(t *testing.T) error {
 	t.Helper()
 	cert, key := authority()
@@ -118,6 +143,7 @@ func trustRecorders(t *testing.T) error {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", file)
+	t.Setenv("SSL_CERT_DIR", t.TempDir())
 	ip := net.IPv4(192, 0, 2, 1)
 	leaf, err := sign(cert, key, []net.IP{ip})
 	if err != nil {
@@ -209,16 +235,18 @@ func serveRecorder() int {
 		mu.Unlock()
 		answer(w, body)
 	})
+	plain, err := net.Listen("tcp", ":"+recorderPlain)
+	if err != nil {
+		return fail(err)
+	}
+	secure, err := tls.Listen("tcp", ":"+recorderTLS, &tls.Config{Certificates: []tls.Certificate{*leaf}})
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Println(RecorderReady)
 	errs := make(chan error, 2)
-	go func() { errs <- http.ListenAndServe(":"+recorderPlain, handler) }()
-	go func() {
-		ln, err := tls.Listen("tcp", ":"+recorderTLS, &tls.Config{Certificates: []tls.Certificate{*leaf}})
-		if err != nil {
-			errs <- err
-			return
-		}
-		errs <- http.Serve(ln, handler)
-	}()
+	go func() { errs <- http.Serve(plain, handler) }()
+	go func() { errs <- http.Serve(secure, handler) }()
 	return fail(<-errs)
 }
 

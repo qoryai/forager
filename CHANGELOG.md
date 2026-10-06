@@ -26,10 +26,14 @@ release may change what an existing document does, and says so under Upgrading.
   `Host` the proxy reaches it on and a `Recorded` function that returns the content of
   `walltest.RecorderFile` in its container. An adapter's test that passes none skips
   the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
-  and any other number than three fails the suite. With `Recorders`, `walltest.Run`
-  points the process's roots at the suite's authority with `SSL_CERT_FILE` for the rest
-  of the process, so the test binary verifies no other certificate, before `Run` or
-  after it. `TestDockerConforms` starts the recorders from `busybox:stable`.
+  and a number other than none or three fails the suite. A recorder prints
+  `walltest.RecorderReady` once it listens, and `walltest.AwaitRecorder` waits for that
+  line in its container's log. With `Recorders`, `walltest.Run` points the process's
+  roots at the suite's authority alone, with `SSL_CERT_FILE` and `SSL_CERT_DIR`. The
+  process reads its roots once, at its first verification of a certificate, so the test
+  binary's first verification must come within `Run`; from then on, for the rest of the
+  process, it trusts only the suite's authority. `TestDockerConforms` starts the
+  recorders from `busybox:stable`.
 
 ### Added
 
@@ -39,16 +43,18 @@ release may change what an existing document does, and says so under Upgrading.
   reaches its own host once, in its own header and in place of the stand-in; another
   allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
   probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
-  key; and the run's directory, output and reports contain no key. The suite points its
-  own process's roots at an authority of its own with `SSL_CERT_FILE`, so the proxy
-  verifies the recorders. The proxy's tests cover both schemes as well, with a request
-  that carries both stand-ins.
+  key; and the run's directory, output and reports contain no key, after the
+  interactive run as well. The suite points its own process's roots at an authority of
+  its own with `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the
+  recorders. The proxy's tests cover both schemes as well, with a request that carries
+  both stand-ins.
 - `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
   adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
   `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
   with an API key and once with an OAuth credential. Claude Code prints the recorder's
   answer, each request carries the fake key in the credential's header and no stand-in,
-  and the record lists every request, to the recorder alone.
+  and the record lists one request through the proxy for each the recorder received,
+  each to the recorder.
 
 ### Changed
 
