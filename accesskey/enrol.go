@@ -187,52 +187,54 @@ type EnrolmentAnswer struct {
 	Pin Pin `json:"-"`
 }
 
-// VerifyAnswer reads the server's answer to the request. A 201 is verified under the
-// entry of its apiary_public_key whose fingerprint the code carries first, and its pin
-// is the entries whose fingerprints the code carries. Any other answer is a
-// [*Refusal]: a 401, unsigned, is unauthorized, the code used, expired or cancelled; a
-// signed answer is the code its body contains, key_invalid or key_limit say; an answer
-// that does not verify is answer_unsigned. A refusal verifies under the keys of pin the
-// code's fingerprints select, the machine's pin when it has one: a machine without a
-// pin reads such a refusal's status alone.
-func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string, pin Pin) (*EnrolmentAnswer, error) {
+// VerifyAnswer reads the server's answer to the request. A 201 and a signed 409 are
+// verified alike: each lists the server's keys in apiary_public_key, and the answer
+// verifies under the entry whose fingerprint the code carries first, or it is
+// answer_unsigned. A 201's pin is then the entries whose fingerprints the code
+// carries. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit. A
+// 401, unsigned, is unauthorized: the code was used, has expired or was cancelled. Any
+// other answer is answer_unsigned. A caller acts on a refusal's code, and never on the
+// status of an answer_unsigned: an answer that does not verify may come from anyone on
+// the path.
+func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentAnswer, error) {
 	a.RequestSignature = r.Proof
 	fingerprints := CodeFingerprints(r.Code)
 	if len(fingerprints) == 0 {
 		return nil, errors.New("the request's code is not an enrolment code")
 	}
 	unsigned := &Refusal{Code: CodeAnswerUnsigned, Status: a.Status, Detail: "enrolment"}
-	switch a.Status {
-	case http.StatusUnauthorized:
-		return nil, &Refusal{Code: CodeUnauthorized, Status: a.Status, Detail: "enrolment: the code was used or has expired"}
-	case http.StatusCreated:
-	default:
-		var selected Pin
-		for _, k := range pin {
-			if pub, err := ParsePublicKey(k.PublicKey); err == nil && slices.Contains(fingerprints, pub.Fingerprint()) {
-				selected = append(selected, k)
+	// verified reports whether the answer verifies under the listed key whose
+	// fingerprint the code carries first.
+	verified := func(keys Pin) bool {
+		for _, k := range keys {
+			if pub, err := ParsePublicKey(k.PublicKey); err == nil && k.Alg == "ed25519" && pub.Fingerprint() == fingerprints[0] {
+				return (Pin{k}).VerifyAnswer(a, signature)
 			}
 		}
-		if len(selected) == 0 || len(a.Body) > MaxAnswer || !selected.VerifyAnswer(a, signature) {
+		return false
+	}
+	switch a.Status {
+	case http.StatusUnauthorized:
+		return nil, &Refusal{Code: CodeUnauthorized, Status: a.Status, Detail: "enrolment: the code was used, has expired or was cancelled"}
+	case http.StatusConflict:
+		var ref struct {
+			Error           string   `json:"error"`
+			Names           []string `json:"names"`
+			ApiaryPublicKey Pin      `json:"apiary_public_key"`
+		}
+		if len(a.Body) > MaxAnswer || jsonv2.Unmarshal(a.Body, &ref, jsonv2.RejectUnknownMembers(true)) != nil || !verified(ref.ApiaryPublicKey) {
 			return nil, unsigned
 		}
-		if ref := ReadRefusal(a.Status, a.Body); ref != nil {
-			ref.Detail = "enrolment"
-			return nil, ref
+		if ref.Error != CodeKeyInvalid && ref.Error != CodeKeyLimit {
+			return nil, fmt.Errorf("enrolment: a signed 409 with a code this package does not read")
 		}
-		return nil, fmt.Errorf("enrolment: status %d, signed, without a code", a.Status)
-	}
-	var ans EnrolmentAnswer
-	if err := jsonv2.Unmarshal(a.Body, &ans, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment"}
+	case http.StatusCreated:
+	default:
 		return nil, unsigned
 	}
-	var first *ServerKey
-	for i, k := range ans.ApiaryPublicKey {
-		if pub, err := ParsePublicKey(k.PublicKey); err == nil && pub.Fingerprint() == fingerprints[0] {
-			first = &ans.ApiaryPublicKey[i]
-		}
-	}
-	if first == nil || first.Alg != "ed25519" || !(Pin{*first}).VerifyAnswer(a, signature) {
+	var ans EnrolmentAnswer
+	if err := jsonv2.Unmarshal(a.Body, &ans, jsonv2.RejectUnknownMembers(true)); err != nil || !verified(ans.ApiaryPublicKey) {
 		return nil, unsigned
 	}
 	if err := ans.check(); err != nil {
@@ -272,9 +274,9 @@ func (a *EnrolmentAnswer) check() error {
 // Post sends the request to the server's enrolment endpoint and returns its verified
 // answer, as [EnrolmentRequest.VerifyAnswer] reads it. serverURL is the server's
 // origin, https or http to a loopback address; hc is the client, nil for one with a
-// ten-second timeout, and in either case one that follows no redirect; userAgent is
-// sent as User-Agent; pin is the machine's pin, empty when it has none.
-func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL, userAgent string, pin Pin) (*EnrolmentAnswer, error) {
+// ten-second timeout, and in either case one that follows no redirect and keeps no
+// cookie; userAgent is sent as User-Agent.
+func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL, userAgent string) (*EnrolmentAnswer, error) {
 	if err := checkOrigin(serverURL); err != nil {
 		return nil, err
 	}
@@ -296,6 +298,7 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 		client = &cp
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client.Jar = nil
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("enrolment %s: %w", u, err)
@@ -313,7 +316,7 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 		Status: resp.StatusCode, Body: answer,
 		Configuration:    resp.Header.Get(HeaderConfiguration),
 		RunConfiguration: resp.Header.Get(HeaderRunConfiguration),
-	}, sig, pin)
+	}, sig)
 }
 
 // checkOrigin refuses a server URL that is not an origin, https or http to a loopback

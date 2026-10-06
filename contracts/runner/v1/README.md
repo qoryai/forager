@@ -810,7 +810,10 @@ keys, signed as Signed answers describes with the request's `proof` as line 3; t
 machine verifies it under the listed key whose fingerprint the code carries first, and
 pins only the keys whose fingerprints the code carries. A `401` means the code was used,
 has expired or was cancelled; a signed `409` `key_invalid` refuses the key, and
-`key_limit` a node that already holds a key awaiting approval or two approved keys. The
+`key_limit` a node that already holds a key awaiting approval or two approved keys.
+Each signed refusal lists `apiary_public_key`, the same list in the same order as a
+`201` at that moment, and the machine verifies it exactly as the `201`; a refusal sent
+unsigned lists no key, and the machine acts on none by its status. The
 access key then awaits approval. In place of a code, an owner or administrator may paste
 a public key the machine printed into an existing node or node pool, where it is
 approved at once. The server checks every public key it is given: a canonical encoding,
@@ -1321,8 +1324,8 @@ the option experimental.
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/sealed/` | the sealed fixture: a run configuration, the secrets request that lists its digest, the envelope sealed to the fixture access key with a fixed ephemeral key, the plaintext it opens to, and `vectors.json` with `info`, `aad`, the ephemeral key and the lengths and SHA-256 of the ciphertext and of the envelope's signed message | `secrets-request.schema.json`, `secrets-answer.schema.json`, `sealed-plaintext.schema.json` and `run-configuration.schema.json`; the open with Go's `crypto/hpke`, and the envelope's signature under the fixture signing key |
-| `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, and the answer | `enrolment.schema.json`; each proof under the fixture access key |
-| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, and the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
+| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 Every fixture is synthetic. No host name of anyone's infrastructure, no real secret, no

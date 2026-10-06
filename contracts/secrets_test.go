@@ -130,8 +130,8 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 
 // TestSecretsFixturesValidate pins that every fixture of the sealed fixture and of
 // enrolment passes its schema: the secrets request, its answer, the plaintext, the run
-// configuration the request lists, discovery, and the enrolment request and answer each
-// against the half of enrolment.schema.json it is.
+// configuration the request lists, discovery, and the enrolment request, answer and
+// signed refusals each against the part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -145,14 +145,18 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		return s.Validate
 	}
 	want := map[string][]string{
-		"fixtures/sealed/secrets-request.json":             {"secrets-request.schema.json"},
-		"fixtures/sealed/secrets-answer.json":              {"secrets-answer.schema.json"},
-		"fixtures/sealed/sealed-plaintext.json":            {"sealed-plaintext.schema.json"},
-		"fixtures/sealed/run-configuration.json":           {"run-configuration.schema.json"},
-		"fixtures/known-answers/discovery.json":            {"configuration.schema.json"},
-		"fixtures/enrolment/request.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/request-two-fingerprints.json": {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/answer.json":                   {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/sealed/secrets-request.json":                 {"secrets-request.schema.json"},
+		"fixtures/sealed/secrets-answer.json":                  {"secrets-answer.schema.json"},
+		"fixtures/sealed/sealed-plaintext.json":                {"sealed-plaintext.schema.json"},
+		"fixtures/sealed/run-configuration.json":               {"run-configuration.schema.json"},
+		"fixtures/known-answers/discovery.json":                {"configuration.schema.json"},
+		"fixtures/enrolment/request.json":                      {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/request-two-fingerprints.json":     {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/answer.json":                       {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/refusal-key-limit.json":            {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid.json":          {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-limit-rotation.json":   {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid-rotation.json": {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 	}
 	data := map[string]bool{
 		"fixtures/sealed/vectors.json":            true,
@@ -393,19 +397,22 @@ func TestEnrolmentProofs(t *testing.T) {
 
 // TestAnswerSignatures pins the six lines of a signed answer and their known answers
 // under the fixture signing key: 200 with the discovery body, 404 with an empty body,
-// and 201 to the enrolment request, whose line 3 is the request's proof.
+// 201 to the enrolment request, whose line 3 is the request's proof, and the signed
+// 409s key_limit and key_invalid at enrolment, with one key and, during a rotation, to
+// the request with two fingerprints, with two keys, current first.
 func TestAnswerSignatures(t *testing.T) {
 	k := loadKeys(t)
 	signing := ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed))
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Answers) != 3 {
-		t.Fatalf("%d answer vectors; want 3", len(v.Answers))
+	if len(v.Answers) != 7 {
+		t.Fatalf("%d answer vectors; want 7", len(v.Answers))
 	}
-	var proof struct {
+	var proof, rotation struct {
 		Proof string `json:"proof"`
 	}
 	load(t, "fixtures/enrolment/request.json", &proof)
+	load(t, "fixtures/enrolment/request-two-fingerprints.json", &rotation)
 	for _, a := range v.Answers {
 		if len(a.Lines) != 6 || a.Lines[0] != "qory-answer-ed25519-v1" {
 			t.Errorf("%s: lines %q; want six, the first the domain line", a.Note, a.Lines)
@@ -448,6 +455,34 @@ func TestAnswerSignatures(t *testing.T) {
 			if err := json.Unmarshal(body, &e); err != nil || e.AccessKeyID != k.AccessKey.AccessKeyID ||
 				len(e.APIaryPublicKey) != 1 || e.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
 				t.Errorf("%s: the answer contains %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
+			}
+		case "409":
+			two := a.Body != nil && strings.HasSuffix(*a.Body, "-rotation.json")
+			want := proof.Proof
+			if two {
+				want = rotation.Proof
+			}
+			if a.Lines[2] != want || a.Lines[4] != "" || a.Lines[5] != "" {
+				t.Errorf("%s: lines %q; want the enrolment proof and no digest", a.Note, a.Lines)
+			}
+			var r struct {
+				Error           string `json:"error"`
+				APIaryPublicKey []struct {
+					PublicKey string `json:"public_key"`
+				} `json:"apiary_public_key"`
+			}
+			keys := []string{k.SigningKey.PublicKey}
+			if two {
+				keys = append(keys, k.NextSigningKey.PublicKey)
+			}
+			if err := json.Unmarshal(body, &r); err != nil || (r.Error != "key_limit" && r.Error != "key_invalid") || len(r.APIaryPublicKey) != len(keys) {
+				t.Errorf("%s: the refusal contains %s and %v", a.Note, r.Error, r.APIaryPublicKey)
+				continue
+			}
+			for i, key := range keys {
+				if r.APIaryPublicKey[i].PublicKey != key {
+					t.Errorf("%s: key %d is %s; want %s", a.Note, i, r.APIaryPublicKey[i].PublicKey, key)
+				}
 			}
 		default:
 			t.Errorf("%s: status %q", a.Note, a.Lines[1])

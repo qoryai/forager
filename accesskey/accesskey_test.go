@@ -421,7 +421,7 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	}
 	ans := vectors(t).Answers[2]
 	answer := accesskey.Answer{Status: http.StatusCreated, Body: ans.body(t)}
-	got, err := r.VerifyAnswer(answer, ans.Signature, nil)
+	got, err := r.VerifyAnswer(answer, ans.Signature)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	}
 	// Signed by another key than the one the code names: refused.
 	other := k.NextSigningKey.key(t)
-	if _, err := r.VerifyAnswer(answer, other.SignAnswer(accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: answer.Body}), nil); code(err) != accesskey.CodeAnswerUnsigned {
+	if _, err := r.VerifyAnswer(answer, other.SignAnswer(accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: answer.Body})); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("an answer signed by a key the code does not name: %v", err)
 	}
 }
@@ -470,7 +470,7 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		a := accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: body}
-		got, err := r.VerifyAnswer(a, signer.SignAnswer(a), nil)
+		got, err := r.VerifyAnswer(a, signer.SignAnswer(a))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -655,8 +655,8 @@ func TestInstanceID(t *testing.T) {
 
 // TestPostEnrols posts an enrolment to a fake server signing under the fixture
 // signing key: a 201 verifies and pins; a 401 is unauthorized; a signed 409, key_limit
-// or key_invalid, is its code for a machine whose pin holds the code's key and
-// answer_unsigned for one without; a signed 201 the schema refuses is an error; an
+// or key_invalid, is its code, verified under the key its body lists, and one that
+// lists no key is answer_unsigned; a signed 201 the schema refuses is an error; an
 // unsigned answer is answer_unsigned.
 func TestPostEnrols(t *testing.T) {
 	k := keys(t)
@@ -690,24 +690,26 @@ func TestPostEnrols(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	got, err := r.Post(ctx, nil, srv.URL, "qory/test", nil)
+	got, err := r.Post(ctx, nil, srv.URL, "qory/test")
 	if err != nil || got.AccessKeyID != "ak_f1xt0re000000000" || len(got.Pin) != 1 {
 		t.Fatalf("201: %+v, %v", got, err)
 	}
 	status, body = http.StatusUnauthorized, []byte(`{"error":"unauthorized"}`)
-	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeUnauthorized {
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeUnauthorized {
 		t.Errorf("401: %v", err)
 	}
-	status, body = http.StatusConflict, []byte(`{"error":"key_limit"}`)
-	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", k.SigningKey.pin()); code(err) != accesskey.CodeKeyLimit {
-		t.Errorf("signed 409 with a pin: %v", err)
+	keys := `"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]`
+	status, body = http.StatusConflict, []byte(`{"error":"key_limit",`+keys+`}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeKeyLimit {
+		t.Errorf("signed 409 key_limit: %v", err)
 	}
-	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
-		t.Errorf("signed 409 without a pin: %v", err)
+	body = []byte(`{"error":"key_invalid",` + keys + `}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeKeyInvalid {
+		t.Errorf("signed 409 key_invalid: %v", err)
 	}
-	body = []byte(`{"error":"key_invalid"}`)
-	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", k.SigningKey.pin()); code(err) != accesskey.CodeKeyInvalid {
-		t.Errorf("signed 409 key_invalid with a pin: %v", err)
+	body = []byte(`{"error":"key_limit"}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("a signed 409 that lists no key: %v", err)
 	}
 	status = http.StatusCreated
 	for name, b := range map[string]string{
@@ -716,16 +718,16 @@ func TestPostEnrols(t *testing.T) {
 		"an unknown member":          `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","approved":false,"stored_secrets":false,"extra":1,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
 	} {
 		body = []byte(b)
-		if got, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); err == nil {
+		if got, err := r.Post(ctx, nil, srv.URL, "qory/test"); err == nil {
 			t.Errorf("a 201 with %s: accepted as %+v", name, got)
 		}
 	}
 	sign = false
 	status, body = http.StatusCreated, bytes.TrimSpace(read(t, "fixtures/enrolment/answer.json"))
-	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("unsigned 201: %v", err)
 	}
-	if _, err := r.Post(ctx, nil, "http://qory.example", "qory/test", nil); err == nil {
+	if _, err := r.Post(ctx, nil, "http://qory.example", "qory/test"); err == nil {
 		t.Error("plain http to another host than loopback is accepted")
 	}
 }
@@ -739,7 +741,7 @@ func TestErrorsNeverQuoteASecret(t *testing.T) {
 	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + secret + `"}]`))
 	_, e3 := accesskey.NormaliseCode("qec_F1XT0RE0000000000000000000." + secret)
 	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
-	_, e4 := r.Post(context.Background(), nil, "https://"+secret, "test", nil)
+	_, e4 := r.Post(context.Background(), nil, "https://"+secret, "test")
 	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(secret), accesskey.CheckInstanceID(secret), accesskey.CheckName(secret), accesskey.CheckNodeID(strings.ToUpper(secret))} {
 		if err == nil || strings.Contains(err.Error(), secret[4:]) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:])) {
 			t.Errorf("%d: %v", i, err)
@@ -788,5 +790,73 @@ func TestRefusedKeysVerifyNothing(t *testing.T) {
 		if len(pin.Keys()) != 0 {
 			t.Errorf("%s is among a pin's keys", enc)
 		}
+	}
+}
+
+// TestEnrolmentRefusalKnownAnswers verifies the published signed refusals as a machine
+// without a pin does: each, key_limit and key_invalid, with one key and during a
+// rotation with two, is its code, verified under the key its code's first fingerprint
+// names; the same refusal tampered, signed by the next key, bound to another proof, or
+// listing only a key the code does not name, is answer_unsigned.
+func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
+	k := keys(t)
+	key := k.accessKey(t)
+	one, err := accesskey.NewEnrolmentRequest(key, vectors(t).Enrolment[0].Lines[1], "build-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := accesskey.NewEnrolmentRequest(key, vectors(t).Enrolment[1].Lines[1], "build-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, v := range vectors(t).Answers {
+		if v.Lines[1] != "409" {
+			continue
+		}
+		n++
+		r := one
+		if strings.HasSuffix(v.Body, "-rotation.json") {
+			r = two
+		}
+		body := v.body(t)
+		a := accesskey.Answer{Status: http.StatusConflict, Body: body}
+		var want struct {
+			Error string `json:"error"`
+		}
+		json.Unmarshal(body, &want)
+		if _, err := r.VerifyAnswer(a, v.Signature); code(err) != want.Error {
+			t.Errorf("%s: %v", v.Note, err)
+		}
+		tampered := a
+		tampered.Body = bytes.Replace(body, []byte(want.Error), []byte("key_limit"), 1)
+		if want.Error == "key_limit" {
+			tampered.Body = bytes.Replace(body, []byte("key_limit"), []byte("key_invalid"), 1)
+		}
+		other := two
+		if r == two {
+			other = one
+		}
+		next := k.NextSigningKey.key(t)
+		for name, check := range map[string]func() error{
+			"tampered":      func() error { _, err := r.VerifyAnswer(tampered, v.Signature); return err },
+			"another proof": func() error { _, err := other.VerifyAnswer(a, v.Signature); return err },
+			"signed by the next": func() error {
+				_, err := r.VerifyAnswer(a, next.SignAnswer(accesskey.Answer{Status: 409, RequestSignature: r.Proof, Body: body}))
+				return err
+			},
+			"another key listed": func() error {
+				b := []byte(`{"error":"key_limit","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"}]}`)
+				_, err := one.VerifyAnswer(accesskey.Answer{Status: 409, Body: b}, next.SignAnswer(accesskey.Answer{Status: 409, RequestSignature: one.Proof, Body: b}))
+				return err
+			},
+		} {
+			if code(check()) != accesskey.CodeAnswerUnsigned {
+				t.Errorf("%s, %s: %v", v.Note, name, check())
+			}
+		}
+	}
+	if n != 4 {
+		t.Errorf("%d signed refusals; want 4", n)
 	}
 }

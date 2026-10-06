@@ -101,7 +101,8 @@ release may change what an existing document does, and says so under Upgrading.
   X25519 key; runs the five checks the contract requires of a public key; builds and
   signs the GET and POST request strings; verifies a signed answer under a pin; builds
   an enrolment request with its normalised code and proof, posts it and verifies the
-  answer under the key the code names; and makes the instance id with the two lines of
+  answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
+  names; and makes the instance id with the two lines of
   its file, the id and a keyed hash of the machine's identity. Its tests reproduce every
   published known answer of the access key, the requests, the answers and enrolment.
 - A server can close a run with a signed `410` `run_closed` to a delivery: the runner
@@ -109,6 +110,11 @@ release may change what an existing document does, and says so under Upgrading.
   `reason: run_closed` in the file sink and sends nothing further; before
   `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
   `session.Result` has `RunClosed`.
+- `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
+  `key_invalid` or `key_limit` with `apiary_public_key`, the same list in the same order
+  as a `201`, so a machine without a pin verifies it as it verifies the `201`.
+  `fixtures/enrolment/` has the four refusals, with one key and with two, and
+  `signatures.json` their signatures under the fixture signing key.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
   document is read and before the ping, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.

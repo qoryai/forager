@@ -2196,6 +2196,23 @@ use of a used code is `401`. `qory` verifies the answer under the entry of
 no such entry or does not verify under it, and pins only the entries whose fingerprints
 the code carries; only then does it write `access_key_id` and `apiary_public_key`.
 
+Every signed refusal at enrolment, `409` `key_invalid` and `409` `key_limit`, contains
+`apiary_public_key`, the same list in the same order as a `201` at that moment: the
+current key first, then the next during a rotation of the server's key.
+`enrolment.schema.json` defines it as `$defs/refusal`:
+
+```json
+{"error": "key_limit",
+ "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
+```
+
+`qory` verifies a refusal exactly as it verifies the `201`, under the listed entry whose
+fingerprint the code carries first, so a machine without a pin learns which refusal it
+received and acts on its code: it keeps the secret on `key_limit` and moves it aside on
+`key_invalid`. It pins nothing from a refusal. A refusal sent unsigned, the `401` and
+every answer of steps 1 to 4, lists no key, and `qory` acts on none of them by its
+status; an answer that does not verify is `answer_unsigned`, whatever its status.
+
 Known answers, under the fixture access key secret and the fixture signing key: the five
 lines of the body above are 139 bytes, and `proof` is
 `stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ`.
@@ -2212,6 +2229,13 @@ which production refuses as it refuses every fixture, the code is
 `qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A`. Over it,
 with the body's other members as above, the five lines are 162 bytes, and `proof` is
 `R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg`.
+
+The signed refusals have known answers under the fixture signing key too, in
+`fixtures/known-answers/signatures.json`: `key_limit` and `key_invalid` to the request
+above, each listing the fixture signing key, and the same two to the request whose code
+carries both fingerprints, each listing the fixture signing key and then the fixture
+next signing key, all signed by the current key with the request's `proof` as line 3.
+The bodies are in `fixtures/enrolment/`.
 
 ### The secrets request and the envelope
 
