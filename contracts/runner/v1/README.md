@@ -893,8 +893,8 @@ command.
 **Secrets**, optional: what the runtime needs of a run's secrets. `declares` lists the
 secrets it reads, each `{id, title, name, hosts, paths, auth}`: an id, the key a runtime
 connection supplies it under; a title for a person choosing one; the variable the
-runtime reads it from; the exact hosts its value is set on, no wildcard and no IP
-literal; optionally the paths of those hosts, in the policy's path grammar; and how it
+runtime reads it from; the hosts its value is set on, exact DNS names; optionally the
+paths of those hosts, in the policy's path grammar; and how it
 is set, `auth.schema.json`, a scheme of the closed set, `bearer`, `header` with its
 `header`, or `basic`, with neither `secret` nor `username_secret`. `one_of` lists groups
 `{id, required, of}`, `of` being declared ids, each in one group at most: a runtime
@@ -903,7 +903,8 @@ connection supplies at most one declaration of a group, and one of a `required` 
 ones; `denies`, variables the runner always leaves out of the server's set for the
 runtime; `credential_files`, files in which the runtime keeps a credential of its own,
 `~` being the home of the user the runner runs as. The runner checks `secrets` when it
-reads the descriptor: the schema, and that every id of a group is declared.
+reads the descriptor: the schema, that ids are distinct, and that every id of a group
+is declared and in one group at most.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
@@ -922,7 +923,8 @@ on `api.anthropic.com` under `/v1/`, one of the two required.
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
 `denies`, `credential_files`, `declares` with `id`, `title`, `name`, `hosts`, `auth`
-(`scheme`, and `header` for the `header` scheme) and `paths` when the declaration has
+(`scheme`, and `header` for the `header` scheme and `username` for the `basic`
+scheme) and `paths` when the declaration has
 some, and `one_of` with `id`, `required` and `of`. Every list is present, empty when
 the descriptor has none. `go generate ./contracts` writes it from the descriptors, and
 a test fails while the file differs from what that writes.

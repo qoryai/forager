@@ -18,7 +18,7 @@ func Installers() map[string]runtimes.Installer {
 	return map[string]runtimes.Installer{claude.SettingsInstaller: claude.Settings}
 }
 
-var name = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var name = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
 // Lookup is the runtime of a name. A descriptor in dir, <name>.yaml, comes first when
 // dir is not empty: it is how a machine describes a runtime this runner ships nothing
@@ -26,7 +26,7 @@ var name = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // name with neither is a bare runtime: the run is recorded, the session inside is not.
 func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 	if !name.MatchString(runtime) {
-		return nil, fmt.Errorf("runtime %q is not a name: a lower-case letter, then letters, digits and dashes", runtime)
+		return nil, fmt.Errorf("runtime %q is not a name: a lower-case letter, then up to 63 lower-case letters, digits and dashes", runtime)
 	}
 	if dir != "" {
 		p := filepath.Join(dir, runtime+".yaml")

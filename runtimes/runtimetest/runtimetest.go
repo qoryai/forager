@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	name      = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	name      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 	eventType = regexp.MustCompile(`^dev\.qory\.session\.[a-z_]+$`)
 )
 
@@ -32,7 +32,7 @@ var (
 func Conforms(t *testing.T, rt runtimes.Runtime) {
 	t.Helper()
 	if !name.MatchString(rt.Name()) {
-		t.Errorf("the name %q is not a lower-case letter, then letters, digits and dashes", rt.Name())
+		t.Errorf("the name %q is not a lower-case letter, then up to 63 lower-case letters, digits and dashes", rt.Name())
 	}
 	stop := rt.Stop()
 	if err := session.CheckStopSignal(stop.Signal); err != nil {

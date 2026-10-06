@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"reflect"
 	"testing"
+	"testing/fstest"
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/descriptor"
@@ -95,7 +96,8 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 // TestSecretsAreChecked pins what a descriptor's secrets are held to, by the schema and
 // beyond it: exact hosts, a scheme of the closed set with its header, no secret of its
 // own in a declaration's auth, and groups of declared ids, each in one group at most.
-// A descriptor without secrets stays valid.
+// A descriptor without secrets stays valid, and runtimes.json writes a basic
+// declaration's username beside its scheme.
 func TestSecretsAreChecked(t *testing.T) {
 	const head = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
 		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
@@ -105,14 +107,33 @@ func TestSecretsAreChecked(t *testing.T) {
 	}
 	ok := head + "title: Amp\nsecrets:\n declares:\n" + key +
 		"  - {id: alt, title: Alt, name: AMP_ALT, hosts: [api.example.com], paths: [/v2/*], auth: {scheme: header, header: x-key}}\n" +
+		"  - {id: git, title: Git, name: AMP_GIT, hosts: [git.example.com], auth: {scheme: basic, username: bot}}\n" +
 		" one_of: [{id: model, of: [key, alt]}]\n reserves: [AMP_OTHER]\n denies: [AMP_URL]\n credential_files: [~/.amp/key, /etc/amp/key]\n"
 	if _, err := descriptor.Parse("amp.yaml", []byte(ok)); err != nil {
 		t.Errorf("a descriptor with secrets: %v", err)
 	}
+	rendered, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(ok)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Runtimes []struct {
+			Declares []struct {
+				ID   string         `json:"id"`
+				Auth map[string]any `json:"auth"`
+			} `json:"declares"`
+		} `json:"runtimes"`
+	}
+	if err := json.Unmarshal(rendered, &file); err != nil || len(file.Runtimes) != 1 || len(file.Runtimes[0].Declares) != 3 {
+		t.Fatalf("runtimes.json of the descriptor with secrets: %v\n%s", err, rendered)
+	}
+	if auth := file.Runtimes[0].Declares[2].Auth; !reflect.DeepEqual(auth, map[string]any{"scheme": "basic", "username": "bot"}) {
+		t.Errorf("runtimes.json writes the basic declaration's auth as %v; want its scheme and username", auth)
+	}
 	for name, secrets := range map[string]string{
 		"a wildcard host":            " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: ['*.example.com'], auth: {scheme: bearer}}\n",
 		"an IP literal":              " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [192.0.2.1], auth: {scheme: bearer}}\n",
-		"a header scheme, no name":   " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: header}}\n",
+		"a header scheme, no header": " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: header}}\n",
 		"a scheme outside the set":   " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: digest}}\n",
 		"an auth secret":             " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: bearer, secret: key}}\n",
 		"a username secret":          " declares:\n  - {id: key, title: Key, name: AMP_KEY, hosts: [api.example.com], auth: {scheme: basic, username_secret: key}}\n",
@@ -150,8 +171,8 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // TestRuntimesJSONShape pins the members of runtimes.json a server reads: version and
 // runtimes; per runtime its name, title, reserves, denies, credential_files, declares
 // and one_of, every one present; per declaration id, title, name, hosts, auth with its
-// scheme and the header of a header scheme, and paths when it has some; per group id,
-// required and of. Every built-in descriptor is one runtime, in name order.
+// scheme, the header of a header scheme and the username of a basic scheme, and paths
+// when it has some; per group id, required and of. Every built-in descriptor is one runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -207,9 +228,15 @@ func TestRuntimesJSONShape(t *testing.T) {
 	if doc["version"] != 1.0 {
 		t.Errorf("version %v; want 1", doc["version"])
 	}
-	dirs, err := fs.ReadDir(contracts.FS, "runtimes")
+	entries, err := fs.ReadDir(contracts.FS, "runtimes")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var dirs []fs.DirEntry
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e)
+		}
 	}
 	runtimes, _ := doc["runtimes"].([]any)
 	if len(runtimes) != len(dirs) {
@@ -233,6 +260,9 @@ func TestRuntimesJSONShape(t *testing.T) {
 			auth := members("auth", dc["auth"], []string{"scheme"}, "header", "username")
 			if _, ok := auth["header"]; ok != (auth["scheme"] == "header") {
 				t.Errorf("auth %v: a header scheme has a header and no other does", auth)
+			}
+			if _, ok := auth["username"]; ok != (auth["scheme"] == "basic") {
+				t.Errorf("auth %v: a basic scheme has a username and no other does", auth)
 			}
 		}
 		groups, _ := rt["one_of"].([]any)

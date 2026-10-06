@@ -11,7 +11,8 @@ import (
 )
 
 // TestLookupIsTheMachinesDescriptorThenTheContractsThenBare pins where a runtime comes
-// from by its name.
+// from by its name, and that a name is a lower-case letter and then up to 63 lower-case
+// letters, digits and dashes.
 func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	rt, err := catalog.Lookup("claude", "")
 	if err != nil || rt.Version() == "" || !rt.ReadsOutput() {
@@ -47,9 +48,13 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	if _, err := catalog.Lookup("amp", dir); err == nil {
 		t.Error("a descriptor the schema refuses was read")
 	}
-	for _, bad := range []string{"", "../claude", "Claude", "a b"} {
+	for _, bad := range []string{"", "../claude", "Claude", "a b", "a" + strings.Repeat("b", 64)} {
 		if _, err := catalog.Lookup(bad, dir); err == nil {
 			t.Errorf("%q is a name", bad)
 		}
+	}
+	long := "a" + strings.Repeat("b", 63)
+	if rt, err := catalog.Lookup(long, dir); err != nil || rt.Name() != long {
+		t.Errorf("a name of 64 characters: %v", err)
 	}
 }

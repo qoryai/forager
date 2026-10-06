@@ -19,6 +19,9 @@ release may change what an existing document does, and says so under Upgrading.
   own stops the run when the wall writes the agent's docker configuration there, which
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
+- A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
+  and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
+  runtime that has one, and the descriptor schema holds `runtime` to the same bound.
 
 ### Added
 
