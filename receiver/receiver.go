@@ -9,17 +9,18 @@
 // skips enrolment. It answers in the contract's order of refusals: a body over its
 // limit, 413; a delivery of another content type, 415; a header the signature depends
 // on sent twice, an unsigned 400 bad_request; then verification, the access key id's
-// shape before any lookup, the timestamp of a GET within the window, and the Ed25519
-// signature over the request string, every failure alike an unsigned 401 with
-// {"error":"unauthorized"} and nothing about the headers said or logged. Every answer
-// after verification is signed under the receiver's own key and bound to the request
-// by its signature: an instance id absent or outside its pattern, 400 bad_request; an
-// access key that awaits approval, 409 key_pending; another contract revision, 400
-// unsupported_contract_version; a body or query the contract refuses, 400
-// invalid_request; then each endpoint's own. A delivery it verified is deduplicated on
-// each event's id, handed to a [Store], and answered 202 with the digests in force.
-// [File] is a store that appends events to one JSON lines file and remembers the ids
-// it holds.
+// shape before any lookup and the Ed25519 signature over the request string, every
+// failure alike an unsigned 401 with {"error":"unauthorized"} and nothing about the
+// headers said or logged. Every answer after verification but a 401 is signed under
+// the receiver's own key and bound to the request by its signature: an instance id
+// absent or outside its pattern, 400 bad_request; an access key that awaits approval,
+// 409 key_pending; another contract revision, 400 unsupported_contract_version; a
+// body or query the contract refuses, 400 invalid_request; a GET's timestamp outside
+// the window, the unsigned 401; then each endpoint's own. Of an event's data it reads
+// a ping's interval_seconds and a run.started's labels. A delivery it verified is
+// deduplicated on each event's id, handed to a [Store], and answered 202 with the
+// digests in force. [File] is a store that appends events to one JSON lines file and
+// remembers the ids it holds.
 package receiver
 
 import (
@@ -191,6 +192,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision):
 		h.refuseSigned(w, v, http.StatusBadRequest, "unsupported_contract_version")
 	case r.URL.Path == server.WellKnown:
+		if !h.fresh(r.Header.Get(server.HeaderTimestamp)) {
+			refuse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 		doc, digest := h.Configuration()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderConfiguration, digest)
@@ -199,6 +204,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		labels, err := queryLabels(r.URL.RawQuery)
 		if err != nil {
 			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if !h.fresh(r.Header.Get(server.HeaderTimestamp)) {
+			refuse(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		doc, digest, ok := h.RunConfiguration(labels)
@@ -265,10 +274,11 @@ func (h *Handler) answer(w http.ResponseWriter, v verified, status int, body []b
 }
 
 // verify reports whether the request verifies: an access key id of the right shape,
-// which the lookup is asked for only then, a key it knows, for a GET a timestamp
-// within the window, and the Ed25519 signature over the request string under the key's
-// public key. The request string's instance line is the header as sent, empty when it
-// is absent; the target is the request-target as sent.
+// which is looked up only then, a key the lookup holds, and the Ed25519 signature over
+// the request string under the key's public key. The request string's instance line is
+// the header as sent, empty when it is absent; the target is the request-target as
+// sent. A GET's timestamp is checked against the window later, in the contract's order
+// of refusals.
 func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
 	id, sig := r.Header.Get(server.HeaderAccessKeyID), r.Header.Get(server.HeaderSignature)
 	if id == "" || sig == "" || accesskey.CheckID(id) != nil || h.Keys == nil {
@@ -286,11 +296,7 @@ func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
 	if r.Method == http.MethodPost {
 		req.Body = body
 	} else {
-		ts := r.Header.Get(server.HeaderTimestamp)
-		if !h.fresh(ts) {
-			return verified{}, false
-		}
-		req.Timestamp = ts
+		req.Timestamp = r.Header.Get(server.HeaderTimestamp)
 	}
 	if !key.PublicKey.VerifyRequest(req, sig) {
 		return verified{}, false
@@ -326,12 +332,14 @@ type head struct {
 	Subject string `json:"subject"`
 	Type    string `json:"type"`
 	Data    struct {
-		Labels map[string]string `json:"labels"`
+		Labels   map[string]string `json:"labels"`
+		Interval *int64            `json:"interval_seconds"`
 	} `json:"data"`
 }
 
 // deliver answers one verified delivery, in the events endpoint's order: a batch that
-// is not one, 400 invalid_request; one whose events the store holds every one of,
+// is not one, or a ping whose interval_seconds is absent or outside 1 to 300, 400
+// invalid_request; one whose events the store holds every one of,
 // 202 again; an event of a run the receiver closed, 410 run_closed; of a run it wants
 // nothing more of, 410; a ping from an instance it does not admit, 409
 // instance_limit; otherwise each new event stored and 202.
@@ -345,6 +353,10 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request, v verified, bo
 	fresh := false
 	for i, raw := range batch {
 		if err := json.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" {
+			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if n := heads[i].Data.Interval; heads[i].Type == "dev.qory.ping" && (n == nil || *n < 1 || *n > server.MaxInterval) {
 			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 			return
 		}

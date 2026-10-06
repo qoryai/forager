@@ -271,3 +271,20 @@ func TestRunClosedEndsDeliveriesAndTheRun(t *testing.T) {
 		t.Errorf("the record of accepted batches has no stop: %v", err)
 	}
 }
+
+// TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a signed 410 run_closed ends
+// the deliveries at once: the batches already queued behind the closed one are
+// dropped, not posted, and the caller hears of the close once.
+func TestRunClosedDropsTheBatchesQueuedBeforeIt(t *testing.T) {
+	s := newStation(t, nil, func(string) bool { return true })
+	var calls atomic.Int32
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil, func() { calls.Add(1) })
+	e := event.NewEmitter(event.NewRunID(), nil)
+	for i := 0; i < 3*sink.BatchEvents+50; i++ {
+		w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": i, "interval_seconds": 30}))
+	}
+	w.Close(context.Background())
+	if s.hits.Load() != 1 || calls.Load() != 1 || !w.RunClosed() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, %d calls, closed %v, %d undelivered", s.hits.Load(), calls.Load(), w.RunClosed(), w.Undelivered())
+	}
+}

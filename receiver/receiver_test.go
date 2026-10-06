@@ -329,8 +329,9 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 // TestSignedRefusalsComeInTheContractsOrder pins the refusals after verification,
 // each signed and bound to its request: an instance id absent or outside its pattern
 // is 400 bad_request, before an access key that awaits approval, which is 409
-// key_pending on every endpoint, before another contract revision, which is 400
-// unsupported_contract_version; a batch that is not one is 400 invalid_request; and on
+// key_pending on every endpoint, a stale timestamp's 401 coming later, before another
+// contract revision, which is 400 unsupported_contract_version; a batch that is not
+// one, or a ping with an interval over 300 seconds, is 400 invalid_request; and on
 // the events endpoint, a closed run is 410 run_closed, a run the receiver wants
 // nothing more of 410 without a code, and a ping from an instance it does not admit 409
 // instance_limit, while a retried ping it already accepted gets its 202 again.
@@ -373,6 +374,7 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	check("a pending key at discovery", as(pending, signedGET(server.WellKnown, fixtureKey, "1700000000")), 409, "key_pending")
 	check("a pending key at the run configuration", as(pending, signedGET(receiver.DefaultRunPath, fixtureKey, "1700000000")), 409, "key_pending")
 	check("a pending key at the events endpoint", as(pending, signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("[]"))), 409, "key_pending")
+	check("a pending key with a stale timestamp", as(pending, signedGET(server.WellKnown, fixtureKey, "1699999000")), 409, "key_pending")
 	revision := signedGET(server.WellKnown, fixtureKey, "1700000000")
 	revision.Header.Set(server.HeaderContractVersion, "2")
 	check("another revision", revision, 400, "unsupported_contract_version")
@@ -382,6 +384,8 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), nil)
 	ping, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
 	pingBody := []byte("[" + string(ping) + "]")
+	long, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
+	check("a ping with an interval over 300 seconds", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(long)+"]")), 400, "invalid_request")
 	admitted := true
 	h.Admit = func(id, instance string) bool { return admitted && id == key && instance == inst }
 	check("a ping it admits", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")

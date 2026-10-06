@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"filippo.io/edwards25519"
@@ -127,7 +128,7 @@ func ParsePublicKey(s string) (PublicKey, error) {
 	var p PublicKey
 	b, err := decode(s, len(p))
 	if err != nil {
-		return p, fmt.Errorf("the public key %q: %w", s, err)
+		return p, fmt.Errorf("the public key %s: %w", shown(s), err)
 	}
 	copy(p[:], b)
 	return p, nil
@@ -232,6 +233,20 @@ func (p PublicKey) Fixture() bool {
 	return false
 }
 
+// shown is a value as an error quotes it: quoted, or, when it contains what starts an
+// access key secret, a secret pasted where another value belongs say, a phrase in its
+// place, so an error never contains a secret.
+func shown(v string) string {
+	if looksSecret(v) {
+		return "(a value that contains an access key secret)"
+	}
+	return strconv.Quote(v)
+}
+
+// looksSecret reports whether a value contains what starts an access key secret, in
+// any case.
+func looksSecret(v string) bool { return strings.Contains(strings.ToLower(v), SecretPrefix) }
+
 // decode decodes base64url without padding strictly, to exactly n bytes: padding, a
 // character of the standard alphabet, a line break and non-zero bits after the last
 // full byte are refused.
@@ -256,7 +271,7 @@ var idShape = regexp.MustCompile(`^ak_[0-9a-hjkmnp-tv-z]{16}$`)
 // base32 characters.
 func CheckID(id string) error {
 	if !idShape.MatchString(id) {
-		return fmt.Errorf("the access key id %q is not ak_ and 16 lower-case Crockford base32 characters", id)
+		return fmt.Errorf("the access key id %s is not ak_ and 16 lower-case Crockford base32 characters", shown(id))
 	}
 	return nil
 }
@@ -268,7 +283,7 @@ var nodeShape = regexp.MustCompile(`^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`)
 // pool, and 16 lower-case Crockford base32 characters.
 func CheckNodeID(id string) error {
 	if !nodeShape.MatchString(id) {
-		return fmt.Errorf("the node id %q is not nd_ or np_ and 16 lower-case Crockford base32 characters", id)
+		return fmt.Errorf("the node id %s is not nd_ or np_ and 16 lower-case Crockford base32 characters", shown(id))
 	}
 	return nil
 }
@@ -278,10 +293,12 @@ func CheckNodeID(id string) error {
 var nameShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // CheckName refuses a name outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$: an access key's
-// name at enrolment, and an instance's display name, X-Qory-Instance-Name.
+// name at enrolment, and an instance's display name, X-Qory-Instance-Name. A name that
+// contains an access key secret fits the pattern and is refused too, since the name
+// travels in clear.
 func CheckName(name string) error {
-	if !nameShape.MatchString(name) {
-		return fmt.Errorf("the name %q is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", name)
+	if !nameShape.MatchString(name) || looksSecret(name) {
+		return fmt.Errorf("the name %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(name))
 	}
 	return nil
 }

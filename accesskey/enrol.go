@@ -86,7 +86,7 @@ func NormaliseCode(code string) (string, error) {
 	}
 	for _, f := range parts {
 		if _, err := decode(f, 16); err != nil {
-			return "", fmt.Errorf("the enrolment code's fingerprint %q: %w", f, err)
+			return "", fmt.Errorf("the enrolment code's fingerprint %s: %w", shown(f), err)
 		}
 		b.WriteString("." + f)
 	}
@@ -319,9 +319,12 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 // checkOrigin refuses a server URL that is not an origin, https or http to a loopback
 // address, as the server document's url is.
 func checkOrigin(s string) error {
+	if looksSecret(s) {
+		return errors.New("the server URL contains an access key secret")
+	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("the server URL %q is not an origin, scheme and host only", s)
+		return fmt.Errorf("the server URL %s is not an origin, scheme and host only", shown(s))
 	}
 	switch u.Scheme {
 	case "https":
@@ -332,5 +335,5 @@ func checkOrigin(s string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("the server URL %q is neither https nor http to a loopback address", s)
+	return fmt.Errorf("the server URL %s is neither https nor http to a loopback address", shown(s))
 }

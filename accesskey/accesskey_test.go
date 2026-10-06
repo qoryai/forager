@@ -632,9 +632,10 @@ func TestInstanceID(t *testing.T) {
 }
 
 // TestPostEnrols posts an enrolment to a fake server signing under the fixture
-// signing key: a 201 verifies and pins; a 401 is unauthorized; a signed 409 is its
-// code for a machine whose pin holds the code's key and answer_unsigned for one
-// without; an answer under another key is answer_unsigned.
+// signing key: a 201 verifies and pins; a 401 is unauthorized; a signed 409, key_limit
+// or key_invalid, is its code for a machine whose pin holds the code's key and
+// answer_unsigned for one without; a signed 201 the schema refuses is an error; an
+// unsigned answer is answer_unsigned.
 func TestPostEnrols(t *testing.T) {
 	k := keys(t)
 	signer := k.SigningKey.key(t)
@@ -682,6 +683,21 @@ func TestPostEnrols(t *testing.T) {
 	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("signed 409 without a pin: %v", err)
 	}
+	body = []byte(`{"error":"key_invalid"}`)
+	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", k.SigningKey.pin()); code(err) != accesskey.CodeKeyInvalid {
+		t.Errorf("signed 409 key_invalid with a pin: %v", err)
+	}
+	status = http.StatusCreated
+	for name, b := range map[string]string{
+		"a node_kind against its id": `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"pool","approved":false,"stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
+		"three keys":                 `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","approved":false,"stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.AccessKey.PublicKey + `"}]}`,
+		"an unknown member":          `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","approved":false,"stored_secrets":false,"extra":1,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
+	} {
+		body = []byte(b)
+		if got, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); err == nil {
+			t.Errorf("a 201 with %s: accepted as %+v", name, got)
+		}
+	}
 	sign = false
 	status, body = http.StatusCreated, bytes.TrimSpace(read(t, "fixtures/enrolment/answer.json"))
 	if _, err := r.Post(ctx, nil, srv.URL, "qory/test", nil); code(err) != accesskey.CodeAnswerUnsigned {
@@ -689,5 +705,22 @@ func TestPostEnrols(t *testing.T) {
 	}
 	if _, err := r.Post(ctx, nil, "http://qory.example", "qory/test", nil); err == nil {
 		t.Error("plain http to another host than loopback is accepted")
+	}
+}
+
+// TestErrorsNeverQuoteASecret pins that a secret pasted where another value belongs,
+// a public key, an access key id, an instance id, a name, a pin or a server URL, is
+// named in the error and never quoted.
+func TestErrorsNeverQuoteASecret(t *testing.T) {
+	secret := keys(t).AccessKey.Secret
+	_, e1 := accesskey.ParsePublicKey(secret)
+	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + secret + `"}]`))
+	_, e3 := accesskey.NormaliseCode("qec_F1XT0RE0000000000000000000." + secret)
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	_, e4 := r.Post(context.Background(), nil, "https://"+secret, "test", nil)
+	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(secret), accesskey.CheckInstanceID(secret), accesskey.CheckName(secret), accesskey.CheckNodeID(strings.ToUpper(secret))} {
+		if err == nil || strings.Contains(err.Error(), secret[4:]) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:])) {
+			t.Errorf("%d: %v", i, err)
+		}
 	}
 }

@@ -301,8 +301,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	} else if err := CheckRunID(runID); err != nil {
 		return nil, err
 	}
-	if spec.Timeout < 0 || spec.StopGrace < 0 {
-		return nil, errors.New("the timeout or the stop grace is negative")
+	if spec.Timeout < 0 || spec.StopGrace < 0 || spec.Heartbeat < 0 {
+		return nil, errors.New("the timeout, the stop grace or the heartbeat interval is negative")
 	}
 	if err := CheckStopSignal(spec.StopSignal); err != nil {
 		return nil, err
@@ -340,15 +340,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// until the final event.
 	stopBeat := func() {}
 	// fail ends a run that does not start: the heartbeats stop, and the sinks are
-	// closed. A run the server closed before it started records dev.qory.run.refused
-	// with run_closed, which reaches the file sink alone.
+	// closed, within closeWait. A run the server closed before it started records
+	// dev.qory.run.refused with run_closed, which reaches the file sink alone.
 	fail := func(err error) (*Result, error) {
 		stopBeat()
 		if errors.Is(context.Cause(runCtx), errRunClosed) {
 			write(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
 			err = &Refusal{Code: accesskey.CodeRunClosed, Status: 410, Detail: "the server closed the run before it started"}
 		}
-		sinks.Close(ctx)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
+		defer cancel()
+		sinks.Close(closeCtx)
 		return nil, err
 	}
 	var posts *sink.Server
@@ -373,7 +375,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// The run configuration, when the server names one, is the policy: the
 		// machine's and the run's own are not merged with it.
 		if srv.conf.Run != nil {
-			if pol, err = srv.fetch(ctx, srv.conf.Run.URL); err != nil {
+			if pol, err = srv.fetch(runCtx, srv.conf.Run.URL); err != nil {
 				return fail(err)
 			}
 			srv.holds(pol.RunConfiguration)
@@ -397,7 +399,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	for i, c := range spec.Credentials {
 		defs[i] = credential.Definition(c)
 	}
-	held, err := hold(ctx, spec, defs, pol)
+	held, err := hold(runCtx, spec, defs, pol)
 	if err != nil {
 		return fail(err)
 	}
@@ -419,7 +421,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return fail(err)
 	}
-	tools, err := tool.Start(ctx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
+	tools, err := tool.Start(runCtx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
 	if err != nil {
 		return fail(err)
 	}
@@ -429,7 +431,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	var enclosure wall.Enclosure
 	bind := spec.ProxyBind
 	if spec.Wall != nil {
-		if enclosure, err = spec.Wall.Prepare(ctx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
+		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -504,7 +506,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		Env: environment(spec.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
 	}
 	if enclosure != nil {
-		launch, err = enclosure.Wrap(ctx, wall.Launch{
+		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen))),
 			CA:    authority,
@@ -515,7 +517,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 	}
 
-	// A run the server closed during its start does not start.
+	// A run the server closed during its start does not start: the start's steps run
+	// under runCtx, and whatever they reached ends here.
 	if errors.Is(context.Cause(runCtx), errRunClosed) {
 		return fail(errRunClosed)
 	}

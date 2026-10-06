@@ -75,6 +75,7 @@ type Server struct {
 	runDigest atomic.Pointer[string]
 	onDigests func(server.Digests)
 	onClosed  func()
+	closeOnce sync.Once
 	dir       string
 	report    func(string)
 	sleep     func(context.Context, time.Duration) bool
@@ -215,8 +216,15 @@ func (w *Server) next() ([]queued, bool) {
 // context ends; then it spools what was not accepted. An answer whose signature does
 // not verify under the pin is no answer, retried like a transport failure. The digests
 // of every signed answer go to the caller. A signed 410 stops the deliveries; with
-// run_closed it also closes the run, which the caller hears of once.
+// run_closed it also closes the run, which the caller hears of once. A batch queued
+// before the stop is dropped, as one written after it is.
 func (w *Server) deliver(batch []queued) {
+	w.mu.Lock()
+	stopped := w.stopped
+	w.mu.Unlock()
+	if stopped {
+		return
+	}
 	body := encode(batch)
 	id := event.NewID()
 	backoff := Backoff
@@ -238,14 +246,18 @@ func (w *Server) deliver(batch []queued) {
 		case err == nil && d.Stop():
 			w.mu.Lock()
 			w.stopped = true
-			w.runClosed = d.Closed()
+			if d.Closed() {
+				w.runClosed = true
+			}
 			w.mu.Unlock()
 			w.ack(stoppedWord, nil)
 			if d.Closed() {
-				w.report("the server closed the run with a signed 410 run_closed; the run ends, and no further batch is sent")
-				if w.onClosed != nil {
-					w.onClosed()
-				}
+				w.closeOnce.Do(func() {
+					w.report("the server closed the run with a signed 410 run_closed; the run ends, and no further batch is sent")
+					if w.onClosed != nil {
+						w.onClosed()
+					}
+				})
 				return
 			}
 			w.report(fmt.Sprintf("the server answered %d; no further batch is sent for this run", d.Status))

@@ -146,17 +146,17 @@ func (p Pin) Check() error {
 	seen := map[PublicKey]bool{}
 	for _, k := range p {
 		if k.Alg != "ed25519" {
-			return fmt.Errorf("the pin lists a key of alg %q; ed25519 is the one", k.Alg)
+			return fmt.Errorf("the pin lists a key of alg %s; ed25519 is the one", shown(k.Alg))
 		}
 		pub, err := ParsePublicKey(k.PublicKey)
 		if err != nil {
 			return fmt.Errorf("the pin: %w", err)
 		}
 		if err := pub.Check(); err != nil {
-			return fmt.Errorf("the pin's key %s: %w", k.PublicKey, err)
+			return fmt.Errorf("the pin's key %s: %w", shown(k.PublicKey), err)
 		}
 		if seen[pub] {
-			return fmt.Errorf("the pin lists the key %s twice", k.PublicKey)
+			return fmt.Errorf("the pin lists the key %s twice", shown(k.PublicKey))
 		}
 		seen[pub] = true
 	}

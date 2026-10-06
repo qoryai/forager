@@ -193,16 +193,19 @@ func record(file string) ([]recorded, error) {
 // on from its last event, and reports whether it did.
 func closeRecord(file, runID string, lines *[]recorded) (bool, error) {
 	var started time.Time
+	begun := false
 	for _, l := range *lines {
 		switch l.Type {
 		case event.RunExited:
 			return false, nil
 		case event.RunStarted:
+			begun = true
 			started, _ = time.Parse(time.RFC3339Nano, l.Time)
 		}
 	}
-	if started.IsZero() {
-		// A run the server's ping refused never started, and has no exit to record.
+	if !begun {
+		// A run the server's ping refused, or one refused after it, never started, and
+		// has no exit to record.
 		return false, nil
 	}
 	last := (*lines)[len(*lines)-1]

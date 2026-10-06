@@ -536,3 +536,40 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 		t.Errorf("the host a redirect named saw %d requests", n)
 	}
 }
+
+// TestAnswersThatCannotBeReadAsSignedAreUnsigned pins the edges of an answer's
+// signature: a signature header or a digest header sent twice, and a refusal body over
+// 64 KiB, each make the answer unsigned, even with a valid signature, so its code and
+// its digests are never read.
+func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
+	key, signer := generate(t), generate(t)
+	mode := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, body := 409, `{"error":"key_pending"}`
+		if mode == "large" {
+			body = `{"error":"key_pending","names":["` + strings.Repeat("x", server.MaxRefusal) + `"]}`
+		}
+		if mode == "digest" {
+			w.Header().Add(server.HeaderConfiguration, "sha256=a")
+			w.Header().Add(server.HeaderConfiguration, "sha256=a")
+		}
+		sig := signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(body), Configuration: w.Header().Get(server.HeaderConfiguration)})
+		w.Header().Add(server.HeaderSignature, sig)
+		if mode == "twice" {
+			w.Header().Add(server.HeaderSignature, sig)
+		}
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	c := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer)}, Key: key, InstanceID: instance, UserAgent: "qory-runner/test"}
+	if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeKeyPending {
+		t.Fatalf("a signed 409: %v", err)
+	}
+	for _, m := range []string{"twice", "digest", "large"} {
+		mode = m
+		if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: %v", m, err)
+		}
+	}
+}

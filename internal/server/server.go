@@ -311,8 +311,8 @@ type answer struct {
 // send signs one request and sends it, then reads the answer and verifies its
 // signature under the pin, bound to this request's signature. A GET carries the
 // timestamp; a POST's signature covers its body. A 401 is never signed, and a body
-// over max is read no further and counts as unsigned. An error is a transport failure:
-// no answer.
+// over max, or a body over MaxRefusal with a status other than 200, counts as
+// unsigned. An error is a transport failure: no answer.
 func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
@@ -350,7 +350,7 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 		return nil, err
 	}
 	a := &answer{status: resp.StatusCode, body: b}
-	if resp.StatusCode == http.StatusUnauthorized || len(b) > max {
+	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
 		return a, nil
 	}
 	one := func(name string) (string, bool) {
