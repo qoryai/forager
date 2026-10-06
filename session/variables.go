@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -18,13 +19,22 @@ import (
 var variableShape = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // checkVariables refuses the node's variables section when it cannot be one: a variable
-// that is not NAME=value with a name of the contract's grammar, a deny entry that is
-// neither a name nor a pattern, an unwalled mode other than the two.
+// that is not NAME=value with a name of the contract's grammar, or whose value contains
+// a NUL, a carriage return or a line feed, a deny entry that is neither a name nor a
+// pattern, an unwalled mode other than the two. An error names a variable only by a
+// name of the grammar, and never contains a value.
 func checkVariables(v Variables) error {
 	for _, kv := range v.Own {
-		name, _, ok := strings.Cut(kv, "=")
-		if !ok || !variableShape.MatchString(name) {
-			return fmt.Errorf("the node's variable %q is not NAME=value with a name of letters, digits and underscores", name)
+		name, value, ok := strings.Cut(kv, "=")
+		switch {
+		case !ok && variableShape.MatchString(name):
+			return fmt.Errorf("the node's variable %s has no value: each is NAME=value", name)
+		case !ok:
+			return errors.New("a node's variable is not NAME=value: each is NAME=value")
+		case !variableShape.MatchString(name):
+			return errors.New("a node's variable has a name other than letters, digits and underscores, starting with a letter or an underscore, of at most 128")
+		case strings.ContainsAny(value, "\x00\r\n"):
+			return fmt.Errorf("the node's variable %s holds a NUL, a carriage return or a line feed, which a variable's value does not", name)
 		}
 	}
 	if err := variables.CheckDeny(v.Deny); err != nil {
@@ -54,8 +64,8 @@ func nodePaths(pol *policy.Loaded) int {
 
 // resolve resolves the run's variables, the server's and the node's, and checks what
 // the run passes into the enclosure. It returns the resolution and, for a walled run,
-// the runtime's declared and reserved variables that neither a placeholder nor the run
-// sets, each as an empty value.
+// the runtime's declared and reserved variables that neither a placeholder, the run
+// nor the runtime's preparation sets, each as an empty value.
 func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, held *credential.Held, chosen []tool.Chosen) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
@@ -94,11 +104,12 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		return variables.Resolved{}, nil, err
 	}
 	// Behind a wall, a variable the runtime declares or reserves that neither a
-	// placeholder nor the run sets goes in empty, so an image's own value for it does not
-	// reach the runtime. A value the run passes for one stays the agent's.
+	// placeholder, the run nor the runtime's preparation sets goes in empty, so an
+	// image's own value for it does not reach the runtime. A value the run passes for
+	// one stays the agent's, and one the preparation sets stays the runtime's.
 	var emptied []string
 	if spec.Wall != nil {
-		set := names(passed)
+		set := append(names(passed), names(prepared.Env)...)
 		for _, name := range runtimeNames {
 			if !slices.Contains(placeholderNames, name) && !slices.Contains(set, name) {
 				emptied = append(emptied, name+"=")

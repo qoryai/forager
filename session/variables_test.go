@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/session"
 )
 
@@ -307,5 +308,67 @@ func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
 		if value, ok := env[name]; !ok || value != "" {
 			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
 		}
+	}
+}
+
+// preparing is the Claude Code runtime with a preparation that sets one of the
+// variables the runtime reserves.
+type preparing struct{ runtimes.Runtime }
+
+func (p preparing) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	l, err := p.Runtime.Prepare(a)
+	l.Env = append(l.Env, "ANTHROPIC_AUTH_TOKEN=set-by-the-preparation")
+	return l, err
+}
+
+func (p preparing) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.Secrets).Secrets() }
+
+// TestWhatThePreparationSetsIsNotEmptied pins that behind a wall a variable the
+// runtime reserves and its preparation sets keeps the preparation's value, while the
+// declared ones nothing sets are there empty.
+func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
+	sp := spec(t, nil)
+	out := dumpsEnv(t, &sp)
+	sp.Runtime = preparing{claudeCode(t)}
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit %d", res.ExitCode)
+	}
+	env := envOf(t, out)
+	if env["ANTHROPIC_AUTH_TOKEN"] != "set-by-the-preparation" {
+		t.Errorf("ANTHROPIC_AUTH_TOKEN=%q, want the preparation's value", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if value, ok := env[name]; !ok || value != "" {
+			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
+		}
+	}
+}
+
+// TestTheNodesVariablesAreChecked pins the refusal of a node variable that cannot be
+// one, before anything starts and without its value in the error: no equals sign, a
+// name outside the grammar, a value with a carriage return, a line feed or a NUL.
+func TestTheNodesVariablesAreChecked(t *testing.T) {
+	value := "a-value-no-error-quotes"
+	for _, entry := range []string{value, "BAD NAME=" + value, "1A=" + value, "A=" + value + "\r", "A=" + value + "\nB=c", "A=" + value + "\x00"} {
+		sp := spec(t, nil)
+		sp.Variables.Own = []string{entry}
+		_, err := session.Run(context.Background(), sp)
+		if err == nil {
+			t.Errorf("%q was accepted", entry)
+			continue
+		}
+		if strings.Contains(err.Error(), value) {
+			t.Errorf("%q: the error quotes the value: %v", entry, err)
+		}
+	}
+	sp := spec(t, nil)
+	sp.Variables.Own = []string{"ONLY_A_NAME"}
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ONLY_A_NAME has no value") {
+		t.Errorf("a name without a value: %v", err)
 	}
 }

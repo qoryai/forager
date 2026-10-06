@@ -135,6 +135,21 @@ func TestWhatTheSchemeRefuses(t *testing.T) {
 	}
 }
 
+// TestNumberTakesJSONNumbersAlone pins that Number refuses what strconv reads and JSON
+// does not spell as a number.
+func TestNumberTakesJSONNumbersAlone(t *testing.T) {
+	for _, in := range []string{"Inf", "-Inf", "NaN", "0x1p4", "+1", "1.", ".5", "01", "1e", " 1", "1_000", `"1"`, "true"} {
+		if got, err := jcs.Number(in); err == nil {
+			t.Errorf("%q was written as %s", in, got)
+		}
+	}
+	for in, want := range map[string]string{"-0": "0", "1E2": "100", "0.5": "0.5", "-1.5e-7": "-1.5e-7"} {
+		if got, err := jcs.Number(in); err != nil || got != want {
+			t.Errorf("%s: %s %v, want %s", in, got, err, want)
+		}
+	}
+}
+
 // TestStringsAreEscapedAsJSONStringifyEscapesThem pins the escapes: the short forms of
 // the five control characters, \u with lower-case hex for the others, and every other
 // character, DEL, U+2028 and the HTML characters included, as it is.

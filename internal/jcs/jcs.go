@@ -148,10 +148,14 @@ func writeString(out *bytes.Buffer, s string) {
 
 // Number returns a JSON number literal as RFC 8785 writes it: the IEEE 754 double the
 // literal reads as, in the shortest form that reads back as the same double, laid out
-// by ECMAScript's Number.prototype.toString. Zero, negative zero included, is "0". A
-// literal beyond the double's range is refused, as NaN and the infinities have no
-// literal.
+// by ECMAScript's Number.prototype.toString. Zero, negative zero included, is "0". It
+// takes a JSON number literal and nothing else: what JSON spells otherwise, such as
+// "Inf", "0x1p4" or "+1", which strconv would read, is refused, and so is a literal
+// beyond the double's range, as NaN and the infinities have no literal.
 func Number(literal string) (string, error) {
+	if v := jsontext.Value(literal); !v.IsValid() || v.Kind() != '0' {
+		return "", fmt.Errorf("jcs: %q is not a JSON number", literal)
+	}
 	f, err := strconv.ParseFloat(literal, 64)
 	if err != nil {
 		return "", fmt.Errorf("jcs: the number %s is not an IEEE 754 double", literal)
