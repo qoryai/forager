@@ -39,8 +39,67 @@ release may change what an existing document does, and says so under Upgrading.
   certificate, so the test binary's first verification must come within `Run`; from
   then on, for the rest of the process, it trusts only the suite's authority.
   `TestDockerConforms` starts the recorders from `busybox:stable`.
+- `session.Spec.Env` is what the run inherits. What the harness's composed launch sets
+  goes in `LaunchEnv`, and the node's own variables, for `qory` `wall.env` and `--env`,
+  in `Variables.Own`, so the runner distinguishes them: a server's variable of a name in
+  `LaunchEnv` is left out, and a node variable of a name the server sets is left out.
+- A walled run refuses to pass into the enclosure a variable the run's runtime declares
+  or reserves, for Claude Code `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and
+  `ANTHROPIC_AUTH_TOKEN`, with `runtime_secret_conflict`; and a `QORY_` variable other
+  than `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names,
+  with `variable_reserved`. Whether it comes from `Env`, `LaunchEnv` or `Variables.Own`
+  is the same. A model credential behind a wall is a credential the machine defines and
+  the policy selects, whose placeholder is the runtime's variable. Behind a wall, every
+  variable the runtime declares or reserves that no placeholder sets is in the
+  enclosure's environment as an empty value.
+- With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
+  it, where the runner ignored it before: a caller that refused a policy of its own
+  beside a server passes it now.
+- `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
+  empty list from none: an empty list is written as `[]`, and as a node's policy beside
+  a server's it allows none of the server's tools or credentials.
+- The runtime prepares the launch before the tools start, since the names it sets are
+  the runner's own when the variables are resolved.
 
 ### Added
+
+- A run configuration's `variables` reach the agent's process: names and string values
+  the server resolved. The server leads: a node variable applies for every name whose
+  server value the run does not apply, and is left out, and reported, for a name whose
+  server value it does. The runner leaves out a name on the deny list, which is
+  `denied-variables.json`, the runtime's `denies` and `Variables.Deny`, matched
+  regardless of case with `*` for any run of characters; a variable the runtime declares
+  or reserves; a placeholder's name; a variable a credential is read from; and a name
+  the runtime's preparation, the harness or the wall sets. A run without a wall takes
+  none of the server's variables unless `Variables.Unwalled` is `accept`. The variables
+  are fixed when the run starts. Tools, the relay, the agent's Docker daemon and the
+  wall's `docker` command keep their own environment.
+- `dev.qory.run.policy_applied` reports `variables`: `names`, the variables the run
+  applies; `denied`, the server's left out by the deny list or because the run sets
+  the name otherwise; `unwalled`, the server's an unwalled run left out; and
+  `node_ignored`, the node's left out for a name the server sets. Names alone, sorted.
+- The node's policy narrows a server's. The mode is `enforce` when either side's is;
+  the allow list is the hosts both sides allow; the deny lists add up; a request to a
+  host either side holds to paths must match both; the tools and the credentials are
+  the server's selection within the node's, when the node's document lists them; the
+  image is the one both select or the one a side selects. A tool the narrowing refuses
+  is `tool_unknown`, and two different images are `image_unknown`. A reload narrows the
+  new policy by the same node policy. `dev.qory.run.policy_applied` reports the
+  narrowed lists and `node_policy`: the node policy's `digest`, `sha256=` and the hex
+  SHA-256 of its RFC 8785 serialisation, and its `paths`.
+- `session.Refusal` is a run refused before it starts, with the contract's refusal code
+  and the names it concerns, never a value: `run_configuration_invalid`,
+  `variable_reserved`, `runtime_secret_conflict`, `placeholder_conflict`,
+  `tool_unknown` and `image_unknown`. `errors.As` finds it in the error `session.Run`
+  returns.
+- The runner reads a run configuration with `encoding/json/v2` first, which refuses a
+  member name that appears twice and invalid UTF-8, then against the schema and the
+  limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
+  which rule refused the document, and never quotes a value.
+- `runtimes.Secrets` is the optional interface of a runtime that declares the secrets it
+  needs; a descriptor's runtime implements it. `wall.Setter` is the optional interface
+  of a wall that sets variables in the enclosure itself, and `wall.Docker` implements
+  it.
 
 - A runtime descriptor defines the secrets the runtime needs, under an optional
   `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
@@ -98,6 +157,18 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- Contract `v1` revision 1 is amended in place for a run's variables and a node that
+  narrows the server's policy. `run-configuration.schema.json` has `variables`, at most
+  128 names of `^[A-Za-z_][A-Za-z0-9_]{0,127}$` with string values without NUL,
+  carriage return or line feed, and `security_policy` is optional: without it the
+  node's policy is the run's. `events/run.policy_applied.schema.json` has `variables`
+  and `node_policy`, and allows `url` and `run_configuration` beside `source` `config`
+  or `none`. The README gains §Variables and the narrowing table in §The policy, and
+  §The server reads that `--policy` narrows a fetched policy.
+  `fixtures/invalid/run-configuration-no-policy.json` is now
+  `fixtures/run-configuration/no-policy.json`, `{"version": 1}`; the run configuration
+  fixtures gain `variables.json`, and the invalid ones a variable that is no string and
+  one with a line feed.
 - The README is short. It lists the runner's four jobs: it records the session,
   enforces a policy, walls the agent in with the secrets kept outside, and reports to a
   server. It shows that `qory run` starts the runner, and where a run's policy comes

@@ -49,8 +49,12 @@ In `qory`, turn it on with a `wall` section, or with
 wall:
   adapter: docker
   image: example.com/agent:1            # yours: the runtime and your toolchain
-  env: [ANTHROPIC_API_KEY]              # names; nothing else of your environment goes in
+  env: [NODE_ENV]                       # names; nothing else of your environment goes in
 ```
+
+The runtime's own credential, such as `ANTHROPIC_API_KEY`, stays outside: a walled run
+whose environment contains it does not start. The machine defines it as a credential.
+See [credentials](credentials.md).
 
 ## Start a walled run
 
@@ -70,12 +74,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 ENV HOME=/tmp
 ```
 
+Define the model credential in `~/.config/qory/runner.yaml`, so it stays outside:
+
+```yaml
+credentials:
+  model:
+    env: CLAUDE_CODE_OAUTH_TOKEN        # read from qory run's environment
+    hosts: [api.anthropic.com]
+    auth: {scheme: bearer}
+    placeholders: [CLAUDE_CODE_OAUTH_TOKEN]
+```
+
 ```sh
 docker build -t agent:1 .
 cd your-checkout && qory harness compose
-export ANTHROPIC_API_KEY=...            # a key, or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
-qory run --wall docker --image agent:1 --env ANTHROPIC_API_KEY claude -- -p "Reply pong"
+export CLAUDE_CODE_OAUTH_TOKEN=...      # from `claude setup-token`
+qory run --wall docker --image agent:1 --policy ~/model-policy.yaml claude -- -p "Reply pong"
 ```
+
+`~/model-policy.yaml` selects the credential, `credentials: [{name: model}]`, beside its
+`egress`.
 
 The run is recorded in `.qory/runs/<id>/`, as without a wall. `dev.qory.run.started`
 contains the wall and the image. The exit status is the agent's.
@@ -111,7 +129,7 @@ server:                         # how the node reports; without it, files only
 wall:
   adapter: docker
   image: agent:1                # or --image
-  env: [ANTHROPIC_API_KEY]      # names; the values come from qory run's environment
+  env: [NODE_ENV]               # names; the values come from qory run's environment
   user: "1000:1000"             # only where qory runs as root, which a wall refuses
   helper: /opt/qory/qory-linux  # only where qory is not a Linux build
   command: podman               # only for another command than docker
@@ -120,8 +138,9 @@ wall:
 - `egress` is the policy when the server offers no run configuration. See
   [the policy](policy.md).
 - `server` defines the control plane. See [the server](server.md).
-- `wall.env` is the whole of the node's environment that goes in, by name. See
-  [credentials](credentials.md).
+- `wall.env` is the whole of the node's environment that goes in, by name: the node's
+  own variables. A server's variables come beside them. See
+  [variables](server.md#variables) and [credentials](credentials.md).
 
 Two flags change one run:
 
@@ -157,7 +176,15 @@ res, err := session.Run(ctx, session.Spec{
 	Runtime: rt,
 	Command: "claude",                            // a path inside the image
 	Args:    []string{"-p", "Reply pong."},
-	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
+	Env:     []string{"NODE_ENV=production"},     // under a wall, nothing else goes in
+	Credentials: []session.Credential{{            // the model credential stays outside
+		Name: "model", Env: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"},
+		Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"},
+	}},
+	Policy: &session.Policy{Version: 1,           // the node's policy; it selects the credential
+		Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com"}},
+		Credentials: []session.PolicyCredential{{Name: "model"}},
+	},
 	Dir:     checkout,                            // the workspace, mounted at its own path
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
 	Image:   "base",                              // the default: a name of Images, or a reference

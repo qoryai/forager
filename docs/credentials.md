@@ -12,9 +12,11 @@ nothing here.
 Behind a wall, the container gets only what the run lists of the machine's environment:
 
 - `wall.env` is the whole of the node's environment that goes in, by name.
-- A model credential listed in `wall.env` is the agent's.
+- A variable the runtime reads its credential from, such as `ANTHROPIC_API_KEY`, stops
+  a walled run when the run passes it in: `runtime_secret_conflict`.
+- So does a variable a credential is read from: `variable_reserved`.
 - A credential defined under `credentials`, and selected by the run's policy, stays
-  outside instead.
+  outside.
 
 For a credential that stays outside:
 

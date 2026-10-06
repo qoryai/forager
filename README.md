@@ -89,8 +89,8 @@ The policy comes from one of three places:
 - **Your server**: its run configuration, chosen by the run's labels, such as its
   repository. See [Report to a server](#4-report-to-a-server).
 
-When your server sends a run configuration, that is the policy. With no policy, the
-runner observes and records everything.
+When your server sends a policy, the machine's policy and `--policy` narrow it: the
+machine only takes away. With no policy, the runner observes and records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the
@@ -127,8 +127,8 @@ Every event goes to files. With a server, the events it selects go there too:
 - Before the run starts, the runner fetches the server's configuration, signed. The run
   starts only when the server answers.
 - It posts them in batches, signed with an HMAC.
-- The server can return the run's policy, chosen by the run's labels. It can change the
-  policy while the run goes.
+- The server can return the run's policy and variables, chosen by the run's labels. It
+  can change the policy while the run goes.
 
 A server is your control plane, or a receiver of your own. The package `receiver` is a
 worked example.

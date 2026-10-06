@@ -76,6 +76,13 @@ runs the same checks on it.
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
 - `Server` defines the server the run reports to. See [the server](server.md).
+- `Policy` is the node's policy. Without a server's policy it is the run's; with one it
+  narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
+- `Env` is what the run inherits, `LaunchEnv` what the harness's launch sets over it,
+  and `Variables` the node's own variables, its deny entries and how an unwalled run
+  takes the server's. See [variables](server.md#variables).
+- A run refused before it starts returns a `*session.Refusal`, with the contract's code
+  and the names it concerns. `errors.As` finds it.
 - `Events` is any stream that gets every event as well. See
   [the record](events.md#following-a-run).
 
@@ -109,7 +116,7 @@ The whole sequence, every event type and every file are in the
   the tests run the runner against. It is tested against the signed fixtures. It is a
   worked example of the contract's receiving rules.
 - `internal/`: what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`,
-  `sink`, `server`, `descriptor`, `socket`, `chunk`.
+  `sink`, `server`, `descriptor`, `socket`, `chunk`, `variables`, `jcs`, `refusal`.
 - `node/`: the node runner's fleet layer, not built yet. See
   [the node runner](node.md).
 
