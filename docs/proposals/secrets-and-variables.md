@@ -1558,7 +1558,8 @@ program of the machine's produces a credential or serves hosts for a connection.
 - **`_file` settings come from the node.** A `<name>_file` setting is a path on the node,
   so a server-sent connection carries none: one that does is
   `integration_settings_not_allowed`. A `_file` setting comes only from the node's runner
-  file, or from a fixed value in its `integrations:` `settings` bound. Otherwise a
+  file, or from a fixed value the node supplies in its `integrations:` `settings` bound.
+  Otherwise a
   server could point a program at any file the runner's user can read and have it sent
   to the server's chosen host.
 - **Hosts are per role.** `roles.credential.hosts` is where the proxy sets the credential
@@ -1618,12 +1619,15 @@ program of the machine's produces a credential or serves hosts for a connection.
   leads; `arguments`, an RE2 pattern the argument must match whole, else
   `integration_argument_not_allowed`; and `settings`, per member a fixed value or
   `{pattern: <RE2>}`, a member the bound does not list being refused,
-  `integration_settings_not_allowed`; and `paths`, by host, the most paths the program's
-  credential answer may claim, a claim above it being `integration_hosts_exceeded`, as
-  main's definition bounded an adapter. A tool's `serves` hosts are bounded by the
-  policy, as every host is. A server-sent integration connection that references a
-  machine value needs both of the first two bounds: without an `arguments` bound it is no
-  run, `integration_argument_not_allowed`, and without a `settings` bound its `settings`
+  `integration_settings_not_allowed`. A fixed value is the node's: the node supplies it,
+  the runner writes it into the document of every chosen role that lists the member,
+  and a server value for that member is absent or equal to it, else
+  `integration_settings_not_allowed`; a pattern bounds the server's value. Last,
+  `paths`, by host, the most paths the program's credential answer may claim, a claim
+  above it being `integration_hosts_exceeded`, as main's definition bounded an adapter.
+  A tool's `serves` hosts are bounded by the policy, as every host is. A server-sent
+  integration connection that references a machine value needs an `arguments` and a
+  `settings` bound: without an `arguments` bound it is no run, `integration_argument_not_allowed`, and without a `settings` bound its `settings`
   must be `{}`, else `integration_settings_not_allowed`. Before it writes standard input
   the runner also validates each role's document, with the secret values inlined so a
   required `writeOnly` member passes, against the description's `settings` restricted to
@@ -2736,7 +2740,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `integration_name_mismatch` | runner | `describe`'s `name` differs from the connection's |
 | `integration_version_mismatch` | runner | `program_version` differs from the connection's `version` |
 | `integration_argument_not_allowed` | runner | the argument does not match the machine's `arguments` pattern or a chosen role's `argument` pattern, or the connection passes an argument to a role that takes none |
-| `integration_settings_not_allowed` | runner | a role's document with a name outside that role's `settings`, or a connection setting or secret that no chosen role lists; a `<name>_file` setting in a server-sent connection; a setting outside the machine's `settings` bound, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
+| `integration_settings_not_allowed` | runner | a role's document with a name outside that role's `settings`, or a connection setting or secret that no chosen role lists; a `<name>_file` setting in a server-sent connection; a setting outside the machine's `settings` bound, or a server value that differs from the bound's fixed value for that member, or settings other than `{}` for a server-sent integration with a machine value and no `settings` bound |
 | `integration_hosts_exceeded` | runner | the program's answer claims hosts above those `describe` lists |
 | `integration_settings_invalid` | runner | a role's document that lacks a name of the role's `required`, fails the description's `settings` schema, or holds both `<name>` and `<name>_file` |
 | `integration_settings_too_large` | runner | a role's settings document exceeds 65536 bytes (64 KiB), refused before the program starts |
