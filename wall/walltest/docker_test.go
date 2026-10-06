@@ -74,6 +74,29 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Three recorders, the helper in a busybox of its own each: the hosts of a runtime's
+	// two credentials and a host with none.
+	var recorders []walltest.Recorder
+	for i := range 3 {
+		name := fmt.Sprintf("qory-walltest-recorder-%d-%d", os.Getpid(), i)
+		args := []string{"run", "--detach", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
+		for _, kv := range walltest.RecorderEnv() {
+			args = append(args, "--env", kv)
+		}
+		args = append(append(args, "--entrypoint", "/walltest", "busybox:stable"), walltest.RecorderArgs...)
+		if out, err := exec.Command(command, args...).CombinedOutput(); err != nil {
+			t.Fatalf("a recorder: %v: %s", err, out)
+		}
+		t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+		walltest.AwaitRecorder(t, command, name)
+		ip, err := exec.Command(command, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorders = append(recorders, walltest.Recorder{Host: strings.TrimSpace(string(ip)), Recorded: func() ([]byte, error) {
+			return exec.Command(command, "exec", name, "cat", walltest.RecorderFile).Output()
+		}})
+	}
 	volumes := func() map[string]bool {
 		out, _ := exec.Command(command, "volume", "ls", "--quiet").Output()
 		m := map[string]bool{}
@@ -90,6 +113,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		Runtime:   rt,
 		Docker:    docker,
 		EngineID:  strings.TrimSpace(string(engine)),
+		Recorders: recorders,
 		Forwarder: []string{wall.HelperPath, "forward"},
 		Probe:     wall.HelperPath,
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file

@@ -22,6 +22,23 @@ release may change what an existing document does, and says so under Upgrading.
 - A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
   and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
   runtime that has one, and the descriptor schema holds `runtime` to the same bound.
+- `walltest.Options` has `Recorders`: three `walltest.Recorder` values, each the helper
+  started with `walltest.RecorderArgs` and `walltest.RecorderEnv()` in a container of
+  its own, in this order: the host of a runtime's API key, the host of its OAuth
+  credential, then a host the policy allows with no credential. A `Recorder` holds the
+  `Host` the proxy reaches it on and a `Recorded` function that returns the content of
+  `walltest.RecorderFile` in its container. An adapter's test that passes none skips
+  the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
+  and a number other than none or three fails the suite. A recorder prints
+  `walltest.RecorderReady` once it listens, and `walltest.AwaitRecorder` waits for that
+  line in its container's log, and fails with the log at once when the container stops
+  first; a recorder's container started without `--rm` keeps that log. With
+  `Recorders`, `walltest.Run` points the roots of the process, and the programs it
+  starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
+  certificate, so the test binary's first verification must come within `Run`; from
+  then on, for the rest of the process, it trusts only the suite's authority.
+  `TestDockerConforms` starts the recorders from `busybox:stable`.
 
 ### Added
 
@@ -40,6 +57,24 @@ release may change what an existing document does, and says so under Upgrading.
 - `contracts/runner/v1/runtimes.json` lists the secrets of every descriptor the contract
   ships, for a server to vendor. `go generate ./contracts` writes it from the
   descriptors, and `go test ./...` fails while the file differs from them.
+- The wall's conformance suite checks a runtime's two credentials from inside the
+  enclosure, as Claude Code sends them: an API key in `x-api-key` and an OAuth
+  credential as a bearer, each a fake key for a recorder that acts as its host. Each key
+  reaches its own host once, in its own header and in place of the stand-in; another
+  allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
+  probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
+  key; and the run's directory, output and reports contain no key, after the
+  interactive run as well. The suite points its own process's roots at an authority of
+  its own with `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the
+  recorders. The proxy's tests cover both schemes as well, with a request that carries
+  both stand-ins.
+- `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
+  adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
+  `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
+  with an API key and once with an OAuth credential. Claude Code prints the recorder's
+  answer, each request carries the fake key in the credential's header and no stand-in,
+  and the record lists one request through the proxy for each the recorder received,
+  each to the recorder.
 
 ### Changed
 
