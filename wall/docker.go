@@ -96,6 +96,22 @@ type system interface {
 	checkHelper(path string) error
 }
 
+// Sets lists the variables the enclosure's environment receives from the adapter
+// itself: the proxy's, the hook socket's and the ones that point a program at the
+// run's bundle.
+func (d *Docker) Sets() []string {
+	names := d.CAEnv
+	if names == nil {
+		names = DefaultCAEnv
+	}
+	var out []string
+	for _, kv := range proxy.EnvFor("") {
+		name, _, _ := strings.Cut(kv, "=")
+		out = append(out, name)
+	}
+	return append(append(out, socket.Env), names...)
+}
+
 // DefaultCAEnv are the variables the common programs read a bundle's path from:
 // OpenSSL and Go, git, Node, Python's requests, curl, the AWS CLI and botocore.
 var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE"}

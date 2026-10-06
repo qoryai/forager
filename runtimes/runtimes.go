@@ -48,6 +48,17 @@ type Runtime interface {
 	Headless(args []string) bool
 }
 
+// Declarations is what a runtime declares of a run's secrets: the secrets it reads,
+// each from one variable, the groups of them, the variables it reserves and the ones it
+// denies a server, and the files it keeps a credential in.
+type Declarations = descriptor.Secrets
+
+// Secrets is implemented by a runtime that declares the secrets it needs. A runtime
+// without it declares nothing.
+type Secrets interface {
+	Secrets() Declarations
+}
+
 // Launch is what is started: the program, its arguments, and variables for its
 // environment beside the run's own, each NAME=value.
 type Launch struct {
@@ -202,6 +213,14 @@ func (r *described) Prepare(a Attach) (Launch, error) {
 		return a.Launch, nil
 	}
 	return r.install(r.d.Sources.Hooks.Events, a)
+}
+
+// Secrets is the descriptor's secrets section; the zero value when it has none.
+func (r *described) Secrets() Declarations {
+	if r.d.Secrets == nil {
+		return Declarations{}
+	}
+	return *r.d.Secrets
 }
 
 // Map applies the descriptor's rules.
