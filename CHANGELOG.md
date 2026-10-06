@@ -40,20 +40,23 @@ release may change what an existing document does, and says so under Upgrading.
   then on, for the rest of the process, it trusts only the suite's authority.
   `TestDockerConforms` starts the recorders from `busybox:stable`.
 - `session.Spec.Env` is what the run inherits. What the harness's composed launch sets
-  goes in `LaunchEnv`, and the node's own variables, for `qory` `wall.env` and `--env`,
-  in `Variables.Own`, so the runner distinguishes them: a server's variable of a name in
-  `LaunchEnv` is left out, and a node variable of a name the server sets is left out.
+  goes in `LaunchEnv`, and the node's own variables in `Variables.Own`, so the runner
+  distinguishes them: a server's variable of a name in `LaunchEnv` is left out, and a
+  node variable of a name the server sets is left out.
 - A walled run refuses to pass into the enclosure a `QORY_` variable other than
   `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
   `variable_reserved`, whether it comes from `Env`, `LaunchEnv` or `Variables.Own`.
   Behind a wall, every variable the runtime declares or reserves that neither a
-  placeholder nor the run sets is in the enclosure's environment as an empty value, for
-  Claude Code `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`:
-  a value the run passes for one, through `wall.env` or `--env`, reaches the runtime as
-  before.
+  placeholder, the run nor the runtime's preparation sets is in the enclosure's
+  environment as an empty value, for Claude Code `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`: a value the run passes for one
+  reaches the runtime as before.
 - With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
-  it, where the runner ignored it before: a caller that refused a policy of its own
-  beside a server passes it now.
+  it, where the runner ignored it before, so a caller may pass a policy of its own
+  beside a server.
+- `policy.Covers` covers an IP literal by an identical entry alone, as `policy.Match`
+  matches it: `*.0.0.1` covers no `10.0.0.1`, under a machine's ceiling as in
+  narrowing.
 - `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
@@ -162,7 +165,7 @@ release may change what an existing document does, and says so under Upgrading.
   node's policy is the run's. `events/run.policy_applied.schema.json` has `variables`
   and `node_policy`, and allows `url` and `run_configuration` beside `source` `config`
   or `none`. The README gains §Variables and the narrowing table in §The policy, and
-  §The server reads that `--policy` narrows a fetched policy.
+  §The server reads that the launch spec's policy narrows a fetched policy.
   `fixtures/invalid/run-configuration-no-policy.json` is now
   `fixtures/run-configuration/no-policy.json`, `{"version": 1}`; the run configuration
   fixtures gain `variables.json`, and the invalid ones a variable that is no string and

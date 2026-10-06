@@ -89,8 +89,9 @@ The policy comes from one of three places:
 - **Your server**: its run configuration, chosen by the run's labels, such as its
   repository. See [Report to a server](#4-report-to-a-server).
 
-When your server sends a policy, the machine's policy and `--policy` narrow it: the
-machine only takes away. With no policy, the runner observes and records everything.
+When your server sends a policy, the runner narrows it by the policy it is passed,
+`Spec.Policy` in Go: the node only takes away. With no policy, the runner observes and
+records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the

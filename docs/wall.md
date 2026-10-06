@@ -117,8 +117,8 @@ wall:
   command: podman               # only for another command than docker
 ```
 
-- `egress` is the policy when the server offers no run configuration. See
-  [the policy](policy.md).
+- `egress` is the policy when the server offers no run configuration, and it narrows
+  the server's when the server offers one. See [the policy](policy.md).
 - `server` defines the control plane. See [the server](server.md).
 - `wall.env` is the whole of the node's environment that goes in, by name: the node's
   own variables. A server's variables come beside them. See

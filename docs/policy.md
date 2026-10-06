@@ -45,12 +45,13 @@ A run has one policy. It comes from one of three places:
   - It narrows the machine's `egress`, and never widens it.
   - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
     in the checkout, or in a mount the container may write.
+  - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
   section. Then the runner fetches the run configuration, with the run's labels. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
-The node's policy is the machine's `egress` with the run's own under it. Which one
-applies:
+The node's policy is `Spec.Policy`, the policy the runner is passed: for `qory`, the
+machine's `egress` with the run's own under it. Which one applies:
 
 | The runner has         | The policy is                                                           |
 | ---------------------- | ----------------------------------------------------------------------- |
@@ -98,8 +99,8 @@ server:                                 # optional
   secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
 ```
 
-- `egress` is the machine's policy. It is the ceiling on a run's own, and the two
-  narrow the server's. See [where the policy comes from](#where-the-policy-comes-from).
+- `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows
+  the server's. See [where the policy comes from](#where-the-policy-comes-from).
 - Without `egress`, and with no other policy, everything is allowed and recorded.
 - `server` defines the server the runner reports to. See [the server](server.md).
 

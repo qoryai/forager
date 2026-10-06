@@ -11,8 +11,9 @@ For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the ser
 example is in [the policy](policy.md#in-runneryaml).
 
 - The runner reports to the server, signed.
-- The run's policy comes from the server, when the server offers one. The node's policy
-  narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
+- The run's policy comes from the server, when the server offers one. The node's
+  policy, `Spec.Policy`, narrows it. See
+  [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
 - `secret` can come from `QORY_SERVER_SECRET` in the environment instead of the file.
 - With `server` set, the run starts only when the server answers the fetch and a ping.
@@ -46,23 +47,25 @@ A run configuration may contain `variables`: names and string values for the age
 process. The server leads:
 
 - The server's variables are the run's.
-- The node's own variables add names. For `qory`, these are `wall.env` and `--env`. A
-  node variable for a name the server sets is left out, and the record lists it as
-  `node_ignored`.
+- The node's own variables, `Spec.Variables.Own`, add names. A node variable for a name
+  the server sets is left out, and the record lists it as `node_ignored`.
 - A name on the deny list is left out, and listed as `denied`. The list is the
   contract's [`denied-variables.json`](../contracts/runner/v1/denied-variables.json),
-  the runtime's `denies`, and `variables.deny` in `runner.yaml`. It holds the runner's
-  own names, the proxy's, the trust store's, Docker's and `PATH`.
-- A name the runner or the runtime sets itself is left out the same way, as is one the
-  runtime reads its credential from.
-- A run without a wall takes none of the server's variables, unless `runner.yaml` sets
-  `variables.unwalled: accept`. The record lists them as `unwalled`.
+  the runtime's `denies`, and `Spec.Variables.Deny`. It holds the runner's own names,
+  the proxy's, the trust store's, Docker's and `PATH`.
+- A name the runner, the runtime or the harness, `Spec.LaunchEnv`, sets itself is left
+  out the same way, as is one the runtime reads its credential from.
+- A run without a wall takes none of the server's variables, unless
+  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The record lists them as
+  `unwalled`.
 
-```yaml
-# ~/.config/qory/runner.yaml
-variables:
-  deny: [LEGACY_SETTING, ACME_*] # names and patterns, in any case
-  unwalled: ignore               # or accept: an unwalled run takes them too
+```go
+spec.Env = os.Environ()                        // what the run inherits
+spec.Variables = session.Variables{
+	Own:      []string{"LOG_LEVEL=debug"},      // the node's own; the server's win
+	Deny:     []string{"LEGACY_SETTING", "ACME_*"}, // names and patterns, in any case
+	Unwalled: session.UnwalledIgnore,          // or UnwalledAccept
+}
 ```
 
 Behind a wall, the run refuses to pass in what stays outside:
@@ -72,9 +75,8 @@ Behind a wall, the run refuses to pass in what stays outside:
 | a `QORY_` variable, or one a credential is read from | `variable_reserved`   |
 | a value for a placeholder                        | `placeholder_conflict`    |
 
-The record lists every variable by name, never a value. From Go, `Variables` in the
-spec holds the node's own variables, its deny entries and `Unwalled`, and `LaunchEnv`
-what the harness sets.
+The record lists every variable by name, never a value. `Spec.Env` is what the run
+inherits, and the runner checks it, `Spec.LaunchEnv` and `Spec.Variables.Own` alike.
 
 ## A control plane
 

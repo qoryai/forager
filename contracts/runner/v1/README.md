@@ -57,7 +57,7 @@ The runner's duties, in the order that matters when they conflict:
    denial never ends a run.
 3. **Credentials.** The session's environment and files contain none of the runner's. On
    a developer machine the session runs with the developer's own environment, and the
-   server's variables only with `variables.unwalled: accept` (§Variables). Behind a
+   server's variables only when the launch spec accepts them (§Variables). Behind a
    wall the runner keeps the credentials the run's policy selects in memory, outside the
    enclosure, and its proxy sets each on the requests to the hosts it is for
    (§Credentials): the session reaches a code host and a model endpoint as itself, and
@@ -173,7 +173,7 @@ One run, on a developer machine, with a server configured:
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
    `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment but
    the variables (§Variables), the placeholders and, in a walled run, the runtime's
-   declared and reserved variables the run does not set, as empty.
+   declared and reserved variables nothing else sets, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    the runner's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
@@ -262,13 +262,12 @@ egress:
 | `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy contains no reference and defines no image (§Images) |
 
 **A node narrows a server's policy.** The server leads; the node only narrows. A node,
-through an agent that writes its runner file for example, is easier to compromise than
-the server, so on a node connected to a server what the node contributes can only take
-away from the run. The node's policy is the policy the command passes: for `qory`, its
-runner file's `egress` and the command's `--policy`, as `qory` combines them. A fetched
-`security_policy` and the node's policy combine by narrowing, so a `--policy` beside a
-fetched policy narrows it too. Without a server's `security_policy` the node's policy is
-the run's; with a server's policy and no node policy, the server's applies as it is.
+through an agent that writes its configuration for example, is easier to compromise
+than the server, so on a node connected to a server what the node contributes can only
+take away from the run. The node's policy is the policy document of the launch spec,
+`Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
+narrowing. Without a server's `security_policy` the node's policy is the run's; with a
+server's policy and no node policy, the server's applies as it is.
 
 | Field | The run's |
 |---|---|
@@ -526,40 +525,42 @@ command keep their own environment.
 **The server leads.** On a node connected to a server, the server's variables, the run
 configuration's `variables`, are the run's. The server resolves them among its own
 levels and sends the resolved values alone, a name and a value each. The node adds only
-names: its own variables, for `qory` the ones `wall.env` in `runner.yaml` and `--env`
-list, apply for every name whose server value the run does not apply. A node value for a
-name whose server value the run applies, a name in `names`, is left out and reported in
-`policy_applied`'s `variables.node_ignored`, and the run starts. A server value the deny
-list leaves out, or one an unwalled run leaves out under `ignore`, leaves the node's own
-value in place, as without a server. Names are compared exactly between the node and the
-server; the deny list matches regardless of case. A node, through an agent that writes
-its runner file for example, is easier to compromise than the server, so the node only
-adds. Without a server, the node's own variables are the run's.
+names: its own variables, the ones the launch spec lists as the node's,
+`Spec.Variables.Own` in Go, apply for every name whose server value the run does not
+apply. A node value for a name whose server value the run applies, a name in `names`, is
+left out and reported in `policy_applied`'s `variables.node_ignored`, and the run
+starts. A server value the deny list leaves out, or one an unwalled run leaves out under
+`ignore`, leaves the node's own value in place, as without a server. Names are compared
+exactly between the node and the server; the deny list matches regardless of case. A
+node, through an agent that writes its configuration for example, is easier to
+compromise than the server, so the node only adds. Without a server, the node's own
+variables are the run's.
 
-The runtime's preparation (§The runtime) and the harness's composed launch set names
-that are the runner's own, not the node's. Such a name wins over the server's variable,
-which is left out and reported in `denied`, because the runtime needs it.
+The runtime's preparation (§The runtime) and the harness's composed launch,
+`Spec.LaunchEnv` in Go, set names that are the runner's own, not the node's. Such a name
+wins over the server's variable, which is left out and reported in `denied`, because the
+runtime needs it.
 
-**Unwalled runs.** The runner file's `variables.unwalled` decides whether an unwalled
-run receives the server's variables: `ignore`, the default, or `accept`. With `ignore`,
-an unwalled run starts without them; they are left out and reported by name in
-`variables.unwalled`. With `accept`, the deny list below applies, as in a walled run.
-The deny list protects the wall and the runner, not the developer, so `accept` opens the
-developer's shell to the server.
+**Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
+variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
+`ignore`, an unwalled run starts without them; they are left out and reported by name in
+`policy_applied`'s `variables.unwalled`. With `accept`, the deny list below applies, as
+in a walled run. The deny list protects the wall and the runner, not the developer, so
+`accept` opens the developer's shell to the server.
 
 **Denied names.** The runner leaves out of every walled run, and of an unwalled run with
 `accept`, a server variable whose name is on the deny list: the built-in list
 `denied-variables.json`, the run's runtime's `denies` (§The descriptor), and the names
-the node's owner adds in the runner file, `variables.deny: [NAME, PREFIX_*]`. Each
-built-in entry undermines the wall, the proxy or the runner. A denied variable is left
-out and reported by name in `variables.denied`, and the run starts. An entry is a name
-or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character other than `*`. It
-matches a whole name: `*` matches any run of characters, the empty run included,
-anywhere in the entry. Matching ignores case, because programs read `http_proxy` and
-`HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1, "names": [...],
-"patterns": [...]}`, holds every row of the table but the two that depend on the node
-and the run: the names the wall sets for the run's bundle, and the runtime's `denies`,
-which `runtimes.json` lists.
+the node's owner adds in the launch spec, `Spec.Variables.Deny` in Go, such as `[NAME,
+PREFIX_*]`. Each built-in entry undermines the wall, the proxy or the runner. A denied
+variable is left out and reported by name in `variables.denied`, and the run starts. An
+entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character other
+than `*`. It matches a whole name: `*` matches any run of characters, the empty run
+included, anywhere in the entry. Matching ignores case, because programs read
+`http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1, "names":
+[...], "patterns": [...]}`, holds every row of the table but the two that depend on the
+node and the run: the names the wall sets for the run's bundle, and the runtime's
+`denies`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
@@ -586,10 +587,10 @@ a variable a value of the machine's is read from, into the enclosure is no run,
 `variable_reserved`; `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets
 for the session, are exempt. A run that passes a value for a placeholder is no run,
 `placeholder_conflict`. A variable the run's runtime declares or reserves that the run
-passes, through `wall.env` or `--env` for `qory`, reaches the runtime as passed. Behind
-a wall, every variable the runtime declares or reserves that neither a placeholder nor
-the run sets goes into the enclosure as an empty value, so an image's own `ENV` cannot
-set one.
+passes as a node variable reaches the runtime as passed. Behind a wall, every variable
+the runtime declares or reserves that neither a placeholder, the run nor the runtime's
+preparation sets goes into the enclosure as an empty value, so an image's own `ENV`
+cannot set one.
 
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
@@ -939,10 +940,10 @@ the record is lost with it, and a receiver detects that from heartbeats that sto
 
 A discovery fetch that fails, in transport, with a status other than `200` or with a
 document the schema refuses, or a ping not accepted: no run, and the error contains the
-URL and the status. A `run` section present and its fetch not returning `200`: no run. The
-command's `--policy`, a run's own policy under the machine's, keeps its meaning without
-a server; with a fetched run configuration, `--policy` narrows the fetched policy as the
-machine's does.
+URL and the status. A `run` section present and its fetch not returning `200`: no run.
+The command's `--policy`, a run's own policy under the machine's, keeps its meaning
+without a server. With a fetched run configuration, the policy document of the launch
+spec narrows the fetched policy (§The policy).
 
 **The reference receiver** is the public package `receiver` of this module: a handler
 that serves discovery, verifies each request as this section defines, returns the digest
