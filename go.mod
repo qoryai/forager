@@ -3,6 +3,7 @@ module github.com/qoryai/runner
 go 1.27.1
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/creack/pty v1.1.24
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/sys v0.48.0

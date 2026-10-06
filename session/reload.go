@@ -46,7 +46,7 @@ type live struct {
 
 // discover fetches the server's configuration document for a run.
 func discover(ctx context.Context, cfg *server.Config, spec Spec) (*live, error) {
-	client := &server.Client{Config: cfg, UserAgent: "qory-runner/" + spec.RunnerVersion}
+	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.RunnerVersion}
 	conf, digest, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err

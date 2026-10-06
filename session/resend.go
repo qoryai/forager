@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
@@ -23,8 +24,13 @@ type ResendSpec struct {
 	// Dir is the run directory, the one [Result.Dir] named.
 	Dir string
 	// Server is where the events go: the server the run had, or another. Its
-	// configuration document is fetched first, as for a run.
+	// configuration document is fetched first, as for a run, and every answer is
+	// verified under its pin.
 	Server *Server
+	// AccessKey, InstanceID and InstanceName sign and name the requests, as
+	// [Spec.AccessKey], [Spec.InstanceID] and [Spec.InstanceName] do for a run.
+	AccessKey                *accesskey.Key
+	InstanceID, InstanceName string
 	// Wall, when it is a [wall.Reaper], is asked to remove what the run's wall left.
 	Wall wall.Wall
 	// RunnerVersion is reported in the deliveries' user agent.
@@ -52,9 +58,10 @@ type ResendResult struct {
 // before it. The events file is the record of truth and the run directory says which
 // of its events the server accepted, so Resend sends the rest, the ones the server's
 // configuration wants, in order and in the run's own batches, until they are accepted
-// or the context ends. A record without run.exited gets one first, with the reason
-// runner_lost, and what the run's wall left is removed. A run whose runner still lives
-// is [ErrRunning]; a server that said stop during the run is sent nothing.
+// or the context ends. A record with run.started and without run.exited gets one
+// first, with the reason runner_lost, and what the run's wall left is removed. A run
+// whose runner still lives is [ErrRunning]; a server that said stop during the run, or
+// closed it, is sent nothing.
 func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if spec.Report == nil {
 		spec.Report = func(string) {}
@@ -74,7 +81,7 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &server.Client{Config: cfg, UserAgent: "qory-runner/" + spec.RunnerVersion}
+	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.RunnerVersion}
 	conf, _, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -120,7 +127,7 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 			owed = append(owed, l)
 		}
 	}
-	posts := sink.NewServer(client, sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, spec.Dir, spec.Report, nil)
+	posts := sink.NewServer(client, sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, spec.Dir, spec.Report, nil, nil)
 	for _, l := range owed {
 		if !posts.Resend(ctx, l.line, l.Sequence) {
 			break
@@ -186,16 +193,19 @@ func record(file string) ([]recorded, error) {
 // on from its last event, and reports whether it did.
 func closeRecord(file, runID string, lines *[]recorded) (bool, error) {
 	var started time.Time
+	begun := false
 	for _, l := range *lines {
 		switch l.Type {
 		case event.RunExited:
 			return false, nil
 		case event.RunStarted:
+			begun = true
 			started, _ = time.Parse(time.RFC3339Nano, l.Time)
 		}
 	}
-	if started.IsZero() {
-		// A run the server's ping refused never started, and has no exit to record.
+	if !begun {
+		// A run the server's ping refused, or one refused after it, never started, and
+		// has no exit to record.
 		return false, nil
 	}
 	last := (*lines)[len(*lines)-1]

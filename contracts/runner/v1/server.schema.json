@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/server.schema.json",
   "title": "Server",
-  "description": "The server the runner is a client of: where it fetches its configuration from, and the access key and secret it signs every request with. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns 200 and the server accepts the ping.",
+  "description": "The server the runner is a client of: where it fetches its configuration from, the access key it signs every request as, and the pin, the server's keys it verifies every answer under. The access key's secret lives outside this document: the command reads it from a file descriptor, else QORY_ACCESS_KEY_SECRET, else the file access-key-secret. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns a signed 200 and the server accepts the ping.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "url", "access_key", "secret"],
+  "required": ["version", "url", "access_key_id", "apiary_public_key"],
   "properties": {
     "version": {
       "description": "The document format. A runner refuses a version it does not read.",
@@ -17,15 +17,29 @@
       "format": "uri",
       "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$"
     },
-    "access_key": {
-      "description": "The key that identifies the runner to the server, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
+    "access_key_id": {
+      "description": "The id of the access key every request is signed as, sent on every request in X-Qory-Access-Key-Id and signed as a line of it: ak_ and 16 lower-case Crockford base32 characters, which the server assigns when the key enrols.",
       "type": "string",
       "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
     },
-    "secret": {
-      "description": "The key of the HMAC SHA-256 signature on every request. It signs and never travels: shared with the server and with nothing else, it is the credential of this run's reporting.",
-      "type": "string",
-      "minLength": 16
+    "apiary_public_key": {
+      "description": "The pin: the server's Ed25519 public keys, a list so the key can rotate. Every answer of the server is verified under one of them, and the runner takes keys from this list alone. A runner with a server and no pin is refused before the first request, apiary_public_key_missing.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alg", "public_key"],
+        "properties": {
+          "alg": {"const": "ed25519"},
+          "public_key": {
+            "description": "A raw 32-byte Ed25519 public key, base64url without padding.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+          }
+        }
+      }
     }
   }
 }

@@ -1,0 +1,17 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-runner/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_pend1ng000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1700000000",
+    "X-Qory-Signature-Ed25519": "mtmlv86V2fnqrT_Vy5QvHVuE72DpooTnn_fNRVDNixh7jQcw2hjdQiyAH3nvUTKis7HA239izxq2LJ4AOnrqBQ"
+  },
+  "body": null,
+  "expect": 409,
+  "expect_code": "key_pending",
+  "note": "The discovery fetch as ak_pend1ng000000000, signed under the secret of the second fixture access key, pending_access_key in fixtures/known-answers/keys.json, which the receiver under test holds under that id as awaiting approval. The request verifies, and every signed endpoint answers it with a signed 409 key_pending, discovery included."
+}

@@ -131,6 +131,48 @@ release may change what an existing document does, and says so under Upgrading.
   before. Every run sets `ANTHROPIC_AUTH_TOKEN` and the other credential's variable
   empty, and the recorder receives the chosen credential's header alone, so Claude Code
   reads an empty variable as unset and uses the placeholder.
+- The public package `accesskey` is the access key of the contract, for the runner and
+  for qory alike. It generates a key and reads and writes its secret, `qak_` and the
+  32-byte Ed25519 seed in base64url; derives the public key, its fingerprint and the
+  X25519 key; runs the five checks the contract requires of a public key; builds and
+  signs the GET and POST request strings; verifies a signed answer under a pin; builds
+  an enrolment request with its normalised code and proof, posts it and verifies the
+  answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
+  names; and makes the instance id with the two lines of
+  its file, the id and a keyed hash of the machine's identity. It verifies under no key
+  the key checks refuse, refuses a document that contains a secret with
+  `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
+  fingerprint however it is printed. Its tests reproduce every published known answer
+  of the access key, the requests, the answers and enrolment.
+- No tool, credential program or agent receives `QORY_ACCESS_KEY_SECRET`,
+  `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the runner leaves them out of every
+  environment it starts a program with.
+- A server can close a run with a signed `410` `run_closed` to a delivery: the runner
+  stops the runtime as at its time limit, records `dev.qory.run.exited` with
+  `reason: run_closed` in the file sink and sends nothing further; before
+  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
+  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
+  run the same way, with exit code -1.
+  `session.Result` has `RunClosed`.
+- `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
+  `key_invalid` or `key_limit` with `apiary_public_key`, the same list in the same order
+  as a `201`, so a machine without a pin verifies it as it verifies the `201`.
+  `fixtures/enrolment/` has the four refusals, with one key and with two, and
+  `signatures.json` their signatures under the fixture signing key.
+- `session.Spec` has `Discovered`, called once the server's signed configuration
+  document is read and before the ping, with the access key's `node_id` and whether the
+  document lists `secrets`; an error it returns is no run.
+- A run refused with a code is a `session.Refusal`, with the code and the server's
+  status: `apiary_public_key_missing` for a server without a pin, before any request;
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify;
+  `key_pending` while the access key awaits approval; and `instance_limit` when the
+  node's live instances are at its limit.
+- The reference receiver accepts the public keys its configuration holds, an access key
+  awaiting approval among them, answers in the contract's order of refusals, a ping
+  whose `interval_seconds` is outside 1 to 300 being `invalid_request`, and signs every
+  answer after verification under its own key, the `410` of its `Stop` among them. Its
+  new hooks `Closed` and `Admit` close a run with `run_closed` and refuse an instance's
+  ping with `instance_limit`.
 
 ### Changed
 
@@ -157,6 +199,35 @@ release may change what an existing document does, and says so under Upgrading.
   script it writes into the run directory. §The descriptor describes Claude Code's
   approval of an API key and the script that pre-approves the placeholder value, and
   §Sequence's steps 6 and 7 list the script.
+- Contract `v1` revision 1 is amended in place: the runner signs every request with an
+  access key, an Ed25519 key, and verifies every answer under the server's key it pins.
+  The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
+  no secret; `session.Server` has the same members, and `session.Spec` and
+  `session.ResendSpec` have `AccessKey`, `InstanceID` and `InstanceName`. Every request
+  contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
+  `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
+  but a `401` is signed under the server's key and bound to the request's signature,
+  and the runner reads its body and headers only once it verifies; during a run an
+  answer that does not verify is retried. §The server defines the access key, nodes
+  and instances, the pin, the request string, signed answers, the coded refusals and
+  their order, and enrolment.
+- Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
+  an access key allowed stored secrets.
+- `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
+  300; with a server, `session.Spec.Heartbeat` is a whole number of seconds, so the
+  ping announces the interval the heartbeats tick at. Heartbeats run from the accepted ping until the final event, and
+  `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
+  `run_closed`.
+- `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
+  `fixtures/signed/` has `get-configuration-no-instance-id`, `-header-twice` and
+  `-pending-key`, signed under a second fixture access key that `keys.json` lists as
+  `pending_access_key`, `batch-unknown-key` in place of `batch-wrong-key`, and
+  `expect_code` for a coded refusal. `fixtures/invalid/` has
+  `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
+  `event-ping-interval-too-long` in place of `server-no-key`;
+  `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
+  `node_id` and `apiary_public_key`; and the pings of `fixtures/batch/ping.json` and
+  of the recorded runs contain `interval_seconds`.
 
 ### Fixed
 
