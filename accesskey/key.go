@@ -26,10 +26,18 @@ const SeedSize = ed25519.SeedSize
 
 // Key is an Ed25519 key, held from its seed: an access key, whose secret signs the
 // runner's requests, or a server's signing key, whose public key a machine pins. It
-// formats as its fingerprint alone, whatever the verb, so a log line that prints one
-// shows which key it is and never its secret.
+// formats as its fingerprint alone, whatever the verb, and marshals as text to the
+// same, so a log line that prints one shows which key it is and never its secret. The
+// key material sits behind two pointers, so a Key printed by reflection, as a field
+// fmt does not format through its methods, shows addresses alone.
 type Key struct {
-	priv ed25519.PrivateKey
+	m *material
+}
+
+// material is a Key's private key, itself behind a pointer: fmt prints a pointer below
+// the top level as its address, so even a bad verb on a material shows no byte of it.
+type material struct {
+	priv *ed25519.PrivateKey
 }
 
 // Generate returns a new key from the system's random source.
@@ -46,7 +54,8 @@ func NewKey(seed []byte) (*Key, error) {
 	if len(seed) != SeedSize {
 		return nil, fmt.Errorf("a seed is %d bytes, and this one is %d", SeedSize, len(seed))
 	}
-	return &Key{priv: ed25519.NewKeyFromSeed(seed)}, nil
+	priv := ed25519.NewKeyFromSeed(seed)
+	return &Key{m: &material{priv: &priv}}, nil
 }
 
 // ParseSecret reads an access key secret: "qak_" and the seed in base64url without
@@ -68,13 +77,13 @@ func ParseSecret(secret string) (*Key, error) {
 // padding, 47 characters. It is the one string that holds the key; whoever holds it is
 // the access key.
 func (k *Key) Secret() string {
-	return SecretPrefix + base64.RawURLEncoding.EncodeToString(k.priv.Seed())
+	return SecretPrefix + base64.RawURLEncoding.EncodeToString((*k.m.priv).Seed())
 }
 
 // PublicKey returns the key's Ed25519 public key.
 func (k Key) PublicKey() PublicKey {
 	var p PublicKey
-	copy(p[:], k.priv.Public().(ed25519.PublicKey))
+	copy(p[:], (*k.m.priv).Public().(ed25519.PublicKey))
 	return p
 }
 
@@ -84,7 +93,7 @@ func (k Key) Fingerprint() string { return k.PublicKey().Fingerprint() }
 // X25519PrivateKey returns the X25519 private key of the access key: the first 32
 // bytes of SHA-512 of the seed, clamped, the scalar Ed25519 signs with.
 func (k *Key) X25519PrivateKey() []byte {
-	h := sha512.Sum512(k.priv.Seed())
+	h := sha512.Sum512((*k.m.priv).Seed())
 	s := h[:32]
 	s[0] &= 248
 	s[31] &= 127
@@ -107,7 +116,7 @@ func (k *Key) X25519() *ecdh.PrivateKey {
 // Sign returns the Ed25519 signature of a message under the key. Every message the
 // contract signs starts with a domain line of its own: [Request.Message],
 // [Answer.Message] and [EnrolmentRequest.ProofMessage] build them.
-func (k *Key) Sign(message []byte) []byte { return ed25519.Sign(k.priv, message) }
+func (k *Key) Sign(message []byte) []byte { return ed25519.Sign(*k.m.priv, message) }
 
 // String returns "Ed25519 key" and the fingerprint of its public key. It and Format
 // have value receivers, so a Key printed by value shows the same and no more.
@@ -118,6 +127,10 @@ func (k Key) GoString() string { return k.String() }
 
 // Format writes what String returns, whatever the verb.
 func (k Key) Format(f fmt.State, _ rune) { io.WriteString(f, k.String()) }
+
+// MarshalText returns what String returns, so a structured log of a Key shows its
+// fingerprint.
+func (k Key) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 
 // PublicKey is a raw 32-byte Ed25519 public key, written in base64url without padding.
 type PublicKey [ed25519.PublicKeySize]byte

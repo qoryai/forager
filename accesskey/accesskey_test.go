@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,14 +157,20 @@ func TestFixtureAccessKey(t *testing.T) {
 }
 
 // TestKeyFormatsAsItsFingerprint pins that a key printed with any verb shows its
-// fingerprint and never its secret.
+// fingerprint and never its secret: by pointer and by value, inside slices, maps and
+// structs, in unexported fields, under a bad verb, and through slog's text and JSON
+// handlers.
 func TestKeyFormatsAsItsFingerprint(t *testing.T) {
 	key := keys(t).accessKey(t)
 	secret := strings.TrimPrefix(key.Secret(), accesskey.SecretPrefix)
 	seed, _ := base64.RawURLEncoding.DecodeString(secret)
 	seedHex := hex.EncodeToString(seed)
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
-		for _, v := range []any{key, *key, []*accesskey.Key{key}, struct{ K *accesskey.Key }{key}, struct{ K accesskey.Key }{*key}} {
+		type hidden struct {
+			k  accesskey.Key
+			kp *accesskey.Key
+		}
+		for _, v := range []any{key, *key, []*accesskey.Key{key}, struct{ K *accesskey.Key }{key}, struct{ K accesskey.Key }{*key}, hidden{*key, key}, []hidden{{*key, key}}, map[string]any{"k": hidden{*key, key}}} {
 			got := fmt.Sprintf(verb, v)
 			if strings.Contains(got, secret) || strings.Contains(got, seedHex) || strings.Contains(got, "[1 2 3 4 5") {
 				t.Errorf("%s of %T: %q", verb, v, got)
@@ -171,6 +178,20 @@ func TestKeyFormatsAsItsFingerprint(t *testing.T) {
 		}
 		if got := fmt.Sprintf(verb, key); !strings.Contains(got, key.Fingerprint()) {
 			t.Errorf("%s: %q", verb, got)
+		}
+	}
+	for _, verb := range []string{"%z", "%!", "%[2]v", "%d %d"} {
+		if got := fmt.Sprintf(verb, key); strings.Contains(got, secret) || strings.Contains(got, seedHex) {
+			t.Errorf("a bad verb %s: %q", verb, got)
+		}
+	}
+	var text, js bytes.Buffer
+	for _, h := range []slog.Handler{slog.NewTextHandler(&text, nil), slog.NewJSONHandler(&js, nil)} {
+		slog.New(h).Info("run", "key", key, "value", *key, "hidden", struct{ k accesskey.Key }{*key})
+	}
+	for name, out := range map[string]string{"text": text.String(), "JSON": js.String()} {
+		if strings.Contains(out, secret) || strings.Contains(out, seedHex) || !strings.Contains(out, key.Fingerprint()) {
+			t.Errorf("slog's %s handler: %s", name, out)
 		}
 	}
 }
