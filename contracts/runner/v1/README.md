@@ -177,6 +177,10 @@ One run, on a developer machine, with a server configured:
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.
+   `dev.qory.run.started` records the command and the arguments as the runtime prepared
+   them: for an interactive Claude Code whose API key is a placeholder, `command` is
+   `/bin/sh` and `args` hold the script in the run directory, then `claude` and its
+   arguments.
 8. While the program runs: every chunk of output is one `dev.qory.run.log`; on a
    pseudo-terminal every resize is one `dev.qory.run.resized`; every connection through
    the proxy is one `dev.qory.run.egress`; every record the descriptor matches is one
@@ -823,15 +827,15 @@ The runner starts a program, records it and stops it, and contains nothing speci
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
-defines seven things: its name and the version of the
-program it was written against, reported in `dev.qory.run.started`; how a launch is
-prepared so the program reports to the runner and runs with the run's placeholders,
-which may change the arguments, add variables, write into the run directory and start
-the program through a script written there, and nothing else; whether the program's
-standard output is records to read; what event, if any, one record is; how the
-program is stopped, a signal and a grace; whether the arguments it is
-started with mean it runs without an interface, so the session is on pipes whatever
-the caller has; and the secrets it declares, a descriptor's `secrets` (below), which a
+defines seven things: its name and the version of the program it was written against,
+reported in `dev.qory.run.started`; how a launch is prepared so the program reports to
+the runner and runs with the run's placeholders, which may change the command and
+arguments, add variables and write into the run directory, and nothing else (a script it
+writes there may record an approval where the program reads it, then start the program);
+whether the program's standard output is records to read; what event, if any, one record
+is; how the program is stopped, a signal and a grace; whether the arguments it is
+started with mean it runs without an interface, so the session is on pipes whatever the
+caller has; and the secrets it declares, a descriptor's `secrets` (below), which a
 runtime in Go defines through the optional interface `runtimes.Secrets`, checked by type
 assertion: a runtime without it declares nothing. Behind a wall, the preparation
 receives the variables the enclosure gets the placeholder value in.
@@ -933,14 +937,20 @@ configuration is `.config.json` in `CLAUDE_CONFIG_DIR`, else in `~/.claude`, whe
 file exists, and otherwise `.claude.json` in `CLAUDE_CONFIG_DIR`, else in `~`. When the
 session is interactive and `ANTHROPIC_API_KEY` is a placeholder of the run,
 `claude-settings` writes `approve-key.sh` into the run directory and starts Claude Code
-through it with `/bin/sh`. The script adds the placeholder value's entry,
-`utside-the-enclosure`, to that configuration, then starts Claude Code with its
-arguments. A missing or empty file becomes one with the entry alone, mode 0600; a JSON
-object without `customApiKeyResponses` gets the entry as its first member and keeps the
-rest of its bytes; a file with `customApiKeyResponses`, or one that is no object, stays
-as it is, and Claude Code shows its approval prompt. The entry is always the placeholder
-value's. A headless session, and an OAuth credential in either mode, need no approval,
-and Claude Code starts as it is.
+through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
+adds the placeholder value's entry, `utside-the-enclosure`, to that configuration inside
+the enclosure, then starts Claude Code with its arguments. A missing file becomes one
+with the entry alone, mode 0600; an empty one gets the entry and keeps its mode. A JSON
+object without `customApiKeyResponses` gets the entry as its first member, and keeps
+every member and the bytes before and after its opening brace, ending in one newline. A
+file with `customApiKeyResponses`, one that is no object, and a path that is neither a
+regular file nor missing stay as they are; Claude Code then shows its approval prompt
+unless that list approves the placeholder value already. The script writes the new
+content to a temporary file beside the configuration, copies it over the configuration,
+through a link when it is one, and removes the temporary file; whatever fails, the
+configuration keeps its content and Claude Code starts. The entry is always the
+placeholder value's. A headless session, and an OAuth credential in either mode, need no
+approval, and Claude Code starts as it is.
 
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,

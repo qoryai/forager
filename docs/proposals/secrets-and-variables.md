@@ -1440,9 +1440,10 @@ secrets:
   the user to approve the key unless its last 20 characters are listed in
   `~/.claude.json` under `customApiKeyResponses.approved`; headless (`-p`) proceeds at
   once.
-  Follow-up work: the claude runtime's `Prepare` pre-approves the constant stand-in,
-  whose last 20 characters are `utside-the-enclosure`, in the run's copy of the
-  configuration.
+  The claude runtime's `Prepare` pre-approves the constant stand-in, whose last 20
+  characters are `utside-the-enclosure`: it starts Claude Code through a script in the
+  run directory that adds the entry to the agent's own configuration inside the
+  enclosure at start.
 - **Which runtime.** One runtime connection per runtime name: two are
   `runtime_connection_duplicate`. The runner applies the runtime connection for the run's
   own runtime and sets any other aside: it stays out of the secrets request, the seal and
