@@ -157,6 +157,7 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/refusal-key-invalid.json":          {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-limit-rotation.json":   {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-invalid-rotation.json": {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-rate-limited.json":         {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 	}
 	data := map[string]bool{
 		"fixtures/sealed/vectors.json":            true,
@@ -398,17 +399,18 @@ func TestEnrolmentProofs(t *testing.T) {
 // TestAnswerSignatures pins the six lines of a signed answer and their known answers
 // under the fixture signing key: 200 with the discovery body and 404 with an empty
 // body, under qory-answer-ed25519-v1; 201 to the enrolment request, whose line 3 is the
-// request's proof, and the signed 409s key_limit and key_invalid at enrolment, with one
-// key and, during a rotation, to the request with two fingerprints, with two keys,
-// current first, under qory-enrol-answer-ed25519-v1. A signature under one domain line
-// does not verify under the other.
+// request's proof, the signed 409s key_limit and key_invalid at enrolment, with one key
+// and, during a rotation, to the request with two fingerprints, with two keys, current
+// first, and the signed 429 rate_limited per code with one key, under
+// qory-enrol-answer-ed25519-v1. A signature under one domain line does not verify under
+// the other.
 func TestAnswerSignatures(t *testing.T) {
 	k := loadKeys(t)
 	signing := ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed))
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Answers) != 7 {
-		t.Fatalf("%d answer vectors; want 7", len(v.Answers))
+	if len(v.Answers) != 8 {
+		t.Fatalf("%d answer vectors; want 8", len(v.Answers))
 	}
 	var proof, rotation struct {
 		Proof string `json:"proof"`
@@ -417,7 +419,7 @@ func TestAnswerSignatures(t *testing.T) {
 	load(t, "fixtures/enrolment/request-two-fingerprints.json", &rotation)
 	for _, a := range v.Answers {
 		domain := "qory-answer-ed25519-v1"
-		if a.Lines[1] == "201" || a.Lines[1] == "409" {
+		if a.Lines[1] == "201" || a.Lines[1] == "409" || a.Lines[1] == "429" {
 			domain = "qory-enrol-answer-ed25519-v1"
 		}
 		if len(a.Lines) != 6 || a.Lines[0] != domain {
@@ -462,7 +464,7 @@ func TestAnswerSignatures(t *testing.T) {
 				len(e.APIaryPublicKey) != 1 || e.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
 				t.Errorf("%s: the answer contains %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
 			}
-		case "409":
+		case "409", "429":
 			two := a.Body != nil && strings.HasSuffix(*a.Body, "-rotation.json")
 			want := proof.Proof
 			if two {
@@ -481,7 +483,13 @@ func TestAnswerSignatures(t *testing.T) {
 			if two {
 				keys = append(keys, k.NextSigningKey.PublicKey)
 			}
-			if err := json.Unmarshal(body, &r); err != nil || (r.Error != "key_limit" && r.Error != "key_invalid") || len(r.APIaryPublicKey) != len(keys) {
+			codes := map[string][]string{
+				"409": {"key_limit", "key_invalid"},
+				"429": {"rate_limited"},
+			}[a.Lines[1]]
+			err := json.Unmarshal(body, &r)
+			if err != nil || !slices.Contains(codes, r.Error) ||
+				len(r.APIaryPublicKey) != len(keys) {
 				t.Errorf("%s: the refusal contains %s and %v", a.Note, r.Error, r.APIaryPublicKey)
 				continue
 			}
