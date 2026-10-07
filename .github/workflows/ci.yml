@@ -100,10 +100,11 @@ jobs:
           sudo apt-get install -y ./sysbox.deb
           docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
           # The package returns before sysbox-fs and sysbox-mgr listen, and a container
-          # started before then fails. Wait up to 60 seconds for each socket.
+          # started before then fails. Wait up to 60 seconds for each socket. /run/sysbox
+          # is open to root alone, so the check runs as root.
           for sock in /run/sysbox/sysfs.sock /run/sysbox/sysmgr.sock; do
             for _ in $(seq 60); do
-              test -S "$sock" && continue 2
+              sudo test -S "$sock" && continue 2
               sleep 1
             done
             systemctl status sysbox sysbox-fs sysbox-mgr --no-pager || true
