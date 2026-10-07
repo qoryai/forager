@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/runner/internal/program"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/socket"
 )
@@ -111,6 +112,35 @@ func (d *Docker) Sets() []string {
 		out = append(out, name)
 	}
 	return append(append(out, socket.Env), names...)
+}
+
+// Files lists the adapter's own files on this machine: the directory of the docker
+// command, found in PATH as the adapter runs it, the directory of the helper, each with
+// the directory of the file a symbolic link leads to, and the command's configuration
+// directory, DOCKER_CONFIG as the command reads it, else ~/.docker, whose context and
+// credential helpers name programs the command starts.
+func (d *Docker) Files() []string {
+	out := program.Dirs(d.command())
+	// The helper is a path, never looked up in PATH.
+	if helper, err := filepath.Abs(d.Helper); d.Helper != "" && err == nil {
+		out = append(out, program.Dirs(helper)...)
+	}
+	if conf := os.Getenv("DOCKER_CONFIG"); conf != "" {
+		if abs, err := filepath.Abs(conf); err == nil {
+			out = append(out, abs)
+		}
+	} else if home, err := os.UserHomeDir(); err == nil {
+		out = append(out, filepath.Join(home, ".docker"))
+	}
+	return out
+}
+
+// command is the program the adapter runs.
+func (d *Docker) command() string {
+	if d.Command == "" {
+		return "docker"
+	}
+	return d.Command
 }
 
 // DefaultCAEnv are the variables the common programs read a bundle's path from:
@@ -243,12 +273,7 @@ func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, e
 	return out, nil
 }
 
-func (e *dockerEnclosure) command() string {
-	if e.d.Command == "" {
-		return "docker"
-	}
-	return e.d.Command
-}
+func (e *dockerEnclosure) command() string { return e.d.command() }
 
 // ProxyAddr is the gateway's address when this machine holds it, else loopback.
 func (e *dockerEnclosure) ProxyAddr() string {
@@ -665,7 +690,16 @@ func (hostSystem) local(ip string) bool {
 	return false
 }
 
-func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", tempPrefix) }
+
+// tempPrefix begins the name of the private directory the adapter writes a run's
+// environment files in, the relay's with the proxy's secret among them.
+const tempPrefix = "qory-wall-"
+
+// TempDirs is the pattern of the private directories the Docker adapter writes the
+// runs' environment files in, the system's temporary directory with qory-wall- and a
+// random part: every run's, whichever wall a run has.
+func TempDirs() string { return filepath.Join(os.TempDir(), tempPrefix+"*") }
 
 // runtimeSockets are the names a container runtime's socket goes by.
 var runtimeSockets = []string{"docker.sock", "podman/podman.sock", "containerd/containerd.sock", "crio/crio.sock"}

@@ -32,6 +32,10 @@ nothing.
 - The checkout and the composed home are mounted at their own paths. The run's record is
   mounted read-only.
 - Nothing else of the node is visible inside.
+- A mount that is, contains or lies inside one of the runner's files is no run,
+  `mount_contains_runner_files`: the runner file's directory with the access key
+  secret, the programs the runner starts outside the wall, their configuration. See
+  [the runner's files](#the-runners-files).
 - The session runner, the policy and the access key secret stay outside, on the node.
   The record is written from outside.
 
@@ -162,6 +166,7 @@ res, err := session.Run(ctx, session.Spec{
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
 	Dir:     checkout,                            // the workspace, mounted at its own path
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+	RunnerFiles: []string{configDir},             // the caller's own files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
 		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
@@ -183,6 +188,49 @@ res, err := session.Run(ctx, session.Spec{
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
 refused.
+
+### The runner's files
+
+A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
+the runner's files. Such a run returns a `*session.Refusal` with the code
+`mount_contains_runner_files`, and `Names` holds the mount, then the runner's file. The
+check comes before the server is contacted and before anything starts, `Local` included.
+An agent that changes a program the runner starts outside the wall, or reads the access
+key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
+run directory and the hook socket's directory, which the runner shows the enclosure
+itself, are the run's own. The runner's files are:
+
+- `Spec.RunnerFiles`, the absolute paths the caller lists as its own. `qory` lists the
+  runner file's directory, with the access key secret.
+- The directory of every credential program and every tool program the machine defines,
+  found in `PATH` as the runner starts it, and the directory of the file a link to one
+  leads to. A program's neighbours, an interpreter or a module, are covered with it.
+- The file a credential with `File` is read from.
+- The private directories of the tools' sockets, this run's and every other run's on
+  the machine, which are made in the system's temporary directory when the tools
+  start: a mount that contains that directory is refused, whether or not the run has
+  tools.
+- The private directories in the system's temporary directory where every run on the
+  machine makes its record socket, `qory-run-*`, and where the Docker wall writes a
+  run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
+  them.
+- A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
+  directory of the `docker` command, the directory of the helper, and the command's
+  configuration directory, `DOCKER_CONFIG` or `~/.docker`.
+
+Both sides are resolved through symbolic links, a part that does not exist yet through
+its nearest parent that does, and a link whose target does not exist yet through that
+target. A path that cannot be resolved, such as one through a directory the runner
+cannot search, is no run, with a plain error. The check runs again just before the
+enclosure is built, so a link changed after the start leads where it leads then.
+
+The filesystem judges what exists: two directories are the same when they are one file,
+by device and inode. So on a disk that ignores case, as a Mac's does by default,
+`/USERS/USER` is `/Users/user`, and a bind mount is the directory it shows. A part that
+does not exist yet is compared by name, regardless of case. The comparison is by whole
+path components: `/a/bc` does not lie inside `/a/b`. `session.Overlap(mount, path)`
+returns how two paths stand: `is`, `contains`, `lies inside`, or empty, also for a path
+it cannot resolve. A caller uses it to word its own message.
 
 ### The helper
 

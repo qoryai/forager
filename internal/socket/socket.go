@@ -39,10 +39,17 @@ type Listener struct {
 	done chan struct{}
 }
 
+// dirPrefix begins the name of the private directory a run's socket is in.
+const dirPrefix = "qory-run-"
+
+// Dirs is the pattern of the private directories the runs' sockets are in, the
+// system's temporary directory with dirPrefix and a random part.
+func Dirs() string { return filepath.Join(os.TempDir(), dirPrefix+"*") }
+
 // Listen creates a private directory under the system's temporary directory, mode
 // 0700, and listens on a socket in it. Close removes both.
 func Listen() (*Listener, error) {
-	dir, err := os.MkdirTemp("", "qory-run-")
+	dir, err := os.MkdirTemp("", dirPrefix)
 	if err != nil {
 		return nil, err
 	}

@@ -32,6 +32,15 @@ type Setter interface {
 	Sets() []string
 }
 
+// Filer is a wall with files of its own on this machine: the programs it starts outside
+// the enclosure and what configures them. A walled run refuses a mount that is, contains
+// or lies inside one of them, since an agent that changes one of them changes what runs
+// outside the wall.
+type Filer interface {
+	// Files lists the absolute paths of the wall's files, directories included.
+	Files() []string
+}
+
 // Reaper is a wall that can remove what it left of a run whose runner died before it
 // closed the enclosure. It is asked only for a run known to be over.
 type Reaper interface {

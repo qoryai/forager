@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -392,5 +393,51 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 	}
 	if strings.Contains(string(out), "QORY_ACCESS_KEY_") || strings.Contains(string(out), "QORY_APIARY_") || !strings.Contains(string(out), "DOCKER_SEES=yes") {
 		t.Errorf("the command's environment:\n%s", out)
+	}
+}
+
+// TestDockerFilesAreItsProgramsAndConfiguration pins the adapter's own files: the
+// directory of the docker command as PATH finds it and of the file a link to it leads
+// to, the helper's directory, and the command's configuration directory, DOCKER_CONFIG
+// or else ~/.docker.
+func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
+	bin, libexec, helpers, conf, home := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(libexec, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(libexec, "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", home)
+	t.Setenv("DOCKER_CONFIG", conf)
+	d := &Docker{Helper: filepath.Join(helpers, "qory"), RelayArgs: []string{"relay"}}
+	files := d.Files()
+	resolved, err := filepath.EvalSymlinks(libexec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{bin, resolved, helpers, conf} {
+		if !slices.Contains(files, want) {
+			t.Errorf("files %q lack %s", files, want)
+		}
+	}
+	t.Setenv("DOCKER_CONFIG", "")
+	if files := d.Files(); !slices.Contains(files, filepath.Join(home, ".docker")) || slices.Contains(files, conf) {
+		t.Errorf("without DOCKER_CONFIG, files %q", files)
+	}
+	var _ Filer = d
+}
+
+// TestTempDirsMatchesWhatTheAdapterMakes pins that the pattern of the adapter's private
+// directories matches the one it makes.
+func TestTempDirsMatchesWhatTheAdapterMakes(t *testing.T) {
+	dir, err := hostSystem{}.tempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	if ok, _ := filepath.Match(TempDirs(), dir); !ok {
+		t.Errorf("%s does not match %s", dir, TempDirs())
 	}
 }

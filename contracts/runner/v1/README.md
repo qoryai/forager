@@ -1416,6 +1416,39 @@ for all of them.
   container on the host's network from the daemon has left the wall. A mount that is a
   socket, or a directory containing a runtime's, is refused.
 
+**The runner's files.** A walled run, one without a server included, refuses a mount,
+or the workspace, that is, contains or lies inside one of the runner's files: no run,
+`mount_contains_runner_files`, with the mount and the runner's file as its names, in
+that order. The runner checks before it contacts the server and before anything starts,
+so no event records that refusal, and checks again just before it builds the
+enclosure, so a link changed meanwhile is followed where it leads then. Both paths are
+resolved through symbolic links, a part that does not exist yet through its nearest
+parent that does and a link whose target does not exist yet through that target, and
+compared by whole components; a path that cannot be resolved is no run. The filesystem
+judges what exists: two directories are the same when they are one file, by device and
+inode, so a path written in another case on a disk that ignores case is the directory
+it names. A part that does not exist yet is compared by name, regardless of case. The
+runner's files are:
+
+- the paths the caller lists as its own: for `qory`, the runner file's directory, with
+  the access key secret;
+- the directory of every credential program and every tool program the machine defines,
+  and of the file a link to one leads to, the directory and not only the file, so an
+  interpreter, a module or a configuration beside a program is covered too;
+- the file a credential is read from;
+- the private directories of the tools' sockets, made in the system's temporary
+  directory, every run's on the machine, whether or not the run has tools;
+- the private directories in the system's temporary directory where every run on the
+  machine makes its record socket, `qory-run-*`, and where the `docker` wall writes a
+  run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
+  them;
+- the wall's own: for `docker`, the directory of the `docker` command and of the
+  helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
+  whose context and credential helpers start programs.
+
+An agent that can change a program the runner starts outside the wall, or read a file a
+credential is read from, has left the wall.
+
 When the run has an authority of its own (§Credentials), a wall sets the enclosure's
 trust to one bundle, the image's own authorities with the run's certificate after them,
 and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,

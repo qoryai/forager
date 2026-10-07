@@ -129,6 +129,12 @@ type Spec struct {
 	// path: the checkout around Dir, a composed home outside it. The runner adds the
 	// run directory, read-only. Without a Wall they mean nothing.
 	Mounts []wall.Mount
+	// RunnerFiles are the absolute paths of the caller's files that are the runner's
+	// own, such as the directory of qory's runner file with the access key secret. A
+	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
+	// them, or one of the paths the runner knows itself, mount_contains_runner_files:
+	// see [Overlap].
+	RunnerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
 	// among them by name. A selected credential, like a path rule, needs a Wall: the
 	// proxy then terminates TLS for the hosts concerned, with an authority made for the
@@ -221,8 +227,8 @@ type Discovery struct {
 // the node's live instances are at its limit, and run_closed when the server closes
 // the run before it starts. The runner's own refusals are Refusals too, with the names
 // they concern and never a value: run_configuration_invalid, variable_reserved,
-// placeholder_conflict, tool_unknown and image_unknown among them. errors.As finds one
-// in what [Run] returns.
+// placeholder_conflict, tool_unknown, image_unknown and mount_contains_runner_files
+// among them. errors.As finds one in what [Run] returns.
 type Refusal = accesskey.Refusal
 
 // The environment variables the session gets from the runner. EnvHarnessHome is set
@@ -290,6 +296,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
+		return nil, err
+	}
+	// A mount that holds one of the runner's files is no run, before the server is
+	// contacted and before anything starts.
+	if err := checkMounts(spec); err != nil {
 		return nil, err
 	}
 	// The server, when the run has one: discovered before anything else. The run
@@ -582,6 +593,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path()}, own),
 	}
 	if enclosure != nil {
+		// The mounts again, as the enclosure is about to show them: a link swapped in
+		// since the start's check leads where it leads now.
+		if err := checkMounts(spec); err != nil {
+			return fail(err)
+		}
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, own, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
