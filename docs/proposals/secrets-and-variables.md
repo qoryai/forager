@@ -114,10 +114,12 @@ Fixtures on main the fixtures, and Sources the sources.
 
 **Variables**
 
-- A run configuration's `variables` reach the agent's process, resolved by the server; the
-  node adds only names whose server value the run does not apply; a short built-in deny
-  list, the runtime's `denies` and the node's `variables.deny` apply; an unwalled run
-  receives them only with `variables.unwalled: accept` (Decision 1).
+- A run configuration's `variables` reach the agent's process, resolved by the server.
+  For each name the highest source wins: the run's fixed names, the server's, `--env`,
+  `wall.env`, the harness's written defaults, the inherited shell. A short built-in deny
+  list, the runtime's `denies` and the node's `variables.deny` apply to every source
+  below the fixed names; an unwalled run receives the server's only with
+  `variables.unwalled: accept` (Decision 1).
 - The node's policy and proxy settings only narrow the server's, and a fetched policy and
   `--policy` combine by narrowing (Decision 9).
 
@@ -336,7 +338,7 @@ Each line names a passage of the README on main and what it becomes.
   `variables`, and the variant with `withheld`.
 - `fixtures/signed/*`, rebuilt in the new form (The access key and signed requests).
 - `fixtures/sealed/`, the sealed fixture of Decision 5.
-- `fixtures/invalid/` for what the schemas refuse: `run-configuration-variable-not-string`,
+- `fixtures/invalid/` for what the schemas refuse: `run-configuration-variable-value-not-string`,
   `run-configuration-connection-bad-id`, `secrets-request-unknown-member`,
   `enrolment-code-lower-case`, `enrolment-answer-no-node-id`, `event-egress-credential`
   and `event-policy-applied-credentials`.
@@ -397,17 +399,19 @@ Each line names a passage of the README on main and what it becomes.
   baseline, or a repository of the workspace that has rules, connections or variables of
   its own. The run's labels select the holder within the access key's workspace, and the
   server keeps every rendering of a holder with its digest (Decision 6).
-- **Where connections come from.** A run configuration's `connections`, when the member
-  is present, even as an empty array, is the server's whole set. When the run
-  configuration has no `connections` member, or the run has no run configuration (no
-  server, `--local`, or a server that offers none), the runner file's `connections:`
-  apply, as the node's policy applies without `security_policy`; `qory` parses them
-  and passes them through `session.Spec`. Machine values stay within their `hosts`
-  either way.
+- **Where connections come from.** Connections follow the order of the variables, by
+  kind and name. A run configuration's `connections` apply per kind and name, and the
+  runner file's `connections:` fill every kind and name the server does not set; with
+  no run configuration (no server, `--local`, or a server that offers none) they are
+  all the run's. A runner file connection whose hosts overlap a server connection's is
+  left out and shown: the server's wins, and the run starts. The record lists the
+  connections in the shape of the variables, `{kind, name, from, lost}`. `qory` parses
+  the runner file's and passes them through `session.Spec`. Machine values stay within
+  their `hosts` either way.
 
 ## Decisions
 
-### 1. Variables: the server leads, denied and reserved names
+### 1. Variables: the highest source wins, denied and reserved names
 
 **Variables reach the agent's process alone.** The runner adds them to the launch's
 environment, and tools, integrations, the relay, the agent's Docker daemon and the wall's
@@ -415,40 +419,50 @@ environment, and tools, integrations, the relay, the agent's Docker daemon and t
 with the system `PATH`, the proxy variables and the bundle only, as main does since
 057ce43.
 
-**The server leads.** On a node connected to a server, the server's variables are the
-run's. The server resolves them among its own levels, where the more specific level
+**The highest source wins.** For each name the run takes the value of the highest source
+that sets it:
+
+| Source, highest first | What it is |
+|---|---|
+| `fixed` | the runner's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's; the names the wall sets; the runtime's `Prepare`; the placeholders; and the values the harness computes itself |
+| `apiary` | the server's: the run configuration's `variables` |
+| `run` | the run's own variables, `qory`'s `--env` |
+| `machine` | the machine's variables, `wall.env` in `runner.yaml` |
+| `harness` | the harness's written defaults, `qory.yaml`'s `env:` among them |
+| `shell` | the environment the run inherits |
+
+The server resolves its variables among its own levels, where the more specific level
 wins, the repository over the workspace over the organisation (in the commercial
 editions), and a broader level may lock a name against the levels below it. It sends
-the resolved values alone: a name and a value each. The node adds only names: its own
-variables, from `wall.env` in `runner.yaml` and `qory`'s `--env`, apply for every name
-whose server value the run does not apply. A node value for a name whose server value
-the run applies, a name in `names`, is left out and reported in `policy_applied`'s
-`variables.node_ignored`, and the run starts. A server value the deny list leaves out,
-or one an unwalled run leaves out under `ignore`, leaves the node's own value in place,
-as without a server. Names are compared exactly between the node and the server; the
-deny list matches regardless of case. The reason, plainly: a node, for example through
-an agent that writes `runner.yaml`, is easier to compromise than the server. Without a
-server, the node's own variables are the run's.
+the resolved values alone: a name and a value each. So the server's value of a name wins
+over the node's whenever the run applies it, and a node source applies to the names the
+server leaves alone and to a name whose server value is left out. The reason,
+plainly: a node, for example through an agent that writes `runner.yaml`, is easier to
+compromise than the server. Among the fixed names, the runner's, the wall's, the
+preparation's and the placeholders win over the harness's computed values. Names are
+compared exactly between sources; the deny list matches regardless of case. A value that
+loses is left out and recorded with its source and the reason, and the run starts; the
+contract README's §Variables defines the record. The runner reads each source from its
+own `session.Spec` field (Issues, item 2), and `Spec.OnVariables` receives the record
+once, before the agent starts, so `qory` prints a line for an `--env` value that lost.
 
-- The runtime's `Prepare` and the harness's composed launch set names that are the
-  runner's own, not the node's. Such a name wins over the server's variable, which is
-  left out and reported in `denied`, because the runtime needs it. The runner reads
-  these names, and the node's, from a new `session.Spec` field (Issues, item 2).
 - "Machine value" keeps its own sense, a value of `secrets.local`.
 
 **Unwalled runs.** The runner file's `variables.unwalled` decides whether an unwalled run
 receives the server's variables: `ignore`, the default, or `accept`. With `ignore`, an
-unwalled run starts without them; they are left out and reported by name in
-`policy_applied`'s `variables.unwalled`. With `accept`, the deny list below applies, as
-in a walled run. The deny list protects the wall and the runner, not the developer, so
-`accept` gives the server the developer's shell.
+unwalled run starts without them; each is left out and recorded as `unwalled`, and the
+node's sources apply. With `accept`, the deny list below applies, as in a walled run.
+`--env` applies with or without a wall. The deny list protects the wall and the runner,
+not the developer, so `accept` gives the server the developer's shell.
 
-**Denied names.** The runner leaves out of every walled run, and of an unwalled run with
-`accept`, a server variable whose name is on the deny list: the built-in list below, the
-run's runtime's `denies` (Runtimes), and the names the node's owner adds in the runner
-file, `variables.deny: [NAME, PREFIX_*]`. Each built-in entry undermines the wall, the
-proxy or the runner. A denied variable is left out and reported by name, and the run
-starts.
+**Denied names.** The runner leaves out a value of the server, `--env`, `wall.env` or the
+harness's defaults whose name is on the deny list: the built-in list below, the run's
+runtime's `denies` (Runtimes), and the names the node's owner adds in the runner file,
+`variables.deny: [NAME, PREFIX_*]`. The built-in entries apply to the harness's computed
+values too; the runtime's `denies` and `variables.deny` leave those in. The inherited
+shell is matched against no entry. Each built-in entry undermines the wall, the proxy or
+the runner. A denied value is left out and recorded as `denied`, the next source's value
+applies, and the run starts.
 
 - An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character
   other than `*`. It matches a whole name: `*` matches any run of characters, the empty
@@ -475,18 +489,21 @@ starts.
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
 | the run's runtime's `denies` | they move the runtime's model credential or run its commands (Runtimes) |
 
-**Also left out, the same way:** a server variable with the name of a placeholder of this
-run, a declaration's `name` or an integration's, where the placeholder wins; one the
-run's runtime declares or reserves, where the stand-in or an empty value goes; and one a
-`secrets.local` value reads (`env:`), whose machine value stays outside the enclosure.
+**Also left out:** a value of any source below the fixed names for a fixed name, a
+placeholder's included, a declaration's `name` or an integration's, where the fixed value
+wins, recorded as `fixed`; and a server variable the run's runtime declares or reserves,
+where the stand-in or an empty value goes, or one a `secrets.local` value reads (`env:`),
+whose machine value stays outside the enclosure, recorded as `denied`.
 
-**The node's own environment** keeps three refusals, because they keep the node's
-secrets and the stand-ins out of the enclosure. A run whose environment passes a `QORY_`
-variable, or a variable a `secrets.local` value reads, into the enclosure is no run,
-`variable_reserved`. `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets for
-the session, are exempt. One whose environment contains a variable the run's runtime
-declares or reserves is `runtime_secret_conflict` (Runtimes). One that passes a value for
-a placeholder is `placeholder_conflict`.
+**Refusals come first.** Before it resolves anything, the runner checks every value the
+node passes, the inherited shell, the harness's values, `--env` and `wall.env`. Three
+refusals keep the node's secrets and the stand-ins out of the enclosure, and they stop
+the run where any other loss lets it start. A walled run whose environment passes a
+`QORY_` variable, or a variable a `secrets.local` value reads, into the enclosure is no
+run, `variable_reserved`. `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself
+sets for the session, are exempt. One whose environment contains a variable the run's
+runtime declares or reserves is `runtime_secret_conflict` (Runtimes). Any run that passes
+a value for a placeholder is `placeholder_conflict`.
 
 ### 2. Names, value ids and identity
 
@@ -508,10 +525,9 @@ a placeholder is `placeholder_conflict`.
   included.
 - **One value, sealed once.** A value that two connections reference is sealed once and
   set wherever the connections route it.
-- **Empty lists.** An empty `connections` is the server's whole set, no connection, and
-  keeps the runner file's out; a server that leaves the machine's connections in force
-  omits the member. A server omits an empty `variables`; a runner reads an empty one as
-  absent.
+- **Empty lists.** An empty `connections` sets no kind and name, as an absent one does,
+  so the runner file's connections fill every kind and name. A server omits an empty
+  `connections` and an empty `variables`; a runner reads an empty one as absent.
 
 ### 3. Expiry, clock skew, reload
 
@@ -1321,15 +1337,16 @@ it is.
 | `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does, as on main: under `enforce` it is denied; under `observe`, both sides observing, it passes and is recorded with the rule of the side it missed |
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
-| `variables` | the server's; the node adds only names whose server value the run does not apply (Decision 1) |
-| `connections` | the server's, when present, are the whole set; the node's bounds narrow them: `secrets.local`'s `hosts` (Decision 7) and `integrations:`'s `arguments` and `settings` (Integrations) |
+| `variables` | the server's, over every source of the node's but the fixed names; the node's apply to the names the server leaves alone (Decision 1) |
+| `connections` | the server's, per kind and name; the runner file's fill every kind and name the server does not set, and one whose hosts overlap a server connection's is left out and shown; the node's bounds narrow the server's: `secrets.local`'s `hosts` (Decision 7) and `integrations:`'s `arguments` and `settings` (Integrations) |
 | an integration's `ways` | the server's choice, within the node's `integrations:` `ways` bound when it has one, else `integration_way_not_allowed`; an absent bound leaves the server's choice as it is (Integrations) |
 | a wall | a server that lists `secrets` requires one, and so does the `stored-secrets` marker for every run; the node keeps that requirement (Decision 4) |
 
 - **Fields that select one thing.** `image` selects one thing, so its narrowing is
   agreement: two different selections are no run rather than a choice. `connections` and
-  `variables` are the server's data, which the node bounds rather than intersects. The
-  labels come from outside the agent's reach and only select.
+  `variables` are the server's data, which win name by name over the node's and which
+  the node bounds rather than intersects: the node's own fill only what the server
+  leaves unset. The labels come from outside the agent's reach and only select.
 - **Reloads.** The node's policy is fixed for the run. A reload replaces the server's
   side, and the run applies the new `security_policy` narrowed by the same node policy;
   the reload rules of main hold for the result.
@@ -1418,9 +1435,11 @@ secrets:
   connection whose placeholder is a variable the run's runtime declares or reserves is
   refused, `placeholder_conflict`: only the runtime connection sets those.
 - **Conflicts.** A walled run is refused when its environment, `Spec.Env` with
-  `wall.env`, `--env` and the harness's launch, contains a variable the run's runtime
-  declares or reserves: `runtime_secret_conflict`. A server variable with such a name is
-  left out and reported (Decision 1). For Claude Code these
+  `wall.env`, `--env` and the harness's computed values and defaults, contains a
+  variable the run's runtime declares or reserves: `runtime_secret_conflict`. The
+  refusal lists where each such value came from with the record's source names,
+  `fixed`, `harness`, `machine`, `run` and `shell`, so its origins are the record's.
+  A server variable with such a name is left out and reported (Decision 1). For Claude Code these
   are `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Claude
   Code reads `ANTHROPIC_AUTH_TOKEN` before `ANTHROPIC_API_KEY` before
   `CLAUDE_CODE_OAUTH_TOKEN`, so a stray value for another alternative would win over the
@@ -1823,8 +1842,9 @@ policy the command passes, else observe everything: `dev.qory.run.policy_applied
 `source` `config` or `none` with `url` and `run_configuration`, a reload that brings a
 `security_policy` puts it in force, narrowed by the node's, and one that drops it puts
 the node's back. With `security_policy`, the policy the command passes narrows it
-(Decision 9). Without `connections` the runner file's connections apply;
-a present `connections`, even `[]`, is the whole set. The request is the labels, and
+(Decision 9). `connections` apply per kind and name, and the runner file's connections
+fill every kind and name they do not set; a runner file connection whose hosts overlap
+one of them is left out and shown. The request is the labels, and
 nothing else, as the query; labels the contract refuses are `400` `invalid_request` here
 and on the secrets request alike, decided by one resolver.
 
@@ -1841,11 +1861,9 @@ every answer that carries them, the GET's and the events endpoint's alike,
 therefore reloads once whenever its own variant or its own discovery document changes. The
 variant without stored values lists what it left out in the optional member `withheld`, by
 `id`, `kind` and `name`, and omits `withheld` when it left nothing out, so a holder
-without stored-value connections has one rendering, and one digest, for both variants. It
-keeps `connections`, even `[]`, whenever the full rendering has it, since an absent member
-would put the runner file's connections in force. The runner reports them in
-`policy_applied` as `connections_withheld`, and they raise no `connection_needs_wall` or
-`secrets_endpoint_missing`. When leaving them out leaves a required group of the run's
+without stored-value connections has one rendering, and one digest, for both variants. The
+runner reports them in `policy_applied` as `connections_withheld`, and they raise no
+`connection_needs_wall` or `secrets_endpoint_missing`. When leaving them out leaves a required group of the run's
 runtime unmet, `runtime_secret_missing` applies as usual.
 
 ```json
@@ -1865,10 +1883,12 @@ runtime unmet, `runtime_secret_missing` applies as usual.
     "auth": {"scheme": "bearer", "secret": "auth"},
     "declares": [{"id": "auth", "title": "Sentry auth", "name": "SENTRY_AUTH"}],
     "secrets": {"auth": {"source": "external", "name": "SENTRY_AUTH"}}}],
- "variables": {"NODE_ENV": "test", "APP_REGION": "eu-west-1"}}
+ "variables": {"NODE_ENV": {"value": "test"}, "APP_REGION": {"value": "eu-west-1"}}}
 ```
 
-`connections` is in the server's order, which the record repeats. Schema sketch:
+`connections` is in the server's order, which the record repeats. Each variable is an
+object with its `value`; a later attribute beside it is one a runner may ignore, and an
+attribute a runner must honour needs a new revision. Schema sketch:
 
 ```json
 "connections": {"type": "array", "maxItems": 32, "items": {"oneOf": [
@@ -1880,7 +1900,8 @@ runtime unmet, `runtime_secret_missing` applies as usual.
                  "name": {"type": "string", "minLength": 1, "maxLength": 128}}}},
 "variables": {"type": "object", "maxProperties": 128,
   "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-  "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"}},
+  "additionalProperties": {"type": "object", "additionalProperties": true, "required": ["value"],
+    "properties": {"value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"}}}},
 "$defs": {
   "id": {"type": "string", "pattern": "^con_[0-9a-hjkmnp-tv-z]{16}$"},
   "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
@@ -1988,8 +2009,8 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `headers.json`;
 - `configuration.schema.json`, discovery's document, with `node_id` and
   `apiary_public_key` required and `secrets` optional;
-- `run-configuration.schema.json`, with the optional `withheld` and `variables` of string
-  values, and `policy.schema.json`, both without `credentials`;
+- `run-configuration.schema.json`, with the optional `withheld` and `variables`, each an
+  object with its string `value`, and `policy.schema.json`, both without `credentials`;
 - `auth.schema.json`;
 - `secrets-request.schema.json`, the secrets request's body;
   `secrets-answer.schema.json`, its answer, the envelope; `sealed-plaintext.schema.json`,
@@ -2577,23 +2598,19 @@ public roots only is among them as a connection's host. `dev.qory.run.egress` ha
 gets a `403`. The heartbeat schema's "a receiver that misses two in a row may consider the
 run lost" reads "a run is live from its accepted ping until its final event, or until no
 accepted event has arrived for 3 × `interval_seconds`", as Decision 4 defines. A top-level
-`variables` reports the variables by name:
+`variables` lists the variables by name, never a value: each name, the source whose value
+the run applies, and the values that lost, the highest source first, each with its source
+and why (Decision 1):
 
 ```json
-"variables": {"names": ["APP_REGION", "NODE_ENV"],
-              "denied": ["ANTHROPIC_BASE_URL"],
-              "unwalled": [],
-              "node_ignored": ["NODE_ENV"]}
+"variables": [{"name": "LOG_LEVEL", "from": "apiary",
+               "lost": [{"from": "run", "why": "overridden"}]},
+              {"name": "PATH", "lost": [{"from": "machine", "why": "denied"}]}]
 ```
 
-Each server variable appears in exactly one of `names`, `denied` and `unwalled`.
-`names` lists the variables the run applies, the server's and the names the node adds;
-`denied` the server's variables left out: a denied name, a reserved name, a placeholder's
-name, one a `secrets.local` value reads, or one the runtime's `Prepare` or the harness
-sets; `unwalled` the server's variables an unwalled run left out because
-`variables.unwalled` is `ignore`, which then holds every one of them; `node_ignored` the
-node's variables left out because the run applies the server's value for the same name,
-a name in `names` (Decision 1). Each list is sorted and may be empty. `node_policy`,
+The sources are `fixed`, `apiary`, `run`, `machine`, `harness` and `shell`; the reasons
+`overridden`, `denied`, `fixed` and `unwalled`. Both are open lists, and the contract
+README's §Variables defines which names the record lists. `node_policy`,
 present when the run has both a fetched policy and a node policy (Decision 9), contains
 its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785 serialisation of
 the node's policy document, the `policy.schema.json` document the command passes, for
@@ -2601,18 +2618,21 @@ the node's policy document, the `policy.schema.json` document the command passes
 when it has any. Schema sketch:
 
 ```json
-"variables": {"type": "object", "additionalProperties": false,
-  "required": ["names", "denied", "unwalled", "node_ignored"],
-  "properties": {"names": {"$ref": "#/$defs/names"}, "denied": {"$ref": "#/$defs/names"},
-                 "unwalled": {"$ref": "#/$defs/names"},
-                 "node_ignored": {"$ref": "#/$defs/names"}}},
+"variables": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+  "required": ["name", "lost"],
+  "properties": {"name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+                 "from": {"$ref": "#/$defs/word"},
+                 "lost": {"type": "array", "items": {"type": "object",
+                   "additionalProperties": false, "required": ["from", "why"],
+                   "properties": {"from": {"$ref": "#/$defs/word"},
+                                  "why": {"$ref": "#/$defs/word"}}}}}}},
 "node_policy": {"type": "object", "additionalProperties": false, "required": ["digest"],
   "properties": {"digest": {"type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
                  "paths": {"type": "object",
                            "additionalProperties": {"type": "array", "items": {"type": "string"}}}}}
 ```
 
-`names` in `$defs` is a sorted array of unique variable names. A
+`word` in `$defs` is `^[a-z][a-z_]{0,31}$`. A
 top-level `connections_withheld` lists, by `id`, `kind` and `name`, the connections the
 server left out of the variant for an access key without stored secrets (The run
 configuration), and is empty otherwise. With no
@@ -2678,14 +2698,17 @@ Order at run start; the steps not listed are §Sequence's.
    over every connection's hosts and each credential role's `hosts`; the value rules
    for where each value goes; check each chosen role's document, values inlined, in the
    order Integrations gives; compute `hosts_denied`.
-9. Resolve the variables: in an unwalled run with `variables.unwalled` unset or
-   `ignore`, leave out every server variable; otherwise leave out every denied or
-   reserved name, every placeholder's name, every name a `secrets.local` value reads,
-   and every name the runtime's `Prepare` or the harness sets; add the node's variables
-   for every name whose server value the run does not apply, and leave out the others,
-   `node_ignored`. Then check the environment: `variable_reserved`,
+9. Check, then resolve the variables. First check every value the node passes, the
+   inherited shell, the harness's values, `--env` and `wall.env`: `variable_reserved`,
    `runtime_secret_conflict`, and placeholders the run passes a value for, or whose names
-   the placeholder rule of Integrations refuses, `placeholder_conflict`.
+   the placeholder rule of Integrations refuses, `placeholder_conflict`. Then, name by
+   name, take the highest source: the fixed names, the server's, `--env`, `wall.env`,
+   the harness's defaults, the shell. Leave out every server variable in an unwalled run
+   with `variables.unwalled` unset or `ignore`; a denied name of any source below the
+   fixed names, and a computed harness value the built-in list denies; the server's value
+   of a reserved name or of a name a `secrets.local` value reads; and every value of a
+   fixed name below the fixed names. Record each name with its source and its losses
+   (Decision 1).
 10. Run each integration's `credential` role with its settings document; check its answer.
     An integration that does not start or does not answer is `integration_failed`. The
     answer's `placeholders` are known only now, so the runner applies step 9 to them
@@ -2799,7 +2822,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables, create codes and set an access key's stored-secrets flag | Choosing the host is reading the value |
 | A party that can rewrite the administrator's browser session with the server | — | The session is trusted: such a party can show a false pin, fingerprint or code, and can equally approve keys itself. Comparing fingerprints out of band, such as over another channel with the machine's operator, is the operator's option |
 | Whoever may edit variables | Only owners and administrators; an unwalled run receives no server variable unless the machine sets `variables.unwalled: accept`; the deny list, the runtime's `denies` and the machine's `variables.deny` leave out what would undermine the wall, the proxy or the runner | The deny list protects the wall and the runner, not the developer: with `accept`, the server has the developer's shell |
-| A compromised node, such as through an agent that writes `runner.yaml` | The server leads: the node adds only names whose server value the run does not apply, `node_ignored`; its policy only narrows, and public roots apply to every stored value (Decision 9) | A node can still narrow a run until it fails, and it chooses its own variables for names the server leaves unset |
+| A compromised node, such as through an agent that writes `runner.yaml` | The server leads: its value of a name wins over every source of the node's but the fixed names, and each value that loses is recorded; the node's policy only narrows, and public roots apply to every stored value (Decision 9) | A node can still narrow a run until it fails, and it chooses its own variables for names the server leaves unset |
 | A holder of an access key secret, on the path | Every runner pins the server's key, so it forges no answer and no envelope; routing is bound to the document | It signs requests as that key, under any instance id, and opens what is sealed to it, as the next rows say |
 | An instance claiming another instance's id | Authorisation rests on the access key alone | Anyone who holds the key can claim any instance id; the id serves display, audit, per-instance events and the instance limit, which is fleet sizing, not security. Claiming a live instance's id slips past the limit, and new ids can fill it |
 | A holder of the server's signing secret, on the path | Routing is bound to the document, so real values go only to the hosts the stored rendering lists; it holds no access key secret | It forges documents and seals values of its own choosing to every machine that pins the key, until the server's key is rotated and the pins with it |
@@ -2979,24 +3002,29 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   stored-value connection left out and reports them in `connections_withheld`; a secrets
   request with the other variant's digest is `410` `run_configuration_superseded`; labels
   naming a repository the workspace does not hold get the baseline; a holder whose
-  connections all reference stored values renders `connections: []` and `withheld` for an
+  connections all reference stored values renders `withheld` and no `connections` for an
   access key without the flag; a holder without stored-value connections has one rendering
   and one digest for both variants; and the events endpoint answers an access key
   without stored secrets with its own variant's digest, so no reload follows.
-- **Variables:** an unwalled run receives no server variable with `variables.unwalled`
-  unset or `ignore`, each reported in `variables.unwalled`, and receives them, the deny
-  list applied, with `accept`; each server variable lands in exactly one of `names`,
-  `denied` and `unwalled`; a node variable for a name in `names` is left out and reported
-  in `node_ignored`, and the run starts; a node variable for a name the server leaves
-  unset, denies, or leaves out under `ignore` is applied; `node_env` and `NODE_ENV` are
-  different names between the node and the server, while the deny list matches either
-  case; every entry of the built-in deny list, in upper and lower case,
-  `no_proxy` included, and a name from `variables.deny`, is left out and reported, and the
-  run starts; a name from the runtime's `denies` is left out the same way; a name the
-  runtime's `Prepare` sets wins over the server's variable, which is reported in `denied`;
-  the server refuses to save a `QORY_*` name; a `QORY_` variable or a `secrets.local`
-  source passed into the enclosure from the run's environment is `variable_reserved`, and
-  `QORY_RUN_ID` and `QORY_RUN_SOCKET` pass.
+- **Variables:** every pair of sources that can collide on one name, the fixed names
+  against each, the server against `--env` and the harness, `--env` against `wall.env`,
+  `wall.env` against the harness, the harness against the shell, takes the higher
+  source's value, and the agent's environment contains no value that lost; the record
+  lists each name with `from` and `lost`, and `Spec.OnVariables` receives it once before
+  the agent starts; an unwalled run receives no server variable with
+  `variables.unwalled` unset or `ignore`, each recorded as `unwalled` while `--env`
+  applies, and receives them, the deny list applied, with `accept`; `node_env` and
+  `NODE_ENV` are different names between sources, while the deny list matches either
+  case; every entry of the built-in deny list, in upper and lower case, `no_proxy`
+  included, a name from `variables.deny` and one from the runtime's `denies` is left out
+  of every source below the fixed names and recorded as `denied`, and the run starts;
+  the built-in list leaves out a computed harness value and the other entries leave it
+  in; a name the runtime's `Prepare` sets wins over every other source, recorded as
+  `fixed`; a shell or fixed name is recorded only beside a source between them; the
+  server refuses to save a `QORY_*` name; a `QORY_` variable or a `secrets.local` source
+  passed into the enclosure from any source of the node's, `--env QORY_X` included, is
+  `variable_reserved` before anything is resolved, and `QORY_RUN_ID` and
+  `QORY_RUN_SOCKET` pass.
 - **Public roots:** a proxy test with a host whose certificate chains only to an
   authority the test adds to the machine's trust store: a stored value, and a credential
   an integration minted from one, stays with the proxy, and `dev.qory.run.egress`
@@ -3027,12 +3055,14 @@ What a node's owner sets up and meets in 0.7.0:
   `secrets.providers`, `secrets.local`, `variables.deny`, `variables.unwalled` and
   `instance.name`.
 - A run configuration may contain `connections` and `variables`, and may omit
-  `security_policy`. The server resolves its variables; the node adds only names whose
-  server value the run does not apply, and a node value for a name whose server value
-  applies is left out and reported. A denied server value is left out. An unwalled run
+  `security_policy`. The server resolves its variables, and its value of a name wins over
+  `--env`, `wall.env`, the harness's defaults and the shell; a node value that loses is
+  left out and recorded, and `qory` prints a line for an `--env` value. The deny list
+  leaves out a denied value of any of them but the shell. An unwalled run
   receives the server's variables only with `variables.unwalled: accept`, which gives the
   server the developer's shell and suits only a server its owner trusts as fully as their
-  own shell. `dev.qory.run.policy_applied` reports each by name.
+  own shell. `dev.qory.run.policy_applied` records each by name, with its source and what
+  lost.
 - The node's policy only narrows the server's: an allow list intersects, a deny list
   adds, `enforce` wins, and `--policy` narrows a fetched policy too (Decision 9).
 - A node is permanent and runs one instance at a time; a node pool is ephemeral, and its

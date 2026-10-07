@@ -79,7 +79,7 @@ func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, map[st
 	if err != nil {
 		return nil, nil, fmt.Errorf("run configuration %s: %w", runURL, err)
 	}
-	return pol, rc.Variables, nil
+	return pol, rc.Values(), nil
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it

@@ -121,9 +121,9 @@ wall:
 - `egress` is the policy when the server offers no run configuration, and it narrows
   the server's when the server offers one. See [the policy](policy.md).
 - `server` defines the control plane. See [the server](server.md).
-- `wall.env` is the whole of the node's environment that goes in, by name: the node's
-  own variables. A server's variables come beside them. See
-  [variables](server.md#variables) and [credentials](credentials.md).
+- `wall.env` is the whole of the node's environment that goes in, by name: the
+  machine's variables. A server's value of the same name wins over one, and `--env`
+  does too. See [variables](server.md#variables) and [credentials](credentials.md).
 
 Two flags change one run:
 

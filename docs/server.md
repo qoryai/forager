@@ -64,40 +64,82 @@ policy. The variables stay as they were when the run started.
 
 ## Variables
 
-A run configuration may contain `variables`: names and string values for the agent's
-process. The server leads:
+A run configuration may contain `variables`: for each name, an object with its string
+`value`, such as `{"LOG_LEVEL": {"value": "info"}}`. Several sources may set one name,
+and for each name the run takes the value of the highest that sets it:
 
-- The server's variables are the run's.
-- The node's own variables, `Spec.Variables.Own`, add names. A node variable for a name
-  the server sets is left out, and the record lists it as `node_ignored`.
-- A name on the deny list is left out, and listed as `denied`. The list is the
-  contract's [`denied-variables.json`](../contracts/runner/v1/denied-variables.json),
-  the runtime's `denies`, and `Spec.Variables.Deny`. It holds the runner's own names,
-  the proxy's, the trust store's, Docker's and `PATH`.
-- A name the runner, the runtime or the harness, `Spec.LaunchEnv`, sets itself is left
-  out the same way, as is one the runtime reads its credential from.
+| Source, highest first | What it is | In the spec |
+| --- | --- | --- |
+| `fixed` | the runner's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
+| `apiary` | the server's run configuration, resolved by the server | |
+| `run` | the run's own, `qory run --env` | `Variables.Run` |
+| `machine` | the machine's, `wall.env` | `Variables.Machine` |
+| `harness` | the harness's written defaults | `LaunchDefaults` |
+| `shell` | what the run inherits | `Env` |
+
+- The server's value of a name wins over the node's whenever the run applies it: the
+  node's sources apply to the names the server leaves alone, and to a name whose
+  server value is left out.
+- The deny list leaves out a value of the server, the run, the machine or the harness's
+  defaults. The list is the contract's
+  [`denied-variables.json`](../contracts/runner/v1/denied-variables.json), the runtime's
+  `denies`, and `Spec.Variables.Deny`. It holds the runner's own names, the proxy's, the
+  trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
+  computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
+- A value of a fixed name from any other source is left out.
+- The server's value of a variable the runtime declares or reserves, or one a
+  credential is read from, is left out. A node's value of a declared one reaches the
+  runtime.
 - A run without a wall takes none of the server's variables, unless
-  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The record lists them as
-  `unwalled`.
+  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The run's own variables apply
+  with or without a wall.
+- A value that loses is left out, and the run starts.
 
 ```go
-spec.Env = os.Environ()                        // what the run inherits
+spec.Env = os.Environ()                                      // what the run inherits
+spec.LaunchFixed = []string{"CODEX_HOME=/home/agent/.codex"} // what the harness computes itself
+spec.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs"}     // what its author wrote as defaults
+spec.HarnessHome = "/home/agent/.qory/harness"               // QORY_HARNESS_HOME
 spec.Variables = session.Variables{
-	Own:      []string{"LOG_LEVEL=debug"},      // the node's own; the server's win
+	Run:      []string{"LOG_LEVEL=debug"},          // --env; the server's win
+	Machine:  []string{"BUILD_NUMBER=42"},          // wall.env
 	Deny:     []string{"LEGACY_SETTING", "ACME_*"}, // names and patterns, in any case
-	Unwalled: session.UnwalledIgnore,          // or UnwalledAccept
+	Unwalled: session.UnwalledIgnore,               // or UnwalledAccept
+}
+spec.OnVariables = func(applied session.Applied) { // once, before the agent starts
+	for _, v := range applied {
+		for _, l := range v.Lost {
+			if l.From == session.FromRun {
+				fmt.Printf("--env %s is not applied: %s\n", v.Name, l.Why)
+			}
+		}
+	}
 }
 ```
 
-Behind a wall, the run refuses to pass in what stays outside:
+`LaunchFixed` is the values the harness computes itself, and `LaunchDefaults` the values
+its author wrote as defaults; the runner applies each as its source. `HarnessHome` is an absolute path, and the runner sets `QORY_HARNESS_HOME` to it
+as one of its own names; a path that is not absolute, or that holds a NUL, a carriage
+return or a line feed, is an error before anything starts.
 
-| The run passes                                   | The refusal               |
-| ------------------------------------------------ | ------------------------- |
-| a `QORY_` variable, or one a credential is read from | `variable_reserved`   |
-| a value for a placeholder                        | `placeholder_conflict`    |
+Before it resolves anything, the runner refuses to pass in what stays outside. It
+checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
+`Variables.Run` and `Variables.Machine`.
 
-The record lists every variable by name, never a value. `Spec.Env` is what the run
-inherits, and the runner checks it, `Spec.LaunchEnv` and `Spec.Variables.Own` alike.
+| The run passes | In | The refusal |
+| --- | --- | --- |
+| a `QORY_` variable, or one a credential is read from | a walled run | `variable_reserved` |
+| a value for a placeholder | any run | `placeholder_conflict` |
+
+`QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
+`QORY_` value of the server, the run, the machine or the harness is denied instead.
+
+The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
+`variables` contains each name, `from`, the source that applies, and `lost`, each value
+that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A
+fixed name, and a name the run inherits, is listed only beside a value of the server,
+the run, the machine or the harness's defaults. `Spec.OnVariables` receives the same
+list, as `session.Applied`.
 
 ## A control plane
 
