@@ -211,8 +211,8 @@ func runnerFiles(spec Spec) []runnerFile {
 			out = append(out, runnerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
 		}
 	}
-	// The files a run's secrets and variables are read from, the file: paths of
-	// secrets.local and an integration's _file settings, join this list.
+	// Later, the files a run's secrets and variables are read from (the file: paths of
+	// secrets.local and an integration's _file settings) join this list.
 	return out
 }
 
