@@ -969,10 +969,10 @@ same list in the same order as a `201` at that moment, and the machine verifies 
 exactly as the `201`; a refusal sent unsigned lists no key, and the machine acts on none
 by its status, an unsigned `409` being `answer_unsigned`. In place of a code, an owner
 or administrator may paste a public key the machine printed into an existing node or
-node pool, where it is active at once. The server checks every public key it is given: a
-canonical encoding, a point on the curve, not of small order, of prime order, and y ≠ 1;
-`fixtures/known-answers/small-order.json` lists keys it refuses. The known answers are
-`fixtures/enrolment/` and the enrolment lines of `signatures.json`.
+node pool, where it is active at once. The server checks every public key it is given:
+a canonical encoding, a point on the curve, not of small order, of prime order, and
+y ≠ 1; `fixtures/known-answers/small-order.json` lists keys it refuses. The known
+answers are `fixtures/enrolment/` and the enrolment lines of `signatures.json`.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per

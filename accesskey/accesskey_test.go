@@ -523,7 +523,8 @@ func TestADegenerateProofUnderASmallOrderKeyFails(t *testing.T) {
 		Proof:     base64.RawURLEncoding.EncodeToString(sig),
 	}
 	if !ed25519.Verify(identity, r.ProofMessage(), sig) {
-		t.Fatal("plain Ed25519 verification refuses the degenerate proof; the test proves nothing")
+		t.Fatal("plain Ed25519 verification refuses the degenerate proof, " +
+			"so the test proves nothing")
 	}
 	if r.VerifyProof() {
 		t.Error("a degenerate proof under the identity point verifies")
@@ -545,8 +546,8 @@ func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := []byte(`{"error":"key_invalid","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
-	// A server that signed a refusal to an enrolment whose proof is a node's request
-	// signature, the published GET of discovery's here.
+	// The server signs a refusal to an enrolment whose proof is a node's request
+	// signature. The published signature of the GET of discovery serves as that proof.
 	nodeRequest := vectors(t).Requests[0].Signature
 	enrolment := accesskey.Answer{Enrolment: true, Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}
 	if pin.VerifyAnswer(accesskey.Answer{Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}, signer.SignAnswer(enrolment)) {

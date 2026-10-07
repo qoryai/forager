@@ -795,9 +795,11 @@ runs with it.**
 - **One public key, one access key.** A public key serves one access key, ever. The
   server keeps a global unique index over every access key's public key and every
   tombstone, checks it at enrolment and paste, and keeps it beyond the deletion of a
-  workspace. A key already in the index is `409` `key_invalid`, the same answer as an
-  invalid key, so a refusal reveals nothing about other access keys. An enrolment retry
-  is exempt for its own row.
+  workspace. A key already in the index is `409` `key_invalid`. At paste it is the same
+  answer as an invalid key. At enrolment an invalid key or a proof that does not verify
+  gets an unsigned `409` and a key in the index a signed one, and only the holder of a
+  key's secret makes a proof that reaches the index check. Either way, a refusal reveals
+  nothing about other access keys. An enrolment retry is exempt for its own row.
 - **What the server checks.** At enrolment it checks the key first, then verifies the
   proof of possession under it, and only then looks the key up in the index, so it
   reveals a key's status only to whoever holds its private key. It checks every public
