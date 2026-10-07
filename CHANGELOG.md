@@ -39,8 +39,8 @@ release may change what an existing document does, and says so under Upgrading.
   certificate, so the test binary's first verification must come within `Run`; from
   then on, for the rest of the process, it trusts only the suite's authority.
   `TestDockerConforms` starts the recorders from `busybox:stable`.
-- `session.Spec.Env` is what the run inherits. What the harness computes itself goes in
-  `LaunchFixed`, what its author wrote in `LaunchDefaults`, the run's own variables,
+- `session.Spec.Env` is what the run inherits. The values the harness computes itself go in
+  `LaunchFixed`, the values its author wrote as defaults in `LaunchDefaults`, the run's own variables,
   `--env`, in `Variables.Run`, and the machine's, `wall.env`, in `Variables.Machine`, so
   the runner tells each source apart and applies the highest that sets a name.
   `HarnessHome` is the harness's home as the agent sees it, an absolute path, and the

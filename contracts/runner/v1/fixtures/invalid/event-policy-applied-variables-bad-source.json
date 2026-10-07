@@ -12,7 +12,7 @@
     "allow": [],
     "source": "none",
     "variables": [
-      {"name": "NODE_ENV", "from": "Apiary", "lost": [{"from": "run", "why": "overridden"}]}
+      {"name": "NODE_ENV", "from": "Run", "lost": [{"from": "machine", "why": "overridden"}]}
     ]
   }
 }

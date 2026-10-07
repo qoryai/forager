@@ -12,7 +12,7 @@
     "allow": [],
     "source": "none",
     "variables": [
-      {"name": "NODE_ENV", "from": "apiary", "value": "test", "lost": []}
+      {"name": "NODE_ENV", "from": "run", "value": "test", "lost": []}
     ]
   }
 }

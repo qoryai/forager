@@ -82,14 +82,13 @@ runs the same checks on it.
   narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The variables come from several sources, and for each name the highest wins. See
   [variables](server.md#variables).
-  - `LaunchFixed` is the values qory computes itself: the runtime's built-in template
-    entries and its modules' env exports. They win over every source but the runner's
-    own names. The server's variables come next.
+  - `LaunchFixed` is the values the harness computes itself. They win over every source
+    but the runner's own names. The server's variables come next.
   - `Variables.Run` is the run's own, `--env`, and `Variables.Machine` the machine's,
     `wall.env`. `Variables` also holds the deny entries and how an unwalled run takes
     the server's.
-  - `LaunchDefaults` is the harness's written defaults, a value with `${dir}` in it
-    included, and `Env` what the run inherits, the lowest.
+  - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
+    what the run inherits, the lowest.
   - `HarnessHome` is the harness's home as the agent sees it. The runner sets
     `QORY_HARNESS_HOME` to it.
   - `OnVariables` receives each name, its source and the values that lost, once, before

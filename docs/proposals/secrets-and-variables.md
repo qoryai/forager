@@ -434,8 +434,9 @@ that sets it:
 The server resolves its variables among its own levels, where the more specific level
 wins, the repository over the workspace over the organisation (in the commercial
 editions), and a broader level may lock a name against the levels below it. It sends
-the resolved values alone: a name and a value each. So the server controls every name
-it sets, and a node source applies to the names the server leaves alone. The reason,
+the resolved values alone: a name and a value each. So the server's value of a name wins
+over the node's whenever the run applies it, and a node source applies to the names the
+server leaves alone and to a name whose server value is left out. The reason,
 plainly: a node, for example through an agent that writes `runner.yaml`, is easier to
 compromise than the server. Among the fixed names, the runner's, the wall's, the
 preparation's and the placeholders win over the harness's computed values. Names are
@@ -1434,9 +1435,11 @@ secrets:
   connection whose placeholder is a variable the run's runtime declares or reserves is
   refused, `placeholder_conflict`: only the runtime connection sets those.
 - **Conflicts.** A walled run is refused when its environment, `Spec.Env` with
-  `wall.env`, `--env` and the harness's launch, contains a variable the run's runtime
-  declares or reserves: `runtime_secret_conflict`. A server variable with such a name is
-  left out and reported (Decision 1). For Claude Code these
+  `wall.env`, `--env` and the harness's computed values and defaults, contains a
+  variable the run's runtime declares or reserves: `runtime_secret_conflict`. The
+  refusal lists where each such value came from with the record's source names,
+  `fixed`, `harness`, `machine`, `run` and `shell`, so its origins are the record's.
+  A server variable with such a name is left out and reported (Decision 1). For Claude Code these
   are `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`. Claude
   Code reads `ANTHROPIC_AUTH_TOKEN` before `ANTHROPIC_API_KEY` before
   `CLAUDE_CODE_OAUTH_TOKEN`, so a stray value for another alternative would win over the
@@ -2006,8 +2009,8 @@ All under `contracts/runner/v1`, so one pin covers them:
 - `headers.json`;
 - `configuration.schema.json`, discovery's document, with `node_id` and
   `apiary_public_key` required and `secrets` optional;
-- `run-configuration.schema.json`, with the optional `withheld` and `variables` of string
-  values, and `policy.schema.json`, both without `credentials`;
+- `run-configuration.schema.json`, with the optional `withheld` and `variables`, each an
+  object with its string `value`, and `policy.schema.json`, both without `credentials`;
 - `auth.schema.json`;
 - `secrets-request.schema.json`, the secrets request's body;
   `secrets-answer.schema.json`, its answer, the envelope; `sealed-plaintext.schema.json`,
@@ -2999,7 +3002,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   stored-value connection left out and reports them in `connections_withheld`; a secrets
   request with the other variant's digest is `410` `run_configuration_superseded`; labels
   naming a repository the workspace does not hold get the baseline; a holder whose
-  connections all reference stored values renders `connections: []` and `withheld` for an
+  connections all reference stored values renders `withheld` and no `connections` for an
   access key without the flag; a holder without stored-value connections has one rendering
   and one digest for both variants; and the events endpoint answers an access key
   without stored secrets with its own variant's digest, so no reload follows.

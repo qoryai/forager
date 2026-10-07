@@ -16,7 +16,7 @@
       "$ref": "policy.schema.json"
     },
     "variables": {
-      "description": "The variables the agent's process receives, by name, as the server resolved them among its own levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. The runner leaves out a name its deny list matches, a name it, the wall, the runtime or the harness sets itself, and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
+      "description": "The variables the agent's process receives, by name, as the server resolved them among its own levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. The runner leaves out a name its deny list matches; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
       "type": "object",
       "maxProperties": 128,
       "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},

@@ -49,16 +49,14 @@ type Spec struct {
 	// and out of every tool's and credential program's environment too.
 	Env []string
 	Dir string
-	// LaunchFixed is the values the harness computes itself, NAME=value: for qory the
-	// runtime's built-in template entries and its modules' env exports. They are fixed
+	// LaunchFixed is the values the harness computes itself, NAME=value. They are fixed
 	// names of the run: they win over every other source of a variable, the built-in
 	// deny list, denied-variables.json, leaves one out, and the runtime's denies and
 	// Variables.Deny do not. The runner's, the wall's and the runtime preparation's
 	// names win over them.
 	LaunchFixed []string
-	// LaunchDefaults is the harness's written defaults, NAME=value: for qory the values
-	// its author wrote in the launch and qory.yaml's env, a value with ${dir} in it
-	// included. They win over Env and lose to every other source.
+	// LaunchDefaults is the values the harness's author wrote as defaults, NAME=value.
+	// They win over Env and lose to every other source.
 	LaunchDefaults []string
 	// Variables are the run's and the machine's variables, and how the run takes the
 	// variables of the server's run configuration.

@@ -77,8 +77,9 @@ and for each name the run takes the value of the highest that sets it:
 | `harness` | the harness's written defaults | `LaunchDefaults` |
 | `shell` | what the run inherits | `Env` |
 
-- The server controls every name it sets: the node's sources apply to the names it
-  leaves alone.
+- The server's value of a name wins over the node's whenever the run applies it: the
+  node's sources apply to the names the server leaves alone, and to a name whose
+  server value is left out.
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/runner/v1/denied-variables.json), the runtime's
@@ -96,8 +97,8 @@ and for each name the run takes the value of the highest that sets it:
 
 ```go
 spec.Env = os.Environ()                                      // what the run inherits
-spec.LaunchFixed = []string{"CODEX_HOME=/home/agent/.codex"} // what qory computes itself
-spec.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs"}     // what the harness's author wrote
+spec.LaunchFixed = []string{"CODEX_HOME=/home/agent/.codex"} // what the harness computes itself
+spec.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs"}     // what its author wrote as defaults
 spec.HarnessHome = "/home/agent/.qory/harness"               // QORY_HARNESS_HOME
 spec.Variables = session.Variables{
 	Run:      []string{"LOG_LEVEL=debug"},          // --env; the server's win
@@ -116,10 +117,8 @@ spec.OnVariables = func(applied session.Applied) { // once, before the agent sta
 }
 ```
 
-`LaunchFixed` is the values qory computes itself: the runtime's built-in template
-entries and its modules' env exports. `LaunchDefaults` is what an author wrote, a value
-with `${dir}` in it included. The runner classifies neither; it applies each as its
-source. `HarnessHome` is an absolute path, and the runner sets `QORY_HARNESS_HOME` to it
+`LaunchFixed` is the values the harness computes itself, and `LaunchDefaults` the values
+its author wrote as defaults; the runner applies each as its source. `HarnessHome` is an absolute path, and the runner sets `QORY_HARNESS_HOME` to it
 as one of its own names; a path that is not absolute, or that holds a NUL, a carriage
 return or a line feed, is an error before anything starts.
 

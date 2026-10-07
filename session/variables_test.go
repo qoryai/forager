@@ -278,8 +278,8 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 // HarnessHome, with or without a wall; without a wall it wins over a value the run
 // inherits, a value of the run's own is denied as any QORY_ name, and the record lists
 // the name, fixed. Behind a wall a value the run passes is variable_reserved
-// (TestWhatARunPassesInIsChecked). A home that is no absolute path, or holds a line feed, is an error before
-// anything starts.
+// (TestWhatARunPassesInIsChecked). A home that is no absolute path, or holds a line
+// feed or a NUL, is an error before anything starts.
 func TestTheHarnessHome(t *testing.T) {
 	for _, walled := range []bool{true, false} {
 		sp := spec(t, nil)

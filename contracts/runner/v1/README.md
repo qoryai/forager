@@ -552,8 +552,10 @@ of the highest source that sets it:
 | `shell` | the environment the run inherits | `Spec.Env` |
 
 The server resolves its variables among its own levels, a lock included, and sends the
-resolved values alone, a name and a value each; the runner reads no level. So the server
-controls every name it sets, and a node source applies to the names it leaves alone.
+resolved values alone, a name and a value each; the runner reads no level. So the
+server's value of a name wins over the node's whenever the run applies it, and a node
+source applies to the names the server leaves alone and to a name whose server value is
+left out.
 Among the fixed names, the runner's, the proxy's, the wall's, the preparation's and the
 placeholders win over the harness's computed values. Names are compared exactly between
 sources; the deny list matches regardless of case. A value that loses is left out, the
@@ -569,8 +571,11 @@ and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behi
 stops the run. A run that passes a value for a placeholder is no run,
 `placeholder_conflict`, with or without a wall. These are the only refusals of the
 variables. `QORY_HARNESS_HOME` is the runner's own when the launch spec has a harness
-home: the runner sets it after the check, and a value a source passes for it is refused
-or denied as any `QORY_` name.
+home, and the runner sets it after the check. Behind a wall, a value any source passes
+for it is `variable_reserved`, as any `QORY_` name is. Without a wall, the deny list
+leaves out a value of the server, the run, the machine or the harness for it, and the
+runner's value wins over the one the run inherits: the record lists that one as
+`shell`, lost as `fixed`, when another source set the name too.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
 or the harness's defaults whose name it matches: the built-in list
