@@ -1359,7 +1359,10 @@ or the workspace, that is, contains or lies inside one of the runner's files: no
 that order. The runner checks before it contacts the server and before anything starts,
 so no event records the refusal. Both paths are resolved through symbolic links, a part
 that does not exist yet through its nearest parent that does, and compared by whole
-components. The runner's files are:
+components. The filesystem judges what exists: two directories are the same when they
+are one file, by device and inode, so a path written in another case on a disk that
+ignores case is the directory it names. A part that does not exist yet is compared by
+name, regardless of case. The runner's files are:
 
 - the paths the caller lists as its own: for `qory`, the runner file's directory, with
   the access key secret;

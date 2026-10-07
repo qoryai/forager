@@ -212,9 +212,11 @@ key secret, has left the wall. The runner's files are:
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
-its nearest parent that does, and compared by whole path components: `/a/bc` does not
-lie inside `/a/b`. The comparison is exact, so on a filesystem that ignores case, as a
-Mac's does by default, a path written in another case is another path.
+its nearest parent that does. The filesystem judges what exists: two directories are
+the same when they are one file, by device and inode. So on a disk that ignores case,
+as a Mac's does by default, `/USERS/USER` is `/Users/user`, and a bind mount is the
+directory it shows. A part that does not exist yet is compared by name, regardless of
+case. The comparison is by whole path components: `/a/bc` does not lie inside `/a/b`.
 `session.Overlap(mount, path)` returns how two paths stand: `is`, `contains`,
 `lies inside`, or empty. A caller uses it to word its own message.
 

@@ -51,12 +51,53 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		{"trailing slashes", p("a") + "/", p("a/b") + "/", "contains"},
 		{"trailing slash on one side", p("a/b") + "/", p("a/b"), "is"},
 		{"unclean", root + "/a/./b/../b", p("a/b"), "is"},
+		{"a tail that does not exist, in another case", p("a/New/X"), p("a/new/x"), "is"},
+		{"a tail in another case, below the mount", p("a/b/New"), p("a/b/new/deeper"), "contains"},
+		{"a tail in another case, above the mount", p("a/b/NEW/deeper"), p("a/b/new"), "lies inside"},
+		{"a tail that differs", p("a/b/new"), p("a/b/newer"), ""},
+		{"a pattern of names that do not exist", p("a/b/x-1"), p("a/b/x-*"), "is"},
+		{"a pattern below the mount", p("a"), p("a/b/x-*"), "contains"},
+		{"a pattern above the mount", p("a/b/x-1/deeper"), p("a/b/x-*"), "lies inside"},
+		{"a name beside the pattern", p("a/b/y-1"), p("a/b/x-*"), ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := session.Overlap(c.mount, c.path); got != c.want {
 				t.Errorf("Overlap(%q, %q) = %q, want %q", c.mount, c.path, got, c.want)
 			}
 		})
+	}
+}
+
+// TestOverlapJudgesTheSameDirectoryByTheFilesystem pins that on a disk that ignores
+// case, a path written in another case is the directory it names, and that an existing
+// directory matching a pattern of the runner's is refused like the pattern.
+func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"Home/User/.config/qory", "tmp/qory-tool-abc"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := func(rel string) string { return filepath.Join(root, rel) }
+	if got := session.Overlap(p("tmp/qory-tool-abc"), p("tmp/qory-tool-*")); got != "is" {
+		t.Errorf("an existing directory the pattern matches: %q", got)
+	}
+	if got := session.Overlap(p("tmp"), p("tmp/qory-tool-*")); got != "contains" {
+		t.Errorf("the pattern's parent: %q", got)
+	}
+	if _, err := os.Stat(p("HOME/USER")); err != nil {
+		t.Skip("the test's volume tells case apart:", err)
+	}
+	for _, c := range []struct{ mount, path, want string }{
+		{p("HOME/USER"), p("Home/User/.config/qory"), "contains"},
+		{p("home/user/.CONFIG/QORY"), p("Home/User/.config/qory"), "is"},
+		{p("Home/User"), p("home/user/.Config/Qory"), "contains"},
+		{p("home/user/.config/qory/labels"), p("Home/User/.config/qory"), "lies inside"},
+		{p("HOME/OTHER"), p("Home/User/.config/qory"), ""},
+	} {
+		if got := session.Overlap(c.mount, c.path); got != c.want {
+			t.Errorf("Overlap(%q, %q) = %q, want %q", c.mount, c.path, got, c.want)
+		}
 	}
 }
 
@@ -121,6 +162,16 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 	r = mountRefusal(t, runErr(sp))
 	if want := []string{filepath.Join(dir, "labels"), dir}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, " lies inside ") {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+	// On a disk that ignores case, the parent written in another case is the parent.
+	if upper := strings.ToUpper(parent); upper != parent {
+		if _, err := os.Stat(upper); err == nil {
+			sp.Mounts = []wall.Mount{{Path: upper}}
+			r = mountRefusal(t, runErr(sp))
+			if want := []string{upper, dir}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, " contains ") {
+				t.Errorf("names %q, detail %q", r.Names, r.Detail)
+			}
+		}
 	}
 	sp.Mounts, sp.Dir = nil, parent
 	r = mountRefusal(t, runErr(sp))

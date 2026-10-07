@@ -244,7 +244,8 @@ release may change what an existing document does, and says so under Upgrading.
   `wall.Docker` lists the directory of the `docker` command, of the helper, and the
   command's configuration directory. The refusal's `Names` are the mount and the
   runner's file, in that order. `session.Overlap` returns how a mount and a path stand,
-  `is`, `contains` or `lies inside`, after symbolic links and by whole components.
+  `is`, `contains` or `lies inside`, after symbolic links and by whole components, with
+  the filesystem judging which directories are the same, case and bind mounts included.
 
 ### Changed
 

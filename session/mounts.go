@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,54 +13,104 @@ import (
 	"github.com/qoryai/runner/wall"
 )
 
-// Overlap says how a mount and a path stand to each other, both resolved through
-// symbolic links, a part that does not exist yet through its nearest parent that does,
-// and compared by whole components: "is" when they are the same, "contains" when the
-// path lies under the mount, "lies inside" when the mount lies under the path, and
-// empty otherwise. /a/bc does not lie inside /a/b. The comparison is exact, byte for
-// byte, also where the filesystem ignores case, as macOS's does by default: /Users/User
-// and /Users/user are two paths to it.
+// Overlap says how a mount and a path stand to each other: "is" when they are the same
+// file, "contains" when the path lies under the mount, "lies inside" when the mount lies
+// under the path, and empty otherwise. Each is resolved through symbolic links, a part
+// that does not exist yet through its nearest parent that does. The filesystem judges
+// what exists: two directories are the same when they are one file, by device and
+// inode, so a path written in another case on a disk that ignores case, a link or a
+// bind mount names what it leads to. A part that does not exist yet is compared by
+// name, regardless of case, and a name with *, ? or [ in it is a pattern of names,
+// as the private directories of the tools' sockets are. The comparison is by whole
+// components: /a/bc does not lie inside /a/b.
 func Overlap(mount, path string) string {
-	m, p := realPath(mount), realPath(path)
-	switch {
-	case m == p:
-		return "is"
-	case under(m, p):
+	m, p := split(mount), split(path)
+	if ok, same := holds(m, p); ok {
+		if same {
+			return "is"
+		}
 		return "contains"
-	case under(p, m):
+	}
+	if ok, same := holds(p, m); ok {
+		if same {
+			return "is"
+		}
 		return "lies inside"
 	}
 	return ""
 }
 
-// realPath is the absolute, clean path p leads to through symbolic links. A part that
-// does not exist is kept as written after the resolved parent that does.
-func realPath(p string) string {
+// splitPath is a path as the filesystem has it: the resolved nearest part that exists,
+// and the names below it that do not exist yet.
+type splitPath struct {
+	exists string
+	tail   []string
+}
+
+// split resolves p, absolute and clean, through symbolic links as far as it exists.
+func split(p string) splitPath {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		return filepath.Clean(p)
+		abs = filepath.Clean(p)
 	}
-	rest := ""
+	var tail []string
 	for dir := abs; ; {
 		if target, err := filepath.EvalSymlinks(dir); err == nil {
-			return filepath.Join(target, rest)
+			return splitPath{target, tail}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return abs
+			return splitPath{dir, tail}
 		}
-		rest = filepath.Join(filepath.Base(dir), rest)
+		tail = append([]string{filepath.Base(dir)}, tail...)
 		dir = parent
 	}
 }
 
-// under reports whether inner lies under outer, both absolute and clean.
-func under(outer, inner string) bool {
-	prefix := outer
-	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-		prefix += string(filepath.Separator)
+// holds reports whether outer is inner or lies above it, and same when it is inner. It
+// walks up inner's existing part, itself included, to the directory that is the same
+// file as outer's existing part; the names below that one, inner's own included, must
+// then begin with outer's names that do not exist yet.
+func holds(outer, inner splitPath) (ok, same bool) {
+	top, err := os.Stat(outer.exists)
+	if err != nil {
+		return false, false
 	}
-	return inner != outer && strings.HasPrefix(inner, prefix)
+	below := inner.tail
+	for dir := inner.exists; ; {
+		if info, err := os.Stat(dir); err == nil && os.SameFile(top, info) {
+			if len(outer.tail) > len(below) {
+				return false, false
+			}
+			for i, name := range outer.tail {
+				if !sameName(name, below[i]) {
+					return false, false
+				}
+			}
+			return true, len(outer.tail) == len(below)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false, false
+		}
+		below = append([]string{filepath.Base(dir)}, below...)
+		dir = parent
+	}
+}
+
+// sameName reports whether two names of a path may name the same file: equal
+// regardless of case, or one a pattern the other matches, regardless of case. Refusing
+// one mount too many is safe; one too few is not.
+func sameName(a, b string) bool {
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	a, b = strings.ToLower(a), strings.ToLower(b)
+	if ok, _ := filepath.Match(a, b); ok {
+		return true
+	}
+	ok, _ := filepath.Match(b, a)
+	return ok
 }
 
 // runnerFile is one of the runner's files, and what it is, for the refusal's Detail.
