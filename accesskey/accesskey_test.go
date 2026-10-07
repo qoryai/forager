@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/edwards25519"
+
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 )
@@ -499,6 +501,35 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 	}
 }
 
+// TestADegenerateProofUnderASmallOrderKeyFails pins that a proof verifies only under a
+// key the checks pass. Under the identity point as the public key, R = [S]B makes a
+// "proof" that plain Ed25519 verification accepts for any message, though no key made
+// it; VerifyProof refuses it, as a server checks the key before it verifies the proof.
+func TestADegenerateProofUnderASmallOrderKeyFails(t *testing.T) {
+	identity := edwards25519.NewIdentityPoint().Bytes()
+	var one [32]byte
+	one[0] = 1
+	s, err := edwards25519.NewScalar().SetCanonicalBytes(one[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := append(new(edwards25519.Point).ScalarBaseMult(s).Bytes(), s.Bytes()...)
+	r := accesskey.EnrolmentRequest{
+		Version:   1,
+		Code:      vectors(t).Enrolment[0].Lines[1],
+		Name:      "build-01",
+		PublicKey: base64.RawURLEncoding.EncodeToString(identity),
+		Timestamp: 1700000000,
+		Proof:     base64.RawURLEncoding.EncodeToString(sig),
+	}
+	if !ed25519.Verify(identity, r.ProofMessage(), sig) {
+		t.Fatal("plain Ed25519 verification refuses the degenerate proof; the test proves nothing")
+	}
+	if r.VerifyProof() {
+		t.Error("a degenerate proof under the identity point verifies")
+	}
+}
+
 // TestEnrolmentAnswersHaveTheirOwnDomain pins the domain line that keeps an enrolment
 // answer apart from every other answer. Anyone holding a live code chooses the proof
 // that is an enrolment answer's third line, so a server's signed 409 key_invalid to a
@@ -514,8 +545,8 @@ func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := []byte(`{"error":"key_invalid","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
-	// The server signs a refusal to an enrolment whose proof is a node's request
-	// signature, as the published GET of discovery is.
+	// A server that signed a refusal to an enrolment whose proof is a node's request
+	// signature, the published GET of discovery's here.
 	nodeRequest := vectors(t).Requests[0].Signature
 	enrolment := accesskey.Answer{Enrolment: true, Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}
 	if pin.VerifyAnswer(accesskey.Answer{Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}, signer.SignAnswer(enrolment)) {
@@ -728,8 +759,14 @@ func TestPostEnrols(t *testing.T) {
 		}
 		b, _ := io.ReadAll(r.Body)
 		var req accesskey.EnrolmentRequest
-		if json.Unmarshal(b, &req) != nil || !req.VerifyProof() {
+		if json.Unmarshal(b, &req) != nil {
 			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// A key the checks refuse or a proof that does not verify under it: unsigned.
+		if !req.VerifyProof() {
+			w.WriteHeader(http.StatusConflict)
+			io.WriteString(w, `{"error":"key_invalid"}`)
 			return
 		}
 		if sign && status != http.StatusUnauthorized {
@@ -769,8 +806,9 @@ func TestPostEnrols(t *testing.T) {
 	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("a signed 409 that lists no key: %v", err)
 	}
-	// The server refuses a proof that does not verify with an unsigned 409
-	// key_invalid, before it signs anything: answer_unsigned, with its status.
+	// The server refuses a key the checks refuse or a proof that does not verify under
+	// it with an unsigned 409 key_invalid, before it signs anything: answer_unsigned,
+	// with its status.
 	sign = false
 	for _, b := range []string{`{"error":"key_invalid"}`, `{"error":"key_invalid",` + keys + `}`} {
 		body = []byte(b)

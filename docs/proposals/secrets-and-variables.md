@@ -798,9 +798,10 @@ runs with it.**
   workspace. A key already in the index is `409` `key_invalid`, the same answer as an
   invalid key, so a refusal reveals nothing about other access keys. An enrolment retry
   is exempt for its own row.
-- **What the server checks.** At enrolment it verifies the proof of possession first, so
-  it reveals a key's status only to whoever holds its private key. Then it checks every
-  public key it is given, the pasted key included:
+- **What the server checks.** At enrolment it checks the key first, then verifies the
+  proof of possession under it, and only then looks the key up in the index, so it
+  reveals a key's status only to whoever holds its private key. It checks every public
+  key it is given, the pasted key included:
   - a canonical encoding: decode, re-encode and compare the bytes, since a lenient
     decoder such as `filippo.io/edwards25519` `SetBytes` accepts non-canonical encodings;
   - a point on the curve;
@@ -2156,10 +2157,11 @@ request is in the body:
    key's, or whose second, when present, is not its next key's; then for a `timestamp`
    outside ±300 seconds. A used code passes this step for a retry with the same public
    key for 15 minutes after its first use;
-5. `409` `key_invalid` for a `proof` that does not verify, unsigned: the server verifies
-   the proof before it signs anything;
+5. `409` `key_invalid`, unsigned, for a key the checks refuse or a `proof` that does not
+   verify under it; the server checks the key before it verifies the proof;
 6. `429` per code;
-7. `409` `key_invalid` for a key the checks refuse or the index holds (Decision 4);
+7. `409` `key_invalid` for a key the index holds, another access key's or a tombstone's
+   (Decision 4);
 8. `409` `key_limit` for a code of an existing node or node pool that already holds two
    keys; the code stays unused, and a retry's own row is exempt;
 9. `201`: the server creates the key row, active at once, with the code's node or node
@@ -2175,23 +2177,24 @@ request is in the body:
 
 `node_id` matches `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, and `node_kind` is `node` for an
 `nd_` id and `pool` for an `np_` id. Steps 1 to 5 go out unsigned; from step 6 on every
-answer is signed as Signed answers describes, under `qory-enrol-answer-ed25519-v1`,
-line 3 being the request's `proof` exactly as sent. The server signs only once the
-proof verifies, so it signs no answer bound to a proof the key in the body did not
-make; and anyone holding a live code chooses the proof, so the enrolment answer's own
-domain line keeps its signature from verifying as the answer to a signed request, whose
-line 3 is that request's signature. A retry still passes steps 5 to 8, so a key since
-revoked is `409`
-`key_invalid`. Otherwise it receives a `201` for the same access key, built afresh: the
-access key's current `stored_secrets` and `apiary_public_key`, signed with
-the retry's own proof as line 3, so a machine whose answer was lost still learns the
-access key's id. On `key_limit`, `qory` keeps the secret and `enrolment-pending`, and
-prints that the node already holds two keys and that the same command, run again within
-the code's 15 minutes, succeeds once an owner or administrator has revoked one. Any other
-use of a used code is `401`. `qory` verifies the answer under the entry of
-`apiary_public_key` whose fingerprint the code carries first, refuses an answer that lists
-no such entry or does not verify under it, and pins only the entries whose fingerprints
-the code carries; only then does it write `access_key_id` and `apiary_public_key`.
+answer is signed as Signed answers describes, under `qory-enrol-answer-ed25519-v1`, line
+3 being the request's `proof` exactly as sent. The server signs an answer only to a
+proof that verifies under a key the checks pass, so a proof no key made, such as one
+under a key of small order, which plain Ed25519 verification accepts for any message,
+gets no signed answer. Anyone holding a live code still chooses the proof, so the
+enrolment answer's own domain line keeps its signature from verifying as the answer to a
+signed request, whose line 3 is that request's signature. A retry still passes steps 5
+to 8, so a key since revoked is `409` `key_invalid`. Otherwise it receives a `201` for
+the same access key, built afresh: the access key's current `stored_secrets` and
+`apiary_public_key`, signed with the retry's own proof as line 3, so a machine whose
+answer was lost still learns the access key's id. On `key_limit`, `qory` keeps the
+secret and `enrolment-pending`, and prints that the node already holds two keys and that
+the same command, run again within the code's 15 minutes, succeeds once an owner or
+administrator has revoked one. Any other use of a used code is `401`. `qory` verifies
+the answer under the entry of `apiary_public_key` whose fingerprint the code carries
+first, refuses an answer that lists no such entry or does not verify under it, and pins
+only the entries whose fingerprints the code carries; only then does it write
+`access_key_id` and `apiary_public_key`.
 
 Every signed refusal at enrolment, `409` `key_invalid` and `409` `key_limit`, contains
 `apiary_public_key`, the same list in the same order as a `201` at that moment: the
@@ -2336,8 +2339,8 @@ For the enrolment path and `secrets.url`:
   labels' rules refuse; `401` for a `timestamp` outside ±300 seconds; then each
   endpoint's own. Every `401` is unsigned, wherever it falls; every other answer from
   `429` on is signed, except at enrolment, whose steps 1 to 5 go out unsigned, the `429`
-  per source address, the `400`s and the `409` `key_invalid` to a proof that does not
-  verify included.
+  per source address, the `400`s and the `409` `key_invalid` to a key the checks refuse
+  or a proof that does not verify under it included.
 - **The events endpoint's own**, in order: deduplication, so a batch whose delivery id or
   event ids the server already accepted gets the same `2xx` again; `410` `run_closed`
   for an event of a run the server has closed, such as one whose instance an owner or
@@ -2418,9 +2421,10 @@ signature imply the key.
 ### Signed answers
 
 Every answer to a request that verified, and every answer to an enrolment whose code the
-server accepted and whose proof verified, contains `X-Qory-Signature-Ed25519: <64 bytes, base64url>`, the Ed25519
-signature under the server's signing key, `APIARY_SIGNING_SECRET` (Decision 6), of six
-lines joined by `\n`, with no newline after the last:
+server accepted, whose key the checks passed and whose proof verified under that key,
+contains `X-Qory-Signature-Ed25519: <64 bytes, base64url>`, the Ed25519 signature under
+the server's signing key, `APIARY_SIGNING_SECRET` (Decision 6), of six lines joined by
+`\n`, with no newline after the last:
 
 1. `qory-answer-ed25519-v1`, or for an answer to an enrolment
    `qory-enrol-answer-ed25519-v1`;
@@ -2716,7 +2720,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member, a ping with `interval_seconds` above 300 included; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing key row is `401` |
-| `key_invalid` | server, `409` | at enrolment or paste, about a public key: a `proof` that does not verify; a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; or a key the index holds, any access key's or any tombstone's. One answer for all, so a refusal reveals nothing about other access keys |
+| `key_invalid` | server, `409` | at enrolment or paste, about a public key: a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; a `proof` that does not verify under the key; or a key the index holds, any access key's or any tombstone's. At enrolment the first two are unsigned and the last signed; only the holder of a key's secret makes a proof that reaches it, so a refusal reveals nothing about other access keys |
 | `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds two keys; the code stays unused. The server shows the same code when it refuses a paste to a node holding two keys |
 | `instance_limit` | server, `409` | on the ping alone, after the events endpoint's deduplication, signed: a new instance id beyond the node's limit, 1 for a node, a node pool's own; counted over distinct instance ids with a live run, and admitted under the node row's lock |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
@@ -2815,7 +2819,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | An integration program | Its settings on standard input only; `describe`'s name must match; the machine's `arguments` and `settings` bounds, both required when a server-sent connection references a machine value; its standard error redacted, values, their lines and its credential, before it is reported | It runs as the runner's user and is trusted, and sends the raw value where it chooses; a value it transforms before writing escapes redaction |
 | A payload replayed | Run id, access key id, digest and `exp` in `aad`; the recipient's public key in the KEM's context; the timestamp; the reseal window bound to one access key, digest and set; a new run id per attempt | — |
 | A signed body sent to another endpoint | The request target in the request signature; strict schemas on every endpoint | — |
-| A holder of a live code choosing an enrolment proof to obtain a signed answer bound to another request's signature | The server verifies the proof before it signs anything; an enrolment answer is signed under its own domain line, `qory-enrol-answer-ed25519-v1`, so its signature never verifies as the answer to a signed request | — |
+| A holder of a live code choosing an enrolment proof to obtain a signed answer bound to another request's signature | The server checks the key and verifies the proof under it before it signs anything, so a degenerate proof under a key of small order gets no signed answer; an enrolment answer is signed under its own domain line, `qory-enrol-answer-ed25519-v1`, so its signature never verifies as the answer to a signed request | — |
 | The runner's own memory | Unreferenced at run end; optionally `PR_SET_DUMPABLE 0`, `RLIMIT_CORE 0`, `mlock` | A debugger or the kernel of the machine |
 
 ## Tests and release gates
@@ -2941,8 +2945,9 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   run signing with a key from the environment included; `--print` leaves the marker as
   it is.
 - **Key checks and enrolment:** enrolment and paste each refuse the torsion key of
-  Decision 5, `key_invalid`, and with a bad proof enrolment answers an unsigned `409`
-  `key_invalid` before the `429` per code and any key check; an enrolment answer's
+  Decision 5, `key_invalid`; enrolment answers an unsigned `409` `key_invalid` to a key
+  the checks refuse, checked first, and to a bad proof, before the `429` per code; a
+  degenerate proof under a key of small order is refused, unsigned; an enrolment answer's
   signature does not verify as the answer to a signed request, nor the reverse; a
   base64url value with padding, a `+` or `/`, or non-zero spare bits is
   refused; enrolment answers in its own order, with every `401` unsigned; a code typed in

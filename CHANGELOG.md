@@ -142,12 +142,12 @@ release may change what an existing document does, and says so under Upgrading.
   `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
   access key is active, signed with every signed refusal at enrolment under the
   enrolment answers' own domain line, `qory-enrol-answer-ed25519-v1`, once the server
-  has verified the proof; `events/run.refused.schema.json`, the data of
-  `dev.qory.run.refused`, which `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
-  list of variable names and patterns; and `headers.json`, the header names and prefixes
-  refused for a connection's header, from the IANA HTTP Field Name Registry, the Fetch
-  standard's forbidden request headers and the names the contract adds. The runner's
-  code is unchanged.
+  has checked the key and verified the proof under it; `events/run.refused.schema.json`,
+  the data of `dev.qory.run.refused`, which `event.schema.json` lists among its types;
+  `denied-variables.json`, the built-in deny list of variable names and patterns; and
+  `headers.json`, the header names and prefixes refused for a connection's header, from
+  the IANA HTTP Field Name Registry, the Fetch standard's forbidden request headers and
+  the names the contract adds. The runner's code is unchanged.
 - Fixtures with the known answers of the access key: `fixtures/sealed/`, an envelope
   sealed to the fixture access key with its run configuration, secrets request and
   plaintext; `fixtures/enrolment/`, two enrolment requests and the answer; and
@@ -218,8 +218,10 @@ release may change what an existing document does, and says so under Upgrading.
   run the same way, with exit code -1.
   `session.Result` has `RunClosed`.
 - `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
-  `key_invalid` or `key_limit` with `apiary_public_key`, the same list in the same order
-  as a `201`, so a machine without a pin verifies it as it verifies the `201`.
+  `key_invalid` for a key already enrolled, or `key_limit`, with `apiary_public_key`,
+  the same list in the same order as a `201`, so a machine without a pin verifies it as
+  it verifies the `201`. A key the checks refuse or a proof that does not verify under
+  it gets an unsigned `409` `key_invalid`, before the server signs anything.
   `fixtures/enrolment/` has the four refusals, with one key and with two, and
   `signatures.json` their signatures under the fixture signing key.
 - `session.Spec` has `Discovered`, called once the server's signed configuration

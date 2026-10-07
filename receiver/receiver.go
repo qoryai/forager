@@ -18,10 +18,11 @@
 // invalid_request; a GET's timestamp outside the window, the unsigned 401; then each
 // endpoint's own. Of an event's data it reads a ping's interval_seconds and a
 // run.started's labels. A delivery it verified is deduplicated on each event's id,
-// handed to a [Store], and answered 202 with the digests in force. [File] is a store that appends events to one JSON lines file and
-// remembers the ids it holds. It keeps one store and one map of labels for every access
-// key alike, as a test needs; a server of many access keys scopes runs, event ids and
-// labels per access key, so one key's events never deduplicate or label another's.
+// handed to a [Store], and answered 202 with the digests in force. [File] is a store
+// that appends events to one JSON lines file and remembers the ids it holds. It keeps
+// one store and one map of labels for every access key alike, as a test needs; a
+// server of many access keys scopes runs, event ids and labels per access key, so one
+// key's events never deduplicate or label another's.
 package receiver
 
 import (

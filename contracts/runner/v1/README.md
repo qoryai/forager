@@ -790,10 +790,11 @@ an event. The fixtures sign with the published fixture access key of
 `fixtures/known-answers/keys.json`, under the id `ak_f1xt0re000000000`. `qory` refuses
 its secret, and the fixture signing keys as a pin; a server refuses its public key at
 enrolment, and the fixture signing keys as its own key. A second fixture access key,
-whose public key is `dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw`, has its secret
-published too, and every side refuses it as it refuses the fixture access key. A fingerprint, of an access
-key's public key or of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22
-characters.
+the seed being bytes 193 to 224, whose public key is
+`dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw`, has its secret published in the
+`accesskey` package's tests and in this repository's history, and every side refuses it
+as it refuses the fixture access key. A fingerprint, of an access key's public key or
+of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22 characters.
 
 **Nodes and instances.** An access key belongs to a node, `nd_`, a permanent machine
 that runs one instance at a time, or to a node pool, `np_`, whose instances share the
@@ -892,19 +893,19 @@ bytes in base64url, of six lines joined by `\n`, with no newline after the last:
 The server signs every answer to a verified request, `202`, `404` and `503` included,
 and every signed answer contains `Cache-Control: no-store, no-transform`. Every `401`
 goes out unsigned, wherever it falls, and so does a `400`, `413` or `415` sent before
-verification, and at enrolment every answer before the code is accepted and the proof
-verifies. Line 3 binds the answer to its request, and through the request's signature
-to the access key and the instance that sent it. An enrolment answer has its own domain
-line because its line 3 is a proof, which anyone holding a live code chooses: its
-signature never verifies as the answer to a signed request, nor the reverse. At run start the runner
-treats an answer without a valid signature under the pin as no run, `answer_unsigned`;
-during the run a delivery's answer without one is no answer, retried as any other with
-its headers unread, and a reload's fetch without one fails the reload. The runner reads
-a body's code only from a signed answer, and a refusal body over 64 KiB counts as
-unsigned. Two known answers under the fixture signing key, to the GET of discovery
-above: `200` with the 208-byte body of `fixtures/known-answers/discovery.json` and
-`X-Qory-Configuration: sha256=` and the hex SHA-256 of that body, six lines of 251
-bytes,
+verification, and at enrolment every answer before the code is accepted, the key passes
+the checks and the proof verifies under it. Line 3 binds the answer to its request, and
+through the request's signature to the access key and the instance that sent it. An
+enrolment answer has its own domain line because its line 3 is a proof, which anyone
+holding a live code chooses: its signature never verifies as the answer to a signed
+request, nor the reverse. At run start the runner treats an answer without a valid
+signature under the pin as no run, `answer_unsigned`; during the run a delivery's answer
+without one is no answer, retried as any other with its headers unread, and a reload's
+fetch without one fails the reload. The runner reads a body's code only from a signed
+answer, and a refusal body over 64 KiB counts as unsigned. Two known answers under the
+fixture signing key, to the GET of discovery above: `200` with the 208-byte body of
+`fixtures/known-answers/discovery.json` and `X-Qory-Configuration: sha256=` and the hex
+SHA-256 of that body, six lines of 251 bytes,
 `KR8RzAb1z5MnEj2SPYFrghfXqVdU7Da2Yu0qU1-VQhmuObVUiKLywh8FoTawEfg9u0VgOgFQJhutD3-w4a55Bg`;
 and `404` with an empty body and no digest, 180 bytes,
 `wtXEpqIYCRAH0I9P0wd1DxJxkury0OE566ADTu3bH2GWUP4-TAkNl3a5oKGP6ZVWsP8oPL-yJHuaOaxbNPU_Dg`.
@@ -936,38 +937,40 @@ and records the instance id and name as display data. A redirect is not followed
 is a status like any other.
 
 **Enrolment.** A new access key gets its id by enrolment, `enrolment.schema.json`: a
-`POST` to `<url>/.well-known/qory-enrolment`, beside discovery's path, with an
-enrolment code an owner or administrator of the server created: `qec_`, 26 Crockford
-base32 characters, then `.` and the fingerprint of the server's key, and during a
-rotation of that key a second `.` and the next key's fingerprint. The body contains the
-code in its normalised form, the 26 characters in upper case with `I` and `L` read as
-`1`, `O` as `0` and hyphens removed; a name for the access key; the raw public key; a
-timestamp; and `proof`, the Ed25519 signature under the new key of five lines joined by
-`\n`: `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and
-the timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no request
+`POST` to `<url>/.well-known/qory-enrolment`, beside discovery's path, with an enrolment
+code an owner or administrator of the server created: `qec_`, 26 Crockford base32
+characters, then `.` and the fingerprint of the server's key, and during a rotation of
+that key a second `.` and the next key's fingerprint. The body contains the code in its
+normalised form, the 26 characters in upper case with `I` and `L` read as `1`, `O` as
+`0` and hyphens removed; a name for the access key; the raw public key; a timestamp; and
+`proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
+`qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and the
+timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no request
 signature: the code and the proof authenticate it. The server answers an enrolment in
-its own order, unsigned until the code is accepted and the proof verifies: `413`;
-`415`; `400` `bad_request` for a header sent twice; `429` per source address; `400`
-`unsupported_contract_version`; `400` `invalid_request`; `401` for a code it did not
-issue or that is used, expired or cancelled, for a code whose fingerprints are not its
-keys', and for a timestamp outside ±300 seconds; `409` `key_invalid` for a `proof` that
-does not verify. Then, signed: `429` per code; `409` `key_invalid` for a key the checks
-refuse or another access key holds; `409` `key_limit`; and `201`. The server verifies
-the proof before it signs anything, so it signs no answer bound to a proof the key in
-the body did not make. The `201` answer contains the access key id, `node_id` with
-`node_kind`, `stored_secrets` and the server's keys, signed as Signed answers describes
-under `qory-enrol-answer-ed25519-v1` with the request's `proof` as line 3; the machine
-verifies it under the listed key whose fingerprint the code carries first, and pins only
-the keys whose fingerprints the code carries. A `201` means the access key is active:
-the code's use activates it. A `401` means the code was used, has expired or was
-cancelled; a signed `409` `key_invalid` refuses the key, and `key_limit` a node that
-already holds two keys. Each signed refusal lists `apiary_public_key`, the same list in
-the same order as a `201` at that moment, and the machine verifies it exactly as the
-`201`; a refusal sent unsigned lists no key, and the machine acts on none by its status,
-an unsigned `409` being `answer_unsigned`. In place of a code, an owner or administrator
-may paste a public key the machine printed into an existing node or node pool, where it
-is active at once. The server checks every public key it is given: a canonical
-encoding, a point on the curve, not of small order, of prime order, and y ≠ 1;
+its own order, unsigned until the code is accepted, the key passes the checks and the
+proof verifies under it: `413`; `415`; `400` `bad_request` for a header sent twice;
+`429` per source address; `400` `unsupported_contract_version`; `400` `invalid_request`;
+`401` for a code it did not issue or that is used, expired or cancelled, for a code
+whose fingerprints are not its keys', and for a timestamp outside ±300 seconds; `409`
+`key_invalid` for a key the checks refuse or a `proof` that does not verify under it,
+the key checked first. Then, signed: `429` per code; `409` `key_invalid` for a key
+already enrolled, a revoked one included; `409` `key_limit`; and `201`. The server signs
+an answer only to a proof that verifies under a key the checks pass, so a proof no key
+made, such as one under a key of small order, which plain Ed25519 verification accepts
+for any message, gets no signed answer. The `201` answer contains the access key id,
+`node_id` with `node_kind`, `stored_secrets` and the server's keys, signed as Signed
+answers describes under `qory-enrol-answer-ed25519-v1` with the request's `proof` as
+line 3; the machine verifies it under the listed key whose fingerprint the code carries
+first, and pins only the keys whose fingerprints the code carries. A `201` means the
+access key is active: the code's use activates it. A `401` means the code was used, has
+expired or was cancelled; a signed `409` `key_invalid` refuses the key, and `key_limit`
+a node that already holds two keys. Each signed refusal lists `apiary_public_key`, the
+same list in the same order as a `201` at that moment, and the machine verifies it
+exactly as the `201`; a refusal sent unsigned lists no key, and the machine acts on none
+by its status, an unsigned `409` being `answer_unsigned`. In place of a code, an owner
+or administrator may paste a public key the machine printed into an existing node or
+node pool, where it is active at once. The server checks every public key it is given: a
+canonical encoding, a point on the curve, not of small order, of prime order, and y ≠ 1;
 `fixtures/known-answers/small-order.json` lists keys it refuses. The known answers are
 `fixtures/enrolment/` and the enrolment lines of `signatures.json`.
 
@@ -1129,7 +1132,8 @@ a coded refusal as `expect_code`, and a `note` that explains why. Every signatur
 them is real, under the fixture access key secret as the fixture access key and
 instance; a receiver under test holds the fixture access key under
 `ak_f1xt0re000000000` and sets its clock to `1700000000`, around which the timestamps
-are. A receiver written by anyone else follows this section, replays those files, and may read that code.
+are. A receiver written by anyone else follows this section, replays those files, and
+may read that code.
 
 ## The runtime
 

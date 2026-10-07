@@ -18,9 +18,9 @@ const (
 	CodeAnswerUnsigned = "answer_unsigned"
 	// CodeApiaryPublicKeyMissing is a server and no pin, decided before any request.
 	CodeApiaryPublicKeyMissing = "apiary_public_key_missing"
-	// CodeKeyInvalid is the server's 409 at enrolment: signed to a key it refuses, and
-	// unsigned to a proof that does not verify, which a machine reads as
-	// answer_unsigned.
+	// CodeKeyInvalid is the server's 409 at enrolment: signed to a key already enrolled,
+	// a revoked one included, and unsigned to a key the checks refuse or a proof that
+	// does not verify under it, which a machine reads as answer_unsigned.
 	CodeKeyInvalid = "key_invalid"
 	// CodeKeyLimit is the server's signed 409 at enrolment to a node that already holds
 	// two keys.
