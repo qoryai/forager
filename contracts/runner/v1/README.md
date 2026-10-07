@@ -571,10 +571,10 @@ and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behi
 stops the run. A run that passes a value for a placeholder is no run,
 `placeholder_conflict`, with or without a wall. These are the only refusals of the
 variables. `QORY_HARNESS_HOME` is the runner's own when the launch spec has a harness
-home, and the runner sets it after the check. Behind a wall, a value any source passes
-for it is `variable_reserved`, as any `QORY_` name is. Without a wall, the deny list
-leaves out a value of the server, the run, the machine or the harness for it, and the
-runner's value wins over the one the run inherits: the record lists that one as
+home, and the runner sets it after the check. Behind a wall, a value any node source
+passes for it is `variable_reserved`, as any `QORY_` name is. Without a wall, the deny
+list leaves out a value of the server, the run, the machine or the harness for it, and
+the runner's value wins over the one the run inherits: the record lists that one as
 `shell`, lost as `fixed`, when another source set the name too.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
