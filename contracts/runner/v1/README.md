@@ -1353,6 +1353,29 @@ for all of them.
   container on the host's network from the daemon has left the wall. A mount that is a
   socket, or a directory containing a runtime's, is refused.
 
+**The runner's files.** A walled run, one without a server included, refuses a mount,
+or the workspace, that is, contains or lies inside one of the runner's files: no run,
+`mount_contains_runner_files`, with the mount and the runner's file as its names, in
+that order. The runner checks before it contacts the server and before anything starts,
+so no event records the refusal. Both paths are resolved through symbolic links, a part
+that does not exist yet through its nearest parent that does, and compared by whole
+components. The runner's files are:
+
+- the paths the caller lists as its own: for `qory`, the runner file's directory, with
+  the access key secret;
+- the directory of every credential program and every tool program the machine defines,
+  and of the file a link to one leads to, the directory and not only the file, so an
+  interpreter, a module or a configuration beside a program is covered too;
+- the file a credential is read from;
+- the private directories of the tools' sockets, made in the system's temporary
+  directory;
+- the wall's own: for `docker`, the directory of the `docker` command and of the
+  helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
+  whose context and credential helpers start programs.
+
+An agent that can change a program the runner starts outside the wall, or read a file a
+credential is read from, has left the wall.
+
 When the run has an authority of its own (§Credentials), a wall sets the enclosure's
 trust to one bundle, the image's own authorities with the run's certificate after them,
 and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,

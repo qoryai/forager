@@ -77,6 +77,8 @@ runs the same checks on it.
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
+  `Mounts` are what else of the machine the wall shows, and `RunnerFiles` the caller's
+  own files, which no mount may hold. See [the runner's files](wall.md#the-runners-files).
 - `Server` defines the server the run reports to. See [the server](server.md).
 - `Policy` is the node's policy. Without a server's policy it is the run's; with one it
   narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).

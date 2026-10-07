@@ -29,13 +29,17 @@ const (
 	VariableReserved = "variable_reserved"
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
+	// MountContainsRunnerFiles is a walled run with a mount that is, contains or lies
+	// inside one of the runner's files: its names are the mount and the file, in that
+	// order.
+	MountContainsRunnerFiles = "mount_contains_runner_files"
 )
 
 // Decides reports whether the runner decides the code, one of this package's: a
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {
-	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved, PlaceholderConflict:
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved, PlaceholderConflict, MountContainsRunnerFiles:
 		return true
 	}
 	return false

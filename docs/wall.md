@@ -32,6 +32,10 @@ nothing.
 - The checkout and the composed home are mounted at their own paths. The run's record is
   mounted read-only.
 - Nothing else of the node is visible inside.
+- A mount that is, contains or lies inside one of the runner's files is no run,
+  `mount_contains_runner_files`: the runner file's directory with the access key
+  secret, the programs the runner starts outside the wall, their configuration. See
+  [the runner's files](#the-runners-files).
 - The session runner, the policy and the access key secret stay outside, on the node.
   The record is written from outside.
 
@@ -162,6 +166,7 @@ res, err := session.Run(ctx, session.Spec{
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
 	Dir:     checkout,                            // the workspace, mounted at its own path
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+	RunnerFiles: []string{configDir},             // the caller's own files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
 		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
@@ -183,6 +188,35 @@ res, err := session.Run(ctx, session.Spec{
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
 refused.
+
+### The runner's files
+
+A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
+the runner's files. Such a run returns a `*session.Refusal` with the code
+`mount_contains_runner_files`, and `Names` holds the mount, then the runner's file. The
+check comes before the server is contacted and before anything starts, `Local` included.
+An agent that changes a program the runner starts outside the wall, or reads the access
+key secret, has left the wall. The runner's files are:
+
+- `Spec.RunnerFiles`, the absolute paths the caller lists as its own. `qory` lists the
+  runner file's directory, with the access key secret.
+- The directory of every credential program and every tool program the machine defines,
+  found in `PATH` as the runner starts it, and the directory of the file a link to one
+  leads to. A program's neighbours, an interpreter or a module, are covered with it.
+- The file a credential with `File` is read from.
+- The private directories of the tools' sockets, which are made in the system's
+  temporary directory when the tools start: a mount that contains that directory is
+  refused.
+- A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
+  directory of the `docker` command, the directory of the helper, and the command's
+  configuration directory, `DOCKER_CONFIG` or `~/.docker`.
+
+Both sides are resolved through symbolic links, a part that does not exist yet through
+its nearest parent that does, and compared by whole path components: `/a/bc` does not
+lie inside `/a/b`. The comparison is exact, so on a filesystem that ignores case, as a
+Mac's does by default, a path written in another case is another path.
+`session.Overlap(mount, path)` returns how two paths stand: `is`, `contains`,
+`lies inside`, or empty. A caller uses it to word its own message.
 
 ### The helper
 

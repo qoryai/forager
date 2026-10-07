@@ -42,6 +42,16 @@ const EnvListen = "QORY_TOOL_LISTEN"
 // EnvRunID names, in a tool's environment, the run it was started for.
 const EnvRunID = "QORY_RUN_ID"
 
+// socketDirPrefix begins the name of the private directory a tool's socket is in, which
+// is made in the system's temporary directory when the tool starts.
+const socketDirPrefix = "qory-tool-"
+
+// SocketDirs is the pattern of the private directories the tools' sockets are in, the
+// system's temporary directory with socketDirPrefix and a random part: a path that
+// contains it contains every one of them, and nothing else contains one before it is
+// made.
+func SocketDirs() string { return filepath.Join(os.TempDir(), socketDirPrefix+"*") }
+
 // listenWait is how long a tool has to listen after it was started; a variable so a
 // test need not wait a minute.
 var listenWait = time.Minute
@@ -266,7 +276,7 @@ func Start(ctx context.Context, chosen []Chosen, runID string, env []string, rep
 }
 
 func start(ctx context.Context, c Chosen, runID string, env []string, report func(string)) (*Running, error) {
-	dir, err := os.MkdirTemp("", "qory-tool-")
+	dir, err := os.MkdirTemp("", socketDirPrefix)
 	if err != nil {
 		return nil, err
 	}
