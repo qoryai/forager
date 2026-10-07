@@ -363,7 +363,7 @@ func TestAnswerKnownAnswers(t *testing.T) {
 		}
 		var status int
 		fmt.Sscanf(v.Lines[1], "%d", &status)
-		enrolment := v.Lines[1] == "201" || v.Lines[1] == "409"
+		enrolment := v.Lines[1] == "201" || v.Lines[1] == "409" || v.Lines[1] == "429"
 		if want := map[bool]string{false: accesskey.AnswerDomain, true: accesskey.EnrolAnswerDomain}[enrolment]; v.Lines[0] != want {
 			t.Errorf("%s: domain line %s, want %s", v.Note, v.Lines[0], want)
 		}
@@ -745,9 +745,10 @@ func TestInstanceID(t *testing.T) {
 
 // TestPostEnrols posts an enrolment to a fake server signing under the fixture
 // signing key: a 201 verifies and pins; a 401 is unauthorized; a signed 409, key_limit
-// or key_invalid, is its code, verified under the key its body lists, and one that
-// lists no key is answer_unsigned; a signed 201 the schema refuses is an error; an
-// unsigned answer is answer_unsigned.
+// or key_invalid, and a signed 429, rate_limited, is its code, verified under the key
+// its body lists, and one that lists no key is answer_unsigned; a signed 409 or 429
+// with another status's code is an error; a signed 201 the schema refuses is an error;
+// an unsigned answer, a 429 included, is answer_unsigned with its status.
 func TestPostEnrols(t *testing.T) {
 	k := keys(t)
 	signer := k.SigningKey.key(t)
@@ -807,6 +808,31 @@ func TestPostEnrols(t *testing.T) {
 	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("a signed 409 that lists no key: %v", err)
 	}
+	status, body = http.StatusTooManyRequests, []byte(`{"error":"rate_limited",`+keys+`}`)
+	var limited *accesskey.Refusal
+	_, err = r.Post(ctx, nil, srv.URL, "qory/test")
+	if !errors.As(err, &limited) || limited.Code != accesskey.CodeRateLimited ||
+		limited.Status != http.StatusTooManyRequests {
+		t.Errorf("signed 429 rate_limited: %v", err)
+	}
+	body = []byte(`{"error":"rate_limited"}`)
+	_, err = r.Post(ctx, nil, srv.URL, "qory/test")
+	if code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("a signed 429 that lists no key: %v", err)
+	}
+	// A signed refusal whose code its status does not carry is an error, no refusal.
+	for s, b := range map[int]string{
+		http.StatusTooManyRequests: `{"error":"key_limit",` + keys + `}`,
+		http.StatusConflict:        `{"error":"rate_limited",` + keys + `}`,
+	} {
+		status, body = s, []byte(b)
+		var ref *accesskey.Refusal
+		_, err := r.Post(ctx, nil, srv.URL, "qory/test")
+		if err == nil || errors.As(err, &ref) {
+			t.Errorf("a signed %d %s: %v", s, b, err)
+		}
+	}
+	status = http.StatusConflict
 	// The server refuses a key the checks refuse or a proof that does not verify under
 	// it with an unsigned 409 key_invalid, before it signs anything: answer_unsigned,
 	// with its status.
@@ -816,6 +842,18 @@ func TestPostEnrols(t *testing.T) {
 		var ref *accesskey.Refusal
 		if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); !errors.As(err, &ref) || ref.Code != accesskey.CodeAnswerUnsigned || ref.Status != http.StatusConflict {
 			t.Errorf("an unsigned 409 %s: %v", b, err)
+		}
+	}
+	// A 429 per source address goes out unsigned: answer_unsigned, with its status.
+	status = http.StatusTooManyRequests
+	limit := `{"error":"rate_limited"`
+	for _, b := range []string{limit + `}`, limit + `,` + keys + `}`} {
+		body = []byte(b)
+		var ref *accesskey.Refusal
+		_, err := r.Post(ctx, nil, srv.URL, "qory/test")
+		if !errors.As(err, &ref) || ref.Code != accesskey.CodeAnswerUnsigned ||
+			ref.Status != http.StatusTooManyRequests {
+			t.Errorf("an unsigned 429 %s: %v", b, err)
 		}
 	}
 	sign = true
@@ -902,10 +940,11 @@ func TestRefusedKeysVerifyNothing(t *testing.T) {
 }
 
 // TestEnrolmentRefusalKnownAnswers verifies the published signed refusals as a machine
-// without a pin does: each, key_limit and key_invalid, with one key and during a
-// rotation with two, is its code, verified under the key its code's first fingerprint
-// names; the same refusal tampered, signed by the next key, bound to another proof, or
-// listing only a key the code does not name, is answer_unsigned.
+// without a pin does: each 409, key_limit and key_invalid, with one key and during a
+// rotation with two, and the 429 rate_limited, is its code with its status, verified
+// under the key its code's first fingerprint names; the same refusal tampered, signed by
+// the next key, bound to another proof, or listing only a key the code does not name,
+// is answer_unsigned.
 func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 	k := keys(t)
 	key := k.accessKey(t)
@@ -919,7 +958,7 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 	}
 	n := 0
 	for _, v := range vectors(t).Answers {
-		if v.Lines[1] != "409" {
+		if v.Lines[1] != "409" && v.Lines[1] != "429" {
 			continue
 		}
 		n++
@@ -928,12 +967,16 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 			r = two
 		}
 		body := v.body(t)
-		a := accesskey.Answer{Status: http.StatusConflict, Body: body}
+		var status int
+		fmt.Sscanf(v.Lines[1], "%d", &status)
+		a := accesskey.Answer{Status: status, Body: body}
 		var want struct {
 			Error string `json:"error"`
 		}
 		json.Unmarshal(body, &want)
-		if _, err := r.VerifyAnswer(a, v.Signature); code(err) != want.Error {
+		var ref *accesskey.Refusal
+		_, err := r.VerifyAnswer(a, v.Signature)
+		if !errors.As(err, &ref) || ref.Code != want.Error || ref.Status != status {
 			t.Errorf("%s: %v", v.Note, err)
 		}
 		tampered := a
@@ -950,7 +993,9 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 			"tampered":      func() error { _, err := r.VerifyAnswer(tampered, v.Signature); return err },
 			"another proof": func() error { _, err := other.VerifyAnswer(a, v.Signature); return err },
 			"signed by the next": func() error {
-				_, err := r.VerifyAnswer(a, next.SignAnswer(accesskey.Answer{Enrolment: true, Status: 409, RequestSignature: r.Proof, Body: body}))
+				signed := accesskey.Answer{Enrolment: true, Status: status,
+					RequestSignature: r.Proof, Body: body}
+				_, err := r.VerifyAnswer(a, next.SignAnswer(signed))
 				return err
 			},
 			"another key listed": func() error {
@@ -964,8 +1009,8 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 			}
 		}
 	}
-	if n != 4 {
-		t.Errorf("%d signed refusals; want 4", n)
+	if n != 5 {
+		t.Errorf("%d signed refusals; want 5", n)
 	}
 }
 

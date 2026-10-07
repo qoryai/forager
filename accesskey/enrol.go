@@ -185,17 +185,25 @@ type EnrolmentAnswer struct {
 	Pin Pin `json:"-"`
 }
 
-// VerifyAnswer reads the server's answer to the request. A 201 and a signed 409 are
-// verified alike, as enrolment answers, under EnrolAnswerDomain with the request's
-// proof as the third line: each lists the server's keys in apiary_public_key, and the
-// answer verifies under the entry whose fingerprint the code carries first, or it is
-// answer_unsigned. A 409 the server sends unsigned, to a key the checks refuse or a
-// proof that does not verify under it, is answer_unsigned too. A 201's pin is then the
-// entries whose fingerprints the code carries. A verified 409 is a [*Refusal] with its
-// code, key_invalid or key_limit. A 401, unsigned, is unauthorized: the code was used,
-// has expired or was cancelled. Any other answer is answer_unsigned. A caller acts on a
-// refusal's code, and never on the status of an answer_unsigned: an answer that does
-// not verify may come from anyone on the path.
+// enrolmentRefusals are the codes of a signed refusal at enrolment, by its status.
+var enrolmentRefusals = map[int][]string{
+	http.StatusConflict:        {CodeKeyInvalid, CodeKeyLimit},
+	http.StatusTooManyRequests: {CodeRateLimited},
+}
+
+// VerifyAnswer reads the server's answer to the request. A 201, a signed 409 and a
+// signed 429 are verified alike, as enrolment answers, under EnrolAnswerDomain with the
+// request's proof as the third line: each lists the server's keys in apiary_public_key,
+// and the answer verifies under the entry whose fingerprint the code carries first, or
+// it is answer_unsigned. A 409 the server sends unsigned, to a key the checks refuse or
+// a proof that does not verify under it, is answer_unsigned too, and so is a 429 sent
+// unsigned, per source address. A 201's pin is then the entries whose fingerprints the
+// code carries. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit,
+// and a verified 429 one with rate_limited, too many attempts with the code; a verified
+// refusal with another code is an error. A 401, unsigned, is unauthorized: the code was
+// used, has expired or was cancelled. Any other answer is answer_unsigned. A caller acts
+// on a refusal's code, and never on the status of an answer_unsigned: an answer that
+// does not verify may come from anyone on the path.
 func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentAnswer, error) {
 	// The answer is an enrolment answer whatever the caller passed: only a signature
 	// under the enrolment answer's own domain line verifies.
@@ -218,7 +226,7 @@ func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentA
 	switch a.Status {
 	case http.StatusUnauthorized:
 		return nil, &Refusal{Code: CodeUnauthorized, Status: a.Status, Detail: "enrolment: the code was used, has expired or was cancelled"}
-	case http.StatusConflict:
+	case http.StatusConflict, http.StatusTooManyRequests:
 		var ref struct {
 			Error           string   `json:"error"`
 			Names           []string `json:"names"`
@@ -227,8 +235,9 @@ func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentA
 		if len(a.Body) > MaxAnswer || jsonv2.Unmarshal(a.Body, &ref, jsonv2.RejectUnknownMembers(true)) != nil || !verified(ref.ApiaryPublicKey) {
 			return nil, unsigned
 		}
-		if ref.Error != CodeKeyInvalid && ref.Error != CodeKeyLimit {
-			return nil, fmt.Errorf("enrolment: a signed 409 with a code this package does not read")
+		if !slices.Contains(enrolmentRefusals[a.Status], ref.Error) {
+			return nil, fmt.Errorf("enrolment: a signed %d with a code this package does not read",
+				a.Status)
 		}
 		return nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment"}
 	case http.StatusCreated:

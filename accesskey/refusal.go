@@ -25,6 +25,9 @@ const (
 	// CodeKeyLimit is the server's signed 409 at enrolment to a node that already holds
 	// two keys.
 	CodeKeyLimit = "key_limit"
+	// CodeRateLimited is the server's signed 429 at enrolment, per code: too many
+	// attempts with one code.
+	CodeRateLimited = "rate_limited"
 	// CodeInstanceLimit is the server's signed 409 to a ping from a new instance beyond
 	// its node's limit.
 	CodeInstanceLimit = "instance_limit"

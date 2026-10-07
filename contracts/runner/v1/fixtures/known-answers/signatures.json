@@ -90,6 +90,14 @@
       "lines": ["qory-enrol-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "deb4a76a7f791485d555df881b81bb80b53005249d174df071362e0a9ef83f29", "", ""],
       "length": 186,
       "signature": "T66jEKg-BKLfrFVZotmlmGGp6v6lbtB8BD9hdqbtv8X1H8KuVYOrr2ttZucfPkplAbVo9qzNnx42_Q9n7BQADQ"
+    },
+    {
+      "note": "429 rate_limited per code to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
+      "body": "fixtures/enrolment/refusal-rate-limited.json",
+      "body_length": 123,
+      "lines": ["qory-enrol-answer-ed25519-v1", "429", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "01ddb169d4ea2fcf459a423a5c20d42010ea0c686b63415278cf5cc6f64005c4", "", ""],
+      "length": 186,
+      "signature": "Fp4HSpmKWIdIqPCZEcGwB98PeYCM2rZpikfvXilxXHdo23g40RJxaDRJznxa6lLEzeDa4tGjG7XsllWvxoQRCw"
     }
   ]
 }

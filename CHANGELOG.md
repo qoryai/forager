@@ -212,9 +212,9 @@ release may change what an existing document does, and says so under Upgrading.
   X25519 key; runs the five checks the contract requires of a public key; builds and
   signs the GET and POST request strings; verifies a signed answer under a pin; builds
   an enrolment request with its normalised code and proof, posts it and verifies the
-  answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
-  names and the enrolment answers' domain line, an unsigned `409` being
-  `answer_unsigned`; and makes the instance id with the two lines of
+  answer, a signed `409` `key_limit` or `key_invalid` and a signed `429` `rate_limited`,
+  under the key the code names and the enrolment answers' domain line, an unsigned
+  `409` or `429` being `answer_unsigned`; and makes the instance id with the two lines of
   its file, the id and a keyed hash of the machine's identity. It verifies under no key
   the key checks refuse, refuses a document that contains a secret with
   `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
@@ -231,12 +231,13 @@ release may change what an existing document does, and says so under Upgrading.
   run the same way, with exit code -1.
   `session.Result` has `RunClosed`.
 - `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
-  `key_invalid` for a key already enrolled, or `key_limit`, with `apiary_public_key`,
-  the same list in the same order as a `201`, so a machine without a pin verifies it as
-  it verifies the `201`. A key the checks refuse or a proof that does not verify under
-  it gets an unsigned `409` `key_invalid`, before the server signs anything.
-  `fixtures/enrolment/` has the four refusals, with one key and with two, and
-  `signatures.json` their signatures under the fixture signing key.
+  a `409` `key_invalid` for a key already enrolled or `key_limit`, or a `429`
+  `rate_limited` per code, with `apiary_public_key`, the same list in the same order as
+  a `201`, so a machine without a pin verifies it as it verifies the `201`. A key the
+  checks refuse or a proof that does not verify under it gets an unsigned `409`
+  `key_invalid`, before the server signs anything. `fixtures/enrolment/` has the four
+  `409`s, with one key and with two, and the `429` with one key, and `signatures.json`
+  their signatures under the fixture signing key.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
   document is read and before the ping, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.
