@@ -350,3 +350,38 @@ func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 		t.Errorf("prepared %v, wrapped %v, closed %d times", w.req.RunID != "", w.wrapped, w.closed)
 	}
 }
+
+// TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun pins that the private directories
+// runs make in the system's temporary directory, for their record sockets and for the
+// Docker wall's environment files, are the runner's files whoever made them: a mount
+// of the temporary directory while another run's exist is refused, and so is a mount
+// of one of them, or of a file in one.
+func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {
+	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	run, wallDir := filepath.Join(tmp, "qory-run-1234"), filepath.Join(tmp, "qory-wall-5678")
+	for _, d := range []string{run, wallDir} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	patterns := []string{filepath.Join(tmp, "qory-tool-*"), filepath.Join(tmp, "qory-run-*"), filepath.Join(tmp, "qory-wall-*")}
+	sp.Mounts = []wall.Mount{{Path: tmp}}
+	r := mountRefusal(t, runErr(sp))
+	if r.Names[0] != tmp || !slices.Contains(patterns, r.Names[1]) || !strings.Contains(r.Detail, " contains ") {
+		t.Errorf("the temporary directory: names %q, detail %q", r.Names, r.Detail)
+	}
+	for _, c := range []struct{ mount, pattern, how string }{
+		{run, patterns[1], " is "},
+		{wallDir, patterns[2], " is "},
+		{filepath.Join(wallDir, "relay-env"), patterns[2], " lies inside "},
+	} {
+		sp.Mounts = []wall.Mount{{Path: c.mount}}
+		r := mountRefusal(t, runErr(sp))
+		if want := []string{c.mount, c.pattern}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, c.how) {
+			t.Errorf("names %q, want %q, detail %q", r.Names, want, r.Detail)
+		}
+	}
+}

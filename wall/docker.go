@@ -690,7 +690,16 @@ func (hostSystem) local(ip string) bool {
 	return false
 }
 
-func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", tempPrefix) }
+
+// tempPrefix begins the name of the private directory the adapter writes a run's
+// environment files in, the relay's with the proxy's secret among them.
+const tempPrefix = "qory-wall-"
+
+// TempDirs is the pattern of the private directories the Docker adapter writes the
+// runs' environment files in, the system's temporary directory with qory-wall- and a
+// random part: every run's, whichever wall a run has.
+func TempDirs() string { return filepath.Join(os.TempDir(), tempPrefix+"*") }
 
 // runtimeSockets are the names a container runtime's socket goes by.
 var runtimeSockets = []string{"docker.sock", "podman/podman.sock", "containerd/containerd.sock", "crio/crio.sock"}

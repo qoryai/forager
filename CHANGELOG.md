@@ -240,7 +240,8 @@ release may change what an existing document does, and says so under Upgrading.
   absolute paths the caller lists as its own, such as the directory of qory's runner
   file. Beside them the runner checks the directory of every credential and tool program
   the machine defines, the file a credential is read from, the private directories of
-  every run's tool sockets, and the files a wall lists through the new `wall.Filer`:
+  every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
+  files (`qory-wall-*`) in the system's temporary directory, and the files a wall lists through the new `wall.Filer`:
   `wall.Docker` lists the directory of the `docker` command, of the helper, and the
   command's configuration directory. The refusal's `Names` are the mount and the
   runner's file, in that order. `session.Overlap` returns how a mount and a path stand,

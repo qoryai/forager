@@ -428,3 +428,16 @@ func TestDockerFilesAreItsProgramsAndConfiguration(t *testing.T) {
 	}
 	var _ Filer = d
 }
+
+// TestTempDirsMatchesWhatTheAdapterMakes pins that the pattern of the adapter's private
+// directories matches the one it makes.
+func TestTempDirsMatchesWhatTheAdapterMakes(t *testing.T) {
+	dir, err := hostSystem{}.tempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	if ok, _ := filepath.Match(TempDirs(), dir); !ok {
+		t.Errorf("%s does not match %s", dir, TempDirs())
+	}
+}

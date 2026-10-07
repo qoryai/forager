@@ -10,6 +10,7 @@ import (
 
 	"github.com/qoryai/runner/internal/program"
 	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/internal/tool"
 	"github.com/qoryai/runner/wall"
 )
@@ -198,8 +199,13 @@ func runnerFiles(spec Spec) []runnerFile {
 	// The private directory of a tool's socket is made when the tool starts, in the
 	// system's temporary directory; a mount that contains its pattern would contain it.
 	// It is checked whether or not the run has tools, since another run's on this
-	// machine are there too.
-	out = append(out, runnerFile{tool.SocketDirs(), "where the tools' sockets are made"})
+	// machine are there too. So are the private directories of the runs' record
+	// sockets and of the Docker wall's environment files, which hold the proxy's
+	// secret: this run's are made after the check, and other runs' exist.
+	out = append(out,
+		runnerFile{tool.SocketDirs(), "where the tools' sockets are made"},
+		runnerFile{socket.Dirs(), "where the runs' record sockets are made"},
+		runnerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {
 		for _, p := range f.Files() {
 			out = append(out, runnerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
@@ -213,7 +219,9 @@ func runnerFiles(spec Spec) []runnerFile {
 // checkMounts refuses a caller's runner file that is not an absolute path and, behind a
 // wall, a mount or the workspace that is, contains or lies inside one of the runner's
 // files: mount_contains_runner_files, with the mount and the file as its names, in that
-// order. The run directory, which the runner mounts read-only, is the runner's own.
+// order. The mounts are the run's own, Spec.Mounts and the workspace: what the runner
+// shows the enclosure itself, the run directory read-only and its own hook socket's
+// directory, is the runner's and is not checked.
 func checkMounts(spec Spec) error {
 	for _, p := range spec.RunnerFiles {
 		if strings.ContainsRune(p, 0) {

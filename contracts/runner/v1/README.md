@@ -1375,6 +1375,10 @@ runner's files are:
 - the file a credential is read from;
 - the private directories of the tools' sockets, made in the system's temporary
   directory, every run's on the machine, whether or not the run has tools;
+- the private directories in the system's temporary directory where every run on the
+  machine makes its record socket, `qory-run-*`, and where the `docker` wall writes a
+  run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
+  them;
 - the wall's own: for `docker`, the directory of the `docker` command and of the
   helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
   whose context and credential helpers start programs.

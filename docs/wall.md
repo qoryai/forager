@@ -196,7 +196,9 @@ the runner's files. Such a run returns a `*session.Refusal` with the code
 `mount_contains_runner_files`, and `Names` holds the mount, then the runner's file. The
 check comes before the server is contacted and before anything starts, `Local` included.
 An agent that changes a program the runner starts outside the wall, or reads the access
-key secret, has left the wall. The runner's files are:
+key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
+run directory and the hook socket's directory, which the runner shows the enclosure
+itself, are the run's own. The runner's files are:
 
 - `Spec.RunnerFiles`, the absolute paths the caller lists as its own. `qory` lists the
   runner file's directory, with the access key secret.
@@ -208,6 +210,10 @@ key secret, has left the wall. The runner's files are:
   the machine, which are made in the system's temporary directory when the tools
   start: a mount that contains that directory is refused, whether or not the run has
   tools.
+- The private directories in the system's temporary directory where every run on the
+  machine makes its record socket, `qory-run-*`, and where the Docker wall writes a
+  run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
+  them.
 - A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
