@@ -396,10 +396,12 @@ func TestEnrolmentProofs(t *testing.T) {
 }
 
 // TestAnswerSignatures pins the six lines of a signed answer and their known answers
-// under the fixture signing key: 200 with the discovery body, 404 with an empty body,
-// 201 to the enrolment request, whose line 3 is the request's proof, and the signed
-// 409s key_limit and key_invalid at enrolment, with one key and, during a rotation, to
-// the request with two fingerprints, with two keys, current first.
+// under the fixture signing key: 200 with the discovery body and 404 with an empty
+// body, under qory-answer-ed25519-v1; 201 to the enrolment request, whose line 3 is the
+// request's proof, and the signed 409s key_limit and key_invalid at enrolment, with one
+// key and, during a rotation, to the request with two fingerprints, with two keys,
+// current first, under qory-enrol-answer-ed25519-v1. A signature under one domain line
+// does not verify under the other.
 func TestAnswerSignatures(t *testing.T) {
 	k := loadKeys(t)
 	signing := ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed))
@@ -414,8 +416,12 @@ func TestAnswerSignatures(t *testing.T) {
 	load(t, "fixtures/enrolment/request.json", &proof)
 	load(t, "fixtures/enrolment/request-two-fingerprints.json", &rotation)
 	for _, a := range v.Answers {
-		if len(a.Lines) != 6 || a.Lines[0] != "qory-answer-ed25519-v1" {
-			t.Errorf("%s: lines %q; want six, the first the domain line", a.Note, a.Lines)
+		domain := "qory-answer-ed25519-v1"
+		if a.Lines[1] == "201" || a.Lines[1] == "409" {
+			domain = "qory-enrol-answer-ed25519-v1"
+		}
+		if len(a.Lines) != 6 || a.Lines[0] != domain {
+			t.Errorf("%s: lines %q; want six, the first the domain line %s", a.Note, a.Lines, domain)
 			continue
 		}
 		body := a.body(t)
@@ -488,6 +494,11 @@ func TestAnswerSignatures(t *testing.T) {
 			t.Errorf("%s: status %q", a.Note, a.Lines[1])
 		}
 		signs(t, a.Note, signing, a.message(t), a.Signature)
+		other := slices.Clone(a.Lines)
+		other[0] = map[string]string{"qory-answer-ed25519-v1": "qory-enrol-answer-ed25519-v1", "qory-enrol-answer-ed25519-v1": "qory-answer-ed25519-v1"}[domain]
+		if ed25519.Verify(signing.Public().(ed25519.PublicKey), []byte(strings.Join(other, "\n")), b64(t, a.Signature)) {
+			t.Errorf("%s: the signature verifies under %s", a.Note, other[0])
+		}
 	}
 }
 

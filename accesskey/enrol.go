@@ -186,16 +186,20 @@ type EnrolmentAnswer struct {
 }
 
 // VerifyAnswer reads the server's answer to the request. A 201 and a signed 409 are
-// verified alike: each lists the server's keys in apiary_public_key, and the answer
-// verifies under the entry whose fingerprint the code carries first, or it is
-// answer_unsigned. A 201's pin is then the entries whose fingerprints the code
+// verified alike, as enrolment answers, under EnrolAnswerDomain with the request's
+// proof as the third line: each lists the server's keys in apiary_public_key, and the
+// answer verifies under the entry whose fingerprint the code carries first, or it is
+// answer_unsigned. A 409 the server sends unsigned, to a proof that does not verify,
+// is answer_unsigned too. A 201's pin is then the entries whose fingerprints the code
 // carries. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit. A
 // 401, unsigned, is unauthorized: the code was used, has expired or was cancelled. Any
 // other answer is answer_unsigned. A caller acts on a refusal's code, and never on the
 // status of an answer_unsigned: an answer that does not verify may come from anyone on
 // the path.
 func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentAnswer, error) {
-	a.RequestSignature = r.Proof
+	// The answer is an enrolment answer whatever the caller passed: only a signature
+	// under the enrolment answer's own domain line verifies.
+	a.Enrolment, a.RequestSignature = true, r.Proof
 	fingerprints := CodeFingerprints(r.Code)
 	if len(fingerprints) == 0 {
 		return nil, errors.New("the request's code is not an enrolment code")

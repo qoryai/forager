@@ -16,11 +16,16 @@ import (
 )
 
 // The domain lines: the first line of every message an Ed25519 key signs, one per
-// kind of message, so a signature of one kind is never a signature of another.
+// kind of message, so a signature of one kind is never a signature of another. An
+// answer to an enrolment has its own, EnrolAnswerDomain: its third line is the
+// request's proof, which anyone holding a live code can make up, so a signature over an
+// enrolment answer never verifies as the answer to a signed request, whose third line
+// is that request's signature.
 const (
-	RequestDomain = "qory-request-ed25519-v1"
-	AnswerDomain  = "qory-answer-ed25519-v1"
-	EnrolDomain   = "qory-enrol-ed25519-v1"
+	RequestDomain     = "qory-request-ed25519-v1"
+	AnswerDomain      = "qory-answer-ed25519-v1"
+	EnrolDomain       = "qory-enrol-ed25519-v1"
+	EnrolAnswerDomain = "qory-enrol-answer-ed25519-v1"
 )
 
 // The headers of a signed request and of a signed answer.
@@ -103,13 +108,18 @@ func (p PublicKey) VerifyRequest(r Request, signature string) bool {
 func Timestamp(now time.Time) string { return strconv.FormatInt(now.Unix(), 10) }
 
 // Answer is one answer of the server, as its signature covers it: six lines joined by
-// a line feed, with none after the last. The domain line; the status, three decimal
-// digits; the request's X-Qory-Signature-Ed25519 exactly as sent, or for an enrolment
-// the request's proof; the lower-case hex SHA-256 of the body as the server produced
-// it, before any content coding; the answer's X-Qory-Configuration, or empty; and its
+// a line feed, with none after the last. The domain line, AnswerDomain, or
+// EnrolAnswerDomain for an answer to an enrolment; the status, three decimal digits;
+// the request's X-Qory-Signature-Ed25519 exactly as sent, or for an enrolment the
+// request's proof; the lower-case hex SHA-256 of the body as the server produced it,
+// before any content coding; the answer's X-Qory-Configuration, or empty; and its
 // X-Qory-Run-Configuration, or empty. The third line binds the answer to its request,
 // and through the request's signature to the access key and the instance that sent it.
 type Answer struct {
+	// Enrolment marks an answer to an enrolment, whose message starts with
+	// EnrolAnswerDomain. [EnrolmentRequest.VerifyAnswer] sets it; a server sets it to
+	// sign an enrolment answer.
+	Enrolment        bool
 	Status           int
 	RequestSignature string
 	Body             []byte
@@ -119,8 +129,12 @@ type Answer struct {
 
 // Message returns the six lines the answer's signature covers.
 func (a Answer) Message() []byte {
+	domain := AnswerDomain
+	if a.Enrolment {
+		domain = EnrolAnswerDomain
+	}
 	sum := sha256.Sum256(a.Body)
-	return []byte(AnswerDomain + "\n" + fmt.Sprintf("%03d", a.Status) + "\n" + a.RequestSignature + "\n" +
+	return []byte(domain + "\n" + fmt.Sprintf("%03d", a.Status) + "\n" + a.RequestSignature + "\n" +
 		hex.EncodeToString(sum[:]) + "\n" + a.Configuration + "\n" + a.RunConfiguration)
 }
 

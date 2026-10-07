@@ -345,9 +345,11 @@ func TestRequestKnownAnswers(t *testing.T) {
 
 // TestAnswerKnownAnswers verifies the published answers under the fixture signing key,
 // as a runner pinning it does: 200 with the discovery body and its digest, 404 with an
-// empty body, and 201 to the enrolment request, whose third line is the proof. Each
-// is also signed again to the same bytes, and an answer with another status, another
-// body, another digest or another request's signature does not verify.
+// empty body, and the enrolment answers, under their own domain line, whose third line
+// is the proof. Each is also signed again to the same bytes, and an answer with another
+// status, another body, another digest, another request's signature or the other
+// domain line does not verify: an enrolment answer's signature is never one of an
+// answer to a signed request, nor the reverse.
 func TestAnswerKnownAnswers(t *testing.T) {
 	k := keys(t)
 	signer := k.SigningKey.key(t)
@@ -359,7 +361,11 @@ func TestAnswerKnownAnswers(t *testing.T) {
 		}
 		var status int
 		fmt.Sscanf(v.Lines[1], "%d", &status)
-		a := accesskey.Answer{Status: status, RequestSignature: v.Lines[2], Body: body, Configuration: v.Lines[4], RunConfiguration: v.Lines[5]}
+		enrolment := v.Lines[1] == "201" || v.Lines[1] == "409"
+		if want := map[bool]string{false: accesskey.AnswerDomain, true: accesskey.EnrolAnswerDomain}[enrolment]; v.Lines[0] != want {
+			t.Errorf("%s: domain line %s, want %s", v.Note, v.Lines[0], want)
+		}
+		a := accesskey.Answer{Enrolment: enrolment, Status: status, RequestSignature: v.Lines[2], Body: body, Configuration: v.Lines[4], RunConfiguration: v.Lines[5]}
 		m := a.Message()
 		if string(m) != strings.Join(v.Lines, "\n") || len(m) != v.Length {
 			t.Errorf("%s: message of %d bytes:\n%s", v.Note, len(m), m)
@@ -380,6 +386,7 @@ func TestAnswerKnownAnswers(t *testing.T) {
 			"a run digest":      func(a accesskey.Answer) accesskey.Answer { a.RunConfiguration = "sha256=00"; return a },
 			"another request":   func(a accesskey.Answer) accesskey.Answer { a.RequestSignature = v.Signature; return a },
 			"no request at all": func(a accesskey.Answer) accesskey.Answer { a.RequestSignature = ""; return a },
+			"the other domain":  func(a accesskey.Answer) accesskey.Answer { a.Enrolment = !a.Enrolment; return a },
 		} {
 			if pin.VerifyAnswer(changed(a), v.Signature) {
 				t.Errorf("%s: verifies with %s", v.Note, name)
@@ -445,7 +452,7 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	}
 	// Signed by another key than the one the code names: refused.
 	other := k.NextSigningKey.key(t)
-	if _, err := r.VerifyAnswer(answer, other.SignAnswer(accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: answer.Body})); code(err) != accesskey.CodeAnswerUnsigned {
+	if _, err := r.VerifyAnswer(answer, other.SignAnswer(accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: r.Proof, Body: answer.Body})); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("an answer signed by a key the code does not name: %v", err)
 	}
 }
@@ -481,7 +488,7 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := accesskey.Answer{Status: 201, RequestSignature: r.Proof, Body: body}
+		a := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: r.Proof, Body: body}
 		got, err := r.VerifyAnswer(a, signer.SignAnswer(a))
 		if err != nil {
 			t.Fatal(err)
@@ -489,6 +496,45 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 		if len(got.Pin) != c.pins || got.NodeKind != "pool" || !got.StoredSecrets {
 			t.Errorf("%s: pinned %d keys, %+v", c.code, len(got.Pin), got)
 		}
+	}
+}
+
+// TestEnrolmentAnswersHaveTheirOwnDomain pins the domain line that keeps an enrolment
+// answer apart from every other answer. Anyone holding a live code chooses the proof
+// that is an enrolment answer's third line, so a server's signed 409 key_invalid to a
+// proof equal to a node's request signature must not verify as the answer to that
+// node's request; and an answer signed under the other answers' domain line with the
+// proof as its third line must not verify as an enrolment answer.
+func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
+	k := keys(t)
+	signer := k.SigningKey.key(t)
+	pin := k.SigningKey.pin()
+	r, err := accesskey.NewEnrolmentRequest(k.accessKey(t), vectors(t).Enrolment[0].Lines[1], "build-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"error":"key_invalid","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
+	// The server signs a refusal to an enrolment whose proof is a node's request
+	// signature, as the published GET of discovery is.
+	nodeRequest := vectors(t).Requests[0].Signature
+	enrolment := accesskey.Answer{Enrolment: true, Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}
+	if pin.VerifyAnswer(accesskey.Answer{Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}, signer.SignAnswer(enrolment)) {
+		t.Error("an enrolment answer verifies as the answer to a signed request")
+	}
+	if !pin.VerifyAnswer(enrolment, signer.SignAnswer(enrolment)) {
+		t.Error("an enrolment answer does not verify as one")
+	}
+	// An answer under the other answers' domain line, its third line the proof.
+	plain := accesskey.Answer{Status: http.StatusConflict, RequestSignature: r.Proof, Body: body}
+	if _, err := r.VerifyAnswer(plain, signer.SignAnswer(plain)); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("a 409 signed under %s: %v", accesskey.AnswerDomain, err)
+	}
+	if _, err := r.VerifyAnswer(plain, signer.SignAnswer(accesskey.Answer{Enrolment: true, Status: http.StatusConflict, RequestSignature: r.Proof, Body: body})); code(err) != accesskey.CodeKeyInvalid {
+		t.Errorf("a 409 signed under %s: %v", accesskey.EnrolAnswerDomain, err)
+	}
+	created := accesskey.Answer{Status: http.StatusCreated, RequestSignature: r.Proof, Body: bytes.TrimSpace(read(t, "fixtures/enrolment/answer.json"))}
+	if _, err := r.VerifyAnswer(created, signer.SignAnswer(created)); code(err) != accesskey.CodeAnswerUnsigned {
+		t.Errorf("a 201 signed under %s: %v", accesskey.AnswerDomain, err)
 	}
 }
 
@@ -687,7 +733,7 @@ func TestPostEnrols(t *testing.T) {
 			return
 		}
 		if sign && status != http.StatusUnauthorized {
-			w.Header().Set(accesskey.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: req.Proof, Body: body}))
+			w.Header().Set(accesskey.HeaderSignature, signer.SignAnswer(accesskey.Answer{Enrolment: true, Status: status, RequestSignature: req.Proof, Body: body}))
 		}
 		w.WriteHeader(status)
 		w.Write(body)
@@ -723,6 +769,17 @@ func TestPostEnrols(t *testing.T) {
 	if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); code(err) != accesskey.CodeAnswerUnsigned {
 		t.Errorf("a signed 409 that lists no key: %v", err)
 	}
+	// The server refuses a proof that does not verify with an unsigned 409
+	// key_invalid, before it signs anything: answer_unsigned, with its status.
+	sign = false
+	for _, b := range []string{`{"error":"key_invalid"}`, `{"error":"key_invalid",` + keys + `}`} {
+		body = []byte(b)
+		var ref *accesskey.Refusal
+		if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); !errors.As(err, &ref) || ref.Code != accesskey.CodeAnswerUnsigned || ref.Status != http.StatusConflict {
+			t.Errorf("an unsigned 409 %s: %v", b, err)
+		}
+	}
+	sign = true
 	status = http.StatusCreated
 	for name, b := range map[string]string{
 		"a node_kind against its id": `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"pool","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
@@ -854,12 +911,12 @@ func TestEnrolmentRefusalKnownAnswers(t *testing.T) {
 			"tampered":      func() error { _, err := r.VerifyAnswer(tampered, v.Signature); return err },
 			"another proof": func() error { _, err := other.VerifyAnswer(a, v.Signature); return err },
 			"signed by the next": func() error {
-				_, err := r.VerifyAnswer(a, next.SignAnswer(accesskey.Answer{Status: 409, RequestSignature: r.Proof, Body: body}))
+				_, err := r.VerifyAnswer(a, next.SignAnswer(accesskey.Answer{Enrolment: true, Status: 409, RequestSignature: r.Proof, Body: body}))
 				return err
 			},
 			"another key listed": func() error {
 				b := []byte(`{"error":"key_limit","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"}]}`)
-				_, err := one.VerifyAnswer(accesskey.Answer{Status: 409, Body: b}, next.SignAnswer(accesskey.Answer{Status: 409, RequestSignature: one.Proof, Body: b}))
+				_, err := one.VerifyAnswer(accesskey.Answer{Status: 409, Body: b}, next.SignAnswer(accesskey.Answer{Enrolment: true, Status: 409, RequestSignature: one.Proof, Body: b}))
 				return err
 			},
 		} {

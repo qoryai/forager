@@ -140,8 +140,10 @@ release may change what an existing document does, and says so under Upgrading.
   secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
   HPKE to the access key; `sealed-plaintext.schema.json`, what the envelope opens to;
   `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
-  access key is active; `events/run.refused.schema.json`, the data of `dev.qory.run.refused`, which
-  `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
+  access key is active, signed with every signed refusal at enrolment under the
+  enrolment answers' own domain line, `qory-enrol-answer-ed25519-v1`, once the server
+  has verified the proof; `events/run.refused.schema.json`, the data of
+  `dev.qory.run.refused`, which `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
   list of variable names and patterns; and `headers.json`, the header names and prefixes
   refused for a connection's header, from the IANA HTTP Field Name Registry, the Fetch
   standard's forbidden request headers and the names the contract adds. The runner's
@@ -198,7 +200,8 @@ release may change what an existing document does, and says so under Upgrading.
   signs the GET and POST request strings; verifies a signed answer under a pin; builds
   an enrolment request with its normalised code and proof, posts it and verifies the
   answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
-  names; and makes the instance id with the two lines of
+  names and the enrolment answers' domain line, an unsigned `409` being
+  `answer_unsigned`; and makes the instance id with the two lines of
   its file, the id and a keyed hash of the machine's identity. It verifies under no key
   the key checks refuse, refuses a document that contains a secret with
   `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
@@ -228,9 +231,9 @@ release may change what an existing document does, and says so under Upgrading.
   `instance_limit` when the node's live instances are at its limit.
 - The reference receiver accepts the public keys its configuration holds, answers in
   the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
-  being `invalid_request`, and signs every answer after verification under its own key, the `410` of its `Stop` among them. Its
-  new hooks `Closed` and `Admit` close a run with `run_closed` and refuse an instance's
-  ping with `instance_limit`.
+  being `invalid_request`, and signs every answer after verification under its own key,
+  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
+  `run_closed` and refuse an instance's ping with `instance_limit`.
 
 ### Changed
 
