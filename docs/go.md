@@ -80,9 +80,20 @@ runs the same checks on it.
 - `Server` defines the server the run reports to. See [the server](server.md).
 - `Policy` is the node's policy. Without a server's policy it is the run's; with one it
   narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
-- `Env` is what the run inherits, `LaunchEnv` what the harness's launch sets over it,
-  and `Variables` the node's own variables, its deny entries and how an unwalled run
-  takes the server's. See [variables](server.md#variables).
+- The variables come from several sources, and for each name the highest wins. See
+  [variables](server.md#variables).
+  - `LaunchFixed` is the values qory computes itself: the runtime's built-in template
+    entries and its modules' env exports. They win over every source but the runner's
+    own names. The server's variables come next.
+  - `Variables.Run` is the run's own, `--env`, and `Variables.Machine` the machine's,
+    `wall.env`. `Variables` also holds the deny entries and how an unwalled run takes
+    the server's.
+  - `LaunchDefaults` is the harness's written defaults, a value with `${dir}` in it
+    included, and `Env` what the run inherits, the lowest.
+  - `HarnessHome` is the harness's home as the agent sees it. The runner sets
+    `QORY_HARNESS_HOME` to it.
+  - `OnVariables` receives each name, its source and the values that lost, once, before
+    the agent starts.
 - A run refused before it starts returns a `*session.Refusal`, with the contract's code
   and the names it concerns. `errors.As` finds it.
 - `Events` is any stream that gets every event as well. See

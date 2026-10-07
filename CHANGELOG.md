@@ -39,15 +39,21 @@ release may change what an existing document does, and says so under Upgrading.
   certificate, so the test binary's first verification must come within `Run`; from
   then on, for the rest of the process, it trusts only the suite's authority.
   `TestDockerConforms` starts the recorders from `busybox:stable`.
-- `session.Spec.Env` is what the run inherits. What the harness's composed launch sets
-  goes in `LaunchEnv`, and the node's own variables in `Variables.Own`, so the runner
-  distinguishes them: a server's variable of a name in `LaunchEnv` is left out, and a
-  node variable of a name the server sets is left out.
+- `session.Spec.Env` is what the run inherits. What the harness computes itself goes in
+  `LaunchFixed`, what its author wrote in `LaunchDefaults`, the run's own variables,
+  `--env`, in `Variables.Run`, and the machine's, `wall.env`, in `Variables.Machine`, so
+  the runner tells each source apart and applies the highest that sets a name.
+  `HarnessHome` is the harness's home as the agent sees it, an absolute path, and the
+  runner sets `QORY_HARNESS_HOME` to it. `OnVariables` receives each name, its source
+  and the values that lost, once the variables are resolved and before the agent
+  starts.
 - A walled run refuses to pass into the enclosure a `QORY_` variable other than
   `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
-  `variable_reserved`, whether it comes from `Env`, `LaunchEnv` or `Variables.Own`.
-  Behind a wall, every variable the runtime declares or reserves that neither a
-  placeholder, the run nor the runtime's preparation sets is in the enclosure's
+  `variable_reserved`, whether it comes from `Env`, `LaunchFixed`, `LaunchDefaults`,
+  `Variables.Run` or `Variables.Machine`. Any run refuses a value from any of them for a
+  placeholder, `placeholder_conflict`. Both are checked before the variables are
+  resolved. Behind a wall, every variable the runtime declares or reserves that neither
+  a placeholder, a source nor the runtime's preparation sets is in the enclosure's
   environment as an empty value, for Claude Code `ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`: a value the run passes for one
   reaches the runtime as before.
@@ -65,21 +71,28 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Added
 
-- A run configuration's `variables` reach the agent's process: names and string values
-  the server resolved. The server leads: a node variable applies for every name whose
-  server value the run does not apply, and is left out, and reported, for a name whose
-  server value it does. The runner leaves out a name on the deny list, which is
-  `denied-variables.json`, the runtime's `denies` and `Variables.Deny`, matched
-  regardless of case with `*` for any run of characters; a variable the runtime declares
-  or reserves; a placeholder's name; a variable a credential is read from; and a name
-  the runtime's preparation, the harness or the wall sets. A run without a wall takes
-  none of the server's variables unless `Variables.Unwalled` is `accept`. The variables
-  are fixed when the run starts. Tools, the relay, the agent's Docker daemon and the
-  wall's `docker` command keep their own environment.
-- `dev.qory.run.policy_applied` reports `variables`: `names`, the variables the run
-  applies; `denied`, the server's left out by the deny list or because the run sets
-  the name otherwise; `unwalled`, the server's an unwalled run left out; and
-  `node_ignored`, the node's left out for a name the server sets. Names alone, sorted.
+- A run configuration's `variables` reach the agent's process: for each name an object
+  with its string `value`, as the server resolved it. An attribute beside `value` is
+  ignored. For each name the run takes the value of the highest source that sets it: the
+  fixed names, those the runner, the proxy, the wall, the runtime's preparation and the
+  placeholders set and the values the harness computes; then the server's; the run's
+  own; the machine's; the harness's written defaults; and what the run inherits. The
+  deny list, which is `denied-variables.json`, the runtime's `denies` and
+  `Variables.Deny`, matched regardless of case with `*` for any run of characters,
+  leaves out a value of the server, the run, the machine or the harness's defaults; its
+  built-in entries leave out a value the harness computes too. The server's value of a
+  variable the runtime declares or reserves, or of one a credential is read from, is
+  left out. A run without a wall takes none of the server's variables unless
+  `Variables.Unwalled` is `accept`; the run's own apply with or without a wall. A value
+  that loses is left out and the run starts. The variables are fixed when the run
+  starts. Tools, the relay, the agent's Docker daemon and the wall's `docker` command
+  keep their own environment.
+- `dev.qory.run.policy_applied` reports `variables`, one entry per name, sorted: `name`,
+  `from`, the source whose value the run applies, `fixed`, `apiary`, `run`, `machine`,
+  `harness` or `shell`, and `lost`, each value left out with its source and why,
+  `overridden`, `denied`, `fixed` or `unwalled`. Every name the server, the run, the
+  machine or the harness's defaults set is listed; a fixed name, and a name the run
+  inherits, only beside one of those. Names alone, never a value.
 - The node's policy narrows a server's. The mode is `enforce` when either side's is;
   the allow list is the hosts both sides allow; the deny lists add up; a request to a
   host either side holds to paths must match both; the tools and the credentials are
