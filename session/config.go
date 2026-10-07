@@ -167,24 +167,32 @@ func bothDeny(ceiling, own []string) []string {
 	return out
 }
 
-// Variables are the node's variables and how a run takes the server's: for qory, the
-// runner file's variables section, wall.env and --env.
+// Variables are the run's and the machine's variables and how a run takes the
+// server's: for qory, --env, wall.env and the runner file's variables section.
 //
-// The server leads. A server's variable reaches the agent's process alone, never a
-// tool, an integration, the relay or a Docker daemon, unless the run leaves it out: a
-// name on the deny list, which is the contract's denied-variables.json, the runtime's
-// denies and Deny; a variable the runtime declares or reserves; a placeholder's name;
-// a variable a value of the machine's is read from; a name the runtime's preparation,
-// LaunchEnv or the wall sets; and every one in a run without a wall unless Unwalled is
-// [UnwalledAccept]. dev.qory.run.policy_applied reports each by name, never a value.
+// For each name the highest source that sets it wins: the run's fixed names, those
+// the runner, the wall, the runtime's preparation and the placeholders set and
+// [Spec.LaunchFixed]; the server's variables, which it resolved among its own levels;
+// Run; Machine; [Spec.LaunchDefaults]; [Spec.Env]. A walled run refuses first what
+// must stay outside the enclosure: a QORY_ name other than QORY_RUN_ID and
+// QORY_RUN_SOCKET, or a variable a machine value is read from, from any of them,
+// variable_reserved; any run refuses a value for a placeholder, placeholder_conflict.
+// The deny list, the contract's denied-variables.json, the runtime's denies and Deny,
+// then leaves out a value of the server, Run, Machine or LaunchDefaults; the built-in
+// list alone leaves out one of LaunchFixed. The server's are left out of a run without
+// a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out and the
+// run starts; dev.qory.run.policy_applied records each name, its source and what lost,
+// never a value, and [Spec.OnVariables] receives the same.
 type Variables struct {
-	// Own are the node's own variables, NAME=value. Each applies when the run applies no
-	// server value of its name, and is left out, and reported, when it does. Without a
-	// server's variables they are all the run's.
-	Own []string
+	// Run are the run's own variables, NAME=value: for qory, --env. They apply with or
+	// without a wall.
+	Run []string
+	// Machine are the machine's variables, NAME=value: for qory, wall.env.
+	Machine []string
 	// Deny are names and patterns, in which * matches any run of characters, of
-	// variables the run leaves out of the server's, matched regardless of case: the
-	// runner file's variables.deny.
+	// variables the run leaves out of the server's, Run, Machine and
+	// [Spec.LaunchDefaults], matched regardless of case: the runner file's
+	// variables.deny.
 	Deny []string
 	// Unwalled is how a run without a Wall takes the server's variables:
 	// [UnwalledAccept] applies them as a walled run does, after the deny list;
@@ -192,6 +200,53 @@ type Variables struct {
 	// wall and the runner whole, not the developer's shell, which accept opens to the
 	// server.
 	Unwalled string
+}
+
+// Applied is the run's variables as resolved: one entry per name, sorted by name, as
+// dev.qory.run.policy_applied records them. A name is in it when the server, the run,
+// the machine or the harness's defaults set it; a fixed name, and a name of the
+// environment the run inherits, only beside one of those.
+type Applied []AppliedVariable
+
+// AppliedVariable is one name: the source whose value the run applies, empty when none
+// does, and the values that lost, the highest source first.
+type AppliedVariable struct {
+	Name, From string
+	Lost       []Loss
+}
+
+// Loss is one source's value that lost, and why.
+type Loss struct {
+	From, Why string
+}
+
+// The sources of a variable, the highest first, and why a value lost, as
+// [AppliedVariable] and [Loss] contain them.
+const (
+	FromFixed   = variables.FromFixed
+	FromApiary  = variables.FromApiary
+	FromRun     = variables.FromRun
+	FromMachine = variables.FromMachine
+	FromHarness = variables.FromHarness
+	FromShell   = variables.FromShell
+
+	WhyOverridden = variables.WhyOverridden
+	WhyDenied     = variables.WhyDenied
+	WhyFixed      = variables.WhyFixed
+	WhyUnwalled   = variables.WhyUnwalled
+)
+
+// applied is the record of a resolution as [Spec.OnVariables] receives it.
+func applied(entries []variables.Entry) Applied {
+	out := make(Applied, len(entries))
+	for i, e := range entries {
+		lost := make([]Loss, len(e.Lost))
+		for j, l := range e.Lost {
+			lost[j] = Loss{From: l.From, Why: l.Why}
+		}
+		out[i] = AppliedVariable{Name: e.Name, From: e.From, Lost: lost}
+	}
+	return out
 }
 
 // The two values of [Variables.Unwalled].

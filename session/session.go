@@ -40,21 +40,38 @@ type Spec struct {
 	Command string
 	Args    []string
 	// Env is the environment the run inherits, NAME=value: a nil Env is the process's
-	// own, or nothing under a Wall, where only what the run lists goes in. What the run
-	// sets over it is LaunchEnv and Variables, apart from it, so the runner distinguishes
-	// the node's variables and the harness's from what is merely inherited. The access
-	// key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
+	// own, or nothing under a Wall, where only what the run lists goes in. It is the
+	// lowest of the run's sources of variables: LaunchDefaults, Variables and the
+	// server's variables win over it, apart from it, so the runner distinguishes them
+	// from what is merely inherited (contracts/runner/v1/README.md §Variables). The
+	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them,
 	// and out of every tool's and credential program's environment too.
 	Env []string
 	Dir string
-	// LaunchEnv is what the harness's composed launch sets, NAME=value, over Env: the
-	// run's own names, like the ones the Runtime's preparation sets, so a server's
-	// variable of such a name is left out and reported as denied.
-	LaunchEnv []string
-	// Variables are the node's own variables, set over LaunchEnv, and how the run takes
-	// the variables of the server's run configuration.
+	// LaunchFixed is the values the harness computes itself, NAME=value: for qory the
+	// runtime's built-in template entries and its modules' env exports. They are fixed
+	// names of the run: they win over every other source of a variable, the built-in
+	// deny list, denied-variables.json, leaves one out, and the runtime's denies and
+	// Variables.Deny do not. The runner's, the wall's and the runtime preparation's
+	// names win over them.
+	LaunchFixed []string
+	// LaunchDefaults is the harness's written defaults, NAME=value: for qory the values
+	// its author wrote in the launch and qory.yaml's env, a value with ${dir} in it
+	// included. They win over Env and lose to every other source.
+	LaunchDefaults []string
+	// Variables are the run's and the machine's variables, and how the run takes the
+	// variables of the server's run configuration.
 	Variables Variables
+	// HarnessHome is the harness's home as the agent's process sees it, an absolute
+	// path; empty means none. When set, the runner sets QORY_HARNESS_HOME to it, as one
+	// of its own names, like QORY_RUN_ID.
+	HarnessHome string
+	// OnVariables, when not nil, is called once the run's variables are resolved,
+	// before the tools, the wall and the agent start, with each name, its source and
+	// the values that lost, as dev.qory.run.policy_applied records them: qory prints a
+	// line for an --env value that lost. A run refused before then does not call it.
+	OnVariables func(Applied)
 	// Interactive says the caller has a terminal: the session runs on a pseudo-terminal
 	// attached to Stdin and Stdout, unless Args holds an argument the Runtime names as
 	// headless, -p for Claude Code, in which case it runs on pipes as if the caller had
@@ -210,10 +227,12 @@ type Discovery struct {
 // tool_unknown and image_unknown among them. errors.As finds one in what [Run] returns.
 type Refusal = accesskey.Refusal
 
-// The environment variables the session gets from the runner.
+// The environment variables the session gets from the runner. EnvHarnessHome is set
+// when the spec has a HarnessHome.
 const (
-	EnvRunID  = "QORY_RUN_ID"
-	EnvSocket = socket.Env
+	EnvRunID       = "QORY_RUN_ID"
+	EnvSocket      = socket.Env
+	EnvHarnessHome = "QORY_HARNESS_HOME"
 )
 
 // MaxLabels is how many labels a run may carry.
@@ -270,6 +289,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		pol = node
 	}
 	if err := checkVariables(spec.Variables); err != nil {
+		return nil, err
+	}
+	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return nil, err
 	}
 	// The server, when the run has one: discovered before anything else. The run
@@ -465,6 +487,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return fail(err)
 	}
+	if spec.OnVariables != nil {
+		spec.OnVariables(applied(vars.Applied))
+	}
 	tools, err := tool.Start(runCtx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
 	if err != nil {
 		return fail(err)
@@ -543,19 +568,25 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
-	// enclosure reaches them on. The environment is what the run inherits, then what the
-	// harness sets, the variables, what the runtime's preparation sets and the runner's
-	// own, each over the ones before, and behind a wall the placeholders and, empty,
-	// the runtime's declared and reserved variables no placeholder sets, so an image's
-	// own value for one does not reach the runtime.
+	// enclosure reaches them on. The environment is what the run inherits, then the
+	// variables as resolved, the harness's computed values, what the runtime's
+	// preparation sets and the runner's own, each over the ones before, and behind a
+	// wall the placeholders and, empty, the runtime's declared and reserved variables
+	// nothing sets, so an image's own value for one does not reach the runtime. The
+	// resolution has left out every value of a fixed name, so what wins here by position
+	// is what the record says.
+	own := []string{EnvRunID + "=" + runID}
+	if spec.HarnessHome != "" {
+		own = append(own, EnvHarnessHome+"="+spec.HarnessHome)
+	}
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
+		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path()}, own),
 	}
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, own, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
 			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
@@ -602,9 +633,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		started["labels"] = spec.Labels
 	}
 	write(event.RunStarted, started)
-	// applied is the policy_applied event of a policy: the one pinned at start, and
-	// each one a reload puts in its place.
-	applied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
+	// policyApplied is the policy_applied event of a policy: the one pinned at start,
+	// and each one a reload puts in its place.
+	policyApplied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
 		allow, deny := pol.Policy.Egress.Allow, pol.Policy.Egress.Deny
 		if allow == nil {
 			allow = []string{}
@@ -626,7 +657,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			}
 			a["node_policy"] = np
 		}
-		a["variables"] = map[string]any{"names": vars.Names, "denied": vars.Denied, "unwalled": vars.Unwalled, "node_ignored": vars.NodeIgnored}
+		a["variables"] = vars.Applied
 		if spec.Declared != nil {
 			a["harness_hosts"] = spec.Declared
 		}
@@ -664,7 +695,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		return a
 	}
-	write(event.PolicyApplied, applied(pol, held))
+	write(event.PolicyApplied, policyApplied(pol, held))
 	if srv != nil {
 		// A reload is as strict as a start. What a start refuses, a policy that selects
 		// credentials without a wall, a credential that does not resolve, fails the
@@ -713,7 +744,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			old := held
 			held = fresh
 			posts.SetRunDigest(in.RunConfiguration)
-			record(event.PolicyApplied, applied(&in, fresh))
+			record(event.PolicyApplied, policyApplied(&in, fresh))
 			for _, d := range refused {
 				record(event.RunEgress, egress(d))
 			}

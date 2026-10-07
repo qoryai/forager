@@ -145,7 +145,8 @@ One run, on a developer machine, with a server configured:
 1. The runner receives a launch spec: the program, its arguments, its environment and
    directory, whether the session is interactive, the policy document, the server
    document with the access key secret and the instance id and name, the egress the
-   harness declared, the node's variables, and the runtime name. The spec comes from
+   harness declared, the run's and the machine's variables, the harness's computed
+   values and defaults, and the runtime name. The spec comes from
    the `qory` command, which reads the policy and the server from its own
    configuration; the runner receives nothing about what composed it or where it was
    read.
@@ -176,8 +177,9 @@ One run, on a developer machine, with a server configured:
 5. It starts the proxy on a loopback port and sets `HTTP_PROXY`, `HTTPS_PROXY` and
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
-   answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
-   `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment but
+   answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path,
+   `QORY_RUN_ID` to the run id, and `QORY_HARNESS_HOME` to the harness's home when the
+   launch spec has one. Nothing else of the runner's enters the environment but
    the variables (§Variables), the placeholders and, in a walled run, the runtime's
    declared and reserved variables nothing else sets, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
@@ -293,7 +295,7 @@ server's policy and no node policy, the server's applies as it is.
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
 | `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run |
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
-| `variables` | the server's; the node adds only names whose server value the run does not apply (§Variables) |
+| `variables` | the server's, over every source of the node's but the fixed names; the node's apply to the names the server leaves alone (§Variables) |
 
 `image` selects one thing, so its narrowing is agreement: two different selections are
 no run rather than a choice. The node's policy is fixed for the run: a reload replaces
@@ -537,51 +539,63 @@ A run's variables reach the agent's process alone. The runner adds them to the l
 environment; the tools, the relay, the agent's Docker daemon and the wall's `docker`
 command keep their own environment.
 
-**The server leads.** On a node connected to a server, the server's variables, the run
-configuration's `variables`, are the run's. The server resolves them among its own
-levels and sends the resolved values alone, a name and a value each. The node adds only
-names: its own variables, the ones the launch spec lists as the node's,
-`Spec.Variables.Own` in Go, apply for every name whose server value the run does not
-apply. A node value for a name whose server value the run applies, a name in `names`, is
-left out and reported in `policy_applied`'s `variables.node_ignored`, and the run
-starts. A server value the deny list leaves out, or one an unwalled run leaves out under
-`ignore`, leaves the node's own value in place, as without a server. Names are compared
-exactly between the node and the server; the deny list matches regardless of case. A
-node, through an agent that writes its configuration for example, is easier to
-compromise than the server, so the node only adds. Without a server, the node's own
-variables are the run's.
+**The order.** Several sources may set one name. For each name the run takes the value
+of the highest source that sets it:
 
-The runtime's preparation (§The runtime) and the harness's composed launch,
-`Spec.LaunchEnv` in Go, set names that are the runner's own, not the node's. Such a name
-wins over the server's variable, which is left out and reported in `denied`, because the
-runtime needs it.
+| Source, highest first | What it is | In the launch spec, Go |
+|---|---|---|
+| `fixed` | the runner's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
+| `apiary` | the server's: the run configuration's `variables` | |
+| `run` | the run's own variables, `qory run --env` | `Spec.Variables.Run` |
+| `machine` | the machine's variables, the runner file's `wall.env` | `Spec.Variables.Machine` |
+| `harness` | the harness's written defaults | `Spec.LaunchDefaults` |
+| `shell` | the environment the run inherits | `Spec.Env` |
 
-**Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
-variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
-`ignore`, an unwalled run starts without them; they are left out and reported by name in
-`policy_applied`'s `variables.unwalled`. With `accept`, the deny list below applies, as
-in a walled run. The deny list protects the wall and the runner, not the developer, so
-`accept` opens the developer's shell to the server.
+The server resolves its variables among its own levels, a lock included, and sends the
+resolved values alone, a name and a value each; the runner reads no level. So the server
+controls every name it sets, and a node source applies to the names it leaves alone.
+Among the fixed names, the runner's, the proxy's, the wall's, the preparation's and the
+placeholders win over the harness's computed values. Names are compared exactly between
+sources; the deny list matches regardless of case. A value that loses is left out, the
+record lists it with its source and the reason (§The record of the variables), and the
+run starts.
 
-**Denied names.** The runner leaves out of every walled run, and of an unwalled run with
-`accept`, a server variable whose name is on the deny list: the built-in list
+**Refusals first.** Before it resolves anything, the runner checks every value the node
+passes: what the run inherits, the harness's computed values and defaults, and the run's
+and the machine's variables. They keep the node's secrets and the stand-ins out of the
+enclosure. A walled run that passes a `QORY_` variable, or a variable a value of the
+machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY_RUN_ID`
+and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall
+stops the run. A run that passes a value for a placeholder is no run,
+`placeholder_conflict`, with or without a wall. These are the only refusals of the
+variables. `QORY_HARNESS_HOME` is the runner's own when the launch spec has a harness
+home: the runner sets it after the check, and a value a source passes for it is refused
+or denied as any `QORY_` name.
+
+**Denied names.** The deny list leaves out a value of the server, the run, the machine
+or the harness's defaults whose name it matches: the built-in list
 `denied-variables.json`, the run's runtime's `denies` (§The descriptor), and the names
 the node's owner adds in the launch spec, `Spec.Variables.Deny` in Go, such as `[NAME,
-PREFIX_*]`. Each built-in entry undermines the wall, the proxy or the runner. A denied
-variable is left out and reported by name in `variables.denied`, and the run starts. An
-entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one character other
-than `*`. It matches a whole name: `*` matches any run of characters, the empty run
-included, anywhere in the entry. Matching ignores case, because programs read
-`http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1, "names":
-[...], "patterns": [...]}`, holds every row of the table but the two that depend on the
-node and the run: the names the wall sets for the run's bundle, and the runtime's
-`denies`, which `runtimes.json` lists.
+PREFIX_*]`. The built-in entries apply to the harness's computed values as well, so a
+computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `denies`
+and the node's entries leave them in, since the harness computes such values for the
+runtime. What the run inherits is matched against no entry: it is the developer's own
+environment. A denied value is left out, recorded as `denied`, and the next source's
+value of the name applies. Each built-in entry undermines the wall, the proxy or the
+runner. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
+character other than `*`. It matches a whole name: `*` matches any run of characters,
+the empty run included, anywhere in the entry. Matching ignores case, because programs
+read `http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1,
+"names": [...], "patterns": [...]}`, is the built-in list for every source the deny list
+covers, the harness's computed values included. It holds every row of the table but the
+two that depend on the node and the run: the names the wall sets for the run's bundle,
+and the runtime's `denies`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
 | `QORY_*` | the runner's own |
 | `*_PROXY`, `NO_PROXY` included, in any case | the runner sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
-| `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and a server value would replace it |
+| `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and another value would replace it |
 | `SSL_CERT_DIR`, `GIT_SSL_CAPATH` | they point the same programs at another store beside the bundle the wall sets |
 | every name the wall sets for the run's bundle | the node's own names for the run's bundle |
 | `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | they choose the daemon a Docker of the agent's own reaches, and how |
@@ -589,23 +603,50 @@ node and the run: the names the wall sets for the run's bundle, and the runtime'
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
 | the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
 
-**Also left out, the same way:** a server variable with the name of a placeholder of
-this run, where the placeholder wins; one the run's runtime declares or reserves, where
-the stand-in or an empty value goes; one a value of the machine's is read from, such as
-a credential's `env` (§Credentials), whose value stays outside the enclosure; and one
-the runtime's preparation, the harness or the wall sets.
+**Also left out.** A value of any source below the fixed names for a fixed name is left
+out and recorded as `fixed`: the fixed value applies. The server's value of a variable
+the run's runtime declares or reserves, where the stand-in or an empty value goes, and of
+one a value of the machine's is read from, such as a credential's `env` (§Credentials),
+whose value stays outside the enclosure, is left out and recorded as `denied`. A value
+the node passes for a variable the runtime declares or reserves reaches the runtime as
+passed. Behind a wall, every variable the runtime declares or reserves that neither a
+placeholder, a source nor the runtime's preparation sets goes into the enclosure as an
+empty value, so an image's own `ENV` cannot set one.
 
-**The node's own environment** keeps two refusals, because they keep the node's secrets
-and the stand-ins out of the enclosure. A walled run whose environment, what it
-inherits, what the harness sets and the node's variables, passes a `QORY_` variable, or
-a variable a value of the machine's is read from, into the enclosure is no run,
-`variable_reserved`; `QORY_RUN_ID` and `QORY_RUN_SOCKET`, which the runner itself sets
-for the session, are exempt. A run that passes a value for a placeholder is no run,
-`placeholder_conflict`. A variable the run's runtime declares or reserves that the run
-passes as a node variable reaches the runtime as passed. Behind a wall, every variable
-the runtime declares or reserves that neither a placeholder, the run nor the runtime's
-preparation sets goes into the enclosure as an empty value, so an image's own `ENV`
-cannot set one.
+**Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
+variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
+`ignore`, an unwalled run starts without them; each is recorded as `unwalled`, and the
+node's sources apply. With `accept`, they apply as in a walled run, the deny list first.
+The deny list protects the wall and the runner, not the developer, so `accept` opens the
+developer's shell to the server. The run's own variables apply with or without a wall.
+
+**The record of the variables.** `dev.qory.run.policy_applied`'s `variables` lists the
+run's variables by name, never a value, sorted by name: each `name`, `from`, the source
+whose value the run applies, and `lost`, the values left out, the highest source first,
+each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fixed` or
+`unwalled`.
+
+```json
+[{"name": "HARNESS_PROFILE", "from": "harness", "lost": []},
+ {"name": "LOG_LEVEL", "from": "apiary", "lost": [{"from": "run", "why": "overridden"}]},
+ {"name": "PATH", "lost": [{"from": "machine", "why": "denied"}]}]
+```
+
+- A name is listed when the server, the run, the machine or the harness's defaults set
+  it, and when the built-in list leaves out a value the harness computed.
+- A fixed name is listed only when it won over one of those sources, with `from:
+  fixed`, so the runner's, the proxy's and the wall's names do not fill every record.
+- A name the run inherits is listed only when one of those sources set it too, so the
+  developer's whole shell does not fill the record of an unwalled run.
+- A name no source's value applies to has no `from`: a value left out by the deny list
+  with nothing below it, or a variable the runtime declares, which behind a wall goes in
+  empty.
+- The sources and the reasons are open lists: a later source adds a word, and a
+  receiver shows a word it does not know as it is.
+
+The record is fixed when the run starts: every further `policy_applied` repeats it. The
+launch spec's `OnVariables`, in Go, receives the same list once, before the agent
+starts, so `qory` prints a line for an `--env` value that lost.
 
 **The document.** `variables` maps each name to an object with its `value`:
 `{"LOG_LEVEL": {"value": "info"}}`. The object is open: a runner ignores a member beside
@@ -709,14 +750,10 @@ policy narrows a server's, the lists the narrowing computes (§The policy).
 `node_policy`, present when the run has both a fetched policy and a policy the command
 passes, contains its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785
 serialisation of that `policy.schema.json` document, and its `paths`, when it has any,
-so the record shows both sides of every path rule. `variables` reports the run's
-variables by name, never a value: `names`, the variables the run applies, the server's
-and the names the node adds; `denied`, the server's variables left out by the deny list
-or because the run sets that name otherwise; `unwalled`, the server's variables an
-unwalled run left out under `ignore`, then every one of them; `node_ignored`, the node's
-variables left out because the run applies the server's value for that name. Each list
-is sorted and may be empty, and each server variable is in exactly one of `names`,
-`denied` and `unwalled` (§Variables). `dev.qory.run.egress` records what becomes of the
+so the record shows both sides of every path rule. `variables` lists the run's
+variables by name, never a value: each with the source whose value the run applies and
+the values that lost, with their sources and why (§Variables, the record of the
+variables). `dev.qory.run.egress` records what becomes of the
 connection in `outcome`: `connected`, the dial succeeded; `dial_failed`, allowed and the
 dial failed; `refused`, not dialled, because the policy or the wall's guard denied it,
 or closed by a reload. An event that is one request, a plain one or one inside a

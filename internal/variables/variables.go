@@ -1,11 +1,18 @@
-// Package variables resolves the variables a run's agent receives: the server's,
-// which lead, and the node's own, which only add names.
+// Package variables resolves the variables a run's agent receives, name by name, from
+// the sources that set them, and records where each came from and what lost.
 //
-// [Resolve] takes the server's variables, from the run configuration, and the node's,
-// and returns what the run applies with the names it left out and why, as
-// dev.qory.run.policy_applied reports them. [Check] refuses a run whose own environment
-// passes into the enclosure what must stay outside: the runner's own variables, a
-// variable a machine value is read from, a value for a placeholder.
+// The sources form rungs, the highest first: the run's fixed names, the runner's, the
+// wall's, the runtime preparation's, the placeholders and the values the harness
+// computes; the server's, which it resolved among its own levels; the run's own, --env
+// for qory; the machine's, wall.env; the harness's written defaults; and the
+// environment the run inherits. For each name the highest rung that sets it wins.
+//
+// [Resolve] refuses first what must stay outside the enclosure, [Check], over every
+// value the node passes. The deny list then leaves out a value of the server, the run,
+// the machine or the harness's defaults; its built-in entries apply to the harness's
+// computed values too. What loses never stops the run, and [Resolved.Applied] lists
+// each name with its source and its losses, as dev.qory.run.policy_applied reports
+// them.
 //
 // The deny list is the contract's denied-variables.json, the run's runtime's denies
 // and the node's own entries. An entry is a name or a pattern in which * matches any
@@ -43,13 +50,41 @@ const (
 	envSocket = "QORY_RUN_SOCKET"
 )
 
-// Run is what the resolution of one run's variables takes.
-type Run struct {
+// The sources of a variable, the highest rung first, as the record names them.
+const (
+	FromFixed   = "fixed"
+	FromApiary  = "apiary"
+	FromRun     = "run"
+	FromMachine = "machine"
+	FromHarness = "harness"
+	FromShell   = "shell"
+)
+
+// Why a source's value of a name lost: another source's value won, the deny list
+// matched it, the name is one of the run's fixed names, or the run has no wall and
+// takes none of the server's.
+const (
+	WhyOverridden = "overridden"
+	WhyDenied     = "denied"
+	WhyFixed      = "fixed"
+	WhyUnwalled   = "unwalled"
+)
+
+// Inputs is what the resolution of one run's variables takes. Each list of values is
+// NAME=value; within one list a later value replaces an earlier one of the same name.
+type Inputs struct {
+	// Fixed is the values the harness computes itself, the launch's fixed values.
+	Fixed []string
 	// Server is the server's variables, by name; nil when the run has none.
 	Server map[string]string
-	// Node is the node's own variables, NAME=value; a later one replaces an earlier
-	// one of the same name.
-	Node []string
+	// Run is the run's own variables, --env for qory.
+	Run []string
+	// Machine is the machine's variables, wall.env for qory.
+	Machine []string
+	// Defaults is the harness's written defaults.
+	Defaults []string
+	// Shell is the environment the run inherits.
+	Shell []string
 	// Walled says the run has a wall.
 	Walled bool
 	// Unwalled is how an unwalled run takes the server's variables: [Accept], or
@@ -63,74 +98,159 @@ type Run struct {
 	Runtime []string
 	// Placeholders is the names of the run's placeholders.
 	Placeholders []string
-	// Machine is the names of the variables the machine's values are read from.
-	Machine []string
-	// Runner is the names the runtime's Prepare, the harness's launch and the wall set:
-	// the runner's own, which win over a server's variable of the same name.
+	// ReadFrom is the names of the variables the machine's values are read from.
+	ReadFrom []string
+	// Runner is the names the runner, the wall and the runtime's preparation set: with
+	// the placeholders and Fixed, the run's fixed names.
 	Runner []string
 }
 
-// Resolved is what a run applies of the variables, and what it left out.
+// Resolved is what a run applies of the variables, and the record of it.
 type Resolved struct {
-	// Env is the variables the run applies, NAME=value, sorted by name: the server's
-	// it applies and the node's it adds.
+	// Env is the values of the server, the run, the machine and the harness's defaults
+	// the run applies, NAME=value, sorted by name. What wins of the inherited
+	// environment stays in it, and the fixed names go over both.
 	Env []string
-	// Names is the names of Env. Denied is the server's variables left out by the
-	// deny list or because the run sets that name otherwise; Unwalled the server's
-	// variables an unwalled run left out under [Ignore]; NodeIgnored the node's
-	// variables left out because the run applies the server's value for that name.
-	// Each list is sorted and is empty, not nil, when nothing is in it.
-	Names, Denied, Unwalled, NodeIgnored []string
+	// Fixed is the harness's computed values the built-in list leaves in, in order.
+	Fixed []string
+	// Applied is the record: one entry for each name a source below the fixed names
+	// set, sorted by name. The inherited environment's value of a name is in it only
+	// when such a source set the name too.
+	Applied []Entry
 }
 
-// Resolve resolves a run's variables. An unwalled run under [Ignore] leaves out every
-// server variable. Otherwise a server variable is left out when the deny list matches
-// its name, or when it is a variable the runtime declares or reserves, a placeholder, a
-// variable a machine value is read from, or one the runner sets. A node's variable
-// applies for every name whose server value the run does not apply, and is left out
-// otherwise. The node's deny entries are checked first.
-func Resolve(r Run) (Resolved, error) {
-	if err := CheckDeny(r.Deny); err != nil {
+// Entry is one name of the record: the source whose value the run applies, empty when
+// none, and the values that lost, the highest rung first. A fixed name's From is
+// [FromFixed].
+type Entry struct {
+	Name string `json:"name"`
+	From string `json:"from,omitempty"`
+	Lost []Loss `json:"lost"`
+}
+
+// Loss is one source's value that lost, and why.
+type Loss struct {
+	From string `json:"from"`
+	Why  string `json:"why"`
+}
+
+// Resolve resolves a run's variables. It checks the node's deny entries and the
+// unwalled mode, then refuses what the run passes into the enclosure ([Check]) over
+// every value the node passes: Fixed, Run, Machine, Defaults and Shell. The server's
+// values cannot be refused: the names Check refuses are on the built-in list, fixed or
+// read from, and are left out.
+//
+// Then, name by name, the highest rung that sets it wins. The fixed names win over
+// every other source. The server's value is left out in an unwalled run under
+// [Ignore], when the deny list matches the name, and when the runtime declares or
+// reserves it or a value of the machine's is read from it. A value of the run, the
+// machine or the harness's defaults is left out when the deny list matches it. A value
+// of the harness's computed ones is left out when the built-in list matches it; the
+// runtime's denies and the node's entries leave it in. The inherited environment's
+// values are not matched against the deny list.
+func Resolve(in Inputs) (Resolved, error) {
+	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
 	}
-	if r.Unwalled != "" && r.Unwalled != Ignore && r.Unwalled != Accept {
-		return Resolved{}, fmt.Errorf("variables.unwalled is %q, neither %s nor %s", r.Unwalled, Accept, Ignore)
+	if in.Unwalled != "" && in.Unwalled != Ignore && in.Unwalled != Accept {
+		return Resolved{}, fmt.Errorf("variables.unwalled is %q, neither %s nor %s", in.Unwalled, Accept, Ignore)
 	}
-	deny, err := List(append(slices.Clone(r.Deny), r.RuntimeDenies...))
+	passed := slices.Concat(in.Fixed, in.Run, in.Machine, in.Defaults, in.Shell)
+	if err := Check(passed, in.Walled, in.Placeholders, in.ReadFrom); err != nil {
+		return Resolved{}, err
+	}
+	deny, err := List(append(slices.Clone(in.Deny), in.RuntimeDenies...))
 	if err != nil {
 		return Resolved{}, err
 	}
-	out := Resolved{Names: []string{}, Denied: []string{}, Unwalled: []string{}, NodeIgnored: []string{}}
-	applied := map[string]string{}
-	fromServer := map[string]bool{}
-	setOtherwise := slices.Concat(r.Runtime, r.Placeholders, r.Machine, r.Runner)
-	for _, name := range slices.Sorted(maps.Keys(r.Server)) {
-		switch {
-		case !r.Walled && r.Unwalled != Accept:
-			out.Unwalled = append(out.Unwalled, name)
-		case deny.Matches(name) || slices.Contains(setOtherwise, name):
-			out.Denied = append(out.Denied, name)
-		default:
-			applied[name], fromServer[name] = r.Server[name], true
-		}
+	builtin, err := List(nil)
+	if err != nil {
+		return Resolved{}, err
 	}
-	node := map[string]string{}
-	for _, kv := range r.Node {
-		name, value, _ := strings.Cut(kv, "=")
-		node[name] = value
+	out := Resolved{Env: []string{}, Fixed: []string{}, Applied: []Entry{}}
+	fixed := map[string]bool{}
+	for _, name := range slices.Concat(in.Runner, in.Placeholders) {
+		fixed[name] = true
 	}
-	for _, name := range slices.Sorted(maps.Keys(node)) {
-		if fromServer[name] {
-			out.NodeIgnored = append(out.NodeIgnored, name)
+	deniedFixed := map[string]bool{}
+	for _, kv := range in.Fixed {
+		name, _, _ := strings.Cut(kv, "=")
+		if builtin.Matches(name) {
+			deniedFixed[name] = true
 			continue
 		}
-		applied[name] = node[name]
+		out.Fixed = append(out.Fixed, kv)
+		fixed[name] = true
 	}
-	out.Names = append(out.Names, slices.Sorted(maps.Keys(applied))...)
-	for _, name := range out.Names {
-		out.Env = append(out.Env, name+"="+applied[name])
+	run, machine, defaults, shell := byName(in.Run), byName(in.Machine), byName(in.Defaults), byName(in.Shell)
+	names := maps.Clone(deniedFixed)
+	for _, m := range []map[string]string{in.Server, run, machine, defaults} {
+		for name := range m {
+			names[name] = true
+		}
+	}
+	setOtherwise := slices.Concat(in.Runtime, in.ReadFrom)
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		e := Entry{Name: name, Lost: []Loss{}}
+		if deniedFixed[name] {
+			e.Lost = append(e.Lost, Loss{FromFixed, WhyDenied})
+		}
+		if fixed[name] {
+			e.From = FromFixed
+		}
+		value := ""
+		take := func(from string, v string, ok bool, why string) {
+			switch {
+			case !ok:
+			case why != "":
+				e.Lost = append(e.Lost, Loss{from, why})
+			case fixed[name]:
+				e.Lost = append(e.Lost, Loss{from, WhyFixed})
+			case e.From != "":
+				e.Lost = append(e.Lost, Loss{from, WhyOverridden})
+			default:
+				e.From, value = from, v
+			}
+		}
+		v, ok := in.Server[name]
+		why := ""
+		switch {
+		case !in.Walled && in.Unwalled != Accept:
+			why = WhyUnwalled
+		case deny.Matches(name) || slices.Contains(setOtherwise, name):
+			why = WhyDenied
+		}
+		take(FromApiary, v, ok, why)
+		for _, s := range []struct {
+			from string
+			m    map[string]string
+		}{{FromRun, run}, {FromMachine, machine}, {FromHarness, defaults}} {
+			v, ok := s.m[name]
+			why := ""
+			if deny.Matches(name) {
+				why = WhyDenied
+			}
+			take(s.from, v, ok, why)
+		}
+		v, ok = shell[name]
+		take(FromShell, v, ok, "")
+		switch e.From {
+		case FromApiary, FromRun, FromMachine, FromHarness:
+			out.Env = append(out.Env, name+"="+value)
+		}
+		out.Applied = append(out.Applied, e)
 	}
 	return out, nil
+}
+
+// byName are NAME=value entries by name, a later one replacing an earlier one.
+func byName(env []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		out[name] = value
+	}
+	return out
 }
 
 // Check refuses a run whose own environment, env, NAME=value, passes into the

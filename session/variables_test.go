@@ -51,38 +51,67 @@ func envOf(t *testing.T, path string) map[string]string {
 	return out
 }
 
-// variablesApplied is the variables member of the run's policy_applied.
-func variablesApplied(t *testing.T, res *session.Result) map[string]string {
+// variablesApplied is the variables member of the run's policy_applied, one line per
+// name: the name, the source that won after <- when one did, and each loss as
+// source:why.
+func variablesApplied(t *testing.T, res *session.Result) []string {
 	t.Helper()
 	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
 	if len(pa) != 1 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
-	v, ok := data(pa[0])["variables"].(map[string]any)
+	list, ok := data(pa[0])["variables"].([]any)
 	if !ok {
 		t.Fatalf("policy_applied without variables: %v", data(pa[0]))
 	}
-	out := map[string]string{}
-	for k, list := range v {
-		out[k] = fmt.Sprint(list)
+	out := []string{}
+	for _, item := range list {
+		e := item.(map[string]any)
+		line := fmt.Sprint(e["name"])
+		if from, ok := e["from"]; ok {
+			line += "<-" + fmt.Sprint(from)
+		}
+		for _, l := range e["lost"].([]any) {
+			loss := l.(map[string]any)
+			line += " " + fmt.Sprint(loss["from"]) + ":" + fmt.Sprint(loss["why"])
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// lines is an Applied as variablesApplied writes the record.
+func lines(applied session.Applied) []string {
+	out := []string{}
+	for _, v := range applied {
+		line := v.Name
+		if v.From != "" {
+			line += "<-" + v.From
+		}
+		for _, l := range v.Lost {
+			line += " " + l.From + ":" + l.Why
+		}
+		out = append(out, line)
 	}
 	return out
 }
 
 // serverVariables is a run configuration with variables of every kind the runner
-// treats apart: two it applies, one the node's deny entry covers, one the runtime
-// denies, one the built-in list denies, and one the node sets as well.
+// treats apart: one it applies, one the node's deny entry covers, one the runtime
+// denies, one the built-in list denies, one the run sets as well, one the harness
+// computes, and one the runtime declares.
 const serverVariables = `{"version":1,"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
-	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"}}}`
+	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"},` +
+	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"}}}`
 
-// TestVariablesReachTheAgentAndDeniedOnesDoNot runs the server's variables end to end:
-// behind a wall, and without one when the node accepts them, the variables the run
-// applies are in the agent's environment, a denied one is not, the node's own variable
-// for a name the server sets is left out, and its others are added; behind a wall the
-// runtime's declared and reserved variables are there empty. Without a wall, and
-// without accept, none of the server's is there and the node's own are. The record
-// lists each by name and contains no value.
-func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
+// TestVariablesReachTheAgentByRung runs the sources of the variables end to end:
+// behind a wall, and without one when the node accepts the server's, the value of the
+// highest source of each name is in the agent's environment and every value that lost
+// is not, the record lists each name with its source and its losses and no value, and
+// OnVariables receives the same once, before the agent starts. Behind a wall the
+// runtime's declared variables nothing applies are there empty. Without a wall, and
+// without accept, none of the server's is there and the run's own apply.
+func TestVariablesReachTheAgentByRung(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		walled   bool
@@ -96,10 +125,23 @@ func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newControl(t)
 			c.serveDocument(serverVariables, "sha256="+strings.Repeat("1", 64))
-			sp := spec(t, nil)
+			sp := spec(t, nil, "EDITOR=shell", "SHELL_ONLY=kept")
 			out := dumpsEnv(t, &sp)
 			sp.Server, sp.Heartbeat = c.server(), time.Second
-			sp.Variables = session.Variables{Own: []string{"LOG_LEVEL=node", "EDITOR=vi"}, Deny: []string{"APP_*"}, Unwalled: tc.unwalled}
+			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home", "DOCKER_HOST=unix:///computed/docker.sock"}
+			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0", "LOG_LEVEL=harness"}
+			sp.Variables = session.Variables{
+				Run:     []string{"LOG_LEVEL=run", "EDITOR=vi"},
+				Machine: []string{"EDITOR=nano", "BUILD_NUMBER=7"},
+				Deny:    []string{"APP_*"}, Unwalled: tc.unwalled,
+			}
+			var calls []session.Applied
+			sp.OnVariables = func(a session.Applied) {
+				if _, err := os.Stat(out); err == nil {
+					t.Error("OnVariables was called after the agent started")
+				}
+				calls = append(calls, a)
+			}
 			if tc.walled {
 				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			}
@@ -111,26 +153,48 @@ func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
 				t.Fatalf("exit %d", res.ExitCode)
 			}
 			env := envOf(t, out)
-			applied := variablesApplied(t, res)
-			if tc.walled || tc.unwalled == session.UnwalledAccept {
-				if env["NODE_ENV"] != "test" || env["LOG_LEVEL"] != "server" || env["EDITOR"] != "vi" {
-					t.Errorf("the applied variables: NODE_ENV=%q LOG_LEVEL=%q EDITOR=%q", env["NODE_ENV"], env["LOG_LEVEL"], env["EDITOR"])
+			record := variablesApplied(t, res)
+			server := tc.walled || tc.unwalled == session.UnwalledAccept
+			var want []string
+			wantEnv := map[string]string{
+				"CODEX_HOME": "/computed/home", "HARNESS_PROFILE": "nextjs", "BUILD_NUMBER": "7",
+				"EDITOR": "vi", "SHELL_ONLY": "kept", "PATH": os.Getenv("PATH"),
+			}
+			if server {
+				want = []string{
+					"ANTHROPIC_AUTH_TOKEN apiary:denied", "ANTHROPIC_BASE_URL apiary:denied", "APP_REGION apiary:denied",
+					"BUILD_NUMBER<-machine harness:overridden", "CODEX_HOME<-fixed apiary:fixed", "DOCKER_HOST fixed:denied",
+					"EDITOR<-run machine:overridden shell:overridden", "HARNESS_PROFILE<-harness",
+					"LOG_LEVEL<-apiary run:overridden harness:overridden", "NODE_ENV<-apiary", "PATH<-shell apiary:denied",
 				}
-				if _, ok := env["APP_REGION"]; ok || env["ANTHROPIC_BASE_URL"] != "" || env["PATH"] == "/nowhere" {
-					t.Errorf("a denied variable reached the agent: APP_REGION=%q ANTHROPIC_BASE_URL=%q PATH=%q", env["APP_REGION"], env["ANTHROPIC_BASE_URL"], env["PATH"])
-				}
-				want := map[string]string{"names": "[EDITOR LOG_LEVEL NODE_ENV]", "denied": "[ANTHROPIC_BASE_URL APP_REGION PATH]", "unwalled": "[]", "node_ignored": "[LOG_LEVEL]"}
-				if !mapsEqual(applied, want) {
-					t.Errorf("policy_applied variables %v, want %v", applied, want)
-				}
+				wantEnv["LOG_LEVEL"], wantEnv["NODE_ENV"] = "server", "test"
 			} else {
-				if _, ok := env["NODE_ENV"]; ok || env["LOG_LEVEL"] != "node" || env["EDITOR"] != "vi" {
-					t.Errorf("an unwalled run that ignores the server: NODE_ENV=%q LOG_LEVEL=%q EDITOR=%q", env["NODE_ENV"], env["LOG_LEVEL"], env["EDITOR"])
+				want = []string{
+					"ANTHROPIC_AUTH_TOKEN apiary:unwalled", "ANTHROPIC_BASE_URL apiary:unwalled", "APP_REGION apiary:unwalled",
+					"BUILD_NUMBER<-machine harness:overridden", "CODEX_HOME<-fixed apiary:unwalled", "DOCKER_HOST fixed:denied",
+					"EDITOR<-run machine:overridden shell:overridden", "HARNESS_PROFILE<-harness",
+					"LOG_LEVEL<-run apiary:unwalled harness:overridden", "NODE_ENV apiary:unwalled", "PATH<-shell apiary:unwalled",
 				}
-				want := map[string]string{"names": "[EDITOR LOG_LEVEL]", "denied": "[]", "unwalled": "[ANTHROPIC_BASE_URL APP_REGION LOG_LEVEL NODE_ENV PATH]", "node_ignored": "[]"}
-				if !mapsEqual(applied, want) {
-					t.Errorf("policy_applied variables %v, want %v", applied, want)
+				wantEnv["LOG_LEVEL"] = "run"
+			}
+			if !slices.Equal(record, want) {
+				t.Errorf("policy_applied variables\n%q\nwant\n%q", record, want)
+			}
+			if len(calls) != 1 || !slices.Equal(lines(calls[0]), want) {
+				t.Errorf("OnVariables received %v, want once %q", calls, want)
+			}
+			for name, value := range wantEnv {
+				if env[name] != value {
+					t.Errorf("%s=%q, want %q", name, env[name], value)
 				}
+			}
+			for _, name := range []string{"APP_REGION", "ANTHROPIC_BASE_URL", "DOCKER_HOST"} {
+				if value, ok := env[name]; ok {
+					t.Errorf("%s=%q reached the agent, a value that lost", name, value)
+				}
+			}
+			if _, ok := env["NODE_ENV"]; !server && ok {
+				t.Errorf("NODE_ENV=%q reached an unwalled run that ignores the server", env["NODE_ENV"])
 			}
 			for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
 				value, ok := env[name]
@@ -138,9 +202,9 @@ func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
 					t.Errorf("%s: %q, set %v; want set and empty behind a wall alone", name, value, ok)
 				}
 			}
-			record, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
-			for _, value := range []string{"eu-west-1", "elsewhere.example", "/nowhere"} {
-				if strings.Contains(string(record), value) {
+			events, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
+			for _, value := range []string{"eu-west-1", "elsewhere.example", "/nowhere", "server-credential", "/server/home", "nextjs", "computed"} {
+				if strings.Contains(string(events), value) {
 					t.Errorf("the record contains the value %q", value)
 				}
 			}
@@ -148,43 +212,50 @@ func TestVariablesReachTheAgentAndDeniedOnesDoNot(t *testing.T) {
 	}
 }
 
-func mapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
 // TestWhatARunPassesInIsChecked pins the refusals of a run's own environment end to
-// end, each a session.Refusal with its code and names and no value: behind a wall, a
-// QORY_ variable of the node's and a variable a credential is read from are
-// variable_reserved, and a value for a credential's placeholder is
+// end, before the variables are resolved, each a session.Refusal with its code and
+// names and no value, and OnVariables not called: behind a wall, a QORY_ variable from
+// the run, the machine or the harness, QORY_HARNESS_HOME among them, and a variable a
+// credential is read from are variable_reserved, and in any run a value for a
+// credential's placeholder from the run, the machine or the harness is
 // placeholder_conflict.
 func TestWhatARunPassesInIsChecked(t *testing.T) {
 	t.Setenv("MODEL_SOURCE", "the-credential-held-outside")
 	secret := "a-value-no-error-quotes"
+	withCredential := func(sp *session.Spec) {
+		sp.Policy = &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Credentials: []session.PolicyCredential{{Name: "model"}}}
+	}
 	for _, tc := range []struct {
 		name  string
 		edit  func(*session.Spec)
 		code  string
 		names []string
 	}{
-		{"a QORY_ variable", func(sp *session.Spec) { sp.Variables.Own = []string{"QORY_SERVER_SECRET=" + secret} }, "variable_reserved", []string{"QORY_SERVER_SECRET"}},
-		{"what a credential is read from", func(sp *session.Spec) { sp.LaunchEnv = []string{"MODEL_SOURCE=" + secret} }, "variable_reserved", []string{"MODEL_SOURCE"}},
-		{"a placeholder", func(sp *session.Spec) {
-			sp.Policy = &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Credentials: []session.PolicyCredential{{Name: "model"}}}
-			sp.Variables.Own = []string{"MODEL_TOKEN=" + secret}
+		{"a QORY_ variable from --env", func(sp *session.Spec) { sp.Variables.Run = []string{"QORY_X=" + secret} }, "variable_reserved", []string{"QORY_X"}},
+		{"a QORY_ variable from wall.env", func(sp *session.Spec) { sp.Variables.Machine = []string{"QORY_SERVER_SECRET=" + secret} }, "variable_reserved", []string{"QORY_SERVER_SECRET"}},
+		{"the harness home from --env", func(sp *session.Spec) {
+			sp.HarnessHome = "/home/agent/.qory"
+			sp.Variables.Run = []string{"QORY_HARNESS_HOME=" + secret}
+		}, "variable_reserved", []string{"QORY_HARNESS_HOME"}},
+		{"what a credential is read from", func(sp *session.Spec) { sp.LaunchFixed = []string{"MODEL_SOURCE=" + secret} }, "variable_reserved", []string{"MODEL_SOURCE"}},
+		{"a placeholder from --env", func(sp *session.Spec) {
+			withCredential(sp)
+			sp.Variables.Run = []string{"MODEL_TOKEN=" + secret}
+		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
+		{"a placeholder from wall.env", func(sp *session.Spec) {
+			withCredential(sp)
+			sp.Variables.Machine = []string{"MODEL_TOKEN=" + secret}
+		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
+		{"a placeholder from a harness default", func(sp *session.Spec) {
+			withCredential(sp)
+			sp.LaunchDefaults = []string{"MODEL_TOKEN=" + secret}
 		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp := spec(t, nil)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 			sp.Credentials = []session.Credential{{Name: "model", Env: "MODEL_SOURCE", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
+			sp.OnVariables = func(session.Applied) { t.Error("OnVariables was called for a refused run") }
 			tc.edit(&sp)
 			_, err := session.Run(context.Background(), sp)
 			var r *session.Refusal
@@ -200,6 +271,49 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 	sp := spec(t, nil, "ANTHROPIC_API_KEY="+secret, "QORY_SERVER_SECRET="+secret)
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("an unwalled run with the developer's environment: %v", err)
+	}
+}
+
+// TestTheHarnessHome pins QORY_HARNESS_HOME: the runner sets it to the spec's
+// HarnessHome, with or without a wall; without a wall it wins over a value the run
+// inherits, a value of the run's own is denied as any QORY_ name, and the record lists
+// the name, fixed. Behind a wall a value the run passes is variable_reserved
+// (TestWhatARunPassesInIsChecked). A home that is no absolute path, or holds a line feed, is an error before
+// anything starts.
+func TestTheHarnessHome(t *testing.T) {
+	for _, walled := range []bool{true, false} {
+		sp := spec(t, nil)
+		if walled {
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		} else {
+			sp = spec(t, nil, "QORY_HARNESS_HOME=/inherited")
+			sp.Variables.Run = []string{"QORY_HARNESS_HOME=/from-the-run"}
+		}
+		out := dumpsEnv(t, &sp)
+		sp.HarnessHome = "/home/agent/.qory/harness"
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := envOf(t, out)["QORY_HARNESS_HOME"]; got != "/home/agent/.qory/harness" {
+			t.Errorf("walled %v: QORY_HARNESS_HOME=%q", walled, got)
+		}
+		want := []string{}
+		if !walled {
+			want = []string{"QORY_HARNESS_HOME<-fixed run:denied shell:fixed"}
+		}
+		if got := variablesApplied(t, res); !slices.Equal(got, want) {
+			t.Errorf("walled %v: the record %q, want %q", walled, got, want)
+		}
+	}
+	for _, home := range []string{"relative/home", "/home/agent\n/x", "/home/\x00"} {
+		sp := spec(t, nil)
+		sp.HarnessHome = home
+		_, err := session.Run(context.Background(), sp)
+		var r *session.Refusal
+		if err == nil || errors.As(err, &r) {
+			t.Errorf("the harness home %q: %v, want an error that is no refusal", home, err)
+		}
 	}
 }
 
@@ -286,14 +400,14 @@ func TestANarrowingThatRefusesIsNoRun(t *testing.T) {
 }
 
 // TestAWalledRunPassesTheRuntimesKeyItLists pins the walled run that passes the
-// runtime's credential as a node variable, as wall.env and --env do: the value reaches
+// runtime's credential as the machine's variable, as wall.env does: the value reaches
 // the agent as passed, and the runtime's other declared and reserved variables, which
 // neither a placeholder nor the run sets, are there empty.
 func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
 	sp := spec(t, nil)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Variables.Own = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
+	sp.Variables.Machine = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -325,13 +439,16 @@ func (p preparing) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
 func (p preparing) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.Secrets).Secrets() }
 
 // TestWhatThePreparationSetsIsNotEmptied pins that behind a wall a variable the
-// runtime reserves and its preparation sets keeps the preparation's value, while the
-// declared ones nothing sets are there empty.
+// runtime reserves and its preparation sets keeps the preparation's value, over a
+// value the harness computes and one of the machine's, which the record lists as
+// fixed, while the declared ones nothing sets are there empty.
 func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
 	sp := spec(t, nil)
 	out := dumpsEnv(t, &sp)
 	sp.Runtime = preparing{claudeCode(t)}
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.LaunchFixed = []string{"ANTHROPIC_AUTH_TOKEN=computed-by-the-harness"}
+	sp.Variables.Machine = []string{"ANTHROPIC_AUTH_TOKEN=the-machines"}
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -343,6 +460,9 @@ func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
 	if env["ANTHROPIC_AUTH_TOKEN"] != "set-by-the-preparation" {
 		t.Errorf("ANTHROPIC_AUTH_TOKEN=%q, want the preparation's value", env["ANTHROPIC_AUTH_TOKEN"])
 	}
+	if got, want := variablesApplied(t, res), []string{"ANTHROPIC_AUTH_TOKEN<-fixed machine:fixed"}; !slices.Equal(got, want) {
+		t.Errorf("the record %q, want %q", got, want)
+	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
 		if value, ok := env[name]; !ok || value != "" {
 			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
@@ -350,26 +470,32 @@ func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
 	}
 }
 
-// TestTheNodesVariablesAreChecked pins the refusal of a node variable that cannot be
-// one, before anything starts and without its value in the error: no equals sign, a
-// name outside the grammar, a value with a carriage return, a line feed or a NUL.
-func TestTheNodesVariablesAreChecked(t *testing.T) {
+// TestTheRunsAndTheMachinesVariablesAreChecked pins the refusal of a run's or a
+// machine's variable that cannot be one, before anything starts and without its value
+// in the error: no equals sign, a name outside the grammar, a value with a carriage
+// return, a line feed or a NUL.
+func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 	value := "a-value-no-error-quotes"
-	for _, entry := range []string{value, "BAD NAME=" + value, "1A=" + value, "A=" + value + "\r", "A=" + value + "\nB=c", "A=" + value + "\x00"} {
+	for _, set := range []func(*session.Spec, []string){
+		func(sp *session.Spec, env []string) { sp.Variables.Run = env },
+		func(sp *session.Spec, env []string) { sp.Variables.Machine = env },
+	} {
+		for _, entry := range []string{value, "BAD NAME=" + value, "1A=" + value, "A=" + value + "\r", "A=" + value + "\nB=c", "A=" + value + "\x00"} {
+			sp := spec(t, nil)
+			set(&sp, []string{entry})
+			_, err := session.Run(context.Background(), sp)
+			if err == nil {
+				t.Errorf("%q was accepted", entry)
+				continue
+			}
+			if strings.Contains(err.Error(), value) {
+				t.Errorf("%q: the error quotes the value: %v", entry, err)
+			}
+		}
 		sp := spec(t, nil)
-		sp.Variables.Own = []string{entry}
-		_, err := session.Run(context.Background(), sp)
-		if err == nil {
-			t.Errorf("%q was accepted", entry)
-			continue
+		set(&sp, []string{"ONLY_A_NAME"})
+		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ONLY_A_NAME has no value") {
+			t.Errorf("a name without a value: %v", err)
 		}
-		if strings.Contains(err.Error(), value) {
-			t.Errorf("%q: the error quotes the value: %v", entry, err)
-		}
-	}
-	sp := spec(t, nil)
-	sp.Variables.Own = []string{"ONLY_A_NAME"}
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ONLY_A_NAME has no value") {
-		t.Errorf("a name without a value: %v", err)
 	}
 }
