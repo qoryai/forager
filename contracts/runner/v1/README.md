@@ -1016,10 +1016,12 @@ refuses the key, and `key_limit` a node that already holds two keys; a signed `4
 `apiary_public_key`, the same list in the same order as a `201` at that moment, and the
 machine verifies it exactly as the `201`; a refusal sent unsigned lists no key, and the
 machine acts on none by its status, an unsigned `409` or `429` being `answer_unsigned`.
-In place of a code, an owner or administrator may paste a public key the machine printed
-into an existing node or node pool, where it is active at once. The server checks every
-public key it is given: a canonical encoding, a point on the curve, not of small order,
-of prime order, and y ≠ 1; `fixtures/known-answers/small-order.json` lists keys it
+In place of a code, an owner or administrator may make a key for an existing node or node
+pool in the server's console, which receives only its public key; the key is active at
+once, and the machine takes its id, secret and pin as `QORY_ACCESS_KEY_ID`,
+`QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY`. The server checks every public
+key it is given: a canonical encoding, a point on the curve, not of small order, of
+prime order, and y ≠ 1; `fixtures/known-answers/small-order.json` lists keys it
 refuses. The known answers are `fixtures/enrolment/` and the enrolment lines of
 `signatures.json`.
 
@@ -1170,7 +1172,7 @@ spec narrows the fetched policy (§The policy).
 
 **The reference receiver** is the public package `receiver` of this module: a plain
 receiver that serves discovery, the events endpoint and the run configuration, accepts
-the public keys pasted into its own configuration and skips enrolment, verifies each
+the public keys listed in its own configuration and skips enrolment, verifies each
 request and answers in the order this section defines, signs every answer after
 verification under its own key, returns the digest headers, deduplicates and appends to
 a file. Its discovery lists `version`, `node_id`, `events` and `apiary_public_key`, and
