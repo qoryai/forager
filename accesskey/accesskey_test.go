@@ -546,7 +546,7 @@ func TestEnrolmentAnswersHaveTheirOwnDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := []byte(`{"error":"key_invalid","apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
-	// The server signs a refusal to an enrolment whose proof is a node's request
+	// Suppose a server signed a refusal to an enrolment whose proof is a node's request
 	// signature. The published signature of the GET of discovery serves as that proof.
 	nodeRequest := vectors(t).Requests[0].Signature
 	enrolment := accesskey.Answer{Enrolment: true, Status: http.StatusConflict, RequestSignature: nodeRequest, Body: body}
