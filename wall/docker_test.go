@@ -441,3 +441,54 @@ func TestTempDirsMatchesWhatTheAdapterMakes(t *testing.T) {
 		t.Errorf("%s does not match %s", dir, TempDirs())
 	}
 }
+
+// TestDockerBindsTheWorkspaceThroughItsMount pins one bind for a checkout: a workspace
+// below a mount is the working directory inside and gets no bind of its own, by whole
+// components of the paths; a workspace no mount holds is bound at its own path,
+// writable.
+func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
+	for _, c := range []struct {
+		name, dir string
+		mounts    []Mount
+		binds     []string
+	}{
+		{"below the mount", "/work/src/app", []Mount{{Path: "/work"}},
+			[]string{"type=bind,src=/work,dst=/work"}},
+		{"the mount itself", "/work", []Mount{{Path: "/work/"}},
+			[]string{"type=bind,src=/work/,dst=/work/"}},
+		{"beside the mount", "/workshop", []Mount{{Path: "/work", ReadOnly: true}},
+			[]string{
+				"type=bind,src=/workshop,dst=/workshop",
+				"type=bind,src=/work,dst=/work,readonly",
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			req := Request{RunID: runID, Image: "example.com/agent:1"}
+			e, err := d.Prepare(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := launch()
+			l.Dir, l.Mounts, l.Socket = c.dir, c.mounts, ""
+			wrapped, err := e.Wrap(context.Background(), l)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var binds []string
+			workdir := ""
+			for i, a := range wrapped.Args {
+				switch {
+				case a == "--workdir":
+					workdir = wrapped.Args[i+1]
+				case a == "--mount" && strings.HasPrefix(wrapped.Args[i+1], "type=bind,src=/work"):
+					binds = append(binds, wrapped.Args[i+1])
+				}
+			}
+			if !slices.Equal(binds, c.binds) || workdir != c.dir || wrapped.Dir != c.dir {
+				t.Errorf("binds %q, working directory %q, dir %q", binds, workdir, wrapped.Dir)
+			}
+		})
+	}
+}

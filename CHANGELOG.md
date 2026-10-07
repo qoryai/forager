@@ -104,7 +104,8 @@ release may change what an existing document does, and says so under Upgrading.
   SHA-256 of its RFC 8785 serialisation, and its `paths`.
 - The runner's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
-  `variable_reserved`, `placeholder_conflict`, `tool_unknown` and `image_unknown`.
+  `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
+  `mount_contains_runner_files`, `mount_mode_conflict` and `mount_shared_with_run`.
   `errors.As` finds one in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
@@ -265,8 +266,38 @@ release may change what an existing document does, and says so under Upgrading.
   the filesystem judging which directories are the same, case and bind mounts included.
   A link whose target does not exist yet is followed to the target, a path that cannot
   be resolved is no run, and the check runs again just before the enclosure is built.
+- No walled run binds from a place a walled agent of the same user can change. A walled
+  run is refused with `mount_mode_conflict` when a mount, or the workspace, lies inside
+  another one of the run's, or is the same, of the other mode; `Names` holds the inner
+  path and the outer one, as passed. It is refused with `mount_shared_with_run` when one
+  of its binds lies inside a writable bind of another walled run still going, apart
+  from the same root, or when one of its writable binds holds a bind of such a run;
+  `Names` holds this run's path, the other run's id and the other run's path, each as
+  its run passed it. Two runs that bind the same root run side by side, and two
+  read-only binds never conflict. The runner keeps the walled runs still going in a
+  registry of its own, per user, `$XDG_STATE_HOME/qory-runner/walled`, else
+  `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with
+  its process id and its binds, each as passed, as resolved and whether writable, held
+  locked for the run's life and removed when it ends. A file whose lock is free is
+  removed. A run checks its binds and adds its own entry under a lock of the registry's,
+  before it contacts the server. `events/run.refused.schema.json` lists both codes.
 
 ### Changed
+
+- Behind a wall, the enclosure binds the outermost of the places a run lists, the
+  mounts and the workspace, each once: a place inside another one of the same mode is
+  reached through the outer one. The workspace is the working directory inside, through
+  the mount that holds it, and is bound at its own path, writable, only when no mount
+  holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
+  and binds `Dir` only when no mount's path holds it.
+- `Spec.RunsDir` and the registry of walled runs are among the runner's files, so a
+  walled run's mount, or workspace, that is, contains or lies inside either one is
+  `mount_contains_runner_files`. A walled run's run directory lies outside every place
+  it binds, and the agent can neither change nor move its record. The default runs
+  directory, `.qory/runs` in the workspace, lies inside the workspace, so a walled run
+  passes one outside it.
+- The check of a walled run's places runs again just before the enclosure binds them,
+  the registry included; a run whose places resolve otherwise than at its start fails.
 
 - Contract `v1` revision 1 is amended in place for a run's variables and a node that
   narrows the server's policy. `run-configuration.schema.json` has `variables`, at most

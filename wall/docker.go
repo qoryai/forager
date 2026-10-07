@@ -294,7 +294,8 @@ const relayWait = 5 * time.Minute
 
 // Wrap starts the relay towards the proxy, waits until it listens, and returns the
 // docker run that starts the launch in the agent's container: on the internal network
-// only, the workspace and the launch's mounts at their own paths, the helper read-only,
+// only, the launch's mounts at their own paths, the workspace as the working directory
+// inside them, the helper read-only,
 // the socket's directory, and the launch's environment through a file, so no value is on a
 // command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
@@ -461,12 +462,15 @@ func firstFile(stream []byte) ([]byte, error) {
 	}
 }
 
-// mounts are the launch's own: the workspace, what it lists, the socket's directory.
+// mounts are the launch's own: what it lists, the workspace when none of them holds it,
+// and the socket's directory. The workspace is the working directory inside; a mount
+// whose path holds it, by whole components, shows it.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
 	}
-	binds := []bind{{l.Dir, l.Dir, false}}
+	var binds []bind
+	held := false
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
 			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
@@ -475,6 +479,10 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
 		}
 		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
+		held = held || under(m.Path, l.Dir)
+	}
+	if !held {
+		binds = append([]bind{{l.Dir, l.Dir, false}}, binds...)
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
@@ -482,7 +490,6 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, b := range binds {
-		// The workspace is often one of the mounts the run lists; the first wins.
 		if seen[b.dst] {
 			continue
 		}
@@ -494,6 +501,14 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// under reports whether path is dir or lies below it, by whole components of the
+// paths as written.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	up := ".." + string(filepath.Separator)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
 // limits are the agent's resource flags. The relay gets none: it is the runner's own.

@@ -33,13 +33,22 @@ const (
 	// inside one of the runner's files: its names are the mount and the file, in that
 	// order.
 	MountContainsRunnerFiles = "mount_contains_runner_files"
+	// MountModeConflict is a walled run with a mount, or the workspace, inside another
+	// one, or the same, of the other mode, writable or read-only: its names are the
+	// inner and the outer, in that order.
+	MountModeConflict = "mount_mode_conflict"
+	// MountSharedWithRun is a walled run with a bind inside a writable bind of another
+	// walled run of this user's still going, or a writable bind that holds one of that
+	// run's: its names are this run's path, the other run's id and its path.
+	MountSharedWithRun = "mount_shared_with_run"
 )
 
 // Decides reports whether the runner decides the code, one of this package's: a
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {
-	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved, PlaceholderConflict, MountContainsRunnerFiles:
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
+		PlaceholderConflict, MountContainsRunnerFiles, MountModeConflict, MountSharedWithRun:
 		return true
 	}
 	return false

@@ -196,7 +196,7 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 	if w.req.RunID != "" || w.wrapped {
 		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
 	}
-	if _, err := os.Stat(filepath.Join(sp.Dir, ".qory")); !os.IsNotExist(err) {
+	if _, err := os.Stat(sp.RunsDir); !os.IsNotExist(err) {
 		t.Errorf("a run directory was made: %v", err)
 	}
 

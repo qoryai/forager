@@ -91,8 +91,9 @@ type Launch struct {
 	// itself because it knows the addresses inside. Returned from Wrap, nil means the
 	// starting process's own.
 	Env []string
-	// Dir is the working directory, the run's workspace. The enclosure shows it at the
-	// same path, writable.
+	// Dir is the working directory, the run's workspace, at the same path inside. A
+	// mount whose path holds it, by whole components, shows it; when none does, the
+	// enclosure shows it at its own path, writable.
 	Dir string
 	// Interactive says the command runs on a pseudo-terminal.
 	Interactive bool
@@ -110,9 +111,10 @@ type Launch struct {
 	CA []byte
 	// Socket is the path of the hook socket on the host, empty when there is none.
 	Socket string
-	// Mounts are the files and directories of the host the run lists beside Dir: the
-	// checkout around Dir, a composed home, the run directory read-only. The
-	// enclosure shows each at the same path, and nothing of the host besides them.
+	// Mounts are the files and directories of the host the run lists: the checkout
+	// around Dir, a composed home, the run directory read-only. The enclosure shows each
+	// at the same path, and nothing of the host besides them and Dir. From the session
+	// runner, none lies inside another, and one of them holds Dir.
 	Mounts []Mount
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.

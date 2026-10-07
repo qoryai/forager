@@ -114,9 +114,9 @@ type Spec struct {
 	ProxyBind string
 	// Wall, when not nil, encloses the runtime: the command is started inside an
 	// enclosure whose only route out leads to the proxy, in Image, with Dir as its
-	// workspace. Command, Args and Forwarder are then paths inside the enclosure. Nil
-	// means no wall: the runtime is this machine's process, and enforcement is
-	// cooperative.
+	// workspace and working directory. Command, Args and Forwarder are then paths
+	// inside the enclosure. Nil means no wall: the runtime is this machine's process,
+	// and enforcement is cooperative.
 	Wall wall.Wall
 	// Image is the agent's image under a Wall when the policy selects none: the name
 	// of one of Images, or a reference.
@@ -125,15 +125,21 @@ type Spec struct {
 	// by name, as it selects credentials and tools, and a selection needs a Wall. The
 	// image a run starts in is fixed when it starts.
 	Images []Image
-	// Mounts are what the enclosure shows of this machine beside Dir, each at its own
-	// path: the checkout around Dir, a composed home outside it. The runner adds the
-	// run directory, read-only. Without a Wall they mean nothing.
+	// Mounts are what the enclosure shows of this machine, each at its own path: the
+	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
+	// one of the same mode is reached through the outer one, which alone is bound; one
+	// of the other mode is no run, mount_mode_conflict. Dir is writable, and is bound
+	// at its own path when no mount holds it. The runner adds the run directory,
+	// read-only. A walled run refuses a mount, or Dir, that lies inside a writable bind
+	// of another walled run of this user's still going, apart from the same root, or
+	// that is writable and holds one of that run's binds: mount_shared_with_run. Without
+	// a Wall they mean nothing.
 	Mounts []wall.Mount
 	// RunnerFiles are the absolute paths of the caller's files that are the runner's
 	// own, such as the directory of qory's runner file with the access key secret. A
 	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
-	// them, or one of the paths the runner knows itself, mount_contains_runner_files:
-	// see [Overlap].
+	// them, or one of the paths the runner knows itself, RunsDir among them,
+	// mount_contains_runner_files: see [Overlap].
 	RunnerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
 	// among them by name. A selected credential, like a path rule, needs a Wall: the
@@ -149,7 +155,8 @@ type Spec struct {
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
 	Declared []string
-	// RunsDir holds the run directories; empty means Dir/.qory/runs.
+	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of the
+	// runner's files, so a walled run needs one outside its mounts and Dir.
 	RunsDir string
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
@@ -227,8 +234,9 @@ type Discovery struct {
 // the node's live instances are at its limit, and run_closed when the server closes
 // the run before it starts. The runner's own refusals are Refusals too, with the names
 // they concern and never a value: run_configuration_invalid, variable_reserved,
-// placeholder_conflict, tool_unknown, image_unknown and mount_contains_runner_files
-// among them. errors.As finds one in what [Run] returns.
+// placeholder_conflict, tool_unknown, image_unknown, mount_contains_runner_files,
+// mount_mode_conflict and mount_shared_with_run among them. errors.As finds one in
+// what [Run] returns.
 type Refusal = accesskey.Refusal
 
 // The environment variables the session gets from the runner. EnvHarnessHome is set
@@ -284,8 +292,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// policy is in force, and what narrows a server's.
 	var node *policy.Loaded
 	pol := policy.None()
-	var err error
 	if spec.Policy != nil {
+		var err error
 		b, _ := json.Marshal(spec.Policy)
 		if node, err = policy.Read("policy", b); err != nil {
 			return nil, err
@@ -298,10 +306,27 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
 		return nil, err
 	}
-	// A mount that holds one of the runner's files is no run, before the server is
-	// contacted and before anything starts.
-	if err := checkMounts(spec); err != nil {
+	runID := spec.RunID
+	if runID == "" {
+		runID = event.NewRunID()
+	} else if err := CheckRunID(runID); err != nil {
 		return nil, err
+	}
+	dir := filepath.Join(spec.RunsDir, runID)
+	// Behind a wall, a place the run lists that holds one of the runner's files, or that
+	// a walled agent of another run still going can change, is no run, before the server
+	// is contacted and before anything starts. The run is then listed among the walled
+	// runs still going until it ends, however it ends.
+	plan, err := checkMounts(spec, dir)
+	if err != nil {
+		return nil, err
+	}
+	if spec.Wall != nil {
+		release, err := register(runID, plan.sources)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
 	// The server, when the run has one: discovered before anything else. The run
 	// configuration it names is fetched after the ping; its policy, narrowed by the
@@ -353,12 +378,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Wall != nil && spec.ProxyBind != "" {
 		return nil, errors.New("the spec names a wall and a proxy address; the wall names its own")
 	}
-	runID := spec.RunID
-	if runID == "" {
-		runID = event.NewRunID()
-	} else if err := CheckRunID(runID); err != nil {
-		return nil, err
-	}
 	if spec.Timeout < 0 || spec.StopGrace < 0 || spec.Heartbeat < 0 {
 		return nil, errors.New("the timeout, the stop grace or the heartbeat interval is negative")
 	}
@@ -368,7 +387,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err := CheckLabels(spec.Labels); err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(spec.RunsDir, runID)
 	emit := event.NewEmitter(runID, nil)
 	files, err := sink.NewFile(dir)
 	if err != nil {
@@ -480,10 +498,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	// The runtime prepares the launch before the variables are resolved, because what it
-	// sets is the runner's own and wins over a server's variable of the same name. The
-	// run directory goes in read-only, over whatever mount holds it: the settings are
-	// read from it, and the record in it is not the agent's to rewrite. Behind a wall the
-	// runtime learns the placeholders the run sets.
+	// sets is the runner's own and wins over a server's variable of the same name. Behind
+	// a wall the run directory goes in read-only, apart from every place the run binds:
+	// the settings are read from it, and the record in it is not the agent's to rewrite
+	// or move. Behind a wall the runtime learns the placeholders the run sets.
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}
 	if spec.Wall != nil {
@@ -573,7 +591,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
-	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
@@ -593,16 +610,27 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path()}, own),
 	}
 	if enclosure != nil {
-		// The mounts again, as the enclosure is about to show them: a link swapped in
-		// since the start's check leads where it leads now.
-		if err := checkMounts(spec); err != nil {
+		// The places again, just before the enclosure binds them. No walled agent of this
+		// user's can change a part of their paths, the start's checks saw to that; the
+		// user, or a process outside every wall, can. What changed before this point is
+		// checked as at the start, and what changes after it is not.
+		again, err := checkMounts(spec, dir)
+		if err != nil {
+			return fail(err)
+		}
+		if !slices.Equal(again.Mounts, plan.Mounts) || again.Dir != plan.Dir {
+			return fail(errors.New("the places the run lists resolve otherwise than when " +
+				"it started: a link among them changed"))
+		}
+		if err := recheck(runID, again.sources); err != nil {
 			return fail(err)
 		}
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
-			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
+			Command: command, Args: args, Dir: plan.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, own, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
 			CA:    authority,
-			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
+			Proxy: px.Addr(), Socket: sock.Path(), Mounts: plan.Mounts, Limits: spec.Limits,
+			ProxyToken: token,
 		})
 		if err != nil {
 			return fail(err)
