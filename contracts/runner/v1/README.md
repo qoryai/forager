@@ -607,6 +607,11 @@ the runtime declares or reserves that neither a placeholder, the run nor the run
 preparation sets goes into the enclosure as an empty value, so an image's own `ENV`
 cannot set one.
 
+**The document.** `variables` maps each name to an object with its `value`:
+`{"LOG_LEVEL": {"value": "info"}}`. The object is open: a runner ignores a member beside
+`value` it does not recognise, so a later attribute is one a runner may ignore, and an
+attribute a runner must honour needs a new revision.
+
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
 The schema's `maxLength` counts characters, so the runner counts the bytes beside it. A
@@ -1006,7 +1011,7 @@ quoted the second time.
 ```json
 {"version": 1,
  "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["api.example"]}},
- "variables": {"NODE_ENV": "test", "APP_REGION": "eu-west-1"}}
+ "variables": {"NODE_ENV": {"value": "test"}, "APP_REGION": {"value": "eu-west-1"}}}
 ```
 
 `version` is required; `security_policy` and `variables` are optional. `security_policy`
@@ -1016,7 +1021,8 @@ command passes, when there is one, narrows it (§The policy, a node narrows). Wi
 and `dev.qory.run.policy_applied` reports `url` and `run_configuration` beside `source`
 `config` or `none`; a reload that brings a `security_policy` puts it in force, narrowed
 by the command's, and one that drops it puts the command's back. `variables` are the
-server's variables for the run, a name and a string value each (§Variables). A member
+server's variables for the run, a name and an object with its string `value` each
+(§Variables). A member
 the runner does not recognise is ignored. The digest is the server's and opaque; the
 runner keeps it, sends it back on every POST, and never recomputes it. The runner reads
 the document with a decoder that refuses a member name that appears twice and invalid

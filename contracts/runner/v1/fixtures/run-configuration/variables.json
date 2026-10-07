@@ -8,8 +8,9 @@
     }
   },
   "variables": {
-    "NODE_ENV": "test",
-    "APP_REGION": "eu-west-1",
-    "FEATURE_FLAGS": ""
+    "NODE_ENV": {"value": "test"},
+    "APP_REGION": {"value": "eu-west-1"},
+    "FEATURE_FLAGS": {"value": ""},
+    "LOG_LEVEL": {"value": "info", "note": "an attribute a runner may ignore"}
   }
 }

@@ -112,7 +112,7 @@ func TestDocumentFixturesValidate(t *testing.T) {
 // key id or its pin or with a secret, a configuration without events, a ping whose
 // interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
 // an expression. The longest schema name the file name starts with is the schema, so
-// run-configuration-variable-not-string is held to the run configuration and not to a
+// run-configuration-variable-value-not-string is held to the run configuration and not to a
 // schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",

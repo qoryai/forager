@@ -336,7 +336,7 @@ Each line names a passage of the README on main and what it becomes.
   `variables`, and the variant with `withheld`.
 - `fixtures/signed/*`, rebuilt in the new form (The access key and signed requests).
 - `fixtures/sealed/`, the sealed fixture of Decision 5.
-- `fixtures/invalid/` for what the schemas refuse: `run-configuration-variable-not-string`,
+- `fixtures/invalid/` for what the schemas refuse: `run-configuration-variable-value-not-string`,
   `run-configuration-connection-bad-id`, `secrets-request-unknown-member`,
   `enrolment-code-lower-case`, `enrolment-answer-no-node-id`, `event-egress-credential`
   and `event-policy-applied-credentials`.
@@ -1865,10 +1865,12 @@ runtime unmet, `runtime_secret_missing` applies as usual.
     "auth": {"scheme": "bearer", "secret": "auth"},
     "declares": [{"id": "auth", "title": "Sentry auth", "name": "SENTRY_AUTH"}],
     "secrets": {"auth": {"source": "external", "name": "SENTRY_AUTH"}}}],
- "variables": {"NODE_ENV": "test", "APP_REGION": "eu-west-1"}}
+ "variables": {"NODE_ENV": {"value": "test"}, "APP_REGION": {"value": "eu-west-1"}}}
 ```
 
-`connections` is in the server's order, which the record repeats. Schema sketch:
+`connections` is in the server's order, which the record repeats. Each variable is an
+object with its `value`; a later attribute beside it is one a runner may ignore, and an
+attribute a runner must honour needs a new revision. Schema sketch:
 
 ```json
 "connections": {"type": "array", "maxItems": 32, "items": {"oneOf": [
@@ -1880,7 +1882,8 @@ runtime unmet, `runtime_secret_missing` applies as usual.
                  "name": {"type": "string", "minLength": 1, "maxLength": 128}}}},
 "variables": {"type": "object", "maxProperties": 128,
   "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-  "additionalProperties": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"}},
+  "additionalProperties": {"type": "object", "additionalProperties": true, "required": ["value"],
+    "properties": {"value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]*$"}}}},
 "$defs": {
   "id": {"type": "string", "pattern": "^con_[0-9a-hjkmnp-tv-z]{16}$"},
   "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},

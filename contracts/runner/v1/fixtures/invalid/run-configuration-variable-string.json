@@ -1,6 +1,6 @@
 {
   "version": 1,
   "variables": {
-    "GREETING": {"value": "two\nlines"}
+    "WORKERS": "4"
   }
 }

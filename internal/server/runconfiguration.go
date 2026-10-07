@@ -56,8 +56,8 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	if err := jsonv2.Unmarshal(body, &rc); err != nil {
 		return nil, invalid("it does not decode as a run configuration")
 	}
-	for name, value := range rc.Variables {
-		if len(value) > MaxVariableValue {
+	for name, v := range rc.Variables {
+		if len(v.Value) > MaxVariableValue {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{name}, "the document is refused: the variable %s holds more than %d bytes", name, MaxVariableValue)
 		}
 	}

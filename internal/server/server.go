@@ -243,7 +243,26 @@ type RunConfiguration struct {
 	// run's.
 	SecurityPolicy json.RawMessage `json:"security_policy,omitzero"`
 	// Variables are the server's variables, by name; nil when the document has none.
-	Variables map[string]string `json:"variables,omitzero"`
+	Variables map[string]Variable `json:"variables,omitzero"`
+}
+
+// Variable is one of a run configuration's variables: its value. A member beside it is
+// an attribute a runner may ignore, and this one does.
+type Variable struct {
+	Value string `json:"value"`
+}
+
+// Values are the run configuration's variables as values by name; nil when the
+// document has none.
+func (rc *RunConfiguration) Values() map[string]string {
+	if rc.Variables == nil {
+		return nil
+	}
+	out := make(map[string]string, len(rc.Variables))
+	for name, v := range rc.Variables {
+		out[name] = v.Value
+	}
+	return out
 }
 
 // Digests are what an answer says is in force: the server's digest of the

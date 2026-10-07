@@ -72,8 +72,8 @@ func variablesApplied(t *testing.T, res *session.Result) map[string]string {
 // serverVariables is a run configuration with variables of every kind the runner
 // treats apart: two it applies, one the node's deny entry covers, one the runtime
 // denies, one the built-in list denies, and one the node sets as well.
-const serverVariables = `{"version":1,"variables":{"NODE_ENV":"test","APP_REGION":"eu-west-1",` +
-	`"ANTHROPIC_BASE_URL":"https://elsewhere.example","PATH":"/nowhere","LOG_LEVEL":"server"}}`
+const serverVariables = `{"version":1,"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
+	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"}}}`
 
 // TestVariablesReachTheAgentAndDeniedOnesDoNot runs the server's variables end to end:
 // behind a wall, and without one when the node accepts them, the variables the run
@@ -235,7 +235,7 @@ func TestTheNodesPolicyNarrowsTheServers(t *testing.T) {
 		t.Errorf("egress %v", decisions)
 	}
 
-	c.serveDocument(`{"version":1,"variables":{"NODE_ENV":"test"}}`, digest)
+	c.serveDocument(`{"version":1,"variables":{"NODE_ENV":{"value":"test"}}}`, digest)
 	sp = spec(t, node)
 	sp.Server, sp.Heartbeat = c.server(), time.Second
 	res, err = session.Run(context.Background(), sp)
@@ -263,7 +263,7 @@ func TestANarrowingThatRefusesIsNoRun(t *testing.T) {
 			&session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Tools: []session.PolicyTool{}}, "tool_unknown"},
 		{"an image", `{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"},"image":"with-docker"}}`,
 			&session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Image: "base"}, "image_unknown"},
-		{"a variable", `{"version":1,"variables":{"GREETING":"a-value-no-error-quotes\nand more"}}`, nil, "run_configuration_invalid"},
+		{"a variable", `{"version":1,"variables":{"GREETING":{"value":"a-value-no-error-quotes\nand more"}}}`, nil, "run_configuration_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newControl(t)
