@@ -14,8 +14,10 @@
 // string, "qory-request-ed25519-v1" and then the access key id, the instance id and
 // the request, and [Key.SignRequest] signs it. Every answer of the server is signed
 // under the server's own Ed25519 key and bound to the request by the request's
-// signature: [Answer] builds the six lines, and [Pin.VerifyAnswer] verifies them under
-// the keys the machine pins. Every 401 is unsigned.
+// signature: [Answer] builds the six lines, "qory-answer-ed25519-v1" first, and
+// [Pin.VerifyAnswer] verifies them under the keys the machine pins. Every 401 is
+// unsigned. An answer to an enrolment has its own domain line,
+// "qory-enrol-answer-ed25519-v1", and the request's proof in place of its signature.
 //
 // Enrolment assigns a new key its id: [NewEnrolmentRequest] builds the request, with
 // an enrolment code in its normalised form and a proof of possession under the new

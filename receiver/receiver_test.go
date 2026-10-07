@@ -28,16 +28,14 @@ import (
 )
 
 const (
-	key     = "ak_f1xt0re000000000"
-	pending = "ak_pend1ng000000000"
-	inst    = "i_gYKDhIWGh4iJiouMjY6PkA"
+	key  = "ak_f1xt0re000000000"
+	inst = "i_gYKDhIWGh4iJiouMjY6PkA"
 )
 
 // fixtureKey is the fixture access key, and signingKey the fixture signing key, the
 // receiver's own here.
 var (
 	fixtureKey = mustKey(accesskey.ParseSecret("qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"))
-	pendingKey = mustKey(accesskey.ParseSecret("qak_wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A"))
 	signingKey = mustKey(accesskey.NewKey([]byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`")))
 	pin        = accesskey.Pin{{Alg: "ed25519", PublicKey: signingKey.PublicKey().String()}}
 )
@@ -49,16 +47,14 @@ func mustKey(k *accesskey.Key, err error) *accesskey.Key {
 	return k
 }
 
-// keys is a lookup that holds the fixture access key, approved, and the pending fixture
-// access key awaiting approval, and counts how often it is called.
+// keys is a lookup that holds the fixture access key and counts how often it is
+// called.
 func keys(asked *int) func(string) (receiver.AccessKey, bool) {
 	return func(k string) (receiver.AccessKey, bool) {
 		*asked++
 		switch k {
 		case key:
 			return receiver.AccessKey{PublicKey: fixtureKey.PublicKey()}, true
-		case pending:
-			return receiver.AccessKey{PublicKey: pendingKey.PublicKey(), Pending: true}, true
 		}
 		return receiver.AccessKey{}, false
 	}
@@ -163,7 +159,7 @@ func serve(h *receiver.Handler, req *http.Request) *httptest.ResponseRecorder {
 func TestSignedFixturesReplay(t *testing.T) {
 	h, store, _ := handler(t, 1700000000)
 	names, err := fs.Glob(contracts.FS, "fixtures/signed/*.json")
-	if err != nil || len(names) < 12 {
+	if err != nil || len(names) < 11 {
 		t.Fatalf("signed fixtures: %v, %v", names, err)
 	}
 	sort.Strings(names)
@@ -332,9 +328,8 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 
 // TestSignedRefusalsComeInTheContractsOrder pins the refusals after verification,
 // each signed and bound to its request: an instance id absent or outside its pattern
-// is 400 bad_request, before an access key that awaits approval, which is 409
-// key_pending on every endpoint, a stale timestamp's 401 coming later, before another
-// contract revision, which is 400 unsupported_contract_version; a batch that is not
+// is 400 bad_request, before another contract revision, which is 400
+// unsupported_contract_version; a batch that is not
 // one, or a ping with an interval over 300 seconds, is 400 invalid_request; and on
 // the events endpoint, a closed run is 410 run_closed, a run the receiver wants
 // nothing more of 410 without a code, and a ping from an instance it does not admit 409
@@ -361,11 +356,7 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(string(b)))
 			sr.Body = b
 		}
-		signer := fixtureKey
-		if id == pending {
-			signer = pendingKey
-		}
-		sig, _ := signer.SignRequest(sr)
+		sig, _ := fixtureKey.SignRequest(sr)
 		r.Header.Set(server.HeaderSignature, sig)
 		return r
 	}
@@ -379,11 +370,6 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	}
 	check("no instance id", instance("", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
 	check("an instance id outside the pattern", instance("-i", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
-	check("no instance id, pending", instance("", as(pending, signedGET(server.WellKnown, fixtureKey, "1700000000"))), 400, "bad_request")
-	check("a pending key at discovery", as(pending, signedGET(server.WellKnown, fixtureKey, "1700000000")), 409, "key_pending")
-	check("a pending key at the run configuration", as(pending, signedGET(receiver.DefaultRunPath, fixtureKey, "1700000000")), 409, "key_pending")
-	check("a pending key at the events endpoint", as(pending, signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("[]"))), 409, "key_pending")
-	check("a pending key with a stale timestamp", as(pending, signedGET(server.WellKnown, fixtureKey, "1699999000")), 409, "key_pending")
 	revision := signedGET(server.WellKnown, fixtureKey, "1700000000")
 	revision.Header.Set(server.HeaderContractVersion, "2")
 	check("another revision", revision, 400, "unsupported_contract_version")

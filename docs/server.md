@@ -17,9 +17,9 @@ example is in [the policy](policy.md#in-runneryaml).
 - `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
-  id and the pin; the key awaits approval, and until then a run is refused with
-  `key_pending`. `qory access-key create` prints a public key for the server's owner to
-  paste, and a pasted key is approved as it is entered.
+  id and the pin; the code's use activates the key at once. `qory access-key create`
+  prints a public key for the server's owner to paste, and a pasted key is active as it
+  is entered.
 - The run's policy comes from the server, when the server offers one. The node's
   policy, `Spec.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
@@ -49,12 +49,11 @@ server decides which labels identify what the run works on.
 ## When the server refuses or closes a run
 
 A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a key the
-server does not hold, `key_pending` for a key that awaits approval, `instance_limit`
-when the node's live instances are at its limit, `answer_unsigned` for an answer that
-does not verify under the pin, and `apiary_public_key_missing` for a server without a
-pin. A server closes a running run with a signed `410` `run_closed`: the runner stops
-the runtime as at its time limit, records `reason: run_closed`, and sends nothing
-further.
+server does not hold, `instance_limit` when the node's live instances are at its
+limit, `answer_unsigned` for an answer that does not verify under the pin, and
+`apiary_public_key_missing` for a server without a pin. A server closes a running run
+with a signed `410` `run_closed`: the runner stops the runtime as at its time limit,
+records `reason: run_closed`, and sends nothing further.
 
 ## A policy that changes while the run goes
 

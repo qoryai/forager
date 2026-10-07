@@ -16,7 +16,7 @@
 //
 // A refusal that means no run is an [*accesskey.Refusal] with its code: unauthorized
 // for a 401, answer_unsigned for an answer that does not verify, and the server's own
-// code from a signed answer's body, key_pending or instance_limit say.
+// code from a signed answer's body, instance_limit or rate_limited say.
 package server
 
 import (
@@ -459,8 +459,8 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
 // the schema refuses, means no run; it names the URL. A 401 is unauthorized, a signed
-// 409 key_pending is key_pending, and an answer that does not verify is
-// answer_unsigned, each an [*accesskey.Refusal].
+// refusal is the code its body contains, rate_limited say, and an answer that does not
+// verify is answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	if err := c.Check(); err != nil {
 		return nil, "", err
@@ -588,7 +588,7 @@ var ErrNotAccepted = errors.New("the server did not accept the ping")
 // Ping delivers a batch of one ping event to the events URL and returns nil only on a
 // signed 2xx. It is what makes a configured server fail closed: the run does not start
 // otherwise. A 401 is unauthorized, an answer that does not verify answer_unsigned,
-// and a signed refusal its code, instance_limit or key_pending say, each an
+// and a signed refusal its code, instance_limit or rate_limited say, each an
 // [*accesskey.Refusal]; the error names the URL and the status.
 func (c *Client) Ping(ctx context.Context, eventsURL, deliveryID string, body []byte) error {
 	a, err := c.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {

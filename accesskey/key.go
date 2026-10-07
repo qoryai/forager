@@ -225,10 +225,9 @@ func (p PublicKey) X25519() ([]byte, error) {
 	return pt.BytesMontgomery(), nil
 }
 
-// The published fixture keys of the contract: the fixture access key, the second one
-// that awaits approval, and the fixture signing keys of the server, current and next.
-// Their secrets are in the contract's fixtures, so a machine refuses each as its own
-// key and as a pin.
+// The published fixture keys of the contract: the fixture access key, a second fixture
+// access key, and the fixture signing keys of the server, current and next. Their
+// secrets are published, so a machine refuses each as its own key and as a pin.
 var fixtureKeys = []string{
 	"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
 	"dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw",

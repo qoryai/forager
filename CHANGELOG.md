@@ -152,13 +152,15 @@ release may change what an existing document does, and says so under Upgrading.
   variables that the server vendors: `secrets-request.schema.json`, the body of the
   secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
   HPKE to the access key; `sealed-plaintext.schema.json`, what the envelope opens to;
-  `enrolment.schema.json`, the enrolment request and its answer;
-  `events/run.refused.schema.json`, the data of `dev.qory.run.refused`, which
-  `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
-  list of variable names and patterns; and `headers.json`, the header names and prefixes
-  refused for a connection's header, from the IANA HTTP Field Name Registry, the Fetch
-  standard's forbidden request headers and the names the contract adds. The runner's
-  code is unchanged.
+  `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
+  access key is active, signed with every signed refusal at enrolment under the
+  enrolment answers' own domain line, `qory-enrol-answer-ed25519-v1`, once the server
+  has checked the key and verified the proof under it; `events/run.refused.schema.json`,
+  the data of `dev.qory.run.refused`, which `event.schema.json` lists among its types;
+  `denied-variables.json`, the built-in deny list of variable names and patterns; and
+  `headers.json`, the header names and prefixes refused for a connection's header, from
+  the IANA HTTP Field Name Registry, the Fetch standard's forbidden request headers and
+  the names the contract adds. The runner's code is unchanged.
 - Fixtures with the known answers of the access key: `fixtures/sealed/`, an envelope
   sealed to the fixture access key with its run configuration, secrets request and
   plaintext; `fixtures/enrolment/`, two enrolment requests and the answer; and
@@ -211,7 +213,8 @@ release may change what an existing document does, and says so under Upgrading.
   signs the GET and POST request strings; verifies a signed answer under a pin; builds
   an enrolment request with its normalised code and proof, posts it and verifies the
   answer, and a signed `key_limit` or `key_invalid` refusal, under the key the code
-  names; and makes the instance id with the two lines of
+  names and the enrolment answers' domain line, an unsigned `409` being
+  `answer_unsigned`; and makes the instance id with the two lines of
   its file, the id and a keyed hash of the machine's identity. It verifies under no key
   the key checks refuse, refuses a document that contains a secret with
   `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
@@ -228,8 +231,10 @@ release may change what an existing document does, and says so under Upgrading.
   run the same way, with exit code -1.
   `session.Result` has `RunClosed`.
 - `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
-  `key_invalid` or `key_limit` with `apiary_public_key`, the same list in the same order
-  as a `201`, so a machine without a pin verifies it as it verifies the `201`.
+  `key_invalid` for a key already enrolled, or `key_limit`, with `apiary_public_key`,
+  the same list in the same order as a `201`, so a machine without a pin verifies it as
+  it verifies the `201`. A key the checks refuse or a proof that does not verify under
+  it gets an unsigned `409` `key_invalid`, before the server signs anything.
   `fixtures/enrolment/` has the four refusals, with one key and with two, and
   `signatures.json` their signatures under the fixture signing key.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
@@ -237,15 +242,13 @@ release may change what an existing document does, and says so under Upgrading.
   document lists `secrets`; an error it returns is no run.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
   status: `apiary_public_key_missing` for a server without a pin, before any request;
-  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify;
-  `key_pending` while the access key awaits approval; and `instance_limit` when the
-  node's live instances are at its limit.
-- The reference receiver accepts the public keys its configuration holds, an access key
-  awaiting approval among them, answers in the contract's order of refusals, a ping
-  whose `interval_seconds` is outside 1 to 300 being `invalid_request`, and signs every
-  answer after verification under its own key, the `410` of its `Stop` among them. Its
-  new hooks `Closed` and `Admit` close a run with `run_closed` and refuse an instance's
-  ping with `instance_limit`.
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
+  `instance_limit` when the node's live instances are at its limit.
+- The reference receiver accepts the public keys its configuration holds, answers in
+  the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
+  being `invalid_request`, and signs every answer after verification under its own key,
+  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
+  `run_closed` and refuse an instance's ping with `instance_limit`.
 
 ### Changed
 
@@ -304,9 +307,8 @@ release may change what an existing document does, and says so under Upgrading.
   `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
   `run_closed`.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
-  `fixtures/signed/` has `get-configuration-no-instance-id`, `-header-twice` and
-  `-pending-key`, signed under a second fixture access key that `keys.json` lists as
-  `pending_access_key`, `batch-unknown-key` in place of `batch-wrong-key`, and
+  `fixtures/signed/` has `get-configuration-no-instance-id` and `-header-twice`,
+  `batch-unknown-key` in place of `batch-wrong-key`, and
   `expect_code` for a coded refusal. `fixtures/invalid/` has
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
   `event-ping-interval-too-long` in place of `server-no-key`;

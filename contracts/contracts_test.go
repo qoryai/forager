@@ -234,8 +234,8 @@ func TestBatchFixturesValidate(t *testing.T) {
 // the contract's own, a body on a POST that is a batch and none on a GET, a status a
 // receiver answers, the code of a coded refusal, and a note. A header a list holds is
 // one sent once per value. On every request whose signature a receiver verifies, the
-// signature is the Ed25519 one under the fixture access key secret, or the pending
-// fixture access key's for a request as that key, over the request string, its lines the domain, the access key id and the instance id as the headers
+// signature is the Ed25519 one under the fixture access key secret over the request
+// string, its lines the domain, the access key id and the instance id as the headers
 // contain them, the method, the target, then the timestamp on a GET or the raw body on
 // a POST, so the published signatures cannot drift from the fixtures they sign.
 func TestSignedFixtures(t *testing.T) {
@@ -245,20 +245,12 @@ func TestSignedFixtures(t *testing.T) {
 			PublicKey  string `json:"public_key"`
 			InstanceID string `json:"instance_id"`
 		} `json:"access_key"`
-		PendingAccessKey struct {
-			AccessKeyID string `json:"access_key_id"`
-			PublicKey   string `json:"public_key"`
-		} `json:"pending_access_key"`
 	}
 	b, err := fs.ReadFile(contracts.FS, "fixtures/known-answers/keys.json")
 	if err != nil || json.Unmarshal(b, &keys) != nil {
 		t.Fatalf("keys.json: %v", err)
 	}
 	pub, err := base64.RawURLEncoding.DecodeString(keys.AccessKey.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending, err := base64.RawURLEncoding.DecodeString(keys.PendingAccessKey.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,9 +279,9 @@ func TestSignedFixtures(t *testing.T) {
 		status := expect.String()
 		seen[status+" "+code] = true
 		switch status + " " + code {
-		case "200 ", "202 ", "401 unauthorized", "400 bad_request", "409 key_pending":
+		case "200 ", "202 ", "401 unauthorized", "400 bad_request":
 		default:
-			t.Errorf("%s: expect %s %s; want 200, 202, 401 unauthorized, 400 bad_request or 409 key_pending", f, status, code)
+			t.Errorf("%s: expect %s %s; want 200, 202, 401 unauthorized or 400 bad_request", f, status, code)
 		}
 		twice := false
 		value := func(name string, required bool) string {
@@ -351,12 +343,7 @@ func TestSignedFixtures(t *testing.T) {
 			lines = append(lines, value("X-Qory-Timestamp", true))
 		}
 		sig, err := base64.RawURLEncoding.Strict().DecodeString(signature)
-		// A request as the pending access key is signed under its own fixture key.
-		under := pub
-		if accessKeyID == keys.PendingAccessKey.AccessKeyID {
-			under = pending
-		}
-		valid := err == nil && ed25519.Verify(under, []byte(strings.Join(lines, "\n")), sig)
+		valid := err == nil && ed25519.Verify(pub, []byte(strings.Join(lines, "\n")), sig)
 		// A request a receiver verifies is signed under the fixture key: every one but a
 		// header sent twice, refused before verification, and the 401s, one of which
 		// is a correct signature over a stale timestamp.
@@ -373,7 +360,7 @@ func TestSignedFixtures(t *testing.T) {
 			t.Errorf("%s: accepted as %s, %s; want the fixture access key and instance", f, accessKeyID, instanceID)
 		}
 	}
-	for _, want := range []string{"200 ", "202 ", "401 unauthorized", "400 bad_request", "409 key_pending"} {
+	for _, want := range []string{"200 ", "202 ", "401 unauthorized", "400 bad_request"} {
 		if !seen[want] {
 			t.Errorf("no signed fixture expects %s", want)
 		}

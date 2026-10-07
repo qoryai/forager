@@ -54,42 +54,42 @@
     {
       "note": "201 to the enrolment request, signed under the fixture signing key; line 3 is the request's proof.",
       "body": "fixtures/enrolment/answer.json",
-      "body_length": 241,
-      "lines": ["qory-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "9e98fc75fc9e34f965a455f963b660d39b7ed09859576beaa241c3cec1171e54", "", ""],
-      "length": 180,
-      "signature": "iV3ejKcT8WbcptqR-fHYVoNxrYLdXHXLVUpi1RDwbCZ3Vl7YzcBEwt6iWaHF-MszqdGAANz9lM9n2H5h-fqADw"
+      "body_length": 224,
+      "lines": ["qory-enrol-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "51905d711f27a1a67ddbfbdea1b86a6b9c6285039057275cc571f14d0f3c5970", "", ""],
+      "length": 186,
+      "signature": "mlolBZmEjfAvl4-JfERjGZyBKZLg3yVT-uq3z_AsUzv6fn_Gd6qTAcXrrd0Y8FMi0V8Nl9_Iw-xeZ5aOJhqFCA"
     },
     {
       "note": "409 key_limit to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-limit.json",
       "body_length": 120,
-      "lines": ["qory-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "5dd044dde8d72f0fbe4172f2639c90d0e9226d4640f01bdc4019d20df020b8b9", "", ""],
-      "length": 180,
-      "signature": "DWvAxPiDi14b_CAfhza6GdSXwEmB0Q_uev-8zstJshYlWnbgSs3wtI6fG8HwLnw0Rx03uf-cYGECc2LTsJV0DQ"
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "5dd044dde8d72f0fbe4172f2639c90d0e9226d4640f01bdc4019d20df020b8b9", "", ""],
+      "length": 186,
+      "signature": "dtByGGJnlokL_LtW39BLmDRHoryz6s5WIVkssrERfRR-fyknxsjmJ9NjEUHAK0K4aMlL5hMDwNSNXXsir_WsBQ"
     },
     {
       "note": "409 key_invalid to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-invalid.json",
       "body_length": 122,
-      "lines": ["qory-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "959e82a2392a8a909e4bff23270ea79e5c15fa10422bffefbe96b04002d8fd80", "", ""],
-      "length": 180,
-      "signature": "-trQErJK1SHFtZTmBEjU7PPdXgPXq-MF3gpZmncwuMr22olk8rpkXjxO0dDRrWZw35y_9-fDHyYkxH5QUZlZAA"
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "959e82a2392a8a909e4bff23270ea79e5c15fa10422bffefbe96b04002d8fd80", "", ""],
+      "length": 186,
+      "signature": "v5AOuFDcMyRGIjFlPQ1XvhjRDqJMymEn2pau1mMdlGg3BLA7sdgGXRI9Bzbvk7ItLUYGqsYVSurHY7kZ-6j-Cw"
     },
     {
       "note": "409 key_limit during a rotation of the server's key, to the request whose code carries both fingerprints: the body lists the current key, then the next, and the current key signs; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-limit-rotation.json",
       "body_length": 197,
-      "lines": ["qory-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "f8cd2d78468a7dc24af9ad49d26090c3225de539a52ef17db893cd3ba92f2415", "", ""],
-      "length": 180,
-      "signature": "FOs-3uUkWvNbi34ROTCKoP8Ihkzl5Q4lU6rrDW3ZtPvQbovAWAK9UFyw8m1RoRQlsyYxViDRZbC7z86igrjzAA"
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "f8cd2d78468a7dc24af9ad49d26090c3225de539a52ef17db893cd3ba92f2415", "", ""],
+      "length": 186,
+      "signature": "GrbPliGIAWMeF5XpYLibjN33LALD0w1fCHFVtYCh8YigWzW6nhRbcpqj7xTHnZlveGm22-8l768REHwCpVrADg"
     },
     {
       "note": "409 key_invalid during a rotation of the server's key, to the request whose code carries both fingerprints: the body lists the current key, then the next, and the current key signs; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-invalid-rotation.json",
       "body_length": 199,
-      "lines": ["qory-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "deb4a76a7f791485d555df881b81bb80b53005249d174df071362e0a9ef83f29", "", ""],
-      "length": 180,
-      "signature": "PJIhMK-Ql-jpAcREV_7jmx3b_B5R9_2zF40D9I3bmhTKeIczGzwaBP7n0qkQBmQySZJnje9Hv8mJc22A7swhDA"
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "deb4a76a7f791485d555df881b81bb80b53005249d174df071362e0a9ef83f29", "", ""],
+      "length": 186,
+      "signature": "T66jEKg-BKLfrFVZotmlmGGp6v6lbtB8BD9hdqbtv8X1H8KuVYOrr2ttZucfPkplAbVo9qzNnx42_Q9n7BQADQ"
     }
   ]
 }

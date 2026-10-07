@@ -217,12 +217,12 @@ type Discovery struct {
 // Refusal is a run that did not start, and why: its refusal code, and the status of
 // the server's answer when the code came from one. A server's run, for one, is refused
 // with apiary_public_key_missing without a pin, unauthorized on a 401,
-// answer_unsigned on an answer that does not verify under the pin, key_pending while
-// the access key awaits approval, instance_limit when the node's live instances are at
-// its limit, and run_closed when the server closes the run before it starts. The
-// runner's own refusals are Refusals too, with the names they concern and never a
-// value: run_configuration_invalid, variable_reserved, placeholder_conflict,
-// tool_unknown and image_unknown among them. errors.As finds one in what [Run] returns.
+// answer_unsigned on an answer that does not verify under the pin, instance_limit when
+// the node's live instances are at its limit, and run_closed when the server closes
+// the run before it starts. The runner's own refusals are Refusals too, with the names
+// they concern and never a value: run_configuration_invalid, variable_reserved,
+// placeholder_conflict, tool_unknown and image_unknown among them. errors.As finds one
+// in what [Run] returns.
 type Refusal = accesskey.Refusal
 
 // The environment variables the session gets from the runner. EnvHarnessHome is set
