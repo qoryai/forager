@@ -1105,7 +1105,7 @@ func TestRunRefusedCodes(t *testing.T) {
 		"integration_name_mismatch", "integration_role_missing", "integration_settings_invalid",
 		"integration_settings_not_allowed", "integration_settings_too_large",
 		"integration_source_mismatch", "integration_version_mismatch", "integration_way_not_allowed",
-		"invalid_request", "key_invalid", "key_limit", "key_pending", "labels_changed",
+		"invalid_request", "key_invalid", "key_limit", "labels_changed",
 		"mount_contains_credential_files", "mount_contains_runner_files", "placeholder_conflict",
 		"rate_limited", "run_closed", "run_configuration_digest_mismatch", "run_configuration_invalid",
 		"run_configuration_superseded", "run_connections_invalid", "run_secrets_conflict",
@@ -1117,8 +1117,8 @@ func TestRunRefusedCodes(t *testing.T) {
 		"tool_not_started", "tool_unknown", "unauthorized", "unavailable",
 		"unsupported_contract_version", "variable_reserved",
 	}
-	if len(want) != 67 {
-		t.Fatalf("%d codes in the test's list; want 67", len(want))
+	if len(want) != 66 {
+		t.Fatalf("%d codes in the test's list; want 66", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

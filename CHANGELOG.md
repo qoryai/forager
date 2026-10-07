@@ -139,8 +139,8 @@ release may change what an existing document does, and says so under Upgrading.
   variables that the server vendors: `secrets-request.schema.json`, the body of the
   secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
   HPKE to the access key; `sealed-plaintext.schema.json`, what the envelope opens to;
-  `enrolment.schema.json`, the enrolment request and its answer;
-  `events/run.refused.schema.json`, the data of `dev.qory.run.refused`, which
+  `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
+  access key is active; `events/run.refused.schema.json`, the data of `dev.qory.run.refused`, which
   `event.schema.json` lists among its types; `denied-variables.json`, the built-in deny
   list of variable names and patterns; and `headers.json`, the header names and prefixes
   refused for a connection's header, from the IANA HTTP Field Name Registry, the Fetch
@@ -224,13 +224,11 @@ release may change what an existing document does, and says so under Upgrading.
   document lists `secrets`; an error it returns is no run.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
   status: `apiary_public_key_missing` for a server without a pin, before any request;
-  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify;
-  `key_pending` while the access key awaits approval; and `instance_limit` when the
-  node's live instances are at its limit.
-- The reference receiver accepts the public keys its configuration holds, an access key
-  awaiting approval among them, answers in the contract's order of refusals, a ping
-  whose `interval_seconds` is outside 1 to 300 being `invalid_request`, and signs every
-  answer after verification under its own key, the `410` of its `Stop` among them. Its
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
+  `instance_limit` when the node's live instances are at its limit.
+- The reference receiver accepts the public keys its configuration holds, answers in
+  the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
+  being `invalid_request`, and signs every answer after verification under its own key, the `410` of its `Stop` among them. Its
   new hooks `Closed` and `Admit` close a run with `run_closed` and refuse an instance's
   ping with `instance_limit`.
 
@@ -291,9 +289,8 @@ release may change what an existing document does, and says so under Upgrading.
   `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
   `run_closed`.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
-  `fixtures/signed/` has `get-configuration-no-instance-id`, `-header-twice` and
-  `-pending-key`, signed under a second fixture access key that `keys.json` lists as
-  `pending_access_key`, `batch-unknown-key` in place of `batch-wrong-key`, and
+  `fixtures/signed/` has `get-configuration-no-instance-id` and `-header-twice`,
+  `batch-unknown-key` in place of `batch-wrong-key`, and
   `expect_code` for a coded refusal. `fixtures/invalid/` has
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
   `event-ping-interval-too-long` in place of `server-no-key`;

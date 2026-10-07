@@ -54,10 +54,10 @@
     {
       "note": "201 to the enrolment request, signed under the fixture signing key; line 3 is the request's proof.",
       "body": "fixtures/enrolment/answer.json",
-      "body_length": 241,
-      "lines": ["qory-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "9e98fc75fc9e34f965a455f963b660d39b7ed09859576beaa241c3cec1171e54", "", ""],
+      "body_length": 224,
+      "lines": ["qory-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "51905d711f27a1a67ddbfbdea1b86a6b9c6285039057275cc571f14d0f3c5970", "", ""],
       "length": 180,
-      "signature": "iV3ejKcT8WbcptqR-fHYVoNxrYLdXHXLVUpi1RDwbCZ3Vl7YzcBEwt6iWaHF-MszqdGAANz9lM9n2H5h-fqADw"
+      "signature": "E2jdN5_8KhMnJ487eFMfJ90d9LWbPQDgE3mKPE8yuLF2r7XGyDU3MKxSLmI2rniFP1C5pDhuZKRFBnAvTBYTDg"
     },
     {
       "note": "409 key_limit to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",

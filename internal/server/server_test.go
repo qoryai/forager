@@ -339,7 +339,7 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 }
 
 // TestRefusalsAreCoded pins the codes a run start reads: an unsigned 401 is
-// unauthorized, a signed 409 key_pending at discovery is key_pending, a signed 409
+// unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
 // instance_limit to the ping is instance_limit, and a signed 410 run_closed to a
 // delivery closes the run while a signed 410 without that code stops the deliveries
 // alone. A 401 that carries a signature is unauthorized all the same.
@@ -377,16 +377,16 @@ func TestRefusalsAreCoded(t *testing.T) {
 	if d, _ := c.Deliver(context.Background(), events, "d6", []byte("[]"), ""); d.Closed() || d.Stop() {
 		t.Errorf("an unsigned 410: %+v", d)
 	}
-	pending := newVerified(t)
-	pc := pending.client()
-	pending.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := `{"error":"key_pending"}`
-		w.Header().Set(server.HeaderSignature, pending.signer.SignAnswer(accesskey.Answer{Status: 409, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(body)}))
-		w.WriteHeader(409)
+	limited := newVerified(t)
+	lc := limited.client()
+	limited.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := `{"error":"rate_limited"}`
+		w.Header().Set(server.HeaderSignature, limited.signer.SignAnswer(accesskey.Answer{Status: 429, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(body)}))
+		w.WriteHeader(429)
 		io.WriteString(w, body)
 	})
-	if _, _, err := pc.Discover(context.Background()); code(err) != accesskey.CodeKeyPending {
-		t.Errorf("discovery of a pending key: %v", err)
+	if _, _, err := lc.Discover(context.Background()); code(err) != "rate_limited" {
+		t.Errorf("discovery answered a signed 429 rate_limited: %v", err)
 	}
 	unauthorized := newVerified(t)
 	uc := unauthorized.client()
@@ -550,9 +550,9 @@ func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
 	key, signer := generate(t), generate(t)
 	mode := ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		status, body, conf := 409, `{"error":"key_pending"}`, ""
+		status, body, conf := 429, `{"error":"rate_limited"}`, ""
 		if mode == "large" {
-			body = `{"error":"key_pending","names":["` + strings.Repeat("x", server.MaxRefusal) + `"]}`
+			body = `{"error":"rate_limited","names":["` + strings.Repeat("x", server.MaxRefusal) + `"]}`
 		}
 		if mode == "digest" {
 			conf = "sha256=a"
@@ -571,8 +571,8 @@ func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer)}, Key: key, InstanceID: instance, UserAgent: "qory-runner/test"}
-	if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeKeyPending {
-		t.Fatalf("a signed 409: %v", err)
+	if _, _, err := c.Discover(context.Background()); code(err) != "rate_limited" {
+		t.Fatalf("a signed 429: %v", err)
 	}
 	for _, m := range []string{"twice", "digest", "large"} {
 		mode = m

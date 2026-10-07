@@ -70,10 +70,10 @@
     },
     "answer": {
       "title": "Enrolment answer",
-      "description": "The 201 answer: the new access key's id, its node or node pool, its approval, its stored-secrets flag and the server's public keys. Every member is required.",
+      "description": "The 201 answer: the new access key's id, its node or node pool, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "access_key_id", "node_id", "node_kind", "approved", "stored_secrets", "apiary_public_key"],
+      "required": ["version", "access_key_id", "node_id", "node_kind", "stored_secrets", "apiary_public_key"],
       "properties": {
         "version": {
           "description": "The document format. A runner refuses a version it does not read.",
@@ -94,10 +94,6 @@
           "type": "string",
           "enum": ["node", "pool"]
         },
-        "approved": {
-          "description": "True once an owner or administrator has approved the access key. An access key enrolled with a code awaits approval.",
-          "type": "boolean"
-        },
         "stored_secrets": {
           "description": "The access key's stored-secrets flag, fixed when the key is created.",
           "type": "boolean"
@@ -114,7 +110,7 @@
     },
     "refusal": {
       "title": "Enrolment refusal",
-      "description": "The body of a signed 409 at enrolment: key_invalid, a proof that does not verify or a key the server refuses, or key_limit, a node or node pool that already holds a key awaiting approval or two approved keys. It lists apiary_public_key, the same list in the same order as a 201 at that moment, current key first and during a rotation the next key after it, so the machine verifies the refusal as it verifies the 201: under the entry whose fingerprint its code carries first. A refusal sent unsigned, the 401 and every answer before the code is accepted, lists no key, and a machine acts on none by its status.",
+      "description": "The body of a signed 409 at enrolment: key_invalid, a proof that does not verify or a key the server refuses, or key_limit, a node or node pool that already holds two keys. It lists apiary_public_key, the same list in the same order as a 201 at that moment, current key first and during a rotation the next key after it, so the machine verifies the refusal as it verifies the 201: under the entry whose fingerprint its code carries first. A refusal sent unsigned, the 401 and every answer before the code is accepted, lists no key, and a machine acts on none by its status.",
       "type": "object",
       "additionalProperties": false,
       "required": ["error", "apiary_public_key"],

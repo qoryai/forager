@@ -51,12 +51,6 @@ type fixtureKeys struct {
 		X25519PrivateKey string `json:"x25519_private_key"`
 		X25519PublicKey  string `json:"x25519_public_key"`
 	} `json:"access_key"`
-	PendingAccessKey struct {
-		Secret      string `json:"secret"`
-		AccessKeyID string `json:"access_key_id"`
-		PublicKey   string `json:"public_key"`
-		Fingerprint string `json:"fingerprint"`
-	} `json:"pending_access_key"`
 	SigningKey     signingKey `json:"signing_key"`
 	NextSigningKey signingKey `json:"next_signing_key"`
 }
@@ -144,12 +138,14 @@ func TestFixtureAccessKey(t *testing.T) {
 	if !key.PublicKey().Fixture() {
 		t.Error("the fixture access key is not reported as a fixture")
 	}
-	pending, err := accesskey.ParseSecret(k.PendingAccessKey.Secret)
+	// A second fixture access key, the seed being bytes 193 to 224, has its secret
+	// published too and is refused alike.
+	second, err := accesskey.ParseSecret("qak_wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := k.PendingAccessKey; pending.PublicKey().String() != p.PublicKey || pending.Fingerprint() != p.Fingerprint || accesskey.CheckID(p.AccessKeyID) != nil || !pending.PublicKey().Fixture() {
-		t.Errorf("the pending fixture access key: %s, %s", pending.PublicKey(), pending.Fingerprint())
+	if !second.PublicKey().Fixture() {
+		t.Errorf("the second fixture access key %s is not reported as a fixture", second.PublicKey())
 	}
 	for _, s := range []signingKey{k.SigningKey, k.NextSigningKey} {
 		sk := s.key(t)
@@ -441,7 +437,7 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.AccessKeyID != "ak_f1xt0re000000000" || got.NodeID != "nd_f1xt0re000000000" || got.NodeKind != "node" || got.Approved || got.StoredSecrets {
+	if got.AccessKeyID != "ak_f1xt0re000000000" || got.NodeID != "nd_f1xt0re000000000" || got.NodeKind != "node" || got.StoredSecrets {
 		t.Errorf("answer %+v", got)
 	}
 	if len(got.Pin) != 1 || got.Pin[0].PublicKey != k.SigningKey.PublicKey {
@@ -473,7 +469,7 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 	k := keys(t)
 	key := k.accessKey(t)
 	signer := k.SigningKey.key(t)
-	body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"np_f1xt0re000000000","node_kind":"pool","approved":true,"stored_secrets":true,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"}]}`)
+	body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"np_f1xt0re000000000","node_kind":"pool","stored_secrets":true,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"}]}`)
 	for _, c := range []struct {
 		code string
 		pins int
@@ -729,9 +725,9 @@ func TestPostEnrols(t *testing.T) {
 	}
 	status = http.StatusCreated
 	for name, b := range map[string]string{
-		"a node_kind against its id": `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"pool","approved":false,"stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
-		"three keys":                 `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","approved":false,"stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.AccessKey.PublicKey + `"}]}`,
-		"an unknown member":          `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","approved":false,"stored_secrets":false,"extra":1,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
+		"a node_kind against its id": `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"pool","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
+		"three keys":                 `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.NextSigningKey.PublicKey + `"},{"alg":"ed25519","public_key":"` + k.AccessKey.PublicKey + `"}]}`,
+		"an unknown member":          `{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"nd_f1xt0re000000000","node_kind":"node","stored_secrets":false,"extra":1,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`,
 	} {
 		body = []byte(b)
 		if got, err := r.Post(ctx, nil, srv.URL, "qory/test"); err == nil {

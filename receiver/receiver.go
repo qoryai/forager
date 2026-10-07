@@ -13,13 +13,12 @@
 // failure alike an unsigned 401 with {"error":"unauthorized"} and nothing about the
 // headers said or logged. Every answer after verification but a 401 is signed under
 // the receiver's own key and bound to the request by its signature: an instance id
-// absent or outside its pattern, 400 bad_request; an access key that awaits approval,
-// 409 key_pending; another contract revision, 400 unsupported_contract_version; a
-// body or query the contract refuses, 400 invalid_request; a GET's timestamp outside
-// the window, the unsigned 401; then each endpoint's own. Of an event's data it reads
-// a ping's interval_seconds and a run.started's labels. A delivery it verified is
-// deduplicated on each event's id, handed to a [Store], and answered 202 with the
-// digests in force. [File] is a store that appends events to one JSON lines file and
+// absent or outside its pattern, 400 bad_request; another contract revision, 400
+// unsupported_contract_version; a body or query the contract refuses, 400
+// invalid_request; a GET's timestamp outside the window, the unsigned 401; then each
+// endpoint's own. Of an event's data it reads a ping's interval_seconds and a
+// run.started's labels. A delivery it verified is deduplicated on each event's id,
+// handed to a [Store], and answered 202 with the digests in force. [File] is a store that appends events to one JSON lines file and
 // remembers the ids it holds. It keeps one store and one map of labels for every access
 // key alike, as a test needs; a server of many access keys scopes runs, event ids and
 // labels per access key, so one key's events never deduplicate or label another's.
@@ -80,13 +79,10 @@ type Store interface {
 }
 
 // AccessKey is one access key a receiver accepts: the public key its requests verify
-// under, pasted into the receiver's configuration, and whether it awaits approval. A
-// public key [accesskey.PublicKey.Check] refuses verifies no request.
+// under, pasted into the receiver's configuration. A public key
+// [accesskey.PublicKey.Check] refuses verifies no request.
 type AccessKey struct {
 	PublicKey accesskey.PublicKey
-	// Pending says the key awaits approval: its requests verify, and every endpoint
-	// answers them with a signed 409 key_pending.
-	Pending bool
 }
 
 // Handler is the receiving endpoint.
@@ -202,8 +198,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case accesskey.CheckInstanceID(r.Header.Get(server.HeaderInstanceID)) != nil:
 		h.refuseSigned(w, v, http.StatusBadRequest, "bad_request")
-	case v.key.Pending:
-		h.refuseSigned(w, v, http.StatusConflict, "key_pending")
 	case r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision):
 		h.refuseSigned(w, v, http.StatusBadRequest, "unsupported_contract_version")
 	case r.URL.Path == server.WellKnown:

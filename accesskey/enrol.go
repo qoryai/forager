@@ -170,14 +170,13 @@ func (r *EnrolmentRequest) VerifyProof() bool {
 }
 
 // EnrolmentAnswer is the server's 201 to an enrolment: the access key's id, the id of
-// its node or node pool with its kind, whether it is approved, its stored-secrets flag,
-// and the server's keys.
+// its node or node pool with its kind, its stored-secrets flag and the server's keys.
+// The key is active from the 201 on.
 type EnrolmentAnswer struct {
 	Version       int    `json:"version"`
 	AccessKeyID   string `json:"access_key_id"`
 	NodeID        string `json:"node_id"`
 	NodeKind      string `json:"node_kind"`
-	Approved      bool   `json:"approved"`
 	StoredSecrets bool   `json:"stored_secrets"`
 	// ApiaryPublicKey are the server's keys as it lists them, current then next.
 	ApiaryPublicKey Pin `json:"apiary_public_key"`

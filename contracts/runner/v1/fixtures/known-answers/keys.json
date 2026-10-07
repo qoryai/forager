@@ -9,13 +9,6 @@
     "x25519_private_key": "cHiPGgzqABomMdrl0F29BiAI1bMPULnim-sqeCIokEQ",
     "x25519_public_key": "SjgH0GTQdxgcwHCYnnaJHSDcpVWVSNwsd8GlAnOIKzg"
   },
-  "pending_access_key": {
-    "note": "A second fixture access key, the seed being bytes 193 to 224, which a receiver under test holds under ak_pend1ng000000000 as awaiting approval, for fixtures/signed/get-configuration-pending-key.json. qory refuses this secret and the server refuses this key.",
-    "secret": "qak_wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A",
-    "access_key_id": "ak_pend1ng000000000",
-    "public_key": "dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw",
-    "fingerprint": "8fzINP5keC1Ov9CZczT20A"
-  },
   "signing_key": {
     "note": "The fixture signing key of the server, the seed being bytes 65 to 96. Refused as a pin and as the server's key.",
     "seed": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A",

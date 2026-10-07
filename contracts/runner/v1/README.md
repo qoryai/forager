@@ -789,7 +789,9 @@ directory, its environment or a file descriptor; it is never in a checkout and n
 an event. The fixtures sign with the published fixture access key of
 `fixtures/known-answers/keys.json`, under the id `ak_f1xt0re000000000`. `qory` refuses
 its secret, and the fixture signing keys as a pin; a server refuses its public key at
-enrolment, and the fixture signing keys as its own key. A fingerprint, of an access
+enrolment, and the fixture signing keys as its own key. A second fixture access key,
+whose public key is `dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw`, has its secret
+published too, and every side refuses it as it refuses the fixture access key. A fingerprint, of an access
 key's public key or of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22
 characters.
 
@@ -804,8 +806,7 @@ id. `qory` generates `i_` and 16 random bytes in base64url and keeps the id in t
 `instance-id` with the HMAC-SHA256, keyed with `qory instance-id v1`, of the machine's
 identity, so a file copied to another machine yields a new id there. The instance's
 display name, the host name by default, is sent unsigned and serves display alone. A
-request under an access key that awaits approval verifies, and every endpoint answers it
-with a signed `409` `key_pending`. A ping from a new instance id beyond its node's limit
+ping from a new instance id beyond its node's limit
 is a signed `409` `instance_limit`, and that run does not start; an instance counts
 while one of its runs is live. A run is live from its accepted ping until its final
 event, `dev.qory.run.exited` or `dev.qory.run.refused`, or until no accepted event of
@@ -910,7 +911,7 @@ order of refusals on discovery, the run configuration and the events endpoint: `
 `415`; `400` `bad_request` for a header sent twice, of `X-Qory-Access-Key-Id`,
 `X-Qory-Instance-Id`, `X-Qory-Signature-Ed25519` and `X-Qory-Timestamp`, unsigned;
 `401`; `429`; `400` `bad_request` for an instance id absent or outside its pattern,
-signed; `409` `key_pending`; `400` `unsupported_contract_version`; `400`
+signed; `400` `unsupported_contract_version`; `400`
 `invalid_request` for a body or labels the contract refuses, a ping with
 `interval_seconds` above 300 included; `401` for a timestamp outside ±300 seconds;
 then each endpoint's own.
@@ -941,18 +942,17 @@ timestamp; and `proof`, the Ed25519 signature under the new key of five lines jo
 `\n`: `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and
 the timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no request
 signature: the code and the proof authenticate it. The `201` answer contains the
-access key id, `node_id` with `node_kind`, `approved`, `stored_secrets` and the server's
-keys, signed as Signed answers describes with the request's `proof` as line 3; the
+access key id, `node_id` with `node_kind`, `stored_secrets` and the server's keys, signed as Signed answers describes with the request's `proof` as line 3; the
 machine verifies it under the listed key whose fingerprint the code carries first, and
-pins only the keys whose fingerprints the code carries. A `401` means the code was used,
-has expired or was cancelled; a signed `409` `key_invalid` refuses the key, and
-`key_limit` a node that already holds a key awaiting approval or two approved keys.
+pins only the keys whose fingerprints the code carries. A `201` means the access key is
+active: the code's use activates it. A `401` means the code was used, has expired or was
+cancelled; a signed `409` `key_invalid` refuses the key, and `key_limit` a node that
+already holds two keys.
 Each signed refusal lists `apiary_public_key`, the same list in the same order as a
 `201` at that moment, and the machine verifies it exactly as the `201`; a refusal sent
-unsigned lists no key, and the machine acts on none by its status. The
-access key then awaits approval. In place of a code, an owner or administrator may paste
-a public key the machine printed into an existing node or node pool, where it is
-approved at once. The server checks every public key it is given: a canonical encoding,
+unsigned lists no key, and the machine acts on none by its status. In place of a code,
+an owner or administrator may paste a public key the machine printed into an existing
+node or node pool, where it is active at once. The server checks every public key it is given: a canonical encoding,
 a point on the curve, not of small order, of prime order, and y ≠ 1;
 `fixtures/known-answers/small-order.json` lists keys it refuses. The known answers are
 `fixtures/enrolment/` and the enrolment lines of `signatures.json`.
@@ -977,8 +977,7 @@ display: `qory` prints it. `apiary_public_key` lists the server's current key, a
 during a rotation the next one, for information: a runner verifies under its pin alone.
 `secrets` is optional, `{url}` with `run.url`'s grammar, listed only for an access key
 allowed to receive stored secrets. Discovery lists no key endpoint: keys change through
-enrolment alone. A signed `409` `key_pending` is no run, `key_pending`, and a `401` no
-run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
+enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
 offers no run configuration, and the policy is the machine's. A top-level member the
@@ -1114,11 +1113,9 @@ no `secrets`. The module's own tests run the runner's client against it.
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
 a coded refusal as `expect_code`, and a `note` that explains why. Every signature in
 them is real, under the fixture access key secret as the fixture access key and
-instance, or for `get-configuration-pending-key` under the pending fixture access key of
-`keys.json`; a receiver under test holds the fixture access key under
-`ak_f1xt0re000000000`, approved, and the pending one under `ak_pend1ng000000000`,
-awaiting approval, and sets its clock to `1700000000`, around which the timestamps are. A receiver written by
-anyone else follows this section, replays those files, and may read that code.
+instance; a receiver under test holds the fixture access key under
+`ak_f1xt0re000000000` and sets its clock to `1700000000`, around which the timestamps
+are. A receiver written by anyone else follows this section, replays those files, and may read that code.
 
 ## The runtime
 

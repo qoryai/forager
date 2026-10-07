@@ -89,9 +89,8 @@ type control struct {
 	// refuse, when set, is the status every request gets instead of an answer,
 	// unsigned.
 	refuse atomic.Int32
-	// pending makes the access key one that awaits approval; closed makes every run
-	// closed; limit refuses every instance's ping.
-	pending, closed, limit atomic.Bool
+	// closed makes every run closed; limit refuses every instance's ping.
+	closed, limit atomic.Bool
 	// slow delays the run configuration's answer; closeOnFetch closes every run once
 	// the run configuration is fetched.
 	slow         atomic.Int64
@@ -141,7 +140,7 @@ func newControl(t *testing.T) *control {
 	c := &control{store: store, received: received}
 	h := &receiver.Handler{
 		Keys: func(k string) (receiver.AccessKey, bool) {
-			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey(), Pending: c.pending.Load()}, k == testKey
+			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey()}, k == testKey
 		},
 		Signer: testSigner,
 		Store:  store,
@@ -1358,10 +1357,9 @@ func TestPolicyUnderACeilingKeepsBothDenyLists(t *testing.T) {
 
 // TestServerRefusalsAreCoded pins the refusals of a run with a server, each no run
 // with its code: no pin is apiary_public_key_missing before any request; a pin of
-// another key is answer_unsigned; an access key that awaits approval is key_pending at
-// discovery, before the ping; a refused instance is instance_limit at the ping, whose
-// record holds the ping alone; and a run without its access key, or with a heartbeat
-// interval the ping cannot announce, sends nothing.
+// another key is answer_unsigned; a refused instance is instance_limit at the ping,
+// whose record holds the ping alone; and a run without its access key, or with a
+// heartbeat interval the ping cannot announce, sends nothing.
 func TestServerRefusalsAreCoded(t *testing.T) {
 	c := newControl(t)
 	run := func(change func(*session.Spec)) (session.Spec, error) {
@@ -1397,11 +1395,6 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 	if sp, err := run(func(sp *session.Spec) { sp.Server.ApiaryPublicKey = other }); refusal(err) != "answer_unsigned" || runs(sp) != 0 {
 		t.Errorf("a pin of another key: %v", err)
 	}
-	c.pending.Store(true)
-	if sp, err := run(func(*session.Spec) {}); refusal(err) != "key_pending" || runs(sp) != 0 {
-		t.Errorf("a pending key: %v", err)
-	}
-	c.pending.Store(false)
 	c.limit.Store(true)
 	sp, err := run(func(*session.Spec) {})
 	var r *session.Refusal
