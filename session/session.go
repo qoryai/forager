@@ -564,6 +564,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		Env: environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
 	}
 	if enclosure != nil {
+		// The mounts again, as the enclosure is about to show them: a link swapped in
+		// since the start's check leads where it leads now.
+		if err := checkMounts(spec); err != nil {
+			return fail(err)
+		}
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, spec.LaunchEnv, vars.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),

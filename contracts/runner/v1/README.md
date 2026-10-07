@@ -1357,12 +1357,15 @@ for all of them.
 or the workspace, that is, contains or lies inside one of the runner's files: no run,
 `mount_contains_runner_files`, with the mount and the runner's file as its names, in
 that order. The runner checks before it contacts the server and before anything starts,
-so no event records the refusal. Both paths are resolved through symbolic links, a part
-that does not exist yet through its nearest parent that does, and compared by whole
-components. The filesystem judges what exists: two directories are the same when they
-are one file, by device and inode, so a path written in another case on a disk that
-ignores case is the directory it names. A part that does not exist yet is compared by
-name, regardless of case. The runner's files are:
+so no event records that refusal, and checks again just before it builds the
+enclosure, so a link changed meanwhile is followed where it leads then. Both paths are
+resolved through symbolic links, a part that does not exist yet through its nearest
+parent that does and a link whose target does not exist yet through that target, and
+compared by whole components; a path that cannot be resolved is no run. The filesystem
+judges what exists: two directories are the same when they are one file, by device and
+inode, so a path written in another case on a disk that ignores case is the directory
+it names. A part that does not exist yet is compared by name, regardless of case. The
+runner's files are:
 
 - the paths the caller lists as its own: for `qory`, the runner file's directory, with
   the access key secret;
@@ -1371,7 +1374,7 @@ name, regardless of case. The runner's files are:
   interpreter, a module or a configuration beside a program is covered too;
 - the file a credential is read from;
 - the private directories of the tools' sockets, made in the system's temporary
-  directory;
+  directory, every run's on the machine, whether or not the run has tools;
 - the wall's own: for `docker`, the directory of the `docker` command and of the
   helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
   whose context and credential helpers start programs.

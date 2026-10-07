@@ -30,6 +30,14 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "a"), filepath.Join(root, "m")); err != nil {
 		t.Fatal(err)
 	}
+	// dangling and relative lead into the runner's directory, to names that do not
+	// exist yet.
+	if err := os.Symlink(filepath.Join(root, "a", "b", "later"), filepath.Join(root, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("a", "b", "later", "deeper"), filepath.Join(root, "relative")); err != nil {
+		t.Fatal(err)
+	}
 	p := func(rel string) string { return filepath.Join(root, rel) }
 	for _, c := range []struct {
 		name, mount, path, want string
@@ -59,6 +67,10 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		{"a pattern below the mount", p("a"), p("a/b/x-*"), "contains"},
 		{"a pattern above the mount", p("a/b/x-1/deeper"), p("a/b/x-*"), "lies inside"},
 		{"a name beside the pattern", p("a/b/y-1"), p("a/b/x-*"), ""},
+		{"a link whose target does not exist yet", p("dangling"), p("a/b"), "lies inside"},
+		{"a name under a link whose target does not exist yet", p("dangling/x"), p("a/b/later"), "lies inside"},
+		{"a relative link whose target does not exist yet", p("relative"), p("a/b/later"), "lies inside"},
+		{"a link whose target does not exist yet, as the path", p("a"), p("dangling"), "contains"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := session.Overlap(c.mount, c.path); got != c.want {
@@ -66,6 +78,37 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 			}
 		})
 	}
+
+	// A link in a directory the runner cannot search may lead anywhere: Overlap cannot
+	// say, and a run with it as a mount does not start.
+	t.Run("a link in a directory the runner cannot search", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root searches every directory")
+		}
+		locked := p("locked")
+		if err := os.Mkdir(locked, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(p("a"), filepath.Join(locked, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		mount := filepath.Join(locked, "link")
+		if got := session.Overlap(mount, p("a/b")); got != "" {
+			t.Errorf("Overlap = %q", got)
+		}
+		sp := spec(t, nil, "FAKE_EXIT=0")
+		sp.Wall, sp.Image, sp.RunnerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
+		sp.Mounts = []wall.Mount{{Path: mount}}
+		err := runErr(sp)
+		var r *session.Refusal
+		if err == nil || errors.As(err, &r) || !strings.Contains(err.Error(), "cannot resolve the mount "+mount) {
+			t.Errorf("a run with the mount: %v", err)
+		}
+	})
 }
 
 // TestOverlapJudgesTheSameDirectoryByTheFilesystem pins that on a disk that ignores
@@ -239,6 +282,12 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
+	// So does a run without tools: another run's tools have their sockets there too.
+	sp.Tools = nil
+	r = mountRefusal(t, runErr(sp))
+	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
 }
 
 // TestRunnerFilesAreAbsolutePaths pins that a runner file that is no absolute path is
@@ -265,5 +314,39 @@ func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{filepath.Dir(helpers), helpers}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, "the docker wall's files") {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+}
+
+// swappingWall is an open wall that, while it is prepared, puts a link where a mount
+// was checked: what the enclosure would show changes between the start and the wrap.
+type swappingWall struct {
+	openWall
+	link, to string
+}
+
+func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	if err := os.Symlink(w.to, w.link); err != nil {
+		return nil, err
+	}
+	return w.openWall.Prepare(ctx, req)
+}
+
+// TestTheMountsAreCheckedAgainBeforeTheWrap pins the second check: a mount that led
+// nowhere at the start and is a link to the runner's files by the time the enclosure
+// is wrapped is refused the same way, and the enclosure never shows it.
+func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
+	parent, dir := runnerDir(t)
+	link := filepath.Join(t.TempDir(), "later")
+	w := &swappingWall{link: link, to: parent}
+	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: link}}
+	sp.RunnerFiles = []string{dir}
+	r := mountRefusal(t, runErr(sp))
+	if want := []string{link, dir}; !slices.Equal(r.Names, want) {
+		t.Errorf("names %q, want %q", r.Names, want)
+	}
+	if w.req.RunID == "" || w.wrapped || w.closed != 1 {
+		t.Errorf("prepared %v, wrapped %v, closed %d times", w.req.RunID != "", w.wrapped, w.closed)
 	}
 }

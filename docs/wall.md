@@ -204,21 +204,27 @@ key secret, has left the wall. The runner's files are:
   found in `PATH` as the runner starts it, and the directory of the file a link to one
   leads to. A program's neighbours, an interpreter or a module, are covered with it.
 - The file a credential with `File` is read from.
-- The private directories of the tools' sockets, which are made in the system's
-  temporary directory when the tools start: a mount that contains that directory is
-  refused.
+- The private directories of the tools' sockets, this run's and every other run's on
+  the machine, which are made in the system's temporary directory when the tools
+  start: a mount that contains that directory is refused, whether or not the run has
+  tools.
 - A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
-its nearest parent that does. The filesystem judges what exists: two directories are
-the same when they are one file, by device and inode. So on a disk that ignores case,
-as a Mac's does by default, `/USERS/USER` is `/Users/user`, and a bind mount is the
-directory it shows. A part that does not exist yet is compared by name, regardless of
-case. The comparison is by whole path components: `/a/bc` does not lie inside `/a/b`.
-`session.Overlap(mount, path)` returns how two paths stand: `is`, `contains`,
-`lies inside`, or empty. A caller uses it to word its own message.
+its nearest parent that does, and a link whose target does not exist yet through that
+target. A path that cannot be resolved, such as one through a directory the runner
+cannot search, is no run, with a plain error. The check runs again just before the
+enclosure is built, so a link changed after the start leads where it leads then.
+
+The filesystem judges what exists: two directories are the same when they are one file,
+by device and inode. So on a disk that ignores case, as a Mac's does by default,
+`/USERS/USER` is `/Users/user`, and a bind mount is the directory it shows. A part that
+does not exist yet is compared by name, regardless of case. The comparison is by whole
+path components: `/a/bc` does not lie inside `/a/b`. `session.Overlap(mount, path)`
+returns how two paths stand: `is`, `contains`, `lies inside`, or empty, also for a path
+it cannot resolve. A caller uses it to word its own message.
 
 ### The helper
 

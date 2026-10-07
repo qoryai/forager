@@ -240,12 +240,14 @@ release may change what an existing document does, and says so under Upgrading.
   absolute paths the caller lists as its own, such as the directory of qory's runner
   file. Beside them the runner checks the directory of every credential and tool program
   the machine defines, the file a credential is read from, the private directories of
-  the tools' sockets, and the files a wall lists through the new `wall.Filer`:
+  every run's tool sockets, and the files a wall lists through the new `wall.Filer`:
   `wall.Docker` lists the directory of the `docker` command, of the helper, and the
   command's configuration directory. The refusal's `Names` are the mount and the
   runner's file, in that order. `session.Overlap` returns how a mount and a path stand,
   `is`, `contains` or `lies inside`, after symbolic links and by whole components, with
   the filesystem judging which directories are the same, case and bind mounts included.
+  A link whose target does not exist yet is followed to the target, a path that cannot
+  be resolved is no run, and the check runs again just before the enclosure is built.
 
 ### Changed
 

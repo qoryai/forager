@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,28 +17,43 @@ import (
 // Overlap says how a mount and a path stand to each other: "is" when they are the same
 // file, "contains" when the path lies under the mount, "lies inside" when the mount lies
 // under the path, and empty otherwise. Each is resolved through symbolic links, a part
-// that does not exist yet through its nearest parent that does. The filesystem judges
-// what exists: two directories are the same when they are one file, by device and
-// inode, so a path written in another case on a disk that ignores case, a link or a
-// bind mount names what it leads to. A part that does not exist yet is compared by
-// name, regardless of case, and a name with *, ? or [ in it is a pattern of names,
-// as the private directories of the tools' sockets are. The comparison is by whole
-// components: /a/bc does not lie inside /a/b.
+// that does not exist yet through its nearest parent that does, and a link whose target
+// does not exist yet through that target. The filesystem judges what exists: two
+// directories are the same when they are one file, by device and inode, so a path
+// written in another case on a disk that ignores case, a link or a bind mount names
+// what it leads to. A part that does not exist yet is compared by name, regardless of
+// case, and a name with *, ? or [ in it is a pattern of names, as the private
+// directories of the tools' sockets are. The comparison is by whole components: /a/bc
+// does not lie inside /a/b. A path that cannot be resolved, such as one through a
+// directory this user cannot search, is empty here; [Run] refuses a mount of one.
 func Overlap(mount, path string) string {
-	m, p := split(mount), split(path)
+	how, _ := overlap(mount, path)
+	return how
+}
+
+// overlap is [Overlap], with the error of a path that cannot be resolved.
+func overlap(mount, path string) (string, error) {
+	m, err := split(mount, 0)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve the mount %s: %w", mount, err)
+	}
+	p, err := split(path, 0)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve the runner's file %s: %w", path, err)
+	}
 	if ok, same := holds(m, p); ok {
 		if same {
-			return "is"
+			return "is", nil
 		}
-		return "contains"
+		return "contains", nil
 	}
 	if ok, same := holds(p, m); ok {
 		if same {
-			return "is"
+			return "is", nil
 		}
-		return "lies inside"
+		return "lies inside", nil
 	}
-	return ""
+	return "", nil
 }
 
 // splitPath is a path as the filesystem has it: the resolved nearest part that exists,
@@ -47,20 +63,55 @@ type splitPath struct {
 	tail   []string
 }
 
-// split resolves p, absolute and clean, through symbolic links as far as it exists.
-func split(p string) splitPath {
+// maxLinks is how many links whose targets do not exist yet split follows in one path.
+const maxLinks = 40
+
+// split resolves p, absolute and clean, through symbolic links as far as it exists. It
+// walks up only past what does not exist; a link whose target does not exist yet is
+// followed to that target, and any other error is returned, so a path is never taken
+// for one it may not be.
+func split(p string, links int) (splitPath, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		abs = filepath.Clean(p)
+		return splitPath{}, err
 	}
 	var tail []string
 	for dir := abs; ; {
-		if target, err := filepath.EvalSymlinks(dir); err == nil {
-			return splitPath{target, tail}
+		target, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return splitPath{target, tail}, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return splitPath{}, err
+		}
+		info, err := os.Lstat(dir)
+		switch {
+		case err == nil && info.Mode()&fs.ModeSymlink != 0:
+			// A link whose target does not exist yet: the target, read from the
+			// link's own directory, resolved, is where the path leads once it does.
+			if links >= maxLinks {
+				return splitPath{}, fmt.Errorf("%s: too many links", abs)
+			}
+			to, err := os.Readlink(dir)
+			if err != nil {
+				return splitPath{}, err
+			}
+			if !filepath.IsAbs(to) {
+				parent, err := filepath.EvalSymlinks(filepath.Dir(dir))
+				if err != nil {
+					return splitPath{}, err
+				}
+				to = filepath.Join(parent, to)
+			}
+			return split(filepath.Join(append([]string{to}, tail...)...), links+1)
+		case err == nil:
+			return splitPath{}, fmt.Errorf("%s exists and does not resolve", dir)
+		case !errors.Is(err, fs.ErrNotExist):
+			return splitPath{}, err
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return splitPath{dir, tail}
+			return splitPath{dir, tail}, nil
 		}
 		tail = append([]string{filepath.Base(dir)}, tail...)
 		dir = parent
@@ -146,9 +197,9 @@ func runnerFiles(spec Spec) []runnerFile {
 	}
 	// The private directory of a tool's socket is made when the tool starts, in the
 	// system's temporary directory; a mount that contains its pattern would contain it.
-	if len(spec.Tools) > 0 {
-		out = append(out, runnerFile{tool.SocketDirs(), "where the tools' sockets are made"})
-	}
+	// It is checked whether or not the run has tools, since another run's on this
+	// machine are there too.
+	out = append(out, runnerFile{tool.SocketDirs(), "where the tools' sockets are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {
 		for _, p := range f.Files() {
 			out = append(out, runnerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
@@ -184,7 +235,11 @@ func checkMounts(spec Spec) error {
 	files := runnerFiles(spec)
 	for _, m := range mounts {
 		for _, f := range files {
-			if how := Overlap(m.path, f.path); how != "" {
+			how, err := overlap(m.path, f.path)
+			if err != nil {
+				return err
+			}
+			if how != "" {
 				return &Refusal{
 					Code:   refusal.MountContainsRunnerFiles,
 					Names:  []string{m.path, f.path},
