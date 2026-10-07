@@ -503,7 +503,7 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 }
 
 // TestAKeyOfSmallOrderVerifiesNoRequest pins that a public key the key checks refuse,
-// pasted into the receiver's configuration, verifies no request: the forged signature
+// listed in the receiver's configuration, verifies no request: the forged signature
 // R = identity, S = 0 under the identity key is an unsigned 401.
 func TestAKeyOfSmallOrderVerifiesNoRequest(t *testing.T) {
 	h, _, _ := handler(t, 1700000000)

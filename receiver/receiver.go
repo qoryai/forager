@@ -80,7 +80,7 @@ type Store interface {
 }
 
 // AccessKey is one access key a receiver accepts: the public key its requests verify
-// under, pasted into the receiver's configuration. A public key
+// under, listed in the receiver's configuration. A public key
 // [accesskey.PublicKey.Check] refuses verifies no request.
 type AccessKey struct {
 	PublicKey accesskey.PublicKey
