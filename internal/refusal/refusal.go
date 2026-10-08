@@ -50,8 +50,8 @@ const (
 	// one as passed.
 	MountThroughLink = "mount_through_link"
 	// EngineUnreachable is a walled run that cannot ask the container engine whether
-	// an earlier walled run, whose runner is gone, still has containers: its name is
-	// the earlier run's id.
+	// an earlier walled run, whose runner is gone, still has containers: its names are
+	// the earlier run's id and the path of its entry in the registry.
 	EngineUnreachable = "engine_unreachable"
 )
 
