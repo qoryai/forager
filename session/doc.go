@@ -21,7 +21,7 @@
 //     access key and verifies every answer under the pin before reading it; fetches
 //     the server's configuration document with a signed GET, and the run
 //     configuration it names, whose policy is then the run's; emits every event to the
-//     file sink in .qory/runs/<id>/ and to the server's events endpoint too, after a
+//     file sink in the run directory and to the server's events endpoint too, after a
 //     ping the server must accept; reloads the policy when an answer says another is
 //     in force; and ends the run when the server closes it
 //   - takes the harness's reports over a local socket and maps them, with the

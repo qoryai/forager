@@ -111,10 +111,9 @@ Stated so a receiver reads the record for what it is.
 - A credential the run passes into the enclosure's environment is the agent's; one the
   policy selects stays outside (§Credentials). What is passed in is the agent's: a
   checkout that keeps a token in the repository's configuration passes the token in with
-  the workspace. The run directory is shown read-only, so the agent cannot change
-  `events.jsonl`; when it lies inside the workspace the agent can still rename the
-  directory above it, which moves the record and does not alter it. The server's copy is
-  out of reach either way.
+  the workspace. Behind a wall the run directory is shown read-only and lies outside
+  every place the run binds writable, so the agent can neither change nor move
+  `events.jsonl`. The server's copy is out of reach as well.
 - Behind a wall the exit status is the adapter's command's. With Docker that is the
   runtime's status, except that `125` is the engine failing to start the container,
   `126` and `127` the program not being startable in the image, and a runtime killed by
@@ -150,8 +149,9 @@ One run, on a developer machine, with a server configured:
    the `qory` command, which reads the policy and the server from its own
    configuration; the runner receives nothing about what composed it or where it was
    read.
-2. The runner creates a run id, a UUID version 7, and the run directory
-   `.qory/runs/<id>/` in the checkout.
+2. The runner creates a run id, a UUID version 7, and the run directory `<id>/` in the
+   runs directory the caller passes, else in `.qory/runs/` in the checkout. A walled
+   run's runs directory lies outside every place the run binds (§The wall).
 3. It validates the server document once, when one is passed; without a pinned
    `apiary_public_key` the run does not start, `apiary_public_key_missing`, before any
    request. It fetches the server's configuration document with a signed `GET` (§The
@@ -789,7 +789,8 @@ of the old size and the chunks after it to one of the new. On pipes there is no
 
 ## The record files
 
-`.qory/runs/<id>/` in the checkout, kept out of git by the compose:
+The run directory, `<id>/` in the runs directory (§Sequence step 2); in the checkout, the
+compose keeps it out of git:
 
 - `events.jsonl`: every event of the run, one per line, in sequence order, the ping
   included when one is sent. The record of truth; the server's is a copy.
@@ -1129,11 +1130,11 @@ the runner reads a body's code only from a signed answer.
    a denied `dev.qory.run.egress` with `outcome: refused` and the rule that denied it.
 3. A host the new policy terminates TLS for is terminated on its next connection.
 
-What is still undelivered when the run ends is spooled to `.qory/runs/<id>/undelivered/`
-as batch files with their delivery ids, and the runner reports the count on its standard
-error. The file sink has every event regardless. The server never delays the session:
-posting is asynchronous behind a bounded queue, and a queue that fills spools to the
-same directory rather than blocking the runtime.
+What is still undelivered when the run ends is spooled to the run directory's
+`undelivered/` as batch files with their delivery ids, and the runner reports the count
+on its standard error. The file sink has every event regardless. The server never
+delays the session: posting is asynchronous behind a bounded queue, and a queue that
+fills spools to the same directory rather than blocking the runtime.
 
 **After a runner stops unexpectedly.** The run directory records what the server is
 still owed, without the runner that wrote it. `events.jsonl` is written as events
@@ -1424,8 +1425,8 @@ for all of them.
 or the workspace, that is, contains or lies inside one of the runner's files: no run,
 `mount_contains_runner_files`, with the mount and the runner's file as its names, in
 that order. The runner checks before it contacts the server and before anything starts,
-so no event records that refusal, and checks again just before it builds the
-enclosure, so a link changed meanwhile is followed where it leads then. Both paths are
+so no event records that refusal, and checks again just before the enclosure binds the
+mounts. Both paths are
 resolved through symbolic links, a part that does not exist yet through its nearest
 parent that does and a link whose target does not exist yet through that target, and
 compared by whole components; a path that cannot be resolved is no run. The filesystem
@@ -1448,10 +1449,65 @@ runner's files are:
   them;
 - the wall's own: for `docker`, the directory of the `docker` command and of the
   helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
-  whose context and credential helpers start programs.
+  whose context and credential helpers start programs;
+- the runs directory, where the runner makes the run directories;
+- the runner's registry of walled runs (below).
 
 An agent that can change a program the runner starts outside the wall, or read a file a
 credential is read from, has left the wall.
+
+**No bind from a place a walled agent can change.** An engine looks up every name of a
+bind's source path again when it binds it, links included, so a check of the path
+before cannot hold if a name is looked up in a directory an agent can write. So no name
+on the way to a walled run's bind source is looked up in a writable bind, the run's own
+or another walled run's still going, or in a directory inside one. A bind's own root
+is looked up in its parent, so two binds of one root are allowed:
+
+- the enclosure binds the outermost of the places the run lists, the mounts and the
+  workspace, each once, and the run directory, read-only. The workspace is writable and
+  is the working directory inside, through the bind that holds it, or bound at its own
+  path when no mount holds it. The runner passes the wall every bind, each path clean,
+  and the working directory lies in one of them by its names, or the run fails; a wall
+  binds nothing of the caller's the launch does not list;
+- a place inside another one, or the same, of the same mode is reached through the
+  outer one, which alone is bound. Of the other mode it is no run,
+  `mount_mode_conflict`, with the inner place and the outer one as its names, in that
+  order: a read-only part of a writable bind is one the agent replaces, and a writable
+  part of a read-only one writes what the run shows read-only;
+- a place, of either mode, whose path goes through a link inside a writable place of
+  the run's and that does not resolve into it is no run, `mount_through_link`: the
+  agent that writes the link would choose what is bound. Its names are the place as
+  passed, the link, absolute and clean, the last one inside the writable place on the
+  way, and the writable place as passed;
+- the runs directory is one of the runner's files, so the run directory lies in no
+  place the run lists, and a writable place that holds a directory a name on the way
+  to one of the runner's files is looked up in is `mount_contains_runner_files`;
+- the runner keeps a registry of the walled runs still going on the machine, per user,
+  with each run's binds: the places, the run directory and the wall's own, for `docker`
+  its helper, the hook socket's directory and the private directory that holds the run's
+  environment files and, with a CA, the bundle the enclosure binds. The wall's are listed
+  when the run starts, those it makes later as their patterns, which never conflict with
+  another runner's. A run is no run, `mount_shared_with_run`, when one of its binds lies
+  inside a writable bind of another run's or is reached through one, when one of its
+  writable binds holds a bind of another run's or a directory a name on the way to one is
+  looked up in, or when one of its binds is, holds or lies inside another run's run
+  directory, whatever the modes: a run directory is its run's alone. Two binds of the same
+  root never conflict otherwise, and neither do two read-only ones. Its names are the path
+  of this run's, the other run's id and the other run's path. A place that lies inside a
+  writable directory another run's wall binds of its own is refused too. A run whose own
+  helper, or another directory of the runner's its wall binds, lies inside a writable bind
+  of another run's, or is reached through one, does not start. The runner checks and lists
+  the run in one step, before it contacts the server, and the run leaves the registry when
+  it ends, however it ends.
+
+The names of these refusals are paths as the caller passed them, the first always one
+of the run's mounts or its workspace, the run directory named by its runs directory.
+The runner checks again just before the enclosure binds, with the wall's own binds, and
+a place that resolves otherwise, or whose names are looked up in other directories,
+than at the start does not start. So no name on the way to a bind source is looked up
+in a place a walled agent of this user's can write. A process outside every wall, the
+user's own or another user's, can still change a path between the runner's last check
+and the bind.
 
 When the run has an authority of its own (§Credentials), a wall sets the enclosure's
 trust to one bundle, the image's own authorities with the run's certificate after them,

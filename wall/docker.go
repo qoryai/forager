@@ -294,7 +294,8 @@ const relayWait = 5 * time.Minute
 
 // Wrap starts the relay towards the proxy, waits until it listens, and returns the
 // docker run that starts the launch in the agent's container: on the internal network
-// only, the workspace and the launch's mounts at their own paths, the helper read-only,
+// only, the launch's mounts at their own paths, the workspace as the working directory
+// inside one of them, the helper read-only,
 // the socket's directory, and the launch's environment through a file, so no value is on a
 // command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
@@ -413,6 +414,48 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
 }
 
+// Binds lists the adapter's own binds before an enclosure is prepared: the helper,
+// read-only, and, read-only, the pattern of the private directories that hold a run's
+// environment files and, with a CA, the bundle the enclosure binds.
+func (d *Docker) Binds(Launch) ([]Bind, error) {
+	if d.Helper == "" {
+		return nil, errors.New("wall docker: the helper binary is required")
+	}
+	return []Bind{
+		{Path: d.Helper, ReadOnly: true, Helper: true},
+		{Path: TempDirs(), ReadOnly: true, Pattern: true},
+	}, nil
+}
+
+// Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
+// socket's directory, writable, when the launch has a socket, and, read-only, the
+// private directory that holds the run's environment files and, with a CA, the bundle
+// the enclosure binds, which it makes now.
+func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
+	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
+	if l.Socket != "" {
+		out = append(out, Bind{Path: filepath.Dir(l.Socket)})
+	}
+	if err := e.makeTemp(); err != nil {
+		return nil, err
+	}
+	return append(out, Bind{Path: e.temp, ReadOnly: true}), nil
+}
+
+// makeTemp makes the private directory that holds the run's environment files and
+// bundle, once.
+func (e *dockerEnclosure) makeTemp() error {
+	if e.temp != "" {
+		return nil
+	}
+	dir, err := e.sys.tempDir()
+	if err != nil {
+		return err
+	}
+	e.temp = dir
+	return nil
+}
+
 // bundle writes the file the enclosure trusts: the image's own authorities, read out of
 // the relay's container, which is the same image and exists by now, and the run's
 // certificate after them. An image that keeps a bundle nowhere known gets the run's
@@ -430,12 +473,8 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 			break
 		}
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, "ca-bundle.pem")
 	if len(image) > 0 && !bytes.HasSuffix(image, []byte("\n")) {
@@ -461,12 +500,16 @@ func firstFile(stream []byte) ([]byte, error) {
 	}
 }
 
-// mounts are the launch's own: the workspace, what it lists, the socket's directory.
+// mounts are the launch's own: what it lists and the socket's directory. The workspace
+// is the working directory inside; a mount whose path holds it, by whole components,
+// shows it, and a launch none of whose mounts does is refused: the adapter binds
+// nothing of the caller's the launch does not list.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
 	}
-	binds := []bind{{l.Dir, l.Dir, false}}
+	var binds []bind
+	held := false
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
 			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
@@ -475,6 +518,11 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
 		}
 		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
+		held = held || under(m.Path, l.Dir)
+	}
+	if !held {
+		return nil, fmt.Errorf("wall docker: the workspace %q lies in none of the "+
+			"launch's mounts", l.Dir)
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
@@ -482,7 +530,6 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, b := range binds {
-		// The workspace is often one of the mounts the run lists; the first wins.
 		if seen[b.dst] {
 			continue
 		}
@@ -494,6 +541,14 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// under reports whether path is dir or lies below it, by whole components of the
+// paths as written.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	up := ".." + string(filepath.Separator)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
 // limits are the agent's resource flags. The relay gets none: it is the runner's own.
@@ -562,12 +617,8 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		}
 		b.WriteString(kv + "\n")
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, name)
 	return file, os.WriteFile(file, []byte(b.String()), 0o600)

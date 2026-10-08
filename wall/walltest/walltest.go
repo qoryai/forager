@@ -522,16 +522,18 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 func checkNoKey(t *testing.T, r result) {
 	t.Helper()
 	var where []string
-	// r.dir holds the run directory, r.res.Dir, under .qory/runs.
-	filepath.WalkDir(r.dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
+	// r.runs holds the run directory, r.res.Dir; r.dir is the workspace.
+	for _, root := range []string{r.dir, r.runs} {
+		filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
+				where = append(where, path)
+			}
 			return nil
-		}
-		if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
-			where = append(where, path)
-		}
-		return nil
-	})
+		})
+	}
 	for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
 		if strings.Contains(s, keyMark) {
 			where = append(where, name)
@@ -597,10 +599,11 @@ func decoys(workspace string) (string, error) {
 
 // result is one run behind the wall.
 type result struct {
-	res    *session.Result
-	dir    string
-	probe  report
-	events []map[string]any
+	res *session.Result
+	// dir is the workspace, and runs the runs directory, outside it.
+	dir, runs string
+	probe     report
+	events    []map[string]any
 	// out, errs and reports are the run's standard output and error, and what the
 	// runner reported.
 	out, errs, reports string
@@ -610,7 +613,7 @@ type result struct {
 // reported and what the runner recorded.
 func run(t *testing.T, o Options, interactive bool, h hosts, outside string) result {
 	t.Helper()
-	dir := t.TempDir()
+	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	var out, errs, reports bytes.Buffer
 	var reportsMu sync.Mutex
 	settings := filepath.Join(dir, "launch-settings.json")
@@ -678,6 +681,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Args:        []string{modeProbe, "--settings", settings},
 		Env:         env,
 		Dir:         dir,
+		RunsDir:     runs,
 		Interactive: interactive,
 		Stdin:       strings.NewReader(""),
 		Stdout:      &out,
@@ -705,7 +709,8 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
 	}
 	reportsMu.Lock()
-	r := result{res: res, dir: dir, out: out.String(), errs: errs.String(), reports: reports.String()}
+	r := result{res: res, dir: dir, runs: runs, out: out.String(), errs: errs.String(),
+		reports: reports.String()}
 	reportsMu.Unlock()
 	found := false
 	for _, line := range strings.Split(out.String(), "\n") {

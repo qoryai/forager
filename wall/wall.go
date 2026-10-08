@@ -41,6 +41,34 @@ type Filer interface {
 	Files() []string
 }
 
+// Binder is a wall, or an enclosure, that binds files and directories of this machine
+// of its own, beside the launch's mounts: for [Docker], its helper, the hook socket's
+// directory and the private directory that holds the run's environment files and, with
+// a CA, the bundle the enclosure binds. A walled run checks them, as it checks its
+// mounts, against the other walled runs still going: the wall's when the run starts,
+// with a pattern for what the enclosure makes later, and the enclosure's just before
+// it binds them.
+type Binder interface {
+	// Binds lists them. A wall lists what it knows before it prepares an enclosure; an
+	// enclosure lists them for the launch about to be wrapped, with its Socket and CA
+	// set.
+	Binds(l Launch) ([]Bind, error)
+}
+
+// Bind is one file or directory of this machine an enclosure binds of its own.
+type Bind struct {
+	// Path is the path as the caller defined it, or as the enclosure made it.
+	Path string
+	// ReadOnly says the enclosure cannot change it.
+	ReadOnly bool
+	// Helper says it is the runner's helper program, rather than a directory of the
+	// runner's.
+	Helper bool
+	// Pattern says Path is a pattern of [path/filepath.Match]: where the enclosure
+	// makes the directory, before it makes it.
+	Pattern bool
+}
+
 // Reaper is a wall that can remove what it left of a run whose runner died before it
 // closed the enclosure. It is asked only for a run known to be over.
 type Reaper interface {
@@ -91,8 +119,9 @@ type Launch struct {
 	// itself because it knows the addresses inside. Returned from Wrap, nil means the
 	// starting process's own.
 	Env []string
-	// Dir is the working directory, the run's workspace. The enclosure shows it at the
-	// same path, writable.
+	// Dir is the working directory, the run's workspace, at the same path inside. A
+	// mount whose path holds it, by whole components, shows it; a launch whose Dir no
+	// mount holds is not wrapped.
 	Dir string
 	// Interactive says the command runs on a pseudo-terminal.
 	Interactive bool
@@ -110,9 +139,10 @@ type Launch struct {
 	CA []byte
 	// Socket is the path of the hook socket on the host, empty when there is none.
 	Socket string
-	// Mounts are the files and directories of the host the run lists beside Dir: the
-	// checkout around Dir, a composed home, the run directory read-only. The
-	// enclosure shows each at the same path, and nothing of the host besides them.
+	// Mounts are the files and directories of the host the run lists: the checkout
+	// around Dir, a composed home, the run directory read-only. The enclosure shows each
+	// at the same path, and nothing of the host besides them and Dir. From the session
+	// runner, none lies inside another, and one of them holds Dir.
 	Mounts []Mount
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.

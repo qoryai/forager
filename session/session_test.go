@@ -243,7 +243,16 @@ func TestMain(m *testing.M) {
 	case len(os.Args) > 2 && os.Args[1] == toolMode:
 		os.Exit(fakeTool(os.Args[2:]))
 	}
-	os.Exit(m.Run())
+	// The registry of walled runs is the tests' own, not this user's.
+	state, err := os.MkdirTemp("", "session-state-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Setenv("XDG_STATE_HOME", state)
+	code := m.Run()
+	os.RemoveAll(state)
+	os.Exit(code)
 }
 
 // fakeRuntime prints what a headless runtime prints, reaches two hosts through the
@@ -302,7 +311,7 @@ func fakeRuntime() int {
 }
 
 // spec returns a spec running the fake runtime with the given policy path and
-// environment, in a fresh checkout directory.
+// environment, in a fresh checkout directory, with its run directories beside it.
 func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 	t.Helper()
 	dir := t.TempDir()
@@ -318,6 +327,7 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		Args:          []string{"--settings", writeSettings(t, dir)},
 		Env:           append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
 		Dir:           dir,
+		RunsDir:       filepath.Join(t.TempDir(), "runs"),
 		Stdin:         strings.NewReader(""),
 		Stdout:        &out,
 		Stderr:        &errs,
@@ -467,7 +477,7 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 func runWithSettingsEnv(t *testing.T, sp session.Spec) (*session.Result, error) {
 	t.Helper()
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.Dir, ".qory", "runs", sp.RunID, "settings.json"))
+	sp.Env = append(sp.Env, "FAKE_SETTINGS="+filepath.Join(sp.RunsDir, sp.RunID, "settings.json"))
 	return session.Run(context.Background(), sp)
 }
 
@@ -514,7 +524,7 @@ func TestInvalidPolicyMeansNoRun(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("err %v", err)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory")); len(entries) != 0 {
+	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) != 0 {
 		t.Error("a run directory was made")
 	}
 }
@@ -575,7 +585,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "configuration "+c.srv.URL+"/.well-known/qory-configuration") || !strings.Contains(err.Error(), "status 500") {
 		t.Errorf("refused discovery: %v", err)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 0 {
+	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) != 0 {
 		t.Errorf("run directories after a refused discovery: %d", len(entries))
 	}
 
@@ -610,9 +620,9 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	if _, err := session.Run(context.Background(), sp); refusal(err) != "answer_unsigned" || !strings.Contains(err.Error(), "ping "+c.srv.URL+"/nowhere") || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("refused ping: %v", err)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 1 {
+	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) != 1 {
 		t.Errorf("run directories after a refused ping: %d", len(entries))
-	} else if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 {
+	} else if evs, _ := os.ReadFile(filepath.Join(sp.RunsDir, entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 {
 		t.Errorf("the refused run's file holds more than the ping:\n%s", evs)
 	}
 	_ = pinged
@@ -646,7 +656,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	// The runtime waits for the test's go-ahead, then reaches the origin.
 	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], filepath.Join(dir, "go")}
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-	runDir := filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	runDir := filepath.Join(sp.RunsDir, sp.RunID)
 	done := make(chan struct{})
 	var res *session.Result
 	var runErr error
@@ -732,7 +742,7 @@ func startWaiting(t *testing.T, sp session.Spec) *waiting {
 		w.said = append(w.said, l)
 		w.mu.Unlock()
 	}
-	w.dir = filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	w.dir = filepath.Join(sp.RunsDir, sp.RunID)
 	go func() {
 		defer close(w.done)
 		w.res, w.err = session.Run(context.Background(), sp)
@@ -1088,7 +1098,7 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 		if _, err := session.Run(context.Background(), sp); err == nil {
 			t.Errorf("%s: the run started", name)
 		}
-		if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) > 0 {
+		if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
 			t.Errorf("%s: a run directory was made: %v", name, entries)
 		}
 	}
@@ -1230,7 +1240,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	runCtx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); session.Run(runCtx, sp) }()
-	dir := filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	dir := filepath.Join(sp.RunsDir, sp.RunID)
 	for range 100 {
 		if _, err := os.Stat(filepath.Join(dir, "lock")); err == nil {
 			break
@@ -1371,7 +1381,7 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 		return sp, err
 	}
 	runs := func(sp session.Spec) int {
-		entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
+		entries, _ := os.ReadDir(sp.RunsDir)
 		return len(entries)
 	}
 	before := c.hits.Load()
@@ -1401,8 +1411,8 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 	if !errors.As(err, &r) || r.Code != "instance_limit" || r.Status != 409 || runs(sp) != 1 {
 		t.Fatalf("an instance beyond the limit: %v", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
-	if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1,`) {
+	entries, _ := os.ReadDir(sp.RunsDir)
+	if evs, _ := os.ReadFile(filepath.Join(sp.RunsDir, entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1,`) {
 		t.Errorf("the refused run's file:\n%s", evs)
 	}
 }
@@ -1502,11 +1512,11 @@ func TestRunClosedBeforeTheStartIsRefused(t *testing.T) {
 	if !errors.As(err, &r) || r.Code != "run_closed" || r.Status != 410 {
 		t.Fatalf("a run closed before its start: %v", err)
 	}
-	entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs"))
+	entries, _ := os.ReadDir(sp.RunsDir)
 	if len(entries) != 1 {
 		t.Fatalf("%d run directories", len(entries))
 	}
-	evs := events(t, &session.Result{Dir: filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name())})
+	evs := events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, entries[0].Name())})
 	last := evs[len(evs)-1]
 	if last["type"] != "dev.qory.run.refused" || data(last)["code"] != "run_closed" || data(last)["status"] != 410.0 || len(ofType(evs, "dev.qory.run.started")) != 0 {
 		t.Errorf("the record ends with %v", last)

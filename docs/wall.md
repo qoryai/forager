@@ -14,7 +14,7 @@ nothing.
 ┌─────────────────────────────────────────────────────┐
 │ qory run: the session runner, outside the wall      │
 │   policy ─▶ proxy ─▶ decides, records, dials ───────┼──▶ the hosts the policy allows
-│   events ─▶ .qory/runs/<id>/events.jsonl            │
+│   events ─▶ <runs directory>/<id>/events.jsonl      │
 │          └▶ events, signed ─────────────────────────┼──▶ the server: your control plane
 │      ▲ proxy      ▲ hooks       ▲ terminal          │
 │══════╪════════════╪═════════════╪════ the wall ═════│
@@ -29,9 +29,15 @@ nothing.
 - The one peer it reaches is the relay. The relay copies a fixed port to the proxy, and
   decides nothing. It forwards no packet between its networks.
 - So every connection is the proxy's to decide and record.
-- The checkout and the composed home are mounted at their own paths. The run's record is
-  mounted read-only.
+- The checkout and the composed home are mounted at their own paths. The workspace is
+  the working directory inside. The run's record is mounted read-only, from a runs
+  directory outside every mount.
 - Nothing else of the node is visible inside.
+- No mount comes from a place a walled agent can change: no name on the way to it is
+  looked up inside a writable mount of the run's own, or of another walled run still
+  going.
+  See
+  [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
 - A mount that is, contains or lies inside one of the runner's files is no run,
   `mount_contains_runner_files`: the runner file's directory with the access key
   secret, the programs the runner starts outside the wall, their configuration. See
@@ -81,8 +87,10 @@ export ANTHROPIC_API_KEY=...            # a key, or CLAUDE_CODE_OAUTH_TOKEN from
 qory run --wall docker --image agent:1 --env ANTHROPIC_API_KEY claude -- -p "Reply pong"
 ```
 
-The run is recorded in `.qory/runs/<id>/`, as without a wall. `dev.qory.run.started`
-contains the wall and the image. The exit status is the agent's.
+The run is recorded in its run directory, as without a wall: `events.jsonl` and
+`output.log`, in the directory `qory` prints, under its state directory and outside the
+checkout. `dev.qory.run.started` contains the wall and the image. The exit status is the
+agent's.
 
 ### On Linux and on a Mac
 
@@ -164,8 +172,9 @@ res, err := session.Run(ctx, session.Spec{
 	Command: "claude",                            // a path inside the image
 	Args:    []string{"-p", "Reply pong."},
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
-	Dir:     checkout,                            // the workspace, mounted at its own path
+	Dir:     checkout,                            // the workspace and working directory
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
+	RunsDir: runs,                                // the run directories, outside every mount
 	RunnerFiles: []string{configDir},             // the caller's own files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
@@ -198,7 +207,7 @@ check comes before the server is contacted and before anything starts, `Local` i
 An agent that changes a program the runner starts outside the wall, or reads the access
 key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
 run directory and the hook socket's directory, which the runner shows the enclosure
-itself, are the run's own. The runner's files are:
+itself, are the run's own, and lie in the runner's files. The runner's files are:
 
 - `Spec.RunnerFiles`, the absolute paths the caller lists as its own. `qory` lists the
   runner file's directory, with the access key secret.
@@ -217,12 +226,16 @@ itself, are the run's own. The runner's files are:
 - A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
+- `Spec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
+  workspace, lies inside the workspace, so a walled run passes one outside it.
+- The runner's registry of walled runs, `$XDG_STATE_HOME/qory-runner/walled`, else
+  `~/.local/state/qory-runner/walled`.
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
 its nearest parent that does, and a link whose target does not exist yet through that
 target. A path that cannot be resolved, such as one through a directory the runner
 cannot search, is no run, with a plain error. The check runs again just before the
-enclosure is built, so a link changed after the start leads where it leads then.
+enclosure binds the mounts.
 
 The filesystem judges what exists: two directories are the same when they are one file,
 by device and inode. So on a disk that ignores case, as a Mac's does by default,
@@ -231,6 +244,103 @@ does not exist yet is compared by name, regardless of case. The comparison is by
 path components: `/a/bc` does not lie inside `/a/b`. `session.Overlap(mount, path)`
 returns how two paths stand: `is`, `contains`, `lies inside`, or empty, also for a path
 it cannot resolve. A caller uses it to word its own message.
+
+### No bind from a place an agent can change
+
+An engine looks up every name of a bind's source path again when it binds it, links
+included. A check of the path before cannot hold when a name is looked up in a
+directory an agent can write: the agent swaps a link in after the check. So no name on
+the way to a walled run's bind source is looked up in a writable bind, the run's own or
+another walled run's still going, or in a directory inside one. A bind's own root is
+looked up in its parent, so two binds of one root are allowed.
+
+- **One bind for the workspace.** The enclosure binds the outermost of the places the
+  run lists, `Spec.Mounts` and the workspace, each once. The workspace is the working
+  directory inside (`--workdir` for Docker), reached through the mount that holds it.
+  `qory` passes the checkout's root as a mount and the current directory as `Dir`:
+  one bind, the checkout's root, and the working directory below it. A workspace that
+  no mount holds is bound at its own path, writable. The runner passes every bind to
+  the enclosure, each path clean, and the working directory lies in one of them, by
+  its names, or the run fails; `wall.Docker` binds nothing of the caller's the launch
+  does not list, and refuses a launch whose `Dir` no mount holds.
+- **Nested places.** A mount, or the workspace, inside another one of the same mode is
+  reached through the outer one, which alone is bound. One inside another of the other
+  mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
+  outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
+  mount /work (writable): a part of a writable mount can't be read-only". When the
+  outer place is the workspace, it says "place" for "mount".
+
+  A writable place inside a read-only one is refused the same way: a part of a
+  read-only mount can't be writable. Two places of one path in both modes are refused
+  too.
+- **Places through a link.** A mount, or the workspace, of either mode, whose path goes
+  through a link inside a writable place of the run's, and that does not resolve into
+  that place, is no run, `mount_through_link`: the agent that writes the link would
+  choose the directory of this machine that is bound. `Names` holds the place as
+  passed, the link, absolute and clean, and the writable place as passed. The link is
+  the last one inside the writable place on the way to the place, the one that leads
+  out of it. Its sentence reads: "/work/home is reached through the link /work/home
+  inside /work, which a walled agent can change: list the link's target itself". A
+  place whose link leads back into the writable place lies inside it and is reached
+  through it, and nothing is bound through the link. A link on the way to a place that
+  lies inside no writable place of the run's is followed by the engine as it binds.
+- **The runner's files.** A writable place that contains a directory a name on the way
+  to one of the runner's files is looked up in, such as a runs directory that is a link
+  inside the checkout, is `mount_contains_runner_files`: the agent could point the link
+  elsewhere.
+- **The run directory.** The runs directory is one of the runner's files, so the run
+  directory lies inside no place the run lists. It is bound read-only to its own run's
+  enclosure, and to no other: a bind that is, holds or lies inside another walled run's
+  run directory, whatever its mode, is `mount_shared_with_run`.
+- **The wall's own binds.** For `wall.Docker` they are the helper, read-only, the hook
+  socket's directory, writable, and, read-only, the private directory that holds the
+  run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
+  wall, and its enclosure, lists them through `wall.Binder`. The runner lists the
+  wall's in the registry when the run starts, the directories it makes later as their
+  patterns, `wall.TempDirs()` and the pattern of the runs' socket directories, and the
+  enclosure's, made by then, just before it binds them. A pattern stands for the
+  directories its runner makes; two runners' patterns never conflict.
+- **Other walled runs.** The runner keeps a registry of the walled runs still going on the
+  machine, per user, in `$XDG_STATE_HOME/qory-runner/walled`, else
+  `~/.local/state/qory-runner/walled`: a directory of the user's, 0700, which the runner
+  refuses when it is anything else. Each run holds a file there, named by its run id, with
+  its process id and its binds: each as the run passed it, as it resolved, the entries its
+  names are looked up as, whether it is writable, and what it is when it is not a place,
+  the run directory, the helper or a directory of the runner's, and whether it is a
+  pattern. The run holds the file locked until it ends. A file whose lock is free is a run
+  that is over, and the runner removes it. Under a lock of the registry's own, a run reads
+  the entries, checks its binds against them and adds its own, so two runs that start
+  together are checked one after the other. A run is no run, `mount_shared_with_run`, when
+  one of its binds lies inside a writable bind of another run's or is reached through one,
+  or when one of its writable binds holds a bind of another run's or a directory a name on
+  the way to one is looked up in. Two runs that bind the same root, both writable, run
+  side by side, and two read-only binds never conflict. `Names` holds this run's path, the
+  other run's id and the other run's path, as each run passed it. A place of this run's
+  that lies inside a writable directory another run's wall binds of its own is refused
+  too. A bind of another run's, or a directory on the way to it, that is gone is compared
+  by its names, like a part that does not exist yet; any other failure to resolve one
+  stops the run. Its sentence reads: "the mount /work/sub (writable) lies inside the
+  writable bind /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is
+  still going: a walled agent of that run can change it".
+
+  A run whose own helper, or another directory of the runner's it binds, lies inside a
+  writable bind of another run's, or is reached through one, fails with a plain error:
+  "the runner's helper /work/bin/qory lies inside the writable bind /work of the walled
+  run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that
+  run can change it", or "the runner's directory …" for a directory.
+
+  The check comes before the server is contacted, and the run leaves the registry when
+  it ends, however it ends.
+
+A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
+the run directory is named by `Spec.RunsDir`. Every check runs again just before the
+enclosure binds the mounts, with the wall's own binds, and the run's entry is updated. A
+place that resolves otherwise than at the start, or whose names are looked up in other
+directories, fails the run, with a sentence that says which.
+
+So no name on the way to a bind source is looked up in a place a walled agent of this
+user's can write. A process outside every wall, the user's own or another user's, can
+still change a path between the last check and the bind.
 
 ### The helper
 

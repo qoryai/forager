@@ -107,7 +107,7 @@ type claudeRun struct {
 func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 	t.Setenv(apiKeyVar, c.key)
 	before, _ := exec.Command(r.command, "exec", r.recorder, "cat", RecorderFile).Output()
-	dir := t.TempDir()
+	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	rt, err := claude.New()
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,8 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 			"ANTHROPIC_AUTH_TOKEN=",
 			c.unset + "=",
 		},
-		Dir: dir,
+		Dir:     dir,
+		RunsDir: runs,
 		Policy: &session.Policy{Version: 1,
 			Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{r.host}},
 			Credentials: []session.PolicyCredential{{Name: "model"}}},
@@ -273,8 +274,8 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 	}
 
 	var where []string
-	// dir holds the run directory, res.Dir, under .qory/runs.
-	for _, root := range []string{dir, home} {
+	// runs holds the run directory, res.Dir; dir is the workspace.
+	for _, root := range []string{dir, runs, home} {
 		if root == "" {
 			continue
 		}

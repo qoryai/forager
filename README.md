@@ -51,13 +51,14 @@ With `qory` and Claude Code installed:
 mkdir hello && cd hello
 qory setup example              # a stack with two modules
 qory harness compose            # build the harness into this folder
-qory run -- -p "/hello"         # one headless turn, inside the runner
-cat .qory/runs/*/events.jsonl   # what it reached, what it printed, how it ended
+qory run -- -p "/hello"         # one headless turn; prints "the record is in <dir>"
+cat <dir>/events.jsonl          # what it reached, what it printed, how it ended
 ```
 
 ## 1. Record the session
 
-Each run gets a directory in the checkout, `.qory/runs/<id>/`:
+Each run gets a directory, `<id>/`, in the runs directory the caller passes. `qory` keeps
+them under its state directory and prints the path:
 
 - `events.jsonl`: one CloudEvent per line, in order.
 - `output.log`: the session's bytes.

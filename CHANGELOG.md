@@ -104,7 +104,9 @@ release may change what an existing document does, and says so under Upgrading.
   SHA-256 of its RFC 8785 serialisation, and its `paths`.
 - The runner's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
-  `variable_reserved`, `placeholder_conflict`, `tool_unknown` and `image_unknown`.
+  `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
+  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run` and
+  `mount_through_link`.
   `errors.As` finds one in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
@@ -266,9 +268,67 @@ release may change what an existing document does, and says so under Upgrading.
   the filesystem judging which directories are the same, case and bind mounts included.
   A link whose target does not exist yet is followed to the target, a path that cannot
   be resolved is no run, and the check runs again just before the enclosure is built.
+- No walled run binds from a place a walled agent of the same user can change: no name on
+  the way to a bind source is looked up in a writable bind, the run's own or another
+  walled run's still going, or in a directory inside one. A walled run is refused with
+  `mount_mode_conflict` when a mount, or the workspace, lies inside another one of the
+  run's, or is the same, of the other mode; `Names` holds the inner path and the outer
+  one, as passed. It is refused with `mount_through_link` when a mount, or the workspace,
+  of either mode, goes through a link inside a writable place of the run's and does not
+  resolve into it, since the agent that writes the link would choose what is bound;
+  `Names` holds the place as passed, the link's path and the writable place as passed. It
+  is refused with `mount_shared_with_run` when one of its binds lies inside a writable
+  bind of another walled run still going, apart from the same root, or is reached through
+  one; when one of its writable binds holds a bind of such a run, or a directory a name on
+  the way to one is looked up in; or when one of its binds is, holds or lies inside such a
+  run's run directory, whatever the modes. `Names` holds this run's path, the other run's
+  id and the other run's path, each as its run passed it. Two runs that bind the same root
+  run side by side, and two read-only binds never conflict. A run whose own helper, or
+  another directory of the runner's its wall binds, lies inside a writable bind of such a
+  run, or is reached through one, does not start. The runner keeps the walled runs still
+  going in a registry of its own, per user, `$XDG_STATE_HOME/qory-runner/walled`, else
+  `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with its
+  process id and its binds, each as passed, as resolved, with the entries its names are
+  looked up as, whether writable, and what it is when it is not a place; the file is held
+  locked for the run's life and removed when it ends. A file whose lock is free is
+  removed. A bind of another run's, or a directory on the way to it, that is gone is
+  compared by its names, like a part that does not exist yet; any other failure to resolve
+  one stops the run. A run checks its binds and adds its own entry under a lock of the
+  registry's, before it contacts the server, and again, with its wall's own binds, just
+  before the enclosure binds them. `events/run.refused.schema.json` lists the three codes.
+- `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
+  machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
+  directory the enclosure makes later. `wall.Docker` lists its helper and the pattern
+  `wall.TempDirs()` before it prepares an enclosure; its enclosure lists the helper,
+  the hook socket's directory and the private directory that holds the run's
+  environment files and, with a CA, the `ca-bundle.pem` it binds, which it makes when
+  it lists them. The runner lists a wall's binds in the registry when the run starts,
+  with the pattern of the runs' socket directories, and the enclosure's just before it
+  binds them. A place that lies inside a writable directory another run's wall binds
+  is `mount_shared_with_run`.
+- The runner passes every bind's path clean, and a run whose working directory lies in
+  none of its binds fails.
 
 ### Changed
 
+- Behind a wall, the enclosure binds the outermost of the places a run lists, the
+  mounts and the workspace, each once: a place inside another one of the same mode is
+  reached through the outer one. The workspace is the working directory inside, through
+  the mount that holds it, and is bound at its own path, writable, only when no mount
+  holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
+  and refuses a launch whose `Dir` no mount's path holds.
+- `Spec.RunsDir` and the registry of walled runs are among the runner's files, so a
+  walled run's mount, or workspace, that is, contains or lies inside either one is
+  `mount_contains_runner_files`, and so is a writable one that holds a directory a name
+  on the way to one of the runner's files is looked up in, a link say. A walled run's
+  run directory lies outside every place it binds and is reached through none, and the
+  agent can neither change nor move its record. The default runs directory,
+  `.qory/runs` in the workspace, lies inside the workspace, so a walled run passes one
+  outside it.
+- The check of a walled run's places runs again just before the enclosure binds them,
+  the registry included. A place that resolves otherwise than at the start, or whose
+  names are looked up in other directories, fails the run with a sentence that says
+  which.
 - Contract `v1` revision 1 is amended in place for a run's variables and a node that
   narrows the server's policy. `run-configuration.schema.json` has `variables`, at most
   128 names of `^[A-Za-z_][A-Za-z0-9_]{0,127}$` with string values without NUL,

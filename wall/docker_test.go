@@ -238,6 +238,7 @@ func TestDockerRefusesAPathItCannotMount(t *testing.T) {
 	defer e.Close(context.Background())
 	l := launch()
 	l.Dir = "/work,dst=/etc"
+	l.Mounts = append(l.Mounts, Mount{Path: l.Dir})
 	if _, err := e.Wrap(context.Background(), l); err == nil {
 		t.Error("a workspace with a comma was mounted")
 	}
@@ -439,5 +440,96 @@ func TestTempDirsMatchesWhatTheAdapterMakes(t *testing.T) {
 	defer os.RemoveAll(dir)
 	if ok, _ := filepath.Match(TempDirs(), dir); !ok {
 		t.Errorf("%s does not match %s", dir, TempDirs())
+	}
+}
+
+// TestDockerBindsTheWorkspaceThroughItsMount pins one bind for a checkout: a workspace
+// below a mount is the working directory inside and gets no bind of its own, by whole
+// components of the paths; a launch whose workspace no mount holds is refused, since
+// the adapter binds nothing the launch does not list.
+func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
+	for _, c := range []struct {
+		name, dir string
+		mounts    []Mount
+		binds     []string
+	}{
+		{"below the mount", "/work/src/app", []Mount{{Path: "/work"}},
+			[]string{"type=bind,src=/work,dst=/work"}},
+		{"the mount itself", "/work", []Mount{{Path: "/work/"}},
+			[]string{"type=bind,src=/work/,dst=/work/"}},
+		{"beside the mount", "/workshop", []Mount{{Path: "/work", ReadOnly: true}}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+			d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+			req := Request{RunID: runID, Image: "example.com/agent:1"}
+			e, err := d.Prepare(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := launch()
+			l.Dir, l.Mounts, l.Socket = c.dir, c.mounts, ""
+			wrapped, err := e.Wrap(context.Background(), l)
+			if c.binds == nil {
+				want := "lies in none of the launch's mounts"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("a workspace no mount holds: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var binds []string
+			workdir := ""
+			for i, a := range wrapped.Args {
+				switch {
+				case a == "--workdir":
+					workdir = wrapped.Args[i+1]
+				case a == "--mount" && strings.HasPrefix(wrapped.Args[i+1], "type=bind,src=/work"):
+					binds = append(binds, wrapped.Args[i+1])
+				}
+			}
+			if !slices.Equal(binds, c.binds) || workdir != c.dir || wrapped.Dir != c.dir {
+				t.Errorf("binds %q, working directory %q, dir %q", binds, workdir, wrapped.Dir)
+			}
+		})
+	}
+}
+
+// TestDockerListsItsOwnBinds pins the adapter's own binds: the helper, read-only, the
+// hook socket's directory, writable, and the private directory it writes the run's
+// files in, read-only, the one Wrap then writes them in.
+func TestDockerListsItsOwnBinds(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	req := Request{RunID: runID, Image: "example.com/agent:1"}
+	e, err := d.Prepare(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.CA = []byte("-----BEGIN CERTIFICATE-----\n")
+	binds, err := e.(Binder).Binds(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := e.(*dockerEnclosure).temp
+	want := []Bind{
+		{Path: "/opt/qory/qory-linux", ReadOnly: true, Helper: true},
+		{Path: "/tmp/qory-run-1"},
+		{Path: temp, ReadOnly: true},
+	}
+	if temp == "" || !slices.Equal(binds, want) {
+		t.Fatalf("binds %+v, want %+v", binds, want)
+	}
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := "type=bind,src=" + filepath.Join(temp, "ca-bundle.pem") +
+		",dst=" + BundlePath + ",readonly"
+	if !slices.Contains(wrapped.Args, bundle) {
+		t.Errorf("the bundle is not bound from %s: %q", temp, wrapped.Args)
 	}
 }
