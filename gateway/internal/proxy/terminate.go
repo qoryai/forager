@@ -289,7 +289,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
 			if rule == AmbiguousPath {
-				fmt.Fprintf(w, "qory: %s %s%s denied by the wall: the path could be read two ways\n", r.Method, d.Host, clean)
+				fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: the path could be read two ways\n", r.Method, d.Host, clean)
 				return
 			}
 			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", r.Method, d.Host, clean, req.Mode)

@@ -81,7 +81,7 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.ForagerVersion}
+	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: accesskey.UserAgent(spec.ForagerVersion)}
 	conf, _, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err

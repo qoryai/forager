@@ -130,7 +130,7 @@ func newStation(t *testing.T, stop, closed func(string) bool) *station {
 
 func client(s *station) *server.Client {
 	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
-	return &server.Client{Config: &server.Config{Version: 1, URL: s.srv.URL, AccessKeyID: "ak_f1xt0re000000000", ApiaryPublicKey: pin}, Key: accessKey, InstanceID: "i_test", UserAgent: "qory-runner/test"}
+	return &server.Client{Config: &server.Config{Version: 1, URL: s.srv.URL, AccessKeyID: "ak_f1xt0re000000000", ApiaryPublicKey: pin}, Key: accessKey, InstanceID: "i_test", UserAgent: "qory-forager/test"}
 }
 
 // target is the station's events endpoint with a filter; none means every type.

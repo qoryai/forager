@@ -921,7 +921,7 @@ and refuses to start when both are set; it takes `access_key_id` from
 
 | Header | Value |
 |---|---|
-| `User-Agent` | `qory-runner/<version>` |
+| `User-Agent` | `qory-forager/<version>` |
 | `X-Qory-Access-Key-Id` | the access key id |
 | `X-Qory-Instance-Id` | the instance id |
 | `X-Qory-Instance-Name` | the instance's display name, unsigned, for display alone |

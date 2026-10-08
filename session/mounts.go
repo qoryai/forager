@@ -172,34 +172,34 @@ func sameName(a, b string) bool {
 	return ok
 }
 
-// runnerFile is one of the runner's files, and what it is, for the refusal's Detail.
-type runnerFile struct {
+// foragerFile is one of the runner's files, and what it is, for the refusal's Detail.
+type foragerFile struct {
 	path, what string
 }
 
-// runnerFiles are the paths a walled run's mounts leave out: the caller's, and every one
+// foragerFiles are the paths a walled run's mounts leave out: the caller's, and every one
 // the runner knows itself. The programs are every one the machine defines, not only the
 // ones the run's policy selects, because a server's policy selects after the check, and
 // a reload may select another credential.
-func runnerFiles(spec Spec) []runnerFile {
-	var out []runnerFile
-	for _, p := range spec.RunnerFiles {
-		out = append(out, runnerFile{p, "one of the runner's files"})
+func foragerFiles(spec Spec) []foragerFile {
+	var out []foragerFile
+	for _, p := range spec.ForagerFiles {
+		out = append(out, foragerFile{p, "one of the runner's files"})
 	}
 	for _, c := range spec.Credentials {
 		if len(c.Adapter) > 0 {
 			for _, d := range program.Dirs(c.Adapter[0]) {
-				out = append(out, runnerFile{d, "the directory of the credential " + c.Name + "'s program"})
+				out = append(out, foragerFile{d, "the directory of the credential " + c.Name + "'s program"})
 			}
 		}
 		if c.File != "" {
-			out = append(out, runnerFile{c.File, "the file the credential " + c.Name + " is read from"})
+			out = append(out, foragerFile{c.File, "the file the credential " + c.Name + " is read from"})
 		}
 	}
 	for _, t := range spec.Tools {
 		if len(t.Command) > 0 {
 			for _, d := range program.Dirs(t.Command[0]) {
-				out = append(out, runnerFile{d, "the directory of the tool " + t.Name + "'s program"})
+				out = append(out, foragerFile{d, "the directory of the tool " + t.Name + "'s program"})
 			}
 		}
 	}
@@ -210,12 +210,12 @@ func runnerFiles(spec Spec) []runnerFile {
 	// sockets and of the Docker wall's environment files, which hold the proxy's
 	// secret: this run's are made after the check, and other runs' exist.
 	out = append(out,
-		runnerFile{gateway.ToolSocketDirs(), "where the tools' sockets are made"},
-		runnerFile{socket.Dirs(), "where the runs' record sockets are made"},
-		runnerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
+		foragerFile{gateway.ToolSocketDirs(), "where the tools' sockets are made"},
+		foragerFile{socket.Dirs(), "where the runs' record sockets are made"},
+		foragerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {
 		for _, p := range f.Files() {
-			out = append(out, runnerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
+			out = append(out, foragerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
 		}
 	}
 	// The run directories hold the record, and the runner reads the runtime's settings
@@ -223,9 +223,9 @@ func runnerFiles(spec Spec) []runnerFile {
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
-	out = append(out, runnerFile{spec.RunsDir, "where the run directories are kept"})
+	out = append(out, foragerFile{spec.RunsDir, "where the run directories are kept"})
 	if dir, err := walledDir(); err == nil {
-		out = append(out, runnerFile{dir, "where the runner lists the walled runs still going"})
+		out = append(out, foragerFile{dir, "where the runner lists the walled runs still going"})
 	}
 	return out
 }
@@ -458,7 +458,7 @@ type mountPlan struct {
 // through a directory another bound place lets the agent write. The workspace is
 // writable, and is the working directory inside, in one of the binds.
 func checkMounts(spec Spec, runDir string) (mountPlan, error) {
-	for _, p := range spec.RunnerFiles {
+	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
 			return mountPlan{}, errors.New("a runner file's path holds a NUL byte")
 		}
@@ -474,7 +474,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		places = append(places, shown{path: m.Path, what: "the mount", writable: !m.ReadOnly})
 	}
 	places = append(places, shown{path: spec.Dir, what: "the workspace", writable: true})
-	files := runnerFiles(spec)
+	files := foragerFiles(spec)
 	fileLooks := make([][]lookup, len(files))
 	for i, f := range files {
 		ls, err := lookups(f.path)

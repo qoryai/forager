@@ -281,7 +281,7 @@ type Client struct {
 	// InstanceID is X-Qory-Instance-Id, signed into every request; InstanceName is
 	// X-Qory-Instance-Name, for display, sent when not empty.
 	InstanceID, InstanceName string
-	// UserAgent is sent as User-Agent: qory-runner/<version>.
+	// UserAgent is sent as User-Agent: qory-forager/<version>.
 	UserAgent string
 	// HTTP is the client used; nil means one with Timeout. Its redirect policy is
 	// not used: the client follows no redirect.

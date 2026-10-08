@@ -101,7 +101,7 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 			t.Errorf("Overlap = %q", got)
 		}
 		sp := spec(t, nil, "FAKE_EXIT=0")
-		sp.Wall, sp.Image, sp.RunnerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
+		sp.Wall, sp.Image, sp.ForagerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		err := runErr(sp)
 		var r *session.Refusal
@@ -144,9 +144,9 @@ func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
 	}
 }
 
-// runnerDir is a runner file's directory, a directory below a fresh one: the parent is
+// foragerDir is a runner file's directory, a directory below a fresh one: the parent is
 // what a careless mount lists.
-func runnerDir(t *testing.T) (parent, dir string) {
+func foragerDir(t *testing.T) (parent, dir string) {
 	t.Helper()
 	parent = t.TempDir()
 	dir = filepath.Join(parent, ".config", "qory")
@@ -172,17 +172,17 @@ func runErr(sp session.Spec) error {
 	return err
 }
 
-// TestAMountOfTheRunnersFilesIsNoRun pins the refusal of a walled run whose mount
+// TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
 // contains a runner file's directory: it names the mount, then the runner's path, the
 // server is never contacted, the wall builds nothing and no run directory is made.
-func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
+func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	c := newControl(t)
-	parent, dir := runnerDir(t)
+	parent, dir := foragerDir(t)
 	w := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
 	sp.Wall, sp.Image, sp.Server = w, "example.com/agent:1", c.server()
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: parent, ReadOnly: true}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{parent, dir}; !slices.Equal(r.Names, want) {
 		t.Errorf("names %q, want %q", r.Names, want)
@@ -223,16 +223,16 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 	}
 }
 
-// TestAMountBesideTheRunnersFilesRuns pins that a mount that neither holds nor lies in
+// TestAMountBesideTheForagersFilesRuns pins that a mount that neither holds nor lies in
 // one of the runner's files runs, and that a run without a wall checks nothing, having
 // no mounts.
-func TestAMountBesideTheRunnersFilesRuns(t *testing.T) {
-	_, dir := runnerDir(t)
+func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
+	_, dir := foragerDir(t)
 	w := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: t.TempDir(), ReadOnly: true}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil || res.ExitCode != 0 || !w.wrapped {
 		t.Fatalf("a walled run beside the runner's files: %+v, %v", res, err)
@@ -240,7 +240,7 @@ func TestAMountBesideTheRunnersFilesRuns(t *testing.T) {
 
 	sp = spec(t, nil, "FAKE_EXIT=0")
 	sp.Mounts = []wall.Mount{{Path: "/"}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
 		t.Fatalf("an unwalled run: %+v, %v", res, err)
 	}
@@ -290,12 +290,12 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	}
 }
 
-// TestRunnerFilesAreAbsolutePaths pins that a runner file that is no absolute path is
+// TestForagerFilesAreAbsolutePaths pins that a runner file that is no absolute path is
 // a plain error, not a refusal, walled or not.
-func TestRunnerFilesAreAbsolutePaths(t *testing.T) {
+func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
 		sp := spec(t, nil, "FAKE_EXIT=0")
-		sp.RunnerFiles = []string{p}
+		sp.ForagerFiles = []string{p}
 		_, err := session.Run(context.Background(), sp)
 		var r *session.Refusal
 		if err == nil || errors.As(err, &r) {
@@ -335,13 +335,13 @@ func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Encl
 // nowhere at the start and is a link to the runner's files by the time the enclosure
 // is wrapped is refused the same way, and the enclosure never shows it.
 func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
-	parent, dir := runnerDir(t)
+	parent, dir := foragerDir(t)
 	link := filepath.Join(t.TempDir(), "later")
 	w := &swappingWall{link: link, to: parent}
 	sp := spec(t, nil, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: link}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{link, dir}; !slices.Equal(r.Names, want) {
 		t.Errorf("names %q, want %q", r.Names, want)

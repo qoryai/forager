@@ -137,12 +137,12 @@ type Spec struct {
 	// inside that run's run directory: mount_shared_with_run. Without a Wall they mean
 	// nothing.
 	Mounts []wall.Mount
-	// RunnerFiles are the absolute paths of the caller's files that are the runner's
+	// ForagerFiles are the absolute paths of the caller's files that are the runner's
 	// own, such as the directory of qory's runner file with the access key secret. A
 	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
 	// them, or one of the paths the runner knows itself, RunsDir among them,
 	// mount_contains_forager_files: see [Overlap].
-	RunnerFiles []string
+	ForagerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
 	// among them by name. A selected credential, like a path rule, needs a Wall: the
 	// proxy then terminates TLS for the hosts concerned, with an authority made for the

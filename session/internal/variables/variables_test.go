@@ -88,7 +88,7 @@ func TestTheHighestRungWins(t *testing.T) {
 			Defaults: []string{"CODEX_HOME=d"}, Shell: []string{"CODEX_HOME=e"},
 		}, nil, []string{"CODEX_HOME<-fixed apiary:fixed run:fixed machine:fixed harness:fixed shell:fixed"}},
 		{"the runner's names and a placeholder are fixed", variables.Inputs{
-			Runner: []string{"CLAUDE_SETTINGS_HINT"}, Placeholders: []string{"GITHUB_TOKEN"},
+			Own: []string{"CLAUDE_SETTINGS_HINT"}, Placeholders: []string{"GITHUB_TOKEN"},
 			Server: map[string]string{"CLAUDE_SETTINGS_HINT": "x", "GITHUB_TOKEN": "x"}, Machine: []string{"CLAUDE_SETTINGS_HINT=y"},
 		}, nil, []string{"CLAUDE_SETTINGS_HINT<-fixed apiary:fixed machine:fixed", "GITHUB_TOKEN<-fixed apiary:fixed"}},
 		{"a later value of one source replaces an earlier", variables.Inputs{Run: []string{"A=1", "B=2", "A=3"}, Machine: []string{"C=1", "C=2"}},
@@ -193,7 +193,7 @@ func TestAnUnwalledRun(t *testing.T) {
 func TestWhichNamesTheRecordLists(t *testing.T) {
 	in := claude
 	in.Walled = true
-	in.Runner = []string{"QORY_RUN_ID", "HTTPS_PROXY", "CLAUDE_SETTINGS_HINT"}
+	in.Own = []string{"QORY_RUN_ID", "HTTPS_PROXY", "CLAUDE_SETTINGS_HINT"}
 	in.Fixed = []string{"CODEX_HOME=/run/home"}
 	in.Shell = []string{"HOME=/home/dev", "HTTPS_PROXY=http://elsewhere:3128", "CODEX_HOME=/home/dev/.codex", "EDITOR=vi"}
 	in.Server = map[string]string{"ANTHROPIC_API_KEY": "x", "EDITOR": "nano"}

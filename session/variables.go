@@ -108,21 +108,21 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	}
 	// The runner's own names, the proxy's, the wall's and the preparation's: with the
 	// placeholders and the harness's computed values, the run's fixed names.
-	runner := []string{EnvRunID, EnvSocket}
+	own := []string{EnvRunID, EnvSocket}
 	if spec.HarnessHome != "" {
-		runner = append(runner, EnvHarnessHome)
+		own = append(own, EnvHarnessHome)
 	}
-	runner = append(runner, names(link.ProxyEnv(""))...)
-	runner = append(runner, names(prepared.Env)...)
+	own = append(own, names(link.ProxyEnv(""))...)
+	own = append(own, names(prepared.Env)...)
 	if s, ok := spec.Wall.(wall.Setter); ok {
-		runner = append(runner, s.Sets()...)
+		own = append(own, s.Sets()...)
 	}
 	vars, err := variables.Resolve(variables.Inputs{
 		Fixed: spec.LaunchFixed, Server: served, Run: spec.Variables.Run, Machine: spec.Variables.Machine,
 		Defaults: spec.LaunchDefaults, Shell: spec.Env,
 		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled,
 		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Runtime: runtimeNames,
-		Placeholders: placeholderNames, ReadFrom: readFrom, Runner: runner,
+		Placeholders: placeholderNames, ReadFrom: readFrom, Own: own,
 	})
 	if err != nil {
 		return variables.Resolved{}, nil, err

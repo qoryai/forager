@@ -61,7 +61,7 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 	}
 
 	dir = t.TempDir()
-	forwarder := []string{"/opt/runner/forward", "an argument's quote"}
+	forwarder := []string{"/opt/forager/forward", "an argument's quote"}
 	got, err = rt.Prepare(runtimes.Attach{Launch: launch, RunDir: dir, Forwarder: forwarder})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)

@@ -230,8 +230,8 @@ itself, are the run's own, and lie in the runner's files. The runner's files are
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
 - `Spec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
   workspace, lies inside the workspace, so a walled run passes one outside it.
-- The runner's registry of walled runs, `$XDG_STATE_HOME/qory-runner/walled`, else
-  `~/.local/state/qory-runner/walled`.
+- The runner's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
+  `~/.local/state/qory-forager/walled`.
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
 its nearest parent that does, and a link whose target does not exist yet through that
@@ -303,8 +303,8 @@ looked up in its parent, so two binds of one root are allowed.
   enclosure's, made by then, just before it binds them. A pattern stands for the
   directories its runner makes; two runners' patterns never conflict.
 - **Other walled runs.** The runner keeps a registry of the walled runs still going on the
-  machine, per user, in `$XDG_STATE_HOME/qory-runner/walled`, else
-  `~/.local/state/qory-runner/walled`: a directory of the user's, 0700, which the runner
+  machine, per user, in `$XDG_STATE_HOME/qory-forager/walled`, else
+  `~/.local/state/qory-forager/walled`: a directory of the user's, 0700, which the runner
   refuses when it is anything else. Each run holds a file there, named by its run id, with
   its process id and its binds: each as the run passed it, as it resolved, the entries its
   names are looked up as, whether it is writable, and what it is when it is not a place,

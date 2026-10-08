@@ -584,7 +584,7 @@ func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	if d.Rule == GuardRule {
-		fmt.Fprintf(w, "qory: egress to %s:%d denied by the wall: link-local addresses are never reached through the proxy, and the runner's own machine only for a host the policy's allow list names\n", d.Host, d.Port)
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's own machine only for a host the policy's allow list names\n", d.Host, d.Port)
 		return
 	}
 	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)

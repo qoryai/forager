@@ -202,10 +202,10 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 	}
 }
 
-// TestALinkToTheRunnersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
+// TestALinkToTheForagersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
 // writable place to a runs directory: it is one of the runner's files, as every place
 // that resolves to one is.
-func TestALinkToTheRunnersFilesInsideAPlaceIsTheirs(t *testing.T) {
+func TestALinkToTheForagersFilesInsideAPlaceIsTheirs(t *testing.T) {
 	root, runs := t.TempDir(), t.TempDir()
 	to := filepath.Join(root, "records")
 	symlink(t, runs, to)

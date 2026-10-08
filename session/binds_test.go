@@ -174,10 +174,10 @@ func TestNestedMountsOfTwoModesAreNoRun(t *testing.T) {
 	}
 }
 
-// TestTheRunsDirectoryIsOneOfTheRunnersFiles pins that a walled run's mount, or its
+// TestTheRunsDirectoryIsOneOfTheForagersFiles pins that a walled run's mount, or its
 // workspace, that is, holds or lies inside the runs directory is no run, the default
 // one inside the workspace included, and that a run without a wall keeps its default.
-func TestTheRunsDirectoryIsOneOfTheRunnersFiles(t *testing.T) {
+func TestTheRunsDirectoryIsOneOfTheForagersFiles(t *testing.T) {
 	sp := walledSpec(t, &openWall{})
 	parent := filepath.Dir(sp.RunsDir)
 	sp.Mounts = []wall.Mount{{Path: parent + "/"}}
@@ -205,9 +205,9 @@ func TestTheRunsDirectoryIsOneOfTheRunnersFiles(t *testing.T) {
 	}
 }
 
-// TestTheRegistryIsOneOfTheRunnersFiles pins that a mount of the registry of walled
+// TestTheRegistryIsOneOfTheForagersFiles pins that a mount of the registry of walled
 // runs, or of a directory above it, is no run.
-func TestTheRegistryIsOneOfTheRunnersFiles(t *testing.T) {
+func TestTheRegistryIsOneOfTheForagersFiles(t *testing.T) {
 	reg := registry(t)
 	for _, mount := range []string{reg, filepath.Dir(reg)} {
 		sp := walledSpec(t, &openWall{})
@@ -220,10 +220,10 @@ func TestTheRegistryIsOneOfTheRunnersFiles(t *testing.T) {
 	}
 }
 
-// TestALinkedRunnerFileIsKeptAsAPattern pins that a runner file passed as a pattern of
+// TestALinkedForagerFileIsKeptAsAPattern pins that a runner file passed as a pattern of
 // one name, the way a caller keeps a link from being replaced, is refused by the
 // mount of its directory, with the pattern as passed as the refusal's second name.
-func TestALinkedRunnerFileIsKeptAsAPattern(t *testing.T) {
+func TestALinkedForagerFileIsKeptAsAPattern(t *testing.T) {
 	dir := mkdirs(t, filepath.Join(t.TempDir(), "conf"))
 	target := filepath.Join(t.TempDir(), "x.yaml")
 	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
@@ -235,7 +235,7 @@ func TestALinkedRunnerFileIsKeptAsAPattern(t *testing.T) {
 	pattern := dir + "/[x].yaml"
 	for _, mount := range []string{dir, filepath.Dir(dir)} {
 		sp := walledSpec(t, &openWall{})
-		sp.RunnerFiles = []string{pattern}
+		sp.ForagerFiles = []string{pattern}
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		r := mountRefusal(t, runErr(sp))
 		if r.Names[0] != mount || r.Names[1] != pattern {
@@ -251,7 +251,7 @@ func registry(t *testing.T) string {
 	if state == "" {
 		t.Fatal("the tests' XDG_STATE_HOME is not set")
 	}
-	return filepath.Join(state, "qory-runner", "walled")
+	return filepath.Join(state, "qory-forager", "walled")
 }
 
 // holdingWall is an open wall whose Prepare waits until it is released, so its run is

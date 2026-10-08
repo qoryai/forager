@@ -435,14 +435,14 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 		t.Errorf("the command's environment:\n%s", out)
 	}
 	// With the engine's selection, the same, the runner's DOCKER_CONTEXT replaced.
-	t.Setenv("DOCKER_CONTEXT", "the-runners")
+	t.Setenv("DOCKER_CONTEXT", "another-context")
 	out, err = hostSystem{}.output(context.Background(), []string{"env"},
 		[]string{"DOCKER_CONTEXT=pinned"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(out), "QORY_ACCESS_KEY_") ||
-		strings.Contains(string(out), "the-runners") ||
+		strings.Contains(string(out), "another-context") ||
 		!strings.Contains(string(out), "DOCKER_CONTEXT=pinned") ||
 		!strings.Contains(string(out), "DOCKER_SEES=yes") {
 		t.Errorf("the command's environment with a selection:\n%s", out)

@@ -3,7 +3,7 @@
   "target": "/v1/events",
   "headers": {
     "Content-Type": "application/cloudevents-batch+json",
-    "User-Agent": "qory-runner/0.7.0",
+    "User-Agent": "qory-forager/0.7.0",
     "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
     "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
     "X-Qory-Instance-Name": "build-01",

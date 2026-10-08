@@ -102,7 +102,7 @@ type Inputs struct {
 	ReadFrom []string
 	// Runner is the names the runner, the wall and the runtime's preparation set: with
 	// the placeholders and Fixed, the run's fixed names.
-	Runner []string
+	Own []string
 }
 
 // Resolved is what a run applies of the variables, and the record of it.
@@ -169,7 +169,7 @@ func Resolve(in Inputs) (Resolved, error) {
 	}
 	out := Resolved{Env: []string{}, Fixed: []string{}, Applied: []Entry{}}
 	fixed := map[string]bool{}
-	for _, name := range slices.Concat(in.Runner, in.Placeholders) {
+	for _, name := range slices.Concat(in.Own, in.Placeholders) {
 		fixed[name] = true
 	}
 	deniedFixed := map[string]bool{}

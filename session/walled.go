@@ -28,18 +28,18 @@ import (
 // start together are checked one after the other.
 const walledLock = "lock"
 
-// walledDir is the registry's directory, absolute: $XDG_STATE_HOME/qory-runner/walled
-// when XDG_STATE_HOME is absolute, else ~/.local/state/qory-runner/walled, a relative
+// walledDir is the registry's directory, absolute: $XDG_STATE_HOME/qory-forager/walled
+// when XDG_STATE_HOME is absolute, else ~/.local/state/qory-forager/walled, a relative
 // HOME taken from the working directory. A test points it elsewhere.
 var walledDir = func() (string, error) {
 	if state := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(state) {
-		return filepath.Join(state, "qory-runner", "walled"), nil
+		return filepath.Join(state, "qory-forager", "walled"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Abs(filepath.Join(home, ".local", "state", "qory-runner", "walled"))
+	return filepath.Abs(filepath.Join(home, ".local", "state", "qory-forager", "walled"))
 }
 
 // runContainersExist reports whether the engine holds a container labelled with the

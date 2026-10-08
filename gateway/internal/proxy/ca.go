@@ -44,7 +44,7 @@ func NewCA(runID string) (*CA, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "qory run " + runID, Organization: []string{"qory runner, one run only"}},
+		Subject:               pkix.Name{CommonName: "qory run " + runID, Organization: []string{"Forager gateway, one run only"}},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(caLife),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,

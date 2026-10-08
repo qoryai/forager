@@ -110,7 +110,7 @@ func TestClientCheck(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 	defer srv.Close()
 	good := func() *server.Client {
-		return &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-runner/test"}
+		return &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-forager/test"}
 	}
 	for name, c := range map[string]func(*server.Client){
 		"no pin": func(c *server.Client) { c.Config.ApiaryPublicKey = nil },
@@ -215,7 +215,7 @@ func newVerified(t *testing.T) *verified {
 	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.seen = r
 		v.body, _ = io.ReadAll(r.Body)
-		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKeyID) != accessKeyID || r.Header.Get(server.HeaderInstanceID) != instance || r.Header.Get(server.HeaderInstanceName) != "build-01" || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
+		if r.Header.Get("User-Agent") != "qory-forager/test" || r.Header.Get(server.HeaderAccessKeyID) != accessKeyID || r.Header.Get(server.HeaderInstanceID) != instance || r.Header.Get(server.HeaderInstanceName) != "build-01" || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
 			t.Errorf("%s %s: headers %v", r.Method, r.URL, r.Header)
 		}
 		req := accesskey.Request{AccessKeyID: r.Header.Get(server.HeaderAccessKeyID), InstanceID: r.Header.Get(server.HeaderInstanceID), Method: r.Method, Target: r.RequestURI}
@@ -275,7 +275,7 @@ func newVerified(t *testing.T) *verified {
 }
 
 func (v *verified) client() *server.Client {
-	return &server.Client{Config: &server.Config{Version: 1, URL: v.srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(v.signer)}, Key: v.key, InstanceID: instance, InstanceName: "build-01", UserAgent: "qory-runner/test"}
+	return &server.Client{Config: &server.Config{Version: 1, URL: v.srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(v.signer)}, Key: v.key, InstanceID: instance, InstanceName: "build-01", UserAgent: "qory-forager/test"}
 }
 
 // TestDiscoverReadsTheConfigurationAndItsDigest pins discovery: the well-known path,
@@ -521,7 +521,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	}))
 	defer origin.Close()
 	for name, hc := range map[string]*http.Client{"the package's client": nil, "the caller's client": {}} {
-		c := &server.Client{Config: &server.Config{Version: 1, URL: origin.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-runner/test", HTTP: hc}
+		c := &server.Client{Config: &server.Config{Version: 1, URL: origin.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-forager/test", HTTP: hc}
 		if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: discovery through a redirect: %v", name, err)
 		}
@@ -570,7 +570,7 @@ func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
 		io.WriteString(w, body)
 	}))
 	defer srv.Close()
-	c := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer)}, Key: key, InstanceID: instance, UserAgent: "qory-runner/test"}
+	c := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer)}, Key: key, InstanceID: instance, UserAgent: "qory-forager/test"}
 	if _, _, err := c.Discover(context.Background()); code(err) != "rate_limited" {
 		t.Fatalf("a signed 429: %v", err)
 	}
