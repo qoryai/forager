@@ -49,6 +49,10 @@ const (
 	// its names are the place, the link and the other place, the place and the other
 	// one as passed.
 	MountThroughLink = "mount_through_link"
+	// EngineUnreachable is a walled run that cannot ask the container engine whether
+	// an earlier walled run, whose runner is gone, still has containers: its name is
+	// the earlier run's id.
+	EngineUnreachable = "engine_unreachable"
 )
 
 // Decides reports whether the runner decides the code, one of this package's: a
@@ -57,7 +61,7 @@ func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
 		PlaceholderConflict, MountContainsRunnerFiles, MountModeConflict, MountSharedWithRun,
-		MountThroughLink:
+		MountThroughLink, EngineUnreachable:
 		return true
 	}
 	return false

@@ -16,13 +16,17 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // recorder is a machine with no Docker: it records every command and answers the two
 // the adapter reads.
 type recorder struct {
-	relayEnv string
-	t        *testing.T
-	gateway  string
-	local_   bool
-	uid      int
-	lines    []string
-	fail     string
+	// containers is what the engine lists of a run's containers, and env the variables
+	// it was asked with.
+	containers string
+	env        []string
+	relayEnv   string
+	t          *testing.T
+	gateway    string
+	local_     bool
+	uid        int
+	lines      []string
+	fail       string
 }
 
 func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
@@ -54,6 +58,14 @@ func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
 func (r *recorder) output(_ context.Context, argv []string) ([]byte, error) {
 	r.lines = append(r.lines, words(argv))
 	return nil, errors.New("no such file")
+}
+func (r *recorder) engine(_ context.Context, argv, env []string) ([]byte, error) {
+	line := words(argv)
+	r.lines, r.env = append(r.lines, line), env
+	if r.fail != "" && strings.Contains(line, r.fail) {
+		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon")
+	}
+	return []byte(r.containers), nil
 }
 func (r *recorder) local(string) bool        { return r.local_ }
 func (r *recorder) tempDir() (string, error) { return r.t.TempDir(), nil }
@@ -531,5 +543,61 @@ func TestDockerListsItsOwnBinds(t *testing.T) {
 		",dst=" + BundlePath + ",readonly"
 	if !slices.Contains(wrapped.Args, bundle) {
 		t.Errorf("the bundle is not bound from %s: %q", temp, wrapped.Args)
+	}
+}
+
+// TestTheEngineIsAskedForARunsContainersInEveryState pins the liveness query: by the
+// run's label, in every state, with the command and the variables recorded, and
+// whether any container is listed.
+func TestTheEngineIsAskedForARunsContainersInEveryState(t *testing.T) {
+	e := Engine{Wall: "docker", Command: "/opt/engine/docker",
+		Env: []string{"DOCKER_HOST=unix:///run/other.sock", "DOCKER_CONTEXT=other"}}
+	for _, c := range []struct {
+		listed string
+		exists bool
+	}{{"", false}, {"\n", false}, {"3f2a9c1b7d4e\n", true}} {
+		rec := &recorder{t: t, containers: c.listed}
+		exists, err := runContainersExist(context.Background(), rec, e, runID)
+		if err != nil || exists != c.exists {
+			t.Errorf("listed %q: exists %v, %v", c.listed, exists, err)
+		}
+		want := "/opt/engine/docker ps --all --quiet --filter label=dev.qory.run=" + runID
+		if len(rec.lines) != 1 || rec.lines[0] != want || !slices.Equal(rec.env, e.Env) {
+			t.Errorf("asked %q with %q", rec.lines, rec.env)
+		}
+	}
+	rec := &recorder{t: t, fail: " ps "}
+	if _, err := runContainersExist(context.Background(), rec, e, runID); err == nil ||
+		!strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Errorf("an engine that fails: %v", err)
+	}
+	for _, bad := range []Engine{
+		{Wall: "other", Command: "docker"},
+		{Wall: "docker"},
+		{Wall: "docker", Command: "docker", Env: []string{"PATH=/tmp"}},
+	} {
+		if _, err := runContainersExist(context.Background(), rec, bad, runID); err == nil {
+			t.Errorf("%+v was asked", bad)
+		}
+	}
+}
+
+// TestTheEngineRecordedHoldsNoPassword pins what a run records of its engine: the
+// command and the variables that select it, a password in an address left out.
+func TestTheEngineRecordedHoldsNoPassword(t *testing.T) {
+	for _, name := range engineVariables {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	t.Setenv("DOCKER_HOST", "tcp://builder:not-a-real-password@engine.example:2376")
+	t.Setenv("DOCKER_CONTEXT", "remote")
+	t.Setenv("DOCKER_CONFIG", "conf")
+	e := (&Docker{Command: "/opt/engine/docker"}).Engine()
+	conf, _ := filepath.Abs("conf")
+	want := []string{"DOCKER_HOST=tcp://builder@engine.example:2376",
+		"DOCKER_CONTEXT=remote", "DOCKER_CONFIG=" + conf}
+	if e.Wall != "docker" || e.Command != "/opt/engine/docker" ||
+		!slices.Equal(e.Env, want) {
+		t.Errorf("engine %+v", e)
 	}
 }

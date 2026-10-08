@@ -332,7 +332,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		if listed, err = register(runID, append(plan.sources, own...)); err != nil {
+		var engine *wall.Engine
+		if e, ok := spec.Wall.(wall.Engined); ok {
+			v := e.Engine()
+			engine = &v
+		}
+		if listed, err = register(runID, append(plan.sources, own...), engine); err != nil {
 			return nil, err
 		}
 		defer listed.release()

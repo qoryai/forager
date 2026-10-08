@@ -105,8 +105,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The runner's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
   `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
-  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run` and
-  `mount_through_link`.
+  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run`,
+  `mount_through_link` and `engine_unreachable`.
   `errors.As` finds one in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
@@ -290,12 +290,26 @@ release may change what an existing document does, and says so under Upgrading.
   `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with its
   process id and its binds, each as passed, as resolved, with the entries its names are
   looked up as, whether writable, and what it is when it is not a place; the file is held
-  locked for the run's life and removed when it ends. A file whose lock is free is
-  removed. A bind of another run's, or a directory on the way to it, that is gone is
-  compared by its names, like a part that does not exist yet; any other failure to resolve
-  one stops the run. A run checks its binds and adds its own entry under a lock of the
-  registry's, before it contacts the server, and again, with its wall's own binds, just
-  before the enclosure binds them. `events/run.refused.schema.json` lists the three codes.
+  locked for the run's life and removed when it ends. A file whose lock is free is the run
+  of a runner that is gone: it is still going while the container engine its entry records
+  holds a container labelled with its run id, in any state, and is removed when the engine
+  holds none. A run that cannot ask that engine, or reads an entry that records none, is
+  refused with `engine_unreachable`; `Names` holds the earlier run's id, and the sentence
+  reads "Docker could not be asked whether the walled run <id> is still going, so the run
+  does not start: <the engine's error>". A bind of another run's, or a directory on the
+  way to it, that is gone is compared by its names, like a part that does not exist yet;
+  any other failure to resolve one stops the run. A run checks its binds and adds its own
+  entry under a lock of the registry's, before it contacts the server, and again, with its
+  wall's own binds, just before the enclosure binds them. `events/run.refused.schema.json`
+  lists the four codes.
+- `wall.Engined` is a wall whose enclosures are containers of an engine; its `Engine` is
+  a `wall.Engine`: the wall, the command, absolute when found in PATH, and the variables
+  that select the engine, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`,
+  `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`,
+  `CONTAINERD_ADDRESS` and `CONTAINERD_NAMESPACE`, a password in an address left out. A
+  walled run's registry entry records it. `wall.RunContainersExist` lists a run's
+  containers on such an engine with `ps --all --quiet --filter label=dev.qory.run=<id>`,
+  with the recorded variables in place of the runner's own.
 - `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
   machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
   directory the enclosure makes later. `wall.Docker` lists its helper and the pattern

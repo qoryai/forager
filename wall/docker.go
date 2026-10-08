@@ -96,6 +96,9 @@ type system interface {
 	socket(path string) bool
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
+	// engine runs a command against a recorded engine, with the variables that select
+	// it, and returns its standard output; an error holds its standard error.
+	engine(ctx context.Context, argv, env []string) ([]byte, error)
 }
 
 // Sets lists the variables the enclosure's environment receives from the adapter

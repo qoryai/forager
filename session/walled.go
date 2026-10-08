@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +13,15 @@ import (
 	"syscall"
 
 	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/wall"
 )
 
 // The registry of walled runs is a private directory of the runner's, per user: a file
 // for every walled run still going on this machine, named by its run id, which its
 // runner holds locked for the run's whole life and removes when the run ends. A file
-// whose lock is free is a run that is over, however its runner ended.
+// whose lock is free is a run whose runner is gone, however it ended; the run is still
+// going while a container labelled with its id exists, which an agent killed with its
+// runner can be.
 
 // walledLock is the file in the registry a runner holds locked while it reads the
 // entries, checks its own binds against them and writes its own, so that two runs that
@@ -37,6 +41,10 @@ var walledDir = func() (string, error) {
 	return filepath.Join(home, ".local", "state", "qory-runner", "walled"), nil
 }
 
+// runContainersExist reports whether the engine holds a container labelled with the
+// run's id, in any state. A test points it elsewhere.
+var runContainersExist = wall.RunContainersExist
+
 // registerPause, when not nil, is called between a run's check and the writing of its
 // entry, under the registry's lock: a test holds a run there.
 var registerPause func(runID string)
@@ -46,6 +54,10 @@ type walledEntry struct {
 	RunID string       `json:"run_id"`
 	PID   int          `json:"pid"`
 	Binds []bindSource `json:"binds"`
+	// Engine is the container engine the run's enclosure is in, as its wall reaches
+	// it, for another runner to ask once the run's runner is gone; nil for a wall
+	// without one.
+	Engine *wall.Engine `json:"engine,omitempty"`
 }
 
 // openRegistry makes the registry's directory when it does not exist, 0700, and refuses
@@ -79,6 +91,7 @@ func openRegistry() (string, error) {
 // goes.
 type registration struct {
 	dir, runID string
+	engine     *wall.Engine
 	f          *os.File
 	// release removes the entry; it is safe to call more than once.
 	release func()
@@ -86,8 +99,11 @@ type registration struct {
 
 // register checks a walled run's binds against every other walled run of this user's
 // still going and, when none conflicts, lists the run among them, all under the
-// registry's lock.
-func register(runID string, binds []bindSource) (*registration, error) {
+// registry's lock. engine is the container engine of the run's wall, nil for a wall
+// without one.
+func register(
+	runID string, binds []bindSource, engine *wall.Engine,
+) (*registration, error) {
 	dir, err := openRegistry()
 	if err != nil {
 		return nil, err
@@ -113,7 +129,7 @@ func register(runID string, binds []bindSource) (*registration, error) {
 		os.Remove(file)
 		return nil, fmt.Errorf("the registry of walled runs: locking %s: %w", file, err)
 	}
-	r := &registration{dir: dir, runID: runID, f: f}
+	r := &registration{dir: dir, runID: runID, engine: engine, f: f}
 	// The file goes before its lock, so no runner takes the lock of a file that is
 	// still there for a run that is over and finds a run that is not.
 	r.release = sync.OnceFunc(func() {
@@ -129,7 +145,8 @@ func register(runID string, binds []bindSource) (*registration, error) {
 
 // write puts the run's binds in its entry. The caller holds the registry's lock.
 func (r *registration) write(binds []bindSource) error {
-	b, err := json.Marshal(walledEntry{RunID: r.runID, PID: os.Getpid(), Binds: binds})
+	b, err := json.Marshal(walledEntry{RunID: r.runID, PID: os.Getpid(), Binds: binds,
+		Engine: r.engine})
 	if err != nil {
 		return err
 	}
@@ -240,8 +257,12 @@ func resolveOther(runID string, b bindSource) (bindSource, error) {
 	return b, nil
 }
 
-// readEntry reads one entry of the registry. An entry whose lock is free is removed,
-// and live is false; one whose file is gone already is not live either.
+// readEntry reads one entry of the registry. An entry whose lock is held is live. One
+// whose lock is free is a run whose runner is gone: it is live while the engine its
+// entry records holds a container labelled with its run id, and is removed when the
+// engine holds none. A run that cannot ask, for an entry that cannot be read, records
+// no engine or an engine that fails, does not start. One whose file is gone already is
+// not live.
 func readEntry(file string) (walledEntry, bool, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -251,25 +272,59 @@ func readEntry(file string) (walledEntry, bool, error) {
 		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: %w", err)
 	}
 	defer f.Close()
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
-	if err == nil {
-		os.Remove(file)
-		return walledEntry{}, false, nil
-	}
-	if !errors.Is(err, syscall.EWOULDBLOCK) {
+	held := false
+	switch err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); {
+	case errors.Is(err, syscall.EWOULDBLOCK):
+		held = true
+	case err != nil:
 		return walledEntry{}, false,
 			fmt.Errorf("the registry of walled runs: locking %s: %w", file, err)
 	}
+	runID := filepath.Base(file)
 	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
-	if err != nil {
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: %w", err)
-	}
 	var entry walledEntry
-	if err := json.Unmarshal(b, &entry); err != nil || entry.RunID != filepath.Base(file) {
-		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: the entry %s "+
-			"of a run still going cannot be read", file)
+	if err == nil {
+		err = json.Unmarshal(b, &entry)
 	}
-	return entry, true, nil
+	if err == nil && entry.RunID != runID {
+		err = errors.New("it names another run")
+	}
+	if held {
+		if err != nil {
+			return walledEntry{}, false, fmt.Errorf("the registry of walled runs: the "+
+				"entry %s of a run still going cannot be read", file)
+		}
+		return entry, true, nil
+	}
+	if err != nil {
+		return walledEntry{}, false, engineUnreachable(runID,
+			fmt.Errorf("its entry %s cannot be read: %w", file, err))
+	}
+	if entry.Engine == nil {
+		return walledEntry{}, false, engineUnreachable(runID,
+			fmt.Errorf("its entry %s records no engine", file))
+	}
+	exists, err := runContainersExist(context.Background(), *entry.Engine, runID)
+	switch {
+	case err != nil:
+		return walledEntry{}, false, engineUnreachable(runID, err)
+	case exists:
+		return entry, true, nil
+	}
+	os.Remove(file)
+	return walledEntry{}, false, nil
+}
+
+// engineUnreachable is the refusal of a run that cannot ask the container engine
+// whether an earlier walled run, whose runner is gone, still has containers: nothing is
+// bound while one may.
+func engineUnreachable(runID string, err error) *Refusal {
+	return &Refusal{
+		Code:  refusal.EngineUnreachable,
+		Names: []string{runID},
+		Detail: fmt.Sprintf("Docker could not be asked whether the walled run %s is still "+
+			"going, so the run does not start: %v", runID, err),
+	}
 }
 
 // wallKind reports whether a bind is one a wall binds of its own: the runner's helper
