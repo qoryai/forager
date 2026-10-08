@@ -34,9 +34,8 @@ const (
 	// order.
 	MountContainsRunnerFiles = "mount_contains_runner_files"
 	// MountModeConflict is a walled run with a mount, or the workspace, inside another
-	// one, or the same, or reached through a link inside a writable one, of the other
-	// mode, writable or read-only: its names are the inner and the outer, in that
-	// order.
+	// one, or the same, of the other mode, writable or read-only: its names are the
+	// inner and the outer, in that order.
 	MountModeConflict = "mount_mode_conflict"
 	// MountSharedWithRun is a walled run with a bind inside, or reached through, a
 	// writable bind of another walled run of this user's still going, a writable bind
