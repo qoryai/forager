@@ -13,8 +13,8 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/policy"
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/runner/refusal"
 )
 
 // fixture is the bytes of a contract fixture.

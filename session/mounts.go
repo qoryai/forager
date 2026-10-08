@@ -9,10 +9,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/internal/program"
-	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/program"
+	"github.com/qoryai/runner/refusal"
 	"github.com/qoryai/runner/wall"
 )
 

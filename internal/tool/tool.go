@@ -32,8 +32,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qoryai/runner/internal/policy"
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/runner/refusal"
 )
 
 // EnvListen names, in a tool's environment, the path of the Unix socket it listens on.

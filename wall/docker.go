@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/program"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/program"
 )
 
 // Where things are inside a Docker enclosure.

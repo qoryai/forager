@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/policy"
 )
 
 // envMode makes the test binary a tool: serve, fail, stall or leave.

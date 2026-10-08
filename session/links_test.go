@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/event"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
 )

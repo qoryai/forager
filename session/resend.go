@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/server"
-	"github.com/qoryai/runner/internal/sink"
+	"github.com/qoryai/runner/event"
+	"github.com/qoryai/runner/server"
+	"github.com/qoryai/runner/sink"
 	"github.com/qoryai/runner/wall"
 )
 

@@ -16,16 +16,16 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/runner/event"
 	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
-	"github.com/qoryai/runner/internal/refusal"
-	"github.com/qoryai/runner/internal/server"
-	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/runner/refusal"
 	"github.com/qoryai/runner/runtimes"
+	"github.com/qoryai/runner/server"
+	"github.com/qoryai/runner/sink"
 	"github.com/qoryai/runner/wall"
 )
 

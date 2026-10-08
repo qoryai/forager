@@ -18,7 +18,7 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/runner/server"
 )
 
 // accessKeyID is the fixture access key's id, and instance the fixture instance.

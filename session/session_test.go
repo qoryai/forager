@@ -27,8 +27,8 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/receiver"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/runtimes/claude"

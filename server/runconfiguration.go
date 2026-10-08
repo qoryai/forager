@@ -11,7 +11,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/refusal"
 )
 
 // MaxVariableValue is the most bytes of UTF-8 a run configuration's variable value

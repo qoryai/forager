@@ -22,9 +22,9 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/runner/event"
 	"github.com/qoryai/runner/receiver"
+	"github.com/qoryai/runner/server"
 )
 
 const (

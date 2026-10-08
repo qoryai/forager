@@ -10,10 +10,10 @@ import (
 	"strings"
 
 	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/tool"
 	"github.com/qoryai/runner/internal/variables"
+	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/wall"
 )

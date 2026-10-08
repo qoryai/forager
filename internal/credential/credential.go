@@ -31,7 +31,7 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/policy"
 )
 
 // Definition is one credential as the machine defines it. Exactly one of Env, File and

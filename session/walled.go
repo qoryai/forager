@@ -12,7 +12,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/refusal"
 	"github.com/qoryai/runner/wall"
 )
 

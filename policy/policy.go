@@ -24,7 +24,7 @@ import (
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/jcs"
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/refusal"
 )
 
 // Mode is the egress mode of a policy.

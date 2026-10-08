@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/variables"
+	"github.com/qoryai/runner/refusal"
 )
 
 // claude is what the Claude Code descriptor declares and denies, as a run passes it.

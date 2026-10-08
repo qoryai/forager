@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/policy"
 )
 
 // adapter writes a program that answers as a source code host's adapter would for the

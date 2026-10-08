@@ -7,10 +7,10 @@ import (
 
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/policy"
-	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/tool"
 	"github.com/qoryai/runner/internal/variables"
+	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/runner/refusal"
 )
 
 // Policy is the run's policy document, contracts/runner/v1/policy.schema.json, as the

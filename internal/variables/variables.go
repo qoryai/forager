@@ -32,7 +32,7 @@ import (
 	"sync"
 
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/refusal"
+	"github.com/qoryai/runner/refusal"
 )
 
 // Ignore and Accept are the two ways an unwalled run takes the server's variables:

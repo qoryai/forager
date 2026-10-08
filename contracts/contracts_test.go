@@ -15,7 +15,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/runner/server"
 )
 
 // compile compiles every schema a test needs once.

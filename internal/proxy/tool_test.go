@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/policy"
 )
 
 // toolHost is a name that exists nowhere: a tool serves it, and the proxy never dials it.

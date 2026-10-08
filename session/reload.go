@@ -8,10 +8,10 @@ import (
 	"sync"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/policy"
-	"github.com/qoryai/runner/internal/refusal"
-	"github.com/qoryai/runner/internal/server"
-	"github.com/qoryai/runner/internal/sink"
+	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/runner/server"
+	"github.com/qoryai/runner/sink"
 )
 
 // live is a run's server while the run goes: the configuration document as

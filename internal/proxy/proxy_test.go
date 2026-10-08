@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/policy"
 )
 
 // through returns a client that sends everything through the proxy, trusting the test

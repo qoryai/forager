@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/event"
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the

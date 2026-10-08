@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/runner/event"
+	"github.com/qoryai/runner/server"
 )
 
 // The batching rule: a batch is cut at BatchEvents events, at BatchBytes of encoded

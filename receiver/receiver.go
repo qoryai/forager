@@ -42,7 +42,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/runner/server"
 )
 
 // MaxBody is the largest delivery accepted, and the most the handler reads of a body

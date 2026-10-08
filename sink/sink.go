@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/event"
 )
 
 // Sink takes events and is closed once.
