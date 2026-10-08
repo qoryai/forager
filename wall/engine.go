@@ -27,10 +27,12 @@ type Engine struct {
 	// command reads them, and the selection pinned where the command would read it
 	// from its configuration; a password in an address is left out.
 	Env []string `json:"env,omitempty"`
-	// Pinned says Env selects one engine whatever the command's configuration holds:
-	// DOCKER_HOST, DOCKER_CONTEXT, CONTAINER_HOST or CONTAINER_CONNECTION was set and
-	// recorded, or the context the command showed is. An engine whose selection is not
-	// pinned is asked by its ID alone.
+	// Pinned says Env selects one engine whatever the command's configuration holds,
+	// by the variables the command reads: for podman, CONTAINER_HOST or
+	// CONTAINER_CONNECTION was set and recorded; for any other command, DOCKER_HOST or
+	// DOCKER_CONTEXT was, or the context the command showed is. A variable of the other
+	// command's never pins. An engine whose selection is not pinned is asked by its ID
+	// alone.
 	Pinned bool `json:"pinned,omitempty"`
 	// ID is the engine's own id, as it answered when the run started, or once the
 	// enclosure was prepared; empty when it gave none.
@@ -64,11 +66,12 @@ var idArgs = []string{"info", "--format", "{{.ID}}"}
 // Engine is the engine the adapter's command reaches: the command, absolute when it is
 // found in PATH; the variables of this process's environment that select the engine,
 // DOCKER_CONFIG and DOCKER_CERT_PATH made absolute and DOCKER_CONFIG ~/.docker when it
-// is not set; when none of DOCKER_HOST, DOCKER_CONTEXT, CONTAINER_HOST and
-// CONTAINER_CONNECTION is set, the context the command shows, since the command would
-// read it from its configuration, which can change; and the engine's id, when it gives
-// one. A variable left out as unreadable leaves the selection unpinned, and then
-// neither the context nor the id is asked, since they would be another engine's.
+// is not set; for a command other than podman, when neither DOCKER_HOST nor
+// DOCKER_CONTEXT is set, the context the command shows, since the command would read it
+// from its configuration, which can change; whether that selection is pinned, as
+// [Engine.Pinned] says; and the engine's id, when it gives one. A variable left out as
+// unreadable leaves the selection unpinned, and then neither the context nor the id is
+// asked, since they would be another engine's.
 //
 // Every engine command of the adapter's, from then on, runs with this selection in
 // place of the runner's own, so the run's containers are on the engine recorded. With a
@@ -106,11 +109,17 @@ func (d *Docker) Engine(ctx context.Context) Engine {
 	if home, err := os.UserHomeDir(); err == nil && !set["DOCKER_CONFIG"] {
 		e.Env = append(e.Env, "DOCKER_CONFIG="+filepath.Join(home, ".docker"))
 	}
-	e.Pinned = !dropped && (set["DOCKER_HOST"] || set["DOCKER_CONTEXT"] ||
-		set["CONTAINER_HOST"] || set["CONTAINER_CONNECTION"])
+	// The selection is pinned by the variables the command itself reads; the others
+	// stay recorded, and the run's commands keep them.
+	podman := filepath.Base(e.Command) == "podman"
+	if podman {
+		e.Pinned = !dropped && (set["CONTAINER_HOST"] || set["CONTAINER_CONNECTION"])
+	} else {
+		e.Pinned = !dropped && (set["DOCKER_HOST"] || set["DOCKER_CONTEXT"])
+	}
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
 	defer cancel()
-	if !dropped && !e.Pinned {
+	if !dropped && !podman && !e.Pinned {
 		out, err := sys.engine(ctx, []string{e.Command, "context", "show"}, e.Env)
 		if name := oneWord(out); err == nil && name != "" {
 			e.Env, e.Pinned = append(e.Env, "DOCKER_CONTEXT="+name), true

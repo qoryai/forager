@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/qoryai/runner/accesskey"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -169,8 +171,11 @@ func TestDockerCommandLines(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if wrapped.Env != nil {
-				t.Errorf("the docker command gets an environment of its own: %v", wrapped.Env)
+			// The docker command gets the runner's environment without the access key's
+			// variables; no engine is recorded here, so no selection replaces any.
+			if !slices.Equal(wrapped.Env, accesskey.WithoutVariables(os.Environ())) {
+				t.Errorf("the docker command gets an environment of %d variables of its own",
+					len(wrapped.Env))
 			}
 			envFile := ""
 			for i, a := range wrapped.Args {
@@ -760,6 +765,52 @@ func TestTheIDIsAskedAgainThroughTheSelection(t *testing.T) {
 	}
 	if _, err := (&Docker{sys: rec}).EngineID(context.Background()); err == nil {
 		t.Error("an adapter with no engine recorded was asked for its id")
+	}
+}
+
+// TestOnlyTheCommandsOwnVariablesPin pins Pinned to the variables the command reads:
+// podman's CONTAINER_HOST and CONTAINER_CONNECTION, any other command's DOCKER_HOST and
+// DOCKER_CONTEXT or the context it shows. A variable of the other command's stays
+// recorded and never pins, so podman with DOCKER_HOST alone, and no id, is no answer
+// later; docker with CONTAINER_HOST alone is pinned by the context it shows, and is
+// unpinned when it shows none.
+func TestOnlyTheCommandsOwnVariablesPin(t *testing.T) {
+	for _, c := range []struct {
+		name, command, variable, value, fail string
+		pinned, shown                        bool
+	}{
+		{"podman with DOCKER_HOST", "podman", "DOCKER_HOST",
+			"unix:///run/docker.sock", " info ", false, false},
+		{"podman with DOCKER_CONTEXT", "podman", "DOCKER_CONTEXT",
+			"builder", " info ", false, false},
+		{"podman with CONTAINER_CONNECTION", "podman", "CONTAINER_CONNECTION",
+			"builder", " info ", true, false},
+		{"docker with CONTAINER_HOST", "/opt/engine/docker", "CONTAINER_HOST",
+			"unix:///run/podman.sock", " info ", true, true},
+		{"docker with CONTAINER_HOST, no context", "/opt/engine/docker", "CONTAINER_HOST",
+			"unix:///run/podman.sock", " context show| info ", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			unsetEngine(t)
+			t.Setenv(c.variable, c.value)
+			rec := &recorder{t: t, context: "orbstack", fail: c.fail}
+			e := (&Docker{Command: c.command, sys: rec}).Engine(context.Background())
+			asked := slices.ContainsFunc(rec.lines, func(l string) bool {
+				return strings.Contains(l, "context show")
+			})
+			if e.Pinned != c.pinned || e.ID != "" ||
+				!slices.Contains(e.Env, c.variable+"="+c.value) ||
+				asked != (c.command != "podman") ||
+				slices.Contains(e.Env, "DOCKER_CONTEXT=orbstack") != c.shown {
+				t.Fatalf("engine %+v, asked %q", e, rec.lines)
+			}
+			rec = &recorder{t: t, containers: "3f2a9c1b7d4e\n"}
+			exists, err := runContainersExist(context.Background(), rec, e, runID)
+			if c.pinned && (!exists || err != nil) || !c.pinned && (err == nil ||
+				len(rec.lines) != 0) {
+				t.Errorf("exists %v, %v, asked %q", exists, err, rec.lines)
+			}
+		})
 	}
 }
 

@@ -309,23 +309,25 @@ looked up in its parent, so two binds of one root are allowed.
   the run directory, the helper or a directory of the runner's, and whether it is a
   pattern, and, for a wall in a container engine, the engine: the command, the variables
   that select it, a password in an address left out, whether that selection is pinned, and
-  the engine's id. The selection is pinned when `DOCKER_HOST`, `DOCKER_CONTEXT`,
-  `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded; with none of them set,
-  the entry pins the context the command shows and `DOCKER_CONFIG`, else `~/.docker`, so a
-  later `docker context use` does not change the engine asked. The podman command, with
-  none of them set, is unpinned, as is a command whose `context show` fails. An address
-  that cannot be read is left out whole and leaves the selection unpinned, and then
-  neither the context nor the id is asked. Every engine command of the run's, and the
-  agent's container, runs with the recorded selection in place of the runner's own, so the
-  engine recorded is the one the run uses; with an address left out, they run with the
-  runner's own environment. An engine that gives no id as the run starts is asked again
-  through the recorded selection once the enclosure is prepared, and its answer goes in
-  the entry. The run holds the file locked until it ends, and the file stays when the wall
-  could not be removed. An entry is live while its runner holds it, or while a container
-  labelled `dev.qory.run=<id>` exists, in any state, on the engine the entry records: an
-  agent killed with its runner keeps its binds. The runner asks that engine, with the
-  recorded variables, for its id, when one is recorded, and then
-  `<command> ps --all --quiet --filter label=dev.qory.run=<id>`, and removes an entry
+  the engine's id. The selection is pinned by the variables the command reads. For podman,
+  it is pinned when `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded, and
+  unpinned otherwise. For any other command, it is pinned when `DOCKER_HOST` or
+  `DOCKER_CONTEXT` is set and recorded; with neither set, the entry pins the context the
+  command shows and `DOCKER_CONFIG`, else `~/.docker`, so a later `docker context use`
+  does not change the engine asked, and a command whose `context show` fails is unpinned.
+  A variable of the other command's stays recorded and never pins: podman with
+  `DOCKER_HOST` alone is unpinned. An address that cannot be read is left out whole and
+  leaves the selection unpinned, and then neither the context nor the id is asked. Every
+  engine command of the run's, and the agent's container, runs with the recorded selection
+  in place of the runner's own, so the engine recorded is the one the run uses; with an
+  address left out, they run with the runner's own environment. An engine that gives no id
+  as the run starts is asked again through the recorded selection once the enclosure is
+  prepared, and its answer goes in the entry. The run holds the file locked until it ends,
+  and the file stays when the wall could not be removed. An entry is live while its runner
+  holds it, or while a container labelled `dev.qory.run=<id>` exists, in any state, on the
+  engine the entry records: an agent killed with its runner keeps its binds. The runner
+  asks that engine, with the recorded variables, for its id, when one is recorded, and
+  then `<command> ps --all --quiet --filter label=dev.qory.run=<id>`, and removes an entry
   whose engine holds no such container. For an entry whose lock is free, a run that cannot
   ask, whose engine fails or answers with another id, whose entry records neither a pinned
   selection nor an id, or that reads an entry that records no engine or cannot be read, is

@@ -1501,12 +1501,13 @@ is looked up in its parent, so two binds of one root are allowed:
   it ends, however it ends, unless its wall could not be removed. A run is still going
   while its runner holds its entry, or, once its runner is gone, while the container
   engine its entry records, pinned by its selection and by its id when it gave one, holds
-  a container labelled `dev.qory.run=<id>`, in any state. The selection is pinned when
-  `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and
-  recorded, or the context the docker command shows is recorded; the podman command with
-  none of them set is unpinned. A run that cannot ask that engine, reaches another, or
-  finds an entry whose engine has neither a pinned selection nor an id, is no run,
-  `engine_unreachable`, with the earlier run's id as its name.
+  a container labelled `dev.qory.run=<id>`, in any state. The selection is pinned by the
+  variables the command reads: for podman, `CONTAINER_HOST` or `CONTAINER_CONNECTION` set
+  and recorded; for any other command, `DOCKER_HOST` or `DOCKER_CONTEXT` set and recorded,
+  or the context the command shows. A variable of the other command's never pins. A run
+  that cannot ask that engine, reaches another, or finds an entry whose engine has neither
+  a pinned selection nor an id, is no run, `engine_unreachable`, with the earlier run's id
+  as its name.
 
 The names of these refusals are paths as the caller passed them, the first always one
 of the run's mounts or its workspace, the run directory named by its runs directory.

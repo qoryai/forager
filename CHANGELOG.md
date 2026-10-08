@@ -311,20 +311,22 @@ release may change what an existing document does, and says so under Upgrading.
   `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS` and
   `CONTAINERD_NAMESPACE`, a password in an address left out and an address that cannot be
   read left out whole, `Pinned`, and the engine's id, `info --format {{.ID}}`, when it
-  gives one. `Pinned` is true when `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST` or
-  `CONTAINER_CONNECTION` is set and recorded; with none of them set, it pins the context
-  the command shows, `context show`, and `DOCKER_CONFIG`, else `~/.docker`. The podman
-  command with none of them set is unpinned, as is a command whose `context show` fails.
-  An address that cannot be read leaves the selection unpinned, and then neither the
-  context nor the id is asked. Every engine command of `wall.Docker`'s, and the agent's
-  container, then runs with the recorded selection in place of the runner's own; with an
-  address left out, with the runner's own environment. `EngineID` asks the engine's id
-  again through the recorded selection; a run whose engine gave none as it started asks
-  once the enclosure is prepared, and records the answer. A walled run's registry entry
-  records the engine. `wall.RunContainersExist` refuses an engine recorded with neither a
-  pinned selection nor an id, asks the engine's id again, when one is recorded, and then
-  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with
-  the recorded variables in place of the runner's own.
+  gives one. `Pinned` follows the variables the command reads. For podman, it is true when
+  `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded. For any other command,
+  it is true when `DOCKER_HOST` or `DOCKER_CONTEXT` is set and recorded; with neither set,
+  it pins the context the command shows, `context show`, and `DOCKER_CONFIG`, else
+  `~/.docker`, and a command whose `context show` fails is unpinned. A variable of the
+  other command's stays recorded and never makes `Pinned` true. An address that cannot be
+  read leaves the selection unpinned, and then neither the context nor the id is asked.
+  Every engine command of `wall.Docker`'s, and the agent's container, then runs with the
+  recorded selection in place of the runner's own; with an address left out, with the
+  runner's own environment. `EngineID` asks the engine's id again through the recorded
+  selection; a run whose engine gave none as it started asks once the enclosure is
+  prepared, and records the answer. A walled run's registry entry records the engine.
+  `wall.RunContainersExist` refuses an engine recorded with neither a pinned selection nor
+  an id, asks the engine's id again, when one is recorded, and then lists a run's
+  containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with the recorded
+  variables in place of the runner's own.
 - `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
   machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
   directory the enclosure makes later. `wall.Docker` lists its helper and the pattern

@@ -47,6 +47,9 @@ const (
 // conformance suite passes for them. It uses the command and no library, and serves
 // whatever engine that command reaches.
 //
+// One *Docker serves one run at a time: [Docker.Engine] records that run's engine
+// selection on it, and every engine command of the adapter's runs with it.
+//
 // A run gets two networks and two containers. The agent's container is on a network
 // created with --internal and on nothing else, so it has no route out and its resolver
 // knows only that network; the network's bridge gets no address, so the engine's host is
@@ -438,13 +441,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
-	wrapped := Launch{Command: e.command(), Args: run, Dir: l.Dir}
+	// The docker CLI that starts the agent's container runs without the access key's
+	// variables, as every other command of the run's, and reaches the engine recorded.
+	cli := accesskey.WithoutVariables(os.Environ())
 	if e.env != nil {
-		// The docker CLI that starts the agent's container reaches the engine recorded,
-		// without the access key's variables, as every other command of the run's.
-		wrapped.Env = withSelection(accesskey.WithoutVariables(os.Environ()), e.env)
+		cli = withSelection(cli, e.env)
 	}
-	return wrapped, nil
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: l.Dir}, nil
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,
