@@ -1,0 +1,32 @@
+{
+  "kind": "example",
+  "title": "Make the example service answer in under a second",
+  "subjects": [
+    {
+      "type": "example",
+      "ref": "7",
+      "url": "https://qory.example/examples/7",
+      "title": "Slow answers from the example service"
+    },
+    {
+      "type": "example.other",
+      "ref": "acme/example#12",
+      "url": "https://example.com/acme/example/12",
+      "title": "Cache the example lookups"
+    }
+  ],
+  "details": {
+    "priority": 2,
+    "urgent": false,
+    "owner": null,
+    "steps": [
+      "measure",
+      {
+        "cache": {
+          "ttl_seconds": 60,
+          "warm": true
+        }
+      }
+    ]
+  }
+}

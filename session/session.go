@@ -177,6 +177,15 @@ type Spec struct {
 	// At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and dash, a value
 	// at most 256 bytes.
 	Labels map[string]string
+	// About is what the run is about, as the caller passed it: the kind of run, a title,
+	// the subjects it works on and details. It is reported in run.started and no other
+	// event, so a receiver shows the run by it; it is never sent on the run configuration
+	// request and never selects a policy. The runner reads nothing into it. CheckAbout
+	// holds it to its bounds before the server is contacted. Nil, or an About whose every
+	// member is empty, is left out. An empty Kind, Title or Subjects counts as absent and
+	// is left out of the event. Details is shown to every reader of the run, so it
+	// never holds a secret.
+	About *About
 	// Timeout is how long the runtime may run; zero means no limit. At the limit the
 	// runtime is stopped the way the context ending stops it, and run.exited carries
 	// the reason.
@@ -275,6 +284,25 @@ func CheckRunID(id string) error {
 // grammar, a value too long. [Run] checks them; a command may first.
 func CheckLabels(labels map[string]string) error { return server.CheckLabels(labels) }
 
+// About is what a run is about, as the caller passed it: see [Spec.About].
+type About = server.About
+
+// Subject is one thing a run works on, identified by its Type and Ref.
+type Subject = server.Subject
+
+// AboutError is why CheckAbout refuses an About: the Field, such as
+// about.subjects[0].ref, and the Reason.
+type AboutError = server.AboutError
+
+// CheckAbout refuses an About the contract's rules refuse: a member over its bound in
+// bytes, a string that is not UTF-8 or has a control character, a subject type outside
+// its form, a URL that is not an absolute http or https one or that has a user name or
+// password, two subjects with the same type and ref, and details that are not a JSON
+// object of at most 8192 bytes as the event contains them and 4 levels. It returns the
+// first failure as an [*AboutError]. [Run] checks it before it contacts the server; a
+// command may first.
+func CheckAbout(a *About) error { return server.CheckAbout(a) }
+
 // closeWait is how long the sinks get to flush after the runtime exits.
 const closeWait = 15 * time.Second
 
@@ -313,6 +341,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if runID == "" {
 		runID = event.NewRunID()
 	} else if err := CheckRunID(runID); err != nil {
+		return nil, err
+	}
+	if err := CheckAbout(spec.About); err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(spec.RunsDir, runID)
@@ -697,6 +728,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if len(spec.Labels) > 0 {
 		started["labels"] = spec.Labels
+	}
+	if about := server.ReportedAbout(spec.About); about != nil {
+		started["about"] = about
 	}
 	write(event.RunStarted, started)
 	// policyApplied is the policy_applied event of a policy: the one pinned at start,
