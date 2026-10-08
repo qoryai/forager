@@ -295,7 +295,7 @@ const relayWait = 5 * time.Minute
 // Wrap starts the relay towards the proxy, waits until it listens, and returns the
 // docker run that starts the launch in the agent's container: on the internal network
 // only, the launch's mounts at their own paths, the workspace as the working directory
-// inside them, the helper read-only,
+// inside one of them, the helper read-only,
 // the socket's directory, and the launch's environment through a file, so no value is on a
 // command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
@@ -414,9 +414,23 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
 }
 
+// Binds lists the adapter's own binds before an enclosure is prepared: the helper,
+// read-only, and, read-only, the pattern of the private directories that hold a run's
+// environment files and, with a CA, the bundle the enclosure binds.
+func (d *Docker) Binds(Launch) ([]Bind, error) {
+	if d.Helper == "" {
+		return nil, errors.New("wall docker: the helper binary is required")
+	}
+	return []Bind{
+		{Path: d.Helper, ReadOnly: true, Helper: true},
+		{Path: TempDirs(), ReadOnly: true, Pattern: true},
+	}, nil
+}
+
 // Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
-// socket's directory, writable, when the launch has a socket, and the private
-// directory of the run's environment files and bundle, read-only, which it makes now.
+// socket's directory, writable, when the launch has a socket, and, read-only, the
+// private directory that holds the run's environment files and, with a CA, the bundle
+// the enclosure binds, which it makes now.
 func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
 	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
 	if l.Socket != "" {
@@ -428,8 +442,8 @@ func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
 	return append(out, Bind{Path: e.temp, ReadOnly: true}), nil
 }
 
-// makeTemp makes the private directory of the run's environment files and bundle,
-// once.
+// makeTemp makes the private directory that holds the run's environment files and
+// bundle, once.
 func (e *dockerEnclosure) makeTemp() error {
 	if e.temp != "" {
 		return nil
@@ -486,9 +500,10 @@ func firstFile(stream []byte) ([]byte, error) {
 	}
 }
 
-// mounts are the launch's own: what it lists, the workspace when none of them holds it,
-// and the socket's directory. The workspace is the working directory inside; a mount
-// whose path holds it, by whole components, shows it.
+// mounts are the launch's own: what it lists and the socket's directory. The workspace
+// is the working directory inside; a mount whose path holds it, by whole components,
+// shows it, and a launch none of whose mounts does is refused: the adapter binds
+// nothing of the caller's the launch does not list.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
@@ -506,7 +521,8 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		held = held || under(m.Path, l.Dir)
 	}
 	if !held {
-		binds = append([]bind{{l.Dir, l.Dir, false}}, binds...)
+		return nil, fmt.Errorf("wall docker: the workspace %q lies in none of the "+
+			"launch's mounts", l.Dir)
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})

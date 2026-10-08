@@ -238,6 +238,7 @@ func TestDockerRefusesAPathItCannotMount(t *testing.T) {
 	defer e.Close(context.Background())
 	l := launch()
 	l.Dir = "/work,dst=/etc"
+	l.Mounts = append(l.Mounts, Mount{Path: l.Dir})
 	if _, err := e.Wrap(context.Background(), l); err == nil {
 		t.Error("a workspace with a comma was mounted")
 	}
@@ -444,8 +445,8 @@ func TestTempDirsMatchesWhatTheAdapterMakes(t *testing.T) {
 
 // TestDockerBindsTheWorkspaceThroughItsMount pins one bind for a checkout: a workspace
 // below a mount is the working directory inside and gets no bind of its own, by whole
-// components of the paths; a workspace no mount holds is bound at its own path,
-// writable.
+// components of the paths; a launch whose workspace no mount holds is refused, since
+// the adapter binds nothing the launch does not list.
 func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 	for _, c := range []struct {
 		name, dir string
@@ -456,11 +457,7 @@ func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 			[]string{"type=bind,src=/work,dst=/work"}},
 		{"the mount itself", "/work", []Mount{{Path: "/work/"}},
 			[]string{"type=bind,src=/work/,dst=/work/"}},
-		{"beside the mount", "/workshop", []Mount{{Path: "/work", ReadOnly: true}},
-			[]string{
-				"type=bind,src=/workshop,dst=/workshop",
-				"type=bind,src=/work,dst=/work,readonly",
-			}},
+		{"beside the mount", "/workshop", []Mount{{Path: "/work", ReadOnly: true}}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
@@ -473,6 +470,13 @@ func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 			l := launch()
 			l.Dir, l.Mounts, l.Socket = c.dir, c.mounts, ""
 			wrapped, err := e.Wrap(context.Background(), l)
+			if c.binds == nil {
+				want := "lies in none of the launch's mounts"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("a workspace no mount holds: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -127,8 +127,9 @@ type Spec struct {
 	Images []Image
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
-	// one of the same mode, or reached through a link inside a writable one, is reached
-	// through the outer one, which alone is bound; one of the other mode is no run,
+	// one of the same mode is reached through the outer one, which alone is bound; one of
+	// the other mode is no run, mount_mode_conflict. One reached through a link inside a
+	// writable one is bound at its target, the path it resolves to; read-only, it is
 	// mount_mode_conflict. Dir is writable, and is bound at its own path when no mount
 	// holds it. The runner adds the run directory, read-only. A walled run refuses a
 	// bind that lies inside, or is reached through, a writable bind of another walled
@@ -325,7 +326,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	var listed *registration
 	if spec.Wall != nil {
-		if listed, err = register(runID, plan.sources); err != nil {
+		// The wall's own binds are listed from the start, as far as it knows them, so a
+		// run that starts and ends before this one binds them is checked against them.
+		own, err := firstWallBinds(spec.Wall)
+		if err != nil {
+			return nil, err
+		}
+		if listed, err = register(runID, append(plan.sources, own...)); err != nil {
 			return nil, err
 		}
 		defer listed.release()

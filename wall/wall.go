@@ -41,12 +41,17 @@ type Filer interface {
 	Files() []string
 }
 
-// Binder is an enclosure that binds files and directories of this machine of its own,
-// beside the launch's mounts: for [Docker], its helper, the hook socket's directory and
-// the private directory of the files it writes for the run. A walled run checks them,
-// as it checks its mounts, against the other walled runs still going.
+// Binder is a wall, or an enclosure, that binds files and directories of this machine
+// of its own, beside the launch's mounts: for [Docker], its helper, the hook socket's
+// directory and the private directory that holds the run's environment files and, with
+// a CA, the bundle the enclosure binds. A walled run checks them, as it checks its
+// mounts, against the other walled runs still going: the wall's when the run starts,
+// with a pattern for what the enclosure makes later, and the enclosure's just before
+// it binds them.
 type Binder interface {
-	// Binds lists them for the launch about to be wrapped, with its Socket and CA set.
+	// Binds lists them. A wall lists what it knows before it prepares an enclosure; an
+	// enclosure lists them for the launch about to be wrapped, with its Socket and CA
+	// set.
 	Binds(l Launch) ([]Bind, error)
 }
 
@@ -59,6 +64,9 @@ type Bind struct {
 	// Helper says it is the runner's helper program, rather than a directory of the
 	// runner's.
 	Helper bool
+	// Pattern says Path is a pattern of [path/filepath.Match]: where the enclosure
+	// makes the directory, before it makes it.
+	Pattern bool
 }
 
 // Reaper is a wall that can remove what it left of a run whose runner died before it
@@ -112,8 +120,8 @@ type Launch struct {
 	// starting process's own.
 	Env []string
 	// Dir is the working directory, the run's workspace, at the same path inside. A
-	// mount whose path holds it, by whole components, shows it; when none does, the
-	// enclosure shows it at its own path, writable.
+	// mount whose path holds it, by whole components, shows it; a launch whose Dir no
+	// mount holds is not wrapped.
 	Dir string
 	// Interactive says the command runs on a pseudo-terminal.
 	Interactive bool

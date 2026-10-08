@@ -259,12 +259,13 @@ looked up in its parent, so two binds of one root are allowed.
   directory inside (`--workdir` for Docker), reached through the mount that holds it.
   `qory` passes the checkout's root as a mount and the current directory as `Dir`:
   one bind, the checkout's root, and the working directory below it. A workspace that
-  no mount holds is bound at its own path, writable.
+  no mount holds is bound at its own path, writable. The runner passes every bind to
+  the enclosure, each path clean, and the working directory lies in one of them, by
+  its names, or the run fails; `wall.Docker` binds nothing of the caller's the launch
+  does not list, and refuses a launch whose `Dir` no mount holds.
 - **Nested places.** A mount, or the workspace, inside another one of the same mode is
-  reached through the outer one, which alone is bound. So is one whose path goes
-  through a link inside a writable one: the enclosure shows the link as the outer one
-  has it, and binds nothing through it. One inside another of the other mode, either
-  way, is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
+  reached through the outer one, which alone is bound. One inside another of the other
+  mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
   outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
   mount /work (writable): a part of a writable mount can't be read-only", or, through a
   link, "the mount /work/home (read-only) is reached through /work/home, which lies
@@ -274,6 +275,19 @@ looked up in its parent, so two binds of one root are allowed.
   A writable place inside a read-only one is refused the same way: a part of a
   read-only mount can't be writable. Two places of one path in both modes are refused
   too.
+- **Places through a link.** A place whose path goes through a link inside a writable
+  place of the run's, and that does not lie inside that place, is bound at its target:
+  the path it resolves to, with no link in it, at that same path inside. The link
+  inside leads to it as it does here, and the agent that changes the link changes
+  nothing that is bound. The target is checked as every bind is: inside another place
+  of the run's, of the same mode, it is reached through that one; inside a writable
+  bind of another walled run, it is refused. A workspace bound at its target is the
+  working directory at its path as passed, when a bound place holds that path by its
+  names, and at its target otherwise. A read-only place through a link inside a
+  writable one is `mount_mode_conflict`, with the sentence above.
+
+  Inside, the link reads as it does here. A link whose text goes through another link
+  of this machine, outside every place, such as `/tmp` on macOS, leads nowhere inside.
 - **The runner's files.** A writable place that contains a directory a name on the way
   to one of the runner's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_runner_files`: the agent could point the link
@@ -283,26 +297,33 @@ looked up in its parent, so two binds of one root are allowed.
   enclosure, and to no other: a bind that is, holds or lies inside another walled run's
   run directory, whatever its mode, is `mount_shared_with_run`.
 - **The wall's own binds.** For `wall.Docker` they are the helper, read-only, the hook
-  socket's directory, writable, and the private directory of the run's environment
-  files and bundle, read-only. A wall lists them through `wall.Binder`, and the runner
-  checks them like the places, just before the enclosure binds them.
-- **Other walled runs.** The runner keeps a registry of the walled runs still going on
-  the machine, per user, in `$XDG_STATE_HOME/qory-runner/walled`, else
+  socket's directory, writable, and, read-only, the private directory that holds the
+  run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
+  wall, and its enclosure, lists them through `wall.Binder`. The runner lists the
+  wall's in the registry when the run starts, the directories it makes later as their
+  patterns, `wall.TempDirs()` and the pattern of the runs' socket directories, and the
+  enclosure's, made by then, just before it binds them. A pattern stands for the
+  directories its runner makes; two runners' patterns never conflict.
+- **Other walled runs.** The runner keeps a registry of the walled runs still going on the
+  machine, per user, in `$XDG_STATE_HOME/qory-runner/walled`, else
   `~/.local/state/qory-runner/walled`: a directory of the user's, 0700, which the runner
-  refuses when it is anything else. Each run holds a file there, named by its run id,
-  with its process id and its binds: each as the run passed it, as it resolved, the
-  entries its names are looked up as, whether it is writable, and what it is when it is
-  not a place, the run directory, the helper or a directory of the runner's. The run
-  holds the file locked until it ends. A file whose lock is free is a run that is over,
-  and the runner removes it. Under a lock of the registry's own, a run reads the
-  entries, checks its binds against them and adds its own, so two runs that start
-  together are checked one after the other. A run is no run, `mount_shared_with_run`,
-  when one of its binds lies inside a writable bind of another run's or is reached
-  through one, or when one of its writable binds holds a bind of another run's or a
-  directory a name on the way to one is looked up in. Two runs that bind the same root,
-  both writable, run side by side, and two read-only binds never conflict. `Names` holds
-  this run's path, the other run's id and the other run's path, as each run passed it.
-  Its sentence reads: "the mount /work/sub (writable) lies inside the writable bind
+  refuses when it is anything else. Each run holds a file there, named by its run id, with
+  its process id and its binds: each as the run passed it, as it resolved, the entries its
+  names are looked up as, whether it is writable, and what it is when it is not a place,
+  the run directory, the helper or a directory of the runner's, and whether it is a
+  pattern. The run holds the file locked until it ends. A file whose lock is free is a run
+  that is over, and the runner removes it. Under a lock of the registry's own, a run reads
+  the entries, checks its binds against them and adds its own, so two runs that start
+  together are checked one after the other. A run is no run, `mount_shared_with_run`, when
+  one of its binds lies inside a writable bind of another run's or is reached through one,
+  or when one of its writable binds holds a bind of another run's or a directory a name on
+  the way to one is looked up in. Two runs that bind the same root, both writable, run
+  side by side, and two read-only binds never conflict. `Names` holds this run's path, the
+  other run's id and the other run's path, as each run passed it. A place of this run's
+  that lies inside a writable directory another run's wall binds of its own is refused
+  too. A bind of another run's that does not resolve any more is passed over, and a name
+  on the way to it that is gone is left out; any other failure to resolve one stops the
+  run. Its sentence reads: "the mount /work/sub (writable) lies inside the writable bind
   /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a
   walled agent of that run can change it".
 

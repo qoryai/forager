@@ -40,9 +40,10 @@ const (
 	MountModeConflict = "mount_mode_conflict"
 	// MountSharedWithRun is a walled run with a bind inside, or reached through, a
 	// writable bind of another walled run of this user's still going, a writable bind
-	// that holds one of that run's binds or the way to one, or a bind that is, holds or
-	// lies inside that run's run directory: its names are this run's path, the other
-	// run's id and its path.
+	// that holds one of that run's binds or the way to one, a bind that is, holds or
+	// lies inside that run's run directory, or one that lies inside a writable directory
+	// that run's wall binds of its own: its names are this run's path, the other run's
+	// id and its path.
 	MountSharedWithRun = "mount_shared_with_run"
 )
 

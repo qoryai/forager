@@ -330,6 +330,9 @@ type shown struct {
 	writable   bool
 	at         splitPath
 	looks      []lookup
+	// bound is the path the enclosure binds the place at: its own, or, for a place
+	// reached through a link inside a writable place of the run's, its target.
+	bound string
 }
 
 // mode is how a refusal words whether the enclosure can write a place.
@@ -362,6 +365,9 @@ type bindSource struct {
 	// the runner's helper and directory for another directory of the runner's a wall
 	// binds.
 	Kind string `json:"kind,omitempty"`
+	// Pattern says Path is a pattern of the directories a runner makes there later, each
+	// its own: it stands for them until the run lists the one it made.
+	Pattern bool `json:"pattern,omitempty"`
 	// what names the bind in a refusal's sentence, at is where it resolved and looks
 	// are its lookups: for this run's own checks alone.
 	what  string
@@ -413,14 +419,15 @@ type mountPlan struct {
 //     order.
 //   - mount_mode_conflict: a place inside another one, or the same, of the other mode:
 //     a read-only part of a writable bind is one the agent replaces, and a writable
-//     part of a read-only one writes what the run shows read-only. A place a name on
-//     the way to which is looked up inside a writable place lies inside that one. Its
+//     part of a read-only one writes what the run shows read-only. A read-only place a
+//     name on the way to which is looked up inside a writable place is one too. Its
 //     names are the inner place and the outer one, in that order.
 //
 // A place inside another one of the same mode is no bind of its own: the enclosure
-// reaches it through the outer one, at the same path. So no bound place is reached
-// through a directory another bound place lets the agent write. The workspace is
-// writable, and is the working directory inside, through the bind that holds it.
+// reaches it through the outer one, at the same path. A place reached through a link
+// inside a writable one, and not lying inside it, is bound at its target. So no bound
+// place is reached through a directory another bound place lets the agent write. The
+// workspace is writable, and is the working directory inside, in one of the binds.
 func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, p := range spec.RunnerFiles {
 		if strings.ContainsRune(p, 0) {
@@ -469,7 +476,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		if err != nil {
 			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, m.path, err)
 		}
-		places[i].at, places[i].looks = at, looks
+		places[i].at, places[i].looks, places[i].bound = at, looks, filepath.Clean(m.path)
 		if !m.writable {
 			continue
 		}
@@ -486,9 +493,37 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			}
 		}
 	}
-	// outer[i] is the place i is bound through: the first other place that holds it, the
-	// earlier one of two that are the same, or a writable one a name on the way to it is
-	// looked up in; -1 when none is.
+	// A place reached through a link inside a writable place of the run's, and not
+	// lying inside it, is bound at its target, the path it resolves to, which holds no
+	// link: the link inside leads there as it does here, and the agent that can change
+	// the link changes nothing that is bound. Its names are those of the target. Of the
+	// other mode than the place the link is in, it is no run.
+	for i, in := range places {
+		for _, out := range places {
+			if !out.writable {
+				continue
+			}
+			if ok, _ := holds(out.at, in.at); ok {
+				continue
+			}
+			l, linked := lookedUpIn(out.at, in.looks)
+			if !linked {
+				continue
+			}
+			if !in.writable {
+				return mountPlan{}, modeConflict(in, out, false, l, true)
+			}
+			target := in.at.String()
+			looks, err := lookups(target)
+			if err != nil {
+				return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", in.what, in.path, err)
+			}
+			places[i].bound, places[i].looks = target, looks
+			break
+		}
+	}
+	// outer[i] is the place i is bound through: the first other place that holds it, or
+	// the earlier one of two that are the same; -1 when none is.
 	outer := make([]int, len(places))
 	for i, in := range places {
 		outer[i] = -1
@@ -497,16 +532,11 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 				continue
 			}
 			ok, same := holds(out.at, in.at)
-			var l lookup
-			linked := false
-			if !ok && out.writable {
-				l, linked = lookedUpIn(out.at, in.looks)
-			}
-			if (!ok && !linked) || (same && j > i) {
+			if !ok || (same && j > i) {
 				continue
 			}
 			if in.writable != out.writable {
-				return mountPlan{}, modeConflict(in, out, same, l, linked)
+				return mountPlan{}, modeConflict(in, out, same, lookup{}, false)
 			}
 			if outer[i] < 0 {
 				outer[i] = j
@@ -518,7 +548,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		if outer[i] >= 0 {
 			continue
 		}
-		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.path, ReadOnly: !p.writable})
+		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.bound, ReadOnly: !p.writable})
 		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
 			what: p.what + " " + p.path, at: p.at, looks: p.looks}
 		for _, l := range p.looks {
@@ -527,8 +557,11 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		plan.sources = append(plan.sources, b)
 	}
 	// The workspace is the last place: its root is the outermost place that holds it,
-	// and inside it is that place's path with the names of the workspace below it, or,
-	// reached through a link in it, the names on the way through the link.
+	// and inside it is the path that place is bound at with the names of the workspace
+	// below it. A workspace reached through a link inside a writable place is the path
+	// as passed, which leads through the link inside as it does here, when a bound place
+	// holds that path by its names; else it is the path it is bound at, so no engine
+	// binds a path through the link.
 	ws := len(places) - 1
 	root, seen := ws, map[int]bool{}
 	for outer[root] >= 0 {
@@ -539,15 +572,20 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		seen[root] = true
 		root = outer[root]
 	}
-	plan.Dir = spec.Dir
+	plan.Dir = places[ws].bound
 	if root != ws {
 		if rest, ok := within(places[root].at, places[ws].at); ok {
-			plan.Dir = filepath.Join(append([]string{places[root].path}, rest...)...)
-		} else if l, ok := lookedUpIn(places[root].at, places[ws].looks); ok {
-			rest, _ := within(places[root].at, l.at)
-			names := append(append([]string{places[root].path}, rest...), l.rest...)
-			plan.Dir = filepath.Join(names...)
+			plan.Dir = filepath.Join(append([]string{places[root].bound}, rest...)...)
 		}
+	}
+	if asPassed := filepath.Clean(spec.Dir); places[ws].bound != asPassed &&
+		slices.ContainsFunc(plan.Mounts, func(m wall.Mount) bool {
+			return m.Path != places[ws].bound && under(m.Path, asPassed)
+		}) {
+		plan.Dir = asPassed
+	}
+	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
+		return mountPlan{}, err
 	}
 	run, err := source(runDir, "the run directory "+runDir, kindRun, false)
 	if err != nil {
@@ -559,6 +597,24 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	run.Path = spec.RunsDir
 	plan.sources = append(plan.sources, run)
 	return plan, nil
+}
+
+// dirInBinds fails a plan whose working directory lies, by its names, in none of its
+// binds: the enclosure binds what the plan lists and nothing else, so it would be bound
+// unchecked, or not at all.
+func dirInBinds(dir string, mounts []wall.Mount) error {
+	if slices.ContainsFunc(mounts, func(m wall.Mount) bool { return under(m.Path, dir) }) {
+		return nil
+	}
+	return fmt.Errorf("the working directory inside, %s, lies in none of the places the "+
+		"enclosure binds: %v", dir, paths(mounts))
+}
+
+// under reports whether path is dir or lies inside it, by the names of both, clean.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	up := ".." + string(filepath.Separator)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
 // modeConflict is the refusal of a place inside another one of the other mode, or
@@ -631,6 +687,23 @@ func paths(ms []wall.Mount) []string {
 	return out
 }
 
+// firstWallBinds are the binds a wall makes of its own as it knows them when the run
+// starts, as bind sources, and, when it binds any, the pattern of the private
+// directories of the runs' record sockets, the hook socket's among them, writable:
+// none when it lists none.
+func firstWallBinds(w wall.Wall) ([]bindSource, error) {
+	b, ok := w.(wall.Binder)
+	if !ok {
+		return nil, nil
+	}
+	binds, err := b.Binds(wall.Launch{})
+	if err != nil {
+		return nil, err
+	}
+	binds = append(binds, wall.Bind{Path: socket.Dirs(), Pattern: true})
+	return bindSources(binds)
+}
+
 // wallBinds are the binds an enclosure makes of its own, as bind sources: none when
 // it lists none.
 func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, error) {
@@ -642,6 +715,11 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 	if err != nil {
 		return nil, err
 	}
+	return bindSources(binds)
+}
+
+// bindSources are a wall's own binds as bind sources.
+func bindSources(binds []wall.Bind) ([]bindSource, error) {
 	var out []bindSource
 	for _, m := range binds {
 		what, kind := "the runner's directory "+m.Path, kindDir
@@ -652,6 +730,7 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 		if err != nil {
 			return nil, err
 		}
+		src.Pattern = m.Pattern
 		out = append(out, src)
 	}
 	return out, nil

@@ -1462,29 +1462,40 @@ is looked up in its parent, so two binds of one root are allowed:
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the run directory, read-only. The workspace is writable and
   is the working directory inside, through the bind that holds it, or bound at its own
-  path when no mount holds it;
-- a place inside another one, or the same, or reached through a link inside a writable
-  one, of the same mode is reached through the outer one, which alone is bound. Of the
-  other mode it is no run, `mount_mode_conflict`, with the inner place and the outer
-  one as its names, in that order: a read-only part of a writable bind is one the agent
-  replaces, and a writable part of a read-only one writes what the run shows read-only;
+  path when no mount holds it. The runner passes the wall every bind, each path clean,
+  and the working directory lies in one of them by its names, or the run fails; a wall
+  binds nothing of the caller's the launch does not list;
+- a place inside another one, or the same, of the same mode is reached through the
+  outer one, which alone is bound. Of the other mode it is no run,
+  `mount_mode_conflict`, with the inner place and the outer one as its names, in that
+  order: a read-only part of a writable bind is one the agent replaces, and a writable
+  part of a read-only one writes what the run shows read-only;
+- a place reached through a link inside a writable place of the run's, and not lying
+  inside it, is bound at its target, the path it resolves to, with no link in it, at
+  that same path inside, so the link inside leads to it; the target is checked as every
+  bind is. A read-only one is `mount_mode_conflict`. A workspace bound at its target is
+  the working directory at its path as passed when a bound place holds that path by its
+  names, else at its target;
 - the runs directory is one of the runner's files, so the run directory lies in no
   place the run lists, and a writable place that holds a directory a name on the way
   to one of the runner's files is looked up in is `mount_contains_runner_files`;
 - the runner keeps a registry of the walled runs still going on the machine, per user,
-  with each run's binds: the places, the run directory and the wall's own, for
-  `docker` its helper, the hook socket's directory and the directory of the run's
-  environment files and bundle. A run is no run, `mount_shared_with_run`, when one of
-  its binds lies inside a writable bind of another run's or is reached through one,
-  when one of its writable binds holds a bind of another run's or a directory a name on
-  the way to one is looked up in, or when one of its binds is, holds or lies inside
-  another run's run directory, whatever the modes: a run directory is its run's alone.
-  Two binds of the same root never conflict otherwise, and neither do two read-only
-  ones. Its names are the path of this run's, the other run's id and the other run's
-  path. A run whose own helper, or another directory of the runner's its wall binds,
-  lies inside a writable bind of another run's, or is reached through one, does not
-  start. The runner checks and lists the run in one step, before it contacts the
-  server, and the run leaves the registry when it ends, however it ends.
+  with each run's binds: the places, the run directory and the wall's own, for `docker`
+  its helper, the hook socket's directory and the private directory that holds the run's
+  environment files and, with a CA, the bundle the enclosure binds. The wall's are listed
+  when the run starts, those it makes later as their patterns, which never conflict with
+  another runner's. A run is no run, `mount_shared_with_run`, when one of its binds lies
+  inside a writable bind of another run's or is reached through one, when one of its
+  writable binds holds a bind of another run's or a directory a name on the way to one is
+  looked up in, or when one of its binds is, holds or lies inside another run's run
+  directory, whatever the modes: a run directory is its run's alone. Two binds of the same
+  root never conflict otherwise, and neither do two read-only ones. Its names are the path
+  of this run's, the other run's id and the other run's path. A place that lies inside a
+  writable directory another run's wall binds of its own is refused too. A run whose own
+  helper, or another directory of the runner's its wall binds, lies inside a writable bind
+  of another run's, or is reached through one, does not start. The runner checks and lists
+  the run in one step, before it contacts the server, and the run leaves the registry when
+  it ends, however it ends.
 
 The names of these refusals are paths as the caller passed them, the first always one
 of the run's mounts or its workspace, the run directory named by its runs directory.

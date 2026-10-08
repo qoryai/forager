@@ -216,18 +216,19 @@ func checkShared(dir, runID string, binds []bindSource) error {
 }
 
 // resolveOther is a bind of another run's as the filesystem has it now: its resolved
-// path and the directories its names are looked up in. gone says one of them does not
-// exist any more, which nothing of this run's lies in; any other failure to resolve one
-// is an error, since a bind this run cannot see may be one it shares.
+// path and the directories its names are looked up in. gone says the bind itself does
+// not resolve any more, which nothing of this run's lies in; a directory on the way to
+// it that is gone is left out, and the others are kept. Any other failure to resolve
+// one is an error, since a bind this run cannot see may be one it shares.
 func resolveOther(runID string, b bindSource) (bindSource, bool, error) {
 	fail := func(p string, err error) (bindSource, bool, error) {
-		if errors.Is(err, fs.ErrNotExist) {
-			return bindSource{}, true, nil
-		}
 		return bindSource{}, false, fmt.Errorf("the registry of walled runs: cannot "+
 			"resolve %s of the walled run %s, which is still going: %w", p, runID, err)
 	}
 	at, err := split(b.Resolved, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return bindSource{}, true, nil
+	}
 	if err != nil {
 		return fail(b.Resolved, err)
 	}
@@ -235,6 +236,9 @@ func resolveOther(runID string, b bindSource) (bindSource, bool, error) {
 	for _, entry := range b.Lookups {
 		dir := filepath.Dir(entry)
 		dirAt, err := split(dir, 0)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return fail(dir, err)
 		}
@@ -299,7 +303,9 @@ func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
 //   - A wall's own bind, the runner's helper or a directory of the runner's, that is or
 //     lies inside a writable bind of the other run's, or is reached through one, is a
 //     plain error; one of the other run's that a writable bind of this run's is, holds
-//     or reaches is refused.
+//     or reaches is refused, and so is a bind of this run's that is, lies inside or is
+//     reached through a writable one of the other run's. Patterns of the directories
+//     runners make are each runner's own, and never conflict with each other.
 //   - A run directory is its runner's alone: a bind that is, holds or lies inside the
 //     other run's, or that the other run's is, holds or lies inside, whatever their
 //     modes, is refused.
@@ -318,6 +324,10 @@ func shared(own bindSource, otherID string, other bindSource) error {
 	}
 	still := " of the walled run " + otherID + ", which is still going: "
 	switch {
+	case wallKind(own) && wallKind(other) && (own.Pattern || other.Pattern):
+		// Each runner makes its private directories its own; the pattern stands for
+		// those it has not made yet, not for another runner's.
+		return nil
 	case wallKind(own):
 		if _, ok := inside(own, other.at, true); ok && other.Writable {
 			return fmt.Errorf("%s lies inside the writable bind %s%sa walled agent of that run "+
@@ -329,16 +339,23 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		if other.Kind == kindHelper {
 			what = "the runner's helper "
 		}
-		entry, ok := inside(other, own.at, true)
-		switch {
-		case !ok || !own.Writable:
-			return nil
-		case entry != "":
-			return refuse("%s (writable) contains %s, on the way to %s%s%sthis run's agent "+
-				"could change it", own.what, entry, what, other.Path, still)
+		if entry, ok := inside(other, own.at, true); ok && own.Writable {
+			if entry != "" {
+				return refuse("%s (writable) contains %s, on the way to %s%s%sthis run's "+
+					"agent could change it", own.what, entry, what, other.Path, still)
+			}
+			return refuse("%s (writable) contains %s%s%sthis run's agent could change it",
+				own.what, what, other.Path, still)
 		}
-		return refuse("%s (writable) contains %s%s%sthis run's agent could change it",
-			own.what, what, other.Path, still)
+		if entry, ok := inside(own, other.at, true); ok && other.Writable {
+			how := "lies inside"
+			if entry != "" {
+				how = "is reached through " + entry + ", which lies inside"
+			}
+			return refuse("%s (%s) %s %s%s%sa walled agent of that run can change it",
+				own.what, mode(own.Writable), how, what, other.Path, still)
+		}
+		return nil
 	}
 	if own.Kind == kindRun || other.Kind == kindRun {
 		how := ""

@@ -87,11 +87,21 @@ func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 	}
 }
 
-// TestAWorkspaceThroughALinkInItsOwnRootIsThatRoot pins two runs with the same root,
-// the second's workspace a link in it to elsewhere: the workspace lies inside the
-// root it is looked up in, so the run binds the root alone, beside the other run's,
-// and works at the link's path inside.
-func TestAWorkspaceThroughALinkInItsOwnRootIsThatRoot(t *testing.T) {
+// resolved is a path resolved, with no link in it.
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestAWorkspaceThroughALinkInItsOwnRootIsBoundAtItsTarget pins two runs with the same
+// root, the second's workspace a link in it to elsewhere: the workspace is bound at
+// its target, beside the root, which the other run binds too, and is the working
+// directory at its path as passed, which leads there through the link inside.
+func TestAWorkspaceThroughALinkInItsOwnRootIsBoundAtItsTarget(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	ws := filepath.Join(w, "ws")
 	link(t, outside, ws)
@@ -103,8 +113,83 @@ func TestAWorkspaceThroughALinkInItsOwnRootIsThatRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []wall.Mount{{Path: w}, {Path: res.Dir, ReadOnly: true}}
+	want := []wall.Mount{{Path: w}, {Path: resolved(t, outside)},
+		{Path: res.Dir, ReadOnly: true}}
 	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != ws {
+		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
+	}
+}
+
+// TestAMountThroughALinkInItsRootIsBoundAtItsTarget pins a mount whose path goes
+// through a link inside a writable mount of the same run: it is bound at its target,
+// which holds no link, so it is in the enclosure, and the link inside leads to it.
+func TestAMountThroughALinkInItsRootIsBoundAtItsTarget(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	out := filepath.Join(root, "out")
+	link(t, outside, out)
+	o := &openWall{}
+	sp := walledSpec(t, o)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}, {Path: out}}, root
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wall.Mount{{Path: root}, {Path: resolved(t, outside)},
+		{Path: res.Dir, ReadOnly: true}}
+	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != root {
+		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
+	}
+}
+
+// TestALinkedTargetInsideAnotherRunsBindIsNoRun pins a place bound at its target: the
+// target is checked as every bind is, so one inside another walled run's writable bind
+// is refused, with the place as passed as the first name.
+func TestALinkedTargetInsideAnotherRunsBindIsNoRun(t *testing.T) {
+	e, root := t.TempDir(), t.TempDir()
+	x := mkdirs(t, filepath.Join(e, "x"))
+	first, _ := hold(t, []wall.Mount{{Path: e}}, e)
+	out := filepath.Join(root, "out")
+	link(t, x, out)
+	sp := walledSpec(t, &openWall{})
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}, {Path: out}}, root
+	r := refusalOf(t, "mount_shared_with_run", runErr(sp))
+	want := "the mount " + out + " (writable) lies inside the writable bind " + e +
+		" of the walled run " + first.RunID +
+		", which is still going: a walled agent of that run can change it"
+	if !slices.Equal(r.Names, []string{out, first.RunID, e}) || r.Detail != want {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+
+	// A target that is one of the runner's files is one, as every place is.
+	runs := t.TempDir()
+	to := filepath.Join(root, "records")
+	link(t, runs, to)
+	sp = walledSpec(t, &openWall{})
+	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: root}, {Path: to}}, root, runs
+	if r := mountRefusal(t, runErr(sp)); !slices.Equal(r.Names, []string{to, runs}) {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+}
+
+// TestAChainOfLinkedPlacesBindsTheWorkspacesRoot pins a chain: a mount through a link
+// in another mount, to the root another walled run binds, and the workspace inside
+// that root. The linked mount is bound at its target, the root both runs bind, and the
+// working directory lies in it, so nothing is bound that the run did not check.
+func TestAChainOfLinkedPlacesBindsTheWorkspacesRoot(t *testing.T) {
+	e, w := t.TempDir(), t.TempDir()
+	mkdirs(t, filepath.Join(e, "ws"))
+	hold(t, []wall.Mount{{Path: e}}, e)
+	l := filepath.Join(w, "link")
+	link(t, e, l)
+	o := &openWall{}
+	sp := walledSpec(t, o)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: l}}, filepath.Join(e, "ws")
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wall.Mount{{Path: w}, {Path: resolved(t, e)}, {Path: res.Dir, ReadOnly: true}}
+	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != filepath.Join(resolved(t, e), "ws") {
 		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
 	}
 }
@@ -315,6 +400,99 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 		}
 		if mine.wrapped {
 			t.Error("the enclosure was wrapped")
+		}
+	}
+}
+
+// heldBinder is a wall that binds a helper and directories of its own and holds the run
+// after its first check, before its enclosure is prepared.
+type heldBinder struct {
+	*holdingWall
+	binds []wall.Bind
+}
+
+func (w heldBinder) Binds(wall.Launch) ([]wall.Bind, error) { return w.binds, nil }
+
+// TestAWallsHelperIsListedFromTheStart pins that the wall's own binds are listed when
+// the run starts: a run whose writable mount holds the helper of a walled run that has
+// not reached its enclosure yet is refused, and a run whose wall lists the same
+// patterns of private directories runs beside it.
+func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
+	h := t.TempDir()
+	helper := filepath.Join(mkdirs(t, filepath.Join(h, "bin")), "qory")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	own := []wall.Bind{
+		{Path: helper, ReadOnly: true, Helper: true},
+		{Path: wall.TempDirs(), ReadOnly: true, Pattern: true},
+	}
+	w := heldBinder{newHoldingWall(), own}
+	s := start(walledSpec(t, w))
+	select {
+	case <-w.reached:
+	case <-s.done:
+		t.Fatalf("the first run ended: %+v, %v", s.res, s.err)
+	}
+	t.Cleanup(func() {
+		close(w.release)
+		<-s.done
+	})
+	other := walledSpec(t, &openWall{})
+	other.Mounts = []wall.Mount{{Path: h}}
+	r := refusalOf(t, "mount_shared_with_run", runErr(other))
+	want := "the mount " + h + " (writable) contains the runner's helper " + helper +
+		" of the walled run " + w.id +
+		", which is still going: this run's agent could change it"
+	if !slices.Equal(r.Names, []string{h, w.id, helper}) || r.Detail != want {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+	beside := walledSpec(t, &bindingWall{binds: own})
+	if _, err := session.Run(context.Background(), beside); err != nil {
+		t.Errorf("a run with the same helper and patterns: %v", err)
+	}
+}
+
+// TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun pins a place that lies inside a
+// writable directory a wall binds of its own for another walled run still going.
+func TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun(t *testing.T) {
+	dir := t.TempDir()
+	w := heldBinder{newHoldingWall(), []wall.Bind{{Path: dir}}}
+	s := start(walledSpec(t, w))
+	select {
+	case <-w.reached:
+	case <-s.done:
+		t.Fatalf("the first run ended: %+v, %v", s.res, s.err)
+	}
+	t.Cleanup(func() {
+		close(w.release)
+		<-s.done
+	})
+	sub := mkdirs(t, filepath.Join(dir, "sub"))
+	other := walledSpec(t, &openWall{})
+	other.Mounts = []wall.Mount{{Path: sub, ReadOnly: true}}
+	r := refusalOf(t, "mount_shared_with_run", runErr(other))
+	want := "the mount " + sub + " (read-only) lies inside the runner's directory " + dir +
+		" of the walled run " + w.id + ", which is still going: a walled agent of that " +
+		"run can change it"
+	if !slices.Equal(r.Names, []string{sub, w.id, dir}) || r.Detail != want {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+}
+
+// TestAWorkingDirectoryInNoBindIsNoPlan pins the last check of a plan: the enclosure
+// binds what the plan lists alone, so a working directory in none of them fails.
+func TestAWorkingDirectoryInNoBindIsNoPlan(t *testing.T) {
+	mounts := []wall.Mount{{Path: "/w"}, {Path: "/e/link"}}
+	if err := session.DirInBinds("/e/link/ws", mounts); err != nil {
+		t.Error(err)
+	}
+	for _, dir := range []string{"/e/ws", "/wide", "/e"} {
+		err := session.DirInBinds(dir, mounts)
+		want := "the working directory inside, " + dir + ", lies in none of the places the " +
+			"enclosure binds: [/w /e/link]"
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: %v", dir, err)
 		}
 	}
 }
