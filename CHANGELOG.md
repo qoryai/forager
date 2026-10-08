@@ -119,11 +119,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 - A runtime descriptor defines the secrets the runtime needs, under an optional
   `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
-  paths and scheme; `one_of`, groups of which at most one declaration applies, and one
-  of a required group; `reserves`; `denies`; and `credential_files`. Behind a wall, a
-  declared or reserved variable that nothing sets goes in empty. It also has an
-  optional `title`. `auth.schema.json` defines the scheme, `bearer`, `header` or
-  `basic`. The runner checks the secrets when it reads a descriptor.
+  paths and scheme; `one_of`, groups of declarations of which the runtime needs at most
+  one, and exactly one of a required group; `reserves`; `denies`; and
+  `credential_files`. Behind a wall, a declared or reserved variable that nothing sets
+  goes in empty. It also has an optional `title`. `auth.schema.json` defines the
+  scheme, `bearer`, `header` or `basic`. The runner checks the secrets when it reads a
+  descriptor.
 - The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
   `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
   under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the

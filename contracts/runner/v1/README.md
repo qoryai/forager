@@ -859,18 +859,19 @@ key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of e
 request, for display, audit, per-instance events and the instance limit; authorisation
 rests on the access key alone, and whoever holds the access key can claim any instance
 id. `qory` generates `i_` and 16 bytes from the system's random source in base64url, 24
-characters, and keeps the id in the file `instance-id`, two lines, each ended by a line
-feed: the id, and the lower-case hex HMAC-SHA256, keyed with `qory instance-id v1`, of
-the machine's identity, `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, else the
-host name, as machine-id(5) recommends, without the white space around it. A file that
-is not two such lines, whose id is outside the pattern or contains an access key
-secret, or whose hash is not this machine's, yields a new id, so a file copied to
-another machine yields a new id there. The instance's
+characters, and keeps the id in the file `instance-id`. It writes two lines, each ended
+by a line feed: the id, and the lower-case hex HMAC-SHA256, keyed with `qory
+instance-id v1`, of the machine's identity, `/etc/machine-id` on Linux, `IOPlatformUUID`
+on macOS, else the host name, as machine-id(5) recommends, without the white space
+around it. It reads the two lines with or without the final line feed. A file that is
+not exactly two lines, whose first line is outside the pattern or contains an access
+key secret, or whose second line is not this machine's hash, yields a new id, so a file
+copied to another machine yields a new id there. The instance's
 display name, the host name by default, is sent unsigned and serves display alone. A
 ping from a new instance id beyond its node's limit
 is a signed `409` `instance_limit`, and that run does not start; an instance counts
 while one of its runs is live. A run is live from its accepted ping until its final
-event, `dev.qory.run.exited` or `dev.qory.run.refused`, or until no accepted event of
+event, `dev.qory.run.exited`, until the server closes it, or until no accepted event of
 the run has arrived for 3 × the `interval_seconds` its ping announced.
 
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
@@ -1284,15 +1285,15 @@ runtime reads it from; the hosts its value is set on, exact DNS names; optionall
 paths of those hosts, in the policy's path grammar; and how it is set,
 `auth.schema.json`, a scheme of the closed set, `bearer`, `header` with its `header`, or
 `basic` with its `username`. `one_of` lists groups `{id, required, of}`, `of` being
-declared ids, each in one group at most: at most one declaration of a group applies,
-and one of a `required` group. `reserves` lists variables the runtime reads a credential
-from beside the declared ones; `denies`, variables the runner always leaves out of the
-server's set for the runtime; `credential_files`, files in which the runtime keeps a
-credential of its own, `~` being the home of the user the runner runs as. Behind a wall,
-a declared or reserved variable that neither a placeholder, the run nor the runtime's
-preparation sets goes in empty (§Variables). The runner checks `secrets` when it reads the
-descriptor: the schema, that ids are distinct, and that every id of a group is declared
-and in one group at most.
+declared ids, each in one group at most: groups of declarations of which the runtime
+needs at most one, and exactly one of a `required` group. `reserves` lists variables
+the runtime reads a credential from beside the declared ones; `denies`, variables the
+runner always leaves out of the server's set for the runtime; `credential_files`, files
+in which the runtime keeps a credential of its own, `~` being the home of the user the
+runner runs as. Behind a wall, a declared or reserved variable that neither a
+placeholder, the run nor the runtime's preparation sets goes in empty (§Variables). The
+runner checks `secrets` when it reads the descriptor: the schema, that ids are
+distinct, and that every id of a group is declared and in one group at most.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`

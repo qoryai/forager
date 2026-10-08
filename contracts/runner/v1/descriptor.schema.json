@@ -145,7 +145,7 @@
           }
         },
         "one_of": {
-          "description": "Groups of declarations, of which at most one each applies. of lists declared ids, each id in at most one group. A required group needs one; a declaration in no group is optional.",
+          "description": "Groups of declarations of which the runtime needs at most one, and exactly one of a required group. of lists declared ids, each id in at most one group; a declaration in no group is optional.",
           "type": "array",
           "minItems": 1,
           "items": {
