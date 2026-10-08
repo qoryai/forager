@@ -801,10 +801,10 @@ runs with it.**
     settings. The browser generates the key pair and the server receives only the public
     key; the key is active at once, and the console creates no node. The console then
     shows `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY`,
-    each to copy, which the machine sets in its environment or a CI's settings. A key
-    the key checks or the index refuse gets one message, "this key cannot be used",
-    whatever the reason, so the console reveals nothing about other access keys; a key
-    beyond the node's keys is `key_limit` (Replacing a key).
+    each to copy, the secret shown once, which the machine sets in its environment or a
+    CI's settings. A key the key checks or the index refuse is not added, with the same
+    refusal whatever the reason, so the console reveals nothing about other access keys;
+    the console refuses a new key while the node holds two keys (Replacing a key).
 
   A fingerprint is `base64url(SHA-256(raw public key)[:16])`, 22 characters, for an
   access key's key and the server's alike.
@@ -812,7 +812,7 @@ runs with it.**
   server keeps a global unique index over every access key's public key and every
   tombstone, checks it at enrolment and in the console, and keeps it beyond the deletion
   of a workspace. A key already in the index is `409` `key_invalid`. In the console it is
-  the same message as an invalid key. At enrolment an invalid key or a proof that does not
+  the same refusal as an invalid key. At enrolment an invalid key or a proof that does not
   verify gets an unsigned `409` and a key in the index a signed one, and only the holder
   of a key's secret makes a proof that reaches the index check. Either way, a refusal
   reveals nothing about other access keys. An enrolment retry is exempt for its own row.
@@ -859,8 +859,7 @@ runs with it.**
   - an enrolment for a node that already holds two keys is `409` `key_limit`, and the
     code stays unused, so the same command succeeds within the code's 15 minutes once an
     owner or administrator has made room;
-  - the console refuses a new key while the node holds two keys, and shows the refusal
-    as `key_limit`.
+  - the console refuses a new key while the node holds two keys, before it makes one.
 
   An owner or administrator revokes a key, usually the old one, to make room; revocation
   is immediate. A node pool's operator enrols the new key with `--print`, puts the new
@@ -2746,8 +2745,8 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member, a ping with `interval_seconds` above 300 included; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing key row is `401` |
-| `key_invalid` | server, `409` | at enrolment or in the console, about a public key: a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; a `proof` that does not verify under the key; or a key the index holds, any access key's or any tombstone's. At enrolment the first two are unsigned and the last signed; only the holder of a key's secret makes a proof that reaches it, so a refusal reveals nothing about other access keys |
-| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds two keys; the code stays unused. The console shows the same code when it refuses a new key for a node holding two keys |
+| `key_invalid` | server, `409` | at enrolment, about a public key: a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; a `proof` that does not verify under the key; or a key the index holds, any access key's or any tombstone's. At enrolment the first two are unsigned and the last signed; only the holder of a key's secret makes a proof that reaches it, so a refusal reveals nothing about other access keys |
+| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds two keys; the code stays unused. The console refuses a new key for a node holding two keys before it makes one |
 | `instance_limit` | server, `409` | on the ping alone, after the events endpoint's deduplication, signed: a new instance id beyond the node's limit, 1 for a node, a node pool's own; counted over distinct instance ids with a live run, and admitted under the node row's lock |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
 | `run_closed` | server, `410` | the server has closed the run's row, such as when an owner or administrator cleared its instance or revoked its access key; on the events endpoint it ends the run, `reason: run_closed` |
@@ -2956,8 +2955,9 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   answers are unchanged, no new record appears and the count on the node grows; a resent
   delivery keeps its first instance id; an instance name outside its pattern is ignored
   and the last valid one is kept; a public key the index holds is `key_invalid` at
-  enrolment and in the console, with one answer whether another access key holds it or it
-  is a tombstone; deleting a node or its workspace makes its keys tombstones.
+  enrolment and is not added in the console, with one answer whether another access key
+  holds it or it is a tombstone; deleting a node or its workspace makes its keys
+  tombstones.
 - **Locks and the marker:** every key command writes the marker before it generates a
   key, and with an unwalled run's lock held refuses; a run takes the key lock shared,
   checks the marker, creates its lock file, and then drops the key lock, so it waits
@@ -2971,11 +2971,11 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   run signing with a key from the environment included; `--print` leaves the marker as
   it is.
 - **Key checks and enrolment:** enrolment and the console each refuse the torsion key of
-  Decision 5, `key_invalid`; enrolment answers an unsigned `409` `key_invalid` to a key
-  the checks refuse, checked first, and to a bad proof, before the `429` per code; a
-  degenerate proof under a key of small order is refused, unsigned; an enrolment answer's
-  signature does not verify as the answer to a signed request, nor the reverse; a
-  base64url value with padding, a `+` or `/`, or non-zero spare bits is
+  Decision 5, enrolment with `key_invalid`; enrolment answers an unsigned `409`
+  `key_invalid` to a key the checks refuse, checked first, and to a bad proof, before the
+  `429` per code; a degenerate proof under a key of small order is refused, unsigned; an
+  enrolment answer's signature does not verify as the answer to a signed request, nor the
+  reverse; a base64url value with padding, a `+` or `/`, or non-zero spare bits is
   refused; enrolment answers in its own order, with every `401` unsigned; a code typed in
   lower case or with hyphens normalises to the published fixture code, a code with two
   fingerprints is accepted, and the server refuses a code outside the pattern, `U`
@@ -2993,9 +2993,10 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 - **Replacing a key:** a node or node pool holds at most two keys; an enrolment beyond
   that is `409` `key_limit`, the code stays unused, and the same command succeeds within
   the code's 15 minutes once a key is revoked; the console refuses a new key for a node
-  holding two keys as `key_limit`; a key made in the console goes into an existing node or
-  node pool and creates none; both keys of a node verify until one is revoked; a key's
-  stored-secrets flag is the one its code or the console set, and nothing changes it.
+  holding two keys, before it makes one; a key made in the console goes into an existing
+  node or node pool and creates none; both keys of a node verify until one is revoked; a
+  key's stored-secrets flag is the one its code or the console set, and nothing changes
+  it.
 - **Stored secrets:** a key created without the flag gets `409` `secrets_not_allowed` at
   the secrets request and the variant without stored values, whatever other keys its
   node holds; a key created with the flag receives them.
