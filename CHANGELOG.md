@@ -119,11 +119,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - A runtime descriptor defines the secrets the runtime needs, under an optional
   `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
-  paths and scheme; `one_of`, groups of which a runtime connection supplies one
-  declaration at most, and one of a required group; `reserves`; `denies`; and
-  `credential_files`. It also has an optional `title`. `auth.schema.json` defines the
-  scheme, `bearer`, `header` or `basic`. The runner checks the secrets when it reads a
-  descriptor; a run uses them once connections are in the contract.
+  paths and scheme; `one_of`, groups of which at most one declaration applies, and one
+  of a required group; `reserves`; `denies`; and `credential_files`. Behind a wall, a
+  declared or reserved variable that nothing sets goes in empty. It also has an
+  optional `title`. `auth.schema.json` defines the scheme, `bearer`, `header` or
+  `basic`. The runner checks the secrets when it reads a descriptor.
 - The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
   `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
   under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the
@@ -150,28 +150,22 @@ release may change what an existing document does, and says so under Upgrading.
   answer, each request carries the fake key in the credential's header and no stand-in,
   and the record lists one request through the proxy for each the recorder received,
   each to the recorder.
-- Contract `v1` revision 1, amended in place, gains the files of a run's secrets and
-  variables that the server vendors: `secrets-request.schema.json`, the body of the
-  secrets request; `secrets-answer.schema.json`, its answer, the envelope sealed with
-  HPKE to the access key; `sealed-plaintext.schema.json`, what the envelope opens to;
+- Contract `v1` revision 1, amended in place, gains the files of the access key, the
+  refused run and the variables that the server vendors:
   `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
   access key is active, signed with every signed refusal at enrolment under the
   enrolment answers' own domain line, `qory-enrol-answer-ed25519-v1`, once the server
   has checked the key and verified the proof under it; `events/run.refused.schema.json`,
   the data of `dev.qory.run.refused`, which `event.schema.json` lists among its types;
-  `denied-variables.json`, the built-in deny list of variable names and patterns; and
-  `headers.json`, the header names and prefixes refused for a connection's header, from
-  the IANA HTTP Field Name Registry, the Fetch standard's forbidden request headers and
-  the names the contract adds. The runner's code is unchanged.
-- Fixtures with the known answers of the access key: `fixtures/sealed/`, an envelope
-  sealed to the fixture access key with its run configuration, secrets request and
-  plaintext; `fixtures/enrolment/`, two enrolment requests and the answer; and
-  `fixtures/known-answers/`, the fixture access key and signing keys, the request,
-  enrolment and answer signatures, the discovery body an answer covers, and the public
-  keys enrolment refuses. The contracts tests recompute every one with Go's standard
-  library: the keys from their seeds, the X25519 key from the access key, each
-  signature, the open with `crypto/hpke`, and the points of small order with integer
-  arithmetic.
+  and `denied-variables.json`, the built-in deny list of variable names and patterns.
+  The runner's code is unchanged.
+- Fixtures with the known answers of the access key: `fixtures/enrolment/`, two
+  enrolment requests and the answer; and `fixtures/known-answers/`, the fixture access
+  key and signing keys, the request, enrolment and answer signatures, the discovery body
+  an answer covers, and the public keys enrolment refuses. The contracts tests
+  recompute every one with Go's standard library: the keys from their seeds, the
+  X25519 key from the access key, each signature, and the points of small order with
+  integer arithmetic.
 - A runtime declares its secrets in Go through `runtimes.Secrets`, an optional interface
   checked by type assertion, whose `Secrets` method returns `runtimes.Declarations`: the
   declarations, the `one_of` groups, and the reserved, denied and credential-file lists

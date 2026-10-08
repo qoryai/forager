@@ -11,13 +11,6 @@
       "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "GET", "/.well-known/qory-configuration?x=1", "1700000000"],
       "length": 119,
       "signature": "XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ"
-    },
-    {
-      "note": "A POST of the fixture's secrets request to /v1/secrets, signed under the fixture access key secret; the last line is the body.",
-      "body": "fixtures/sealed/secrets-request.json",
-      "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "POST", "/v1/secrets", "{\"version\":1,\"run_id\":\"01928f4e-7c3a-7d2e-9b1a-3f5e6d7c8b9a\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"run_configuration\":\"sha256=929056dda41d0ee9b1234d338b76d3190eb01a91477a7196dd3f3db850d9b940\",\"connections\":[\"con_7q2m4k9x0d3h8w1c\",\"con_0b5n6t2r9y4f7j3s\"],\"timestamp\":1700000000}"],
-      "length": 383,
-      "signature": "evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw"
     }
   ],
   "enrolment": [

@@ -117,8 +117,7 @@ func TestDocumentFixturesValidate(t *testing.T) {
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json", "secrets-request.schema.json",
-		"secrets-answer.schema.json", "sealed-plaintext.schema.json", "enrolment.schema.json")
+		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := ""
 		for name := range s {

@@ -118,7 +118,7 @@
       }
     },
     "secrets": {
-      "description": "The secrets the runtime needs and the variables it keeps for itself. A runtime connection supplies a declaration's value; runtimes.json lists the secrets of every descriptor the contract ships.",
+      "description": "The secrets the runtime needs and the variables it keeps for itself. runtimes.json lists the secrets of every descriptor the contract ships.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -132,7 +132,7 @@
             "additionalProperties": false,
             "required": ["id", "title", "name", "hosts", "auth"],
             "properties": {
-              "id": {"description": "The key a runtime connection supplies the secret under.", "$ref": "#/$defs/declared"},
+              "id": {"description": "The declaration's id, unique among the declarations.", "$ref": "#/$defs/declared"},
               "title": {"description": "What the secret is, for a person choosing one.", "type": "string", "minLength": 1, "maxLength": 128},
               "name": {"description": "The variable the runtime reads the secret from.", "$ref": "#/$defs/name"},
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
@@ -146,7 +146,7 @@
           }
         },
         "one_of": {
-          "description": "Groups of declarations, of which a runtime connection supplies at most one each. of lists declared ids, each id in at most one group. A required group needs one; a declaration in no group is optional.",
+          "description": "Groups of declarations, of which at most one each applies. of lists declared ids, each id in at most one group. A required group needs one; a declaration in no group is optional.",
           "type": "array",
           "minItems": 1,
           "items": {
@@ -161,7 +161,7 @@
           }
         },
         "reserves": {
-          "description": "Variables the runtime reads a credential from beside the declared ones. Only the runtime connection sets them.",
+          "description": "Variables the runtime reads a credential from beside the declared ones. Behind a wall, a declared or reserved variable that neither a placeholder, the run nor the runtime's preparation sets goes in empty.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

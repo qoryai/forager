@@ -8,12 +8,10 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"math/big"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -23,9 +21,8 @@ import (
 	"github.com/qoryai/runner/contracts"
 )
 
-// The fixtures of secrets and variables: the schemas of the secrets request, its answer,
-// the sealed plaintext and enrolment, and the known answers the proposal publishes,
-// recomputed here with Go's standard library alone.
+// The fixtures of the access key: enrolment's schema, and the known answers the contract
+// publishes, recomputed here with Go's standard library alone.
 
 // b64 decodes a binary value of the contract: base64url without padding, decoded
 // strictly, so padding, a character of the standard alphabet or non-zero bits after the
@@ -76,19 +73,6 @@ func counting(first, n int) []byte {
 	return b
 }
 
-// lp is a u16 big-endian length, then the bytes; lp32 the same with a u32.
-func lp(t *testing.T, s string) []byte {
-	t.Helper()
-	if len(s) > 0xffff {
-		t.Fatalf("%d bytes do not fit lp", len(s))
-	}
-	return append(binary.BigEndian.AppendUint16(nil, uint16(len(s))), s...)
-}
-
-func lp32(b []byte) []byte {
-	return append(binary.BigEndian.AppendUint32(nil, uint32(len(b))), b...)
-}
-
 type keyPair struct {
 	Note        string `json:"note"`
 	Seed        string `json:"seed"`
@@ -128,10 +112,9 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(b64(t, secret))
 }
 
-// TestSecretsFixturesValidate pins that every fixture of the sealed fixture and of
-// enrolment passes its schema: the secrets request, its answer, the plaintext, the run
-// configuration the request lists, discovery, and the enrolment request, answer and
-// signed refusals each against the part of enrolment.schema.json it is.
+// TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
+// answers passes its schema: discovery, and the enrolment request, answer and signed
+// refusals each against the part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -145,10 +128,6 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		return s.Validate
 	}
 	want := map[string][]string{
-		"fixtures/sealed/secrets-request.json":                 {"secrets-request.schema.json"},
-		"fixtures/sealed/secrets-answer.json":                  {"secrets-answer.schema.json"},
-		"fixtures/sealed/sealed-plaintext.json":                {"sealed-plaintext.schema.json"},
-		"fixtures/sealed/run-configuration.json":               {"run-configuration.schema.json"},
 		"fixtures/known-answers/discovery.json":                {"configuration.schema.json"},
 		"fixtures/enrolment/request.json":                      {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-two-fingerprints.json":     {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
@@ -160,12 +139,11 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/refusal-rate-limited.json":         {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 	}
 	data := map[string]bool{
-		"fixtures/sealed/vectors.json":            true,
 		"fixtures/known-answers/keys.json":        true,
 		"fixtures/known-answers/signatures.json":  true,
 		"fixtures/known-answers/small-order.json": true,
 	}
-	for _, dir := range []string{"fixtures/sealed", "fixtures/enrolment", "fixtures/known-answers"} {
+	for _, dir := range []string{"fixtures/enrolment", "fixtures/known-answers"} {
 		for _, f := range files(t, dir) {
 			if _, ok := want[f]; !ok && !data[f] {
 				t.Errorf("%s: a fixture no test validates", f)
@@ -320,16 +298,14 @@ func signs(t *testing.T, what string, priv ed25519.PrivateKey, m []byte, sig str
 }
 
 // TestRequestSignatures pins the request strings and their known answers under the
-// fixture access key: a GET's six lines with the timestamp, the same with a query, and
-// a POST's six lines with the raw body of the fixture's secrets request. A POST's
-// signature covers its path: the same body under another target fails.
+// fixture access key: a GET's six lines with the timestamp, and the same with a query.
 func TestRequestSignatures(t *testing.T) {
 	k := loadKeys(t)
 	priv := k.accessKey(t)
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Requests) != 3 {
-		t.Fatalf("%d request vectors; want 3", len(v.Requests))
+	if len(v.Requests) != 2 {
+		t.Fatalf("%d request vectors; want 2", len(v.Requests))
 	}
 	for _, r := range v.Requests {
 		if len(r.Lines) != 6 || r.Lines[0] != "qory-request-ed25519-v1" ||
@@ -337,22 +313,11 @@ func TestRequestSignatures(t *testing.T) {
 			t.Errorf("%s: lines %q; want the domain line, the access key id and the instance id, then three", r.Note, r.Lines)
 			continue
 		}
-		switch r.Lines[3] {
-		case "GET":
-			if _, err := strconv.ParseUint(r.Lines[5], 10, 64); err != nil {
-				t.Errorf("%s: timestamp line %q", r.Note, r.Lines[5])
-			}
-		case "POST":
-			if body := r.body(t); string(body) != r.Lines[5] {
-				t.Errorf("%s: the last line is not the body of %s", r.Note, *r.Body)
-			}
-			other := slices.Clone(r.Lines)
-			other[4] = "/v1/events"
-			if ed25519.Verify(priv.Public().(ed25519.PublicKey), []byte(strings.Join(other, "\n")), b64(t, r.Signature)) {
-				t.Errorf("%s: the signature verifies for another path", r.Note)
-			}
-		default:
+		if r.Lines[3] != "GET" {
 			t.Errorf("%s: method %q", r.Note, r.Lines[3])
+		}
+		if _, err := strconv.ParseUint(r.Lines[5], 10, 64); err != nil {
+			t.Errorf("%s: timestamp line %q", r.Note, r.Lines[5])
 		}
 		signs(t, r.Note, priv, r.message(t), r.Signature)
 	}
@@ -507,211 +472,6 @@ func TestAnswerSignatures(t *testing.T) {
 		if ed25519.Verify(signing.Public().(ed25519.PublicKey), []byte(strings.Join(other, "\n")), b64(t, a.Signature)) {
 			t.Errorf("%s: the signature verifies under %s", a.Note, other[0])
 		}
-	}
-}
-
-type sealedVectors struct {
-	EphemeralPrivateKey    string `json:"ephemeral_private_key"`
-	Info                   string `json:"info"`
-	InfoLength             int    `json:"info_length"`
-	AAD                    string `json:"aad"`
-	AADLength              int    `json:"aad_length"`
-	RunConfigurationLength int    `json:"run_configuration_length"`
-	SecretsRequestLength   int    `json:"secrets_request_length"`
-	SecretsRequestSHA256   string `json:"secrets_request_sha256"`
-	PlaintextLength        int    `json:"plaintext_length"`
-	CTLength               int    `json:"ct_length"`
-	CTSHA256               string `json:"ct_sha256"`
-	SignedLength           int    `json:"signed_length"`
-	SignedSHA256           string `json:"signed_sha256"`
-}
-
-type envelope struct {
-	Version int `json:"version"`
-	Sealed  struct {
-		Suite            string `json:"suite"`
-		AccessKeyID      string `json:"access_key_id"`
-		RunID            string `json:"run_id"`
-		RunConfiguration string `json:"run_configuration"`
-		Exp              uint64 `json:"exp"`
-		Enc              string `json:"enc"`
-		CT               string `json:"ct"`
-		Sig              string `json:"sig"`
-	} `json:"sealed"`
-}
-
-type secretsRequest struct {
-	RunID            string            `json:"run_id"`
-	Labels           map[string]string `json:"labels"`
-	RunConfiguration string            `json:"run_configuration"`
-	Connections      []string          `json:"connections"`
-	Timestamp        int64             `json:"timestamp"`
-}
-
-type sealedValue struct {
-	Secret  string `json:"secret"`
-	ValueID string `json:"value_id"`
-	Value   string `json:"value"`
-}
-
-type plaintext struct {
-	RunConfiguration string        `json:"run_configuration"`
-	Connections      []string      `json:"connections"`
-	Values           []sealedValue `json:"values"`
-}
-
-// TestSealedFixture pins the sealed fixture end to end: the run configuration's digest,
-// the secrets request that lists it, info and aad built from the envelope's identifiers,
-// enc from the fixed ephemeral key, the envelope's signature under the fixture signing
-// key, and the open: crypto/hpke with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
-// AES-256-GCM, NewRecipient with info and Open with aad, yields the published plaintext,
-// and with an altered aad fails. The plaintext contains the request's connections,
-// sorted, and the distinct pairs of secret and value id they reference with an id.
-func TestSealedFixture(t *testing.T) {
-	k := loadKeys(t)
-	var vec sealedVectors
-	load(t, "fixtures/sealed/vectors.json", &vec)
-
-	doc := read(t, "fixtures/sealed/run-configuration.json")
-	if len(doc) != vec.RunConfigurationLength {
-		t.Errorf("run configuration of %d bytes; want %d", len(doc), vec.RunConfigurationLength)
-	}
-	digest := "sha256=" + hexSHA256(doc)
-
-	reqBytes := read(t, "fixtures/sealed/secrets-request.json")
-	if len(reqBytes) != vec.SecretsRequestLength || hexSHA256(reqBytes) != vec.SecretsRequestSHA256 {
-		t.Errorf("secrets request of %d bytes, SHA-256 %s; want %d and %s", len(reqBytes), hexSHA256(reqBytes),
-			vec.SecretsRequestLength, vec.SecretsRequestSHA256)
-	}
-	var req secretsRequest
-	load(t, "fixtures/sealed/secrets-request.json", &req)
-	var env envelope
-	load(t, "fixtures/sealed/secrets-answer.json", &env)
-	s := env.Sealed
-	if req.RunConfiguration != digest || s.RunConfiguration != digest {
-		t.Errorf("digests %s and %s; want the run configuration's %s", req.RunConfiguration, s.RunConfiguration, digest)
-	}
-	if s.RunID != req.RunID || s.AccessKeyID != k.AccessKey.AccessKeyID || s.Suite != "x25519-sha256-aes256gcm" {
-		t.Errorf("envelope of %s for %s in %s; want the request's run, the fixture access key and the suite", s.RunID, s.AccessKeyID, s.Suite)
-	}
-	if s.Exp != uint64(req.Timestamp)+600 {
-		t.Errorf("exp %d; want the request's timestamp plus 600", s.Exp)
-	}
-
-	// The connections the request lists are the run configuration's.
-	var rc struct {
-		Connections []struct {
-			ID      string `json:"id"`
-			Secrets map[string]struct {
-				ID      string `json:"id"`
-				ValueID string `json:"value_id"`
-			} `json:"secrets"`
-		} `json:"connections"`
-	}
-	if err := json.Unmarshal(doc, &rc); err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	var pairs []sealedValue
-	for _, c := range rc.Connections {
-		ids = append(ids, c.ID)
-		for _, ref := range c.Secrets {
-			if ref.ID != "" && !slices.Contains(pairs, sealedValue{Secret: ref.ID, ValueID: ref.ValueID}) {
-				pairs = append(pairs, sealedValue{Secret: ref.ID, ValueID: ref.ValueID})
-			}
-		}
-	}
-	slices.Sort(ids)
-	if sent := slices.Sorted(slices.Values(req.Connections)); !slices.Equal(sent, ids) {
-		t.Errorf("the request lists %q; want the run configuration's %q", req.Connections, ids)
-	}
-
-	info := append([]byte("qory secrets v1\x00"), 0x00, 0x20, 0x00, 0x01, 0x00, 0x02)
-	info = append(info, lp(t, s.AccessKeyID)...)
-	if len(info) != vec.InfoLength || hex.EncodeToString(info) != vec.Info {
-		t.Errorf("info %x, %d bytes; want %s, %d", info, len(info), vec.Info, vec.InfoLength)
-	}
-	kem, kdf, aead := hpke.DHKEM(ecdh.X25519()), hpke.HKDFSHA256(), hpke.AES256GCM()
-	if kem.ID() != 0x0020 || kdf.ID() != 0x0001 || aead.ID() != 0x0002 {
-		t.Errorf("suite %#04x %#04x %#04x; want 0x0020 0x0001 0x0002", kem.ID(), kdf.ID(), aead.ID())
-	}
-	exp := strconv.FormatUint(s.Exp, 10)
-	var aad []byte
-	for _, x := range []string{s.RunID, s.AccessKeyID, s.RunConfiguration, exp} {
-		aad = append(aad, lp(t, x)...)
-	}
-	if len(aad) != vec.AADLength || hex.EncodeToString(aad) != vec.AAD {
-		t.Errorf("aad %x, %d bytes; want %s, %d", aad, len(aad), vec.AAD, vec.AADLength)
-	}
-
-	ephemeralKey := b64(t, vec.EphemeralPrivateKey)
-	if !bytes.Equal(ephemeralKey, counting(33, 32)) {
-		t.Errorf("ephemeral private key %x; want bytes 33 to 64", ephemeralKey)
-	}
-	ephemeral, err := ecdh.X25519().NewPrivateKey(ephemeralKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := b64(t, s.Enc)
-	if !bytes.Equal(ephemeral.PublicKey().Bytes(), enc) {
-		t.Errorf("enc %x; want the ephemeral key's public key %x", enc, ephemeral.PublicKey().Bytes())
-	}
-	ct := b64(t, s.CT)
-	if len(ct) != vec.CTLength || hexSHA256(ct) != vec.CTSHA256 {
-		t.Errorf("ct of %d bytes, SHA-256 %s; want %d, %s", len(ct), hexSHA256(ct), vec.CTLength, vec.CTSHA256)
-	}
-
-	var signed []byte
-	for _, x := range [][]byte{[]byte("qory envelope v1"), []byte(s.Suite), []byte(s.AccessKeyID), []byte(s.RunID),
-		[]byte(s.RunConfiguration), []byte(exp), enc, ct} {
-		signed = append(signed, lp32(x)...)
-	}
-	if len(signed) != vec.SignedLength || hexSHA256(signed) != vec.SignedSHA256 {
-		t.Errorf("signed message of %d bytes, SHA-256 %s; want %d, %s", len(signed), hexSHA256(signed), vec.SignedLength, vec.SignedSHA256)
-	}
-	signs(t, "envelope sig", ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed)), signed, s.Sig)
-
-	recipient, err := kem.NewPrivateKey(b64(t, k.AccessKey.X25519PrivateKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	open := func(aad []byte) ([]byte, error) {
-		r, err := hpke.NewRecipient(enc, recipient, kdf, aead, info)
-		if err != nil {
-			return nil, err
-		}
-		return r.Open(aad, ct)
-	}
-	pt, err := open(aad)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	want := read(t, "fixtures/sealed/sealed-plaintext.json")
-	if !bytes.Equal(pt, want) || len(pt) != vec.PlaintextLength {
-		t.Errorf("plaintext of %d bytes %q; want %d bytes %q", len(pt), pt, vec.PlaintextLength, want)
-	}
-	altered := slices.Clone(aad)
-	altered[len(altered)-1] ^= 1
-	if _, err := open(altered); err == nil {
-		t.Error("the envelope opens with an altered aad")
-	}
-
-	var p plaintext
-	if err := json.Unmarshal(pt, &p); err != nil {
-		t.Fatal(err)
-	}
-	if p.RunConfiguration != digest || !slices.Equal(p.Connections, ids) {
-		t.Errorf("plaintext for %s and %q; want %s and %q, sorted", p.RunConfiguration, p.Connections, digest, ids)
-	}
-	slices.SortFunc(pairs, func(a, b sealedValue) int {
-		return strings.Compare(a.Secret+"\x00"+a.ValueID, b.Secret+"\x00"+b.ValueID)
-	})
-	var got []sealedValue
-	for _, v := range p.Values {
-		got = append(got, sealedValue{Secret: v.Secret, ValueID: v.ValueID})
-	}
-	if !slices.Equal(got, pairs) {
-		t.Errorf("plaintext values %v; want the pairs %v, sorted", got, pairs)
 	}
 }
 
@@ -1013,93 +773,6 @@ func TestDeniedVariables(t *testing.T) {
 		if denied(name) {
 			t.Errorf("%s is on the deny list; want it left to the server", name)
 		}
-	}
-}
-
-// TestHeaders pins headers.json: version 1, every refused name and prefix lower case, a
-// field name of RFC 9110 of at most 64 characters, sorted, without repeats; the names
-// and prefixes the contract lists beside the IANA registry, the Fetch standard's
-// forbidden request headers among them; and a header a service uses, x-api-key, left
-// open.
-func TestHeaders(t *testing.T) {
-	var h struct {
-		Version         int      `json:"version"`
-		Refused         []string `json:"refused"`
-		RefusedPrefixes []string `json:"refused_prefixes"`
-	}
-	load(t, "headers.json", &h)
-	if h.Version != 1 {
-		t.Errorf("version %d; want 1", h.Version)
-	}
-	fieldName := regexp.MustCompile("^[!#$%&'*+.^_`|~0-9a-z-]{1,64}$")
-	for name, list := range map[string][]string{"refused": h.Refused, "refused_prefixes": h.RefusedPrefixes} {
-		if !slices.IsSorted(list) || len(slices.Compact(slices.Clone(list))) != len(list) {
-			t.Errorf("%s: want a sorted list without repeats", name)
-		}
-		for _, e := range list {
-			if !fieldName.MatchString(e) {
-				t.Errorf("%s: %q is no lower-case field name", name, e)
-			}
-		}
-	}
-	refused := func(name string) bool {
-		if slices.Contains(h.Refused, name) {
-			return true
-		}
-		for _, p := range h.RefusedPrefixes {
-			if strings.HasPrefix(name, p) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, name := range []string{
-		// The Fetch standard's forbidden request headers.
-		"accept-charset", "accept-encoding", "access-control-request-headers", "access-control-request-method",
-		"connection", "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive",
-		"origin", "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via",
-		"x-http-method", "x-http-method-override", "x-method-override",
-		// Names hosts commonly send back or log beside a request.
-		"content-type", "x-request-id", "x-correlation-id", "forwarded", "range", "user-agent",
-		// Hop by hop, the host, the body's framing, cookies and authorization.
-		"authorization",
-	} {
-		if !slices.Contains(h.Refused, name) {
-			t.Errorf("%s is not in refused", name)
-		}
-	}
-	for _, p := range []string{"accept", "if-", "x-forwarded-", "proxy-", "sec-", "x-qory-", "qory-"} {
-		if !slices.Contains(h.RefusedPrefixes, p) {
-			t.Errorf("%s is not in refused_prefixes", p)
-		}
-	}
-	for _, name := range []string{"accept", "if-match", "x-forwarded-for", "proxy-authorization", "sec-fetch-mode", "x-qory-signature-ed25519", "qory-request-id", "cache-control", "content-encoding"} {
-		if !refused(name) {
-			t.Errorf("%s is open; want it refused", name)
-		}
-	}
-	if refused("x-api-key") {
-		t.Error("x-api-key is refused; want it open to a service")
-	}
-
-	// Every field of the IANA registry at the snapshot, vendored outside the contract.
-	b, err := os.ReadFile("testdata/http-field-names-2026-08-28.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := 0
-	for line := range strings.Lines(string(b)) {
-		name := strings.TrimSuffix(line, "\n")
-		if name == "" || strings.HasPrefix(name, "#") {
-			continue
-		}
-		n++
-		if !slices.Contains(h.Refused, name) {
-			t.Errorf("%s, a field of the IANA registry, is not in refused", name)
-		}
-	}
-	if n != 259 {
-		t.Errorf("%d names in the IANA snapshot; want 259", n)
 	}
 }
 
