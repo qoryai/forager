@@ -36,6 +36,67 @@
       "maxProperties": 16,
       "propertyNames": {"pattern": "^[a-z0-9_.-]{1,64}$"},
       "additionalProperties": {"type": "string", "maxLength": 256}
+    },
+    "about": {
+      "description": "What the run is about, as the caller passed it: the kind of run, a title, the subjects it works on and details, every member optional. The runner copies it and reads nothing into it. Only this event contains it; it is never sent on the run configuration request and never selects a policy. An empty about is left out. No string in it, key or value, contains a control character: U+0000 to U+001F, U+007F to U+009F, U+2028 and U+2029. The schema counts characters, so each maxLength is an upper bound of the byte limit the description states.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"description": "The kind of run, the caller's word, at most 64 bytes.", "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"},
+        "title": {"description": "The run's title, at most 256 bytes.", "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"},
+        "subjects": {
+          "description": "What the run works on, 1 to 16. No two subjects have the same type and ref: a subject is identified by its type and ref.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "ref"],
+            "properties": {
+              "type": {"description": "The subject's type, an open name the caller chooses: words of a-z and 0-9, each joined to the next by one space, underscore, dot or dash, at most 64 bytes.", "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+([ _.-][a-z0-9]+)*$"},
+              "ref": {"description": "The subject's reference, at most 256 bytes.", "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"},
+              "url": {"description": "Where the subject is shown: an absolute http or https URL, at most 2048 bytes.", "type": "string", "maxLength": 2048, "pattern": "^https?://"},
+              "title": {"description": "The subject's title, at most 256 bytes.", "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"}
+            }
+          }
+        },
+        "details": {
+          "description": "A JSON object of the caller's, at most 8192 bytes once compacted, nested at most 4 levels deep: details is level 1, and an object or an array inside it is level 2. A key is 1 to 64 bytes. It is shown to every reader of the run, so it never holds a secret.",
+          "$ref": "#/$defs/about_details_1"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "about_key": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"},
+    "about_scalar": {"type": ["null", "boolean", "number", "string"], "pattern": "^[^\u0000-\u001F\u007F-\u009F  ]*$"},
+    "about_details_1": {
+      "description": "Level 1: details itself, an object of scalars and level 2 objects and arrays.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/about_key"},
+      "additionalProperties": {"anyOf": [{"$ref": "#/$defs/about_scalar"}, {"$ref": "#/$defs/about_details_2"}]}
+    },
+    "about_details_2": {
+      "description": "Level 2: an object or an array of scalars and level 3 objects and arrays.",
+      "type": ["object", "array"],
+      "propertyNames": {"$ref": "#/$defs/about_key"},
+      "additionalProperties": {"anyOf": [{"$ref": "#/$defs/about_scalar"}, {"$ref": "#/$defs/about_details_3"}]},
+      "items": {"anyOf": [{"$ref": "#/$defs/about_scalar"}, {"$ref": "#/$defs/about_details_3"}]}
+    },
+    "about_details_3": {
+      "description": "Level 3: an object or an array of scalars and level 4 objects and arrays.",
+      "type": ["object", "array"],
+      "propertyNames": {"$ref": "#/$defs/about_key"},
+      "additionalProperties": {"anyOf": [{"$ref": "#/$defs/about_scalar"}, {"$ref": "#/$defs/about_details_4"}]},
+      "items": {"anyOf": [{"$ref": "#/$defs/about_scalar"}, {"$ref": "#/$defs/about_details_4"}]}
+    },
+    "about_details_4": {
+      "description": "Level 4, the deepest: an object or an array of scalars only.",
+      "type": ["object", "array"],
+      "propertyNames": {"$ref": "#/$defs/about_key"},
+      "additionalProperties": {"$ref": "#/$defs/about_scalar"},
+      "items": {"$ref": "#/$defs/about_scalar"}
     }
   }
 }

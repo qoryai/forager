@@ -244,6 +244,34 @@ the tools.
 `dev.qory.run.started` contains `wall` and `image`, and `image_name`, `container_runtime`
 and `docker` when the image is one the machine defines (§Images).
 
+### What a run is about
+
+What the run is about, as the caller passed it, goes in `about` on
+`dev.qory.run.started`. Every member is optional, and the runner copies it and reads
+nothing into it:
+
+- `kind`: the kind of run, the caller's word, 1 to 64 bytes.
+- `title`: the run's title, 1 to 256 bytes.
+- `subjects`: what the run works on, 1 to 16, each an object of `type` and `ref`, and
+  `url` and `title` when the caller has them. `type` is an open name the caller
+  chooses: words of `a-z` and `0-9`, each joined to the next by one space, underscore,
+  dot or dash, at most 64 bytes. `ref` is the subject's reference, 1 to 256 bytes;
+  `url` is where the subject is shown, an absolute `http` or `https` URL of at most
+  2048 bytes; `title` is the subject's title, 1 to 256 bytes. No two subjects have the
+  same `type` and `ref`: a subject is identified by its type and ref.
+- `details`: a JSON object of the caller's, at most 8192 bytes once compacted, nested
+  at most 4 levels deep: `details` is level 1, and an object or an array inside it is
+  level 2. A key is 1 to 64 bytes. `details` is shown to every reader of the run, so it
+  never holds a secret.
+
+No string in `about`, key or value, contains a control character: U+0000 to U+001F,
+U+007F to U+009F, U+2028 and U+2029. The schema counts characters, so its lengths are
+upper bounds of the byte limits above, and the 8192 bytes of `details` and the rule on
+`type` and `ref` are stated here alone.
+
+Only `dev.qory.run.started` contains `about`. `about` is never sent on the run
+configuration request and never selects a policy. An empty `about` is left out.
+
 ## The policy
 
 `policy.schema.json`. The document the command passes to the runner, from the machine's
@@ -690,7 +718,7 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version`, `interval_seconds` |
-| `dev.qory.run.started` | the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any |
+| `dev.qory.run.started` | the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
@@ -1673,6 +1701,7 @@ the option experimental.
 | `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
+| `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule the schema cannot state, two subjects with the same `type` and `ref` or `details` over 8192 bytes compacted, and passes the schema | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |

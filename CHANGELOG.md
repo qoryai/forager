@@ -338,6 +338,18 @@ release may change what an existing document does, and says so under Upgrading.
   is `mount_shared_with_run`.
 - The runner passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
+- `dev.qory.run.started` contains `about` when the caller passes one: what the run is
+  about, as the caller passed it, every member optional. `kind` is the kind of run, at
+  most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
+  of `type`, an open name of words of `a-z` and `0-9` joined by one space, underscore,
+  dot or dash, at most 64 bytes, `ref`, at most 256 bytes, and `url`, an absolute `http`
+  or `https` URL of at most 2048 bytes, and `title`, with no two of the same `type` and
+  `ref`; `details` a JSON object of at most 8192 bytes compacted, nested at most 4
+  levels deep, with keys of 1 to 64 bytes, shown to every reader of the run, so it never
+  holds a secret. No string in it contains a control character. Only this event
+  contains it; it is never sent on the run configuration request and never selects a
+  policy, and an empty `about` is left out. `fixtures/run/about-*.json` holds accepted
+  and refused ones.
 
 ### Changed
 

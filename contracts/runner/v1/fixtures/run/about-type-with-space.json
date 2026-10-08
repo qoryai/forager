@@ -1,0 +1,9 @@
+{
+  "title": "Review the example change",
+  "subjects": [
+    {
+      "type": "pull request",
+      "ref": "42"
+    }
+  ]
+}

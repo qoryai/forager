@@ -1,0 +1,14 @@
+{
+  "subjects": [
+    {
+      "type": "example",
+      "ref": "7",
+      "url": "https://qory.example/examples/7"
+    },
+    {
+      "type": "example",
+      "ref": "7",
+      "url": "https://example.com/examples/7"
+    }
+  ]
+}
