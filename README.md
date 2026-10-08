@@ -116,8 +116,8 @@ requests to the hosts it is for.
 A **tool**, a program of the machine's, runs outside as well. It is for what needs more
 than a credential, such as a request signed with a key.
 
-The wall ships with a Docker adapter. `wall/walltest` checks it from inside the
-container, in CI.
+The wall ships with a Docker adapter. `e2e` checks it from inside the container, in
+CI.
 
 More: [docs/wall.md](docs/wall.md), [docs/credentials.md](docs/credentials.md). A machine
 that runs agents for others: [docs/node.md](docs/node.md).

@@ -49,8 +49,8 @@ nothing.
 
 What every wall guarantees is in the contract's
 [wall section](../contracts/runner/v1/README.md#the-wall). The
-[conformance suite](../wall/walltest/walltest.go) checks it from inside the container, in
-this repository's CI.
+[conformance suite](../e2e/e2e.go) checks it from inside the container, in this
+repository's CI.
 
 ## Turn it on
 
@@ -430,5 +430,4 @@ the mounts the run lists as the machine's root. It has not been verified. So:
 
 What every wall guarantees, what crosses it, and its limits: the contract's
 [wall section](../contracts/runner/v1/README.md#the-wall). The
-[`wall/walltest`](../wall/walltest/walltest.go) suite checks the list from inside the
-enclosure. Every adapter passes it before it ships.
+[`e2e`](../e2e/e2e.go) suite checks the list from inside the enclosure. Every adapter passes it before it ships.

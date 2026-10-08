@@ -6,8 +6,15 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Go tests
+  part:
+    # One job for each part of the module: the core (the packages at the root and under
+    # internal/), the gateway, the wall, the session, and e2e's static checks. Without
+    # Docker, e2e's suite skips here; the two conformance jobs below run it.
+    name: Go tests, ${{ matrix.part }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
     container:
       image: docker.io/golang:1.27
@@ -37,23 +44,61 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
 
+      - name: List the part's packages
+        id: part
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          if [ "$PART" = core ]; then
+            module=$(go list -m)
+            pkgs=$(go list ./... | grep -vE "^$module/(gateway|wall|session|e2e)(/|\$)")
+          else
+            pkgs=$(go list "./$PART/...")
+          fi
+          dirs=$(go list -f '{{.Dir}}' $pkgs | sed "s#^$PWD#.#" | tr '\n' ' ')
+          echo "$dirs"
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        env:
+          DIRS: ${{ steps.part.outputs.dirs }}
+        run: test -z "$(gofmt -l $DIRS)"
 
       - name: Vet
-        run: go vet ./...
+        env:
+          DIRS: ${{ steps.part.outputs.dirs }}
+        run: go vet $DIRS
 
       - name: Test
-        # Every fixture under contracts/runner/v1 is validated against its schema here.
-        run: go test ./...
+        # In the core, every fixture under contracts/runner/v1 is validated against its
+        # schema, and the import rules between the parts are checked.
+        env:
+          DIRS: ${{ steps.part.outputs.dirs }}
+        run: go test $DIRS
 
       - name: Build
-        run: go build ./...
+        env:
+          DIRS: ${{ steps.part.outputs.dirs }}
+        run: go build $DIRS
 
       - name: Check doc comments
-        run: go run github.com/mgechev/revive@v1.16.0 -config revive.toml -set_exit_status ./...
+        env:
+          DIRS: ${{ steps.part.outputs.dirs }}
+        run: go run github.com/mgechev/revive@v1.16.0 -config revive.toml -set_exit_status $DIRS
 
-  wall:
+  test:
+    # The one check that stands for every part's job above.
+    name: Go tests
+    needs: part
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every part passed
+        env:
+          RESULT: ${{ needs.part.result }}
+        run: test "$RESULT" = success
+
+  e2e:
     name: Wall conformance
     # On the machine itself, not in a container: the suite needs the docker command and
     # an engine it reaches, and a Linux host is where the hook socket crosses a mount, so
@@ -73,9 +118,9 @@ jobs:
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./wall/walltest -count=1 -v -run '^TestDockerConforms$'
+        run: go test ./e2e -count=1 -v -run '^TestDockerConforms$'
 
-  wall-docker:
+  e2e-docker:
     name: Wall conformance, a Docker of the agent's own
     # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
     # container root is a user of the machine's that is not root. Sysbox is installed on
@@ -118,4 +163,4 @@ jobs:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
           QORY_WALL_RUNTIME: sysbox-runc
-        run: go test ./wall/walltest -count=1 -v -run TestDockerNestedConforms
+        run: go test ./e2e -count=1 -v -run TestDockerNestedConforms

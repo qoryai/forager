@@ -45,7 +45,7 @@ with the tests.
 ## The runtime
 
 `Runtime` is the program as the runner needs to know it: a
-[`runtimes.Runtime`](../runtimes/runtimes.go). It defines:
+[`runtimes.Runtime`](../session/runtimes/runtimes.go). It defines:
 
 - how its launch is prepared,
 - what its records mean,
@@ -61,8 +61,8 @@ with the tests.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
-A program that needs code of its own implements the interface. `runtimes/runtimetest`
-runs the same checks on it.
+A program that needs code of its own implements the interface.
+`session/runtimes/runtimetest` runs the same checks on it.
 
 ## The spec
 
@@ -105,35 +105,48 @@ The whole sequence, every event type and every file are in the
 
 ## Layout
 
+The module is a core and three parts over it, the session, the gateway and the wall,
+with `e2e` to check them together.
+
 - `contracts/runner/v1/`: the contract. It contains the documents, a JSON schema for
   each, the runtime descriptors and the fixtures.
   [Its README](../contracts/runner/v1/README.md) is the specification.
-- `contracts/`: the Go package that embeds the contract and validates every fixture.
+- The core, at the module's root, which every part may import:
+  - `contracts/`: the Go package that embeds the contract and validates every fixture.
+  - `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and
+    answers, the pin of the server's keys, enrolment, the instance id and its file, and
+    the refusal codes of the server's answers.
+  - `receiver/`: a server of the contract that is not a control plane. It is the
+    handler the tests run the runner against. It is tested against the signed fixtures.
+    It is a worked example of the contract's receiving rules.
+  - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
+    `program/`.
+  - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the
+    loopback address, the variables that name the run's socket and a tool's socket, the
+    headers the proxy sets for a tool, and the placeholder value.
+  - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session runner.
   - `session.Run` takes a launch spec, with the policy, the server and the wall as
     values, and returns the exit status.
   - `session.Forward` is the hook forwarder behind it.
-- `runtimes/`: the runtime. `runtimes.Runtime` is the interface between the runner and
-  the program it runs: how a launch is prepared, what the program's records mean, how it
-  is stopped.
-  - `Described` is a runtime written as a descriptor.
-  - `Bare` is a program the runner runs and does not read.
-  - `runtimes/claude` is Claude Code.
-  - `runtimes/catalog` resolves a name to a runtime.
-  - `runtimes/runtimetest` is the conformance suite every runtime passes.
+  - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
+    runner and the program it runs: how a launch is prepared, what the program's records
+    mean, how it is stopped.
+    - `Described` is a runtime written as a descriptor.
+    - `Bare` is a program the runner runs and does not read.
+    - `session/runtimes/claude` is Claude Code.
+    - `session/runtimes/catalog` resolves a name to a runtime.
+    - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
+  - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
+    and `variables`.
+- `gateway/`: the proxy, the credentials and the tools, in `gateway/internal/`.
+  Package `gateway` holds the types and functions the session drives them by.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.
   - `wall.Nest`, which starts a Docker of the agent's own inside it. Experimental.
-  - `wall/walltest` is the conformance suite every adapter passes before it ships.
-- `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and
-  answers, the pin of the server's keys, enrolment, the instance id and its file, and the
-  refusal codes of the server's answers.
-- `receiver/`: a server of the contract that is not a control plane. It is the handler
-  the tests run the runner against. It is tested against the signed fixtures. It is a
-  worked example of the contract's receiving rules.
-- `internal/`: what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`,
-  `sink`, `server`, `descriptor`, `socket`, `chunk`, `variables`, `jcs`, `refusal`.
+- `e2e/`: the conformance suite every wall adapter passes before it ships: a real
+  session behind the wall, with the gateway between.
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the
 launch template. The hook command it installs calls `session.Forward`.
@@ -141,10 +154,14 @@ launch template. The hook command it installs calls `session.Forward`.
 ## Two invariants
 
 **The runner takes a spec.** `qory` imports `runner`; `runner` imports nothing of
-`qory`. Stacks, modules, homes and reports stay in `qory`. Inside the module:
+`qory`. Stacks, modules, homes and reports stay in `qory`. Inside the module, a test
+holds the imports to these rules:
 
-- `session` imports `wall` for the interface.
-- Only `wall/walltest` imports `session`.
+- The core imports no part.
+- `gateway` and `wall` import the core.
+- `session` imports the core, `wall` for the interface, and package `gateway`.
+- Only `e2e` imports `session`, and it imports every part.
+- No part imports the core's `internal/` packages, or another part's.
 
 **Documents select; releases add.** A policy, a server document and a descriptor select
 among what the binary does. They never add to it. New behaviour arrives only in a

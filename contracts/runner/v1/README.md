@@ -1265,7 +1265,7 @@ There are three ways to a runtime, and a name resolves to the first that applies
    needs what a descriptor cannot express. It is set in `session.Spec.Runtime` like any
    other.
 
-`runtimes/runtimetest` is what any of them is tested against: `Conforms`, that a runtime
+`session/runtimes/runtimetest` is what any of them is tested against: `Conforms`, that a runtime
 leaves alone what is not its own, and `Replays`, that its records produce exactly the
 recorded events and that each passes this contract's schema.
 
@@ -1672,7 +1672,7 @@ them gains nothing. Docker in Docker with `--privileged`, and the machine's own 
 stay refused. gVisor breaks the list: its daemon inside starts only with every
 capability added.
 
-**One conformance suite**, the `wall/walltest` package, checks the list from inside the
+**One conformance suite**, the `e2e` package, checks the list from inside the
 enclosure with a real session behind the adapter, and an adapter ships when the suite
 passes for it. The suite needs Linux and the tool, so it runs in the runner's CI on a
 Linux machine; the ordinary tests compare the commands an adapter generates with golden

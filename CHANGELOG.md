@@ -360,6 +360,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- The module is a core and three parts over it. The core, at the root, is `contracts`,
+  `accesskey`, `receiver`, `policy`, `refusal`, `event`, `sink`, `server`, `program`,
+  and `link`, which holds the names the parts agree on. The gateway is `gateway`, over
+  `gateway/internal/{proxy,credential,tool}`. The session is `session`, with
+  `session/runtimes/…` (from `runtimes/…`) and `session/internal/…`. The wall is `wall`,
+  and its conformance suite is package `e2e` (from `wall/walltest`).
+  `runtimes.CheckStopSignal` checks a stop signal, and `session.CheckStopSignal` calls it.
 - Behind a wall, the enclosure binds the outermost of the places a run lists, the
   mounts and the workspace, each once: a place inside another one of the same mode is
   reached through the outer one. The workspace is the working directory inside, through

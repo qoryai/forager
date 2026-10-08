@@ -13,8 +13,8 @@ Everywhere. Three kinds are the most useful:
 - **The contract.** The documents under `contracts/runner/v1/`, their schemas and their
   fixtures. A receiver follows the contract and lives in your own repository; nothing in
   this one has to change for it.
-- **The runner** and the receiver: the packages `session` and `receiver` and what they
-  share under `internal/`.
+- **The runner** and the receiver: the parts `session`, `gateway` and `wall`, the
+  packages at the module's root that they share, and `receiver`.
 
 ## Contributor Licence Agreement
 
