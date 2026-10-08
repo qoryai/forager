@@ -182,7 +182,8 @@ type Spec struct {
 	// event, so a receiver shows the run by it; it is never sent on the run configuration
 	// request and never selects a policy. The runner reads nothing into it. CheckAbout
 	// holds it to its bounds before the server is contacted. Nil, or an About whose every
-	// member is empty, is left out. Details is shown to every reader of the run, so it
+	// member is empty, is left out. An empty Kind, Title or Subjects counts as absent and
+	// is left out of the event. Details is shown to every reader of the run, so it
 	// never holds a secret.
 	About *About
 	// Timeout is how long the runtime may run; zero means no limit. At the limit the
@@ -295,10 +296,11 @@ type AboutError = server.AboutError
 
 // CheckAbout refuses an About the contract's rules refuse: a member over its bound in
 // bytes, a string that is not UTF-8 or has a control character, a subject type outside
-// its form, a URL that is not an absolute http or https one, two subjects with the same
-// type and ref, and details that are not a JSON object of at most 8192 bytes compacted
-// and 4 levels. It returns the first failure as an [*AboutError]. [Run] checks it before
-// it contacts the server; a command may first.
+// its form, a URL that is not an absolute http or https one or that has a user name or
+// password, two subjects with the same type and ref, and details that are not a JSON
+// object of at most 8192 bytes as the event contains them and 4 levels. It returns the
+// first failure as an [*AboutError]. [Run] checks it before it contacts the server; a
+// command may first.
 func CheckAbout(a *About) error { return server.CheckAbout(a) }
 
 // closeWait is how long the sinks get to flush after the runtime exits.

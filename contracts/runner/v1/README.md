@@ -257,18 +257,23 @@ nothing into it:
   chooses: words of `a-z` and `0-9`, each joined to the next by one space, underscore,
   dot or dash, at most 64 bytes. `ref` is the subject's reference, 1 to 256 bytes;
   `url` is where the subject is shown, an absolute `http` or `https` URL of at most
-  2048 bytes; `title` is the subject's title, 1 to 256 bytes. No two subjects have the
-  same `type` and `ref`: a subject is identified by its type and ref.
-- `details`: a JSON object of the caller's, at most 8192 bytes once compacted, nested
-  at most 4 levels deep: `details` is level 1, and an object or an array inside it is
-  level 2. A key is 1 to 64 bytes. `details` is shown to every reader of the run, so it
-  never holds a secret.
+  2048 bytes, and a `url` never carries a user name or password; `title` is the
+  subject's title, 1 to 256 bytes. No two subjects have the same `type` and `ref`: a
+  subject is identified by its type and ref.
+- `details`: a JSON object of the caller's, at most 8192 bytes as the event contains
+  it, compacted, with `<`, `>` and `&` written as `\u003c`, `\u003e` and `\u0026`, and
+  nested at most 4 levels deep: `details` is level 1, and an object or an array inside
+  it is level 2. A key is 1 to 64 bytes. `details` is shown to every reader of the run,
+  so it never holds a secret.
 
 No string in `about`, key or value, contains a control character: U+0000 to U+001F,
-U+007F to U+009F, U+2028 and U+2029. The schema counts characters, so its lengths are
-upper bounds of the byte limits above, and the 8192 bytes of `details` and the rule on
-`type` and `ref` are stated here alone. The runner holds `about` to every rule here
-before it contacts the server: an `about` that breaks one is no run.
+U+007F to U+009F, U+2028 and U+2029. The schema states every rule but these, which the
+runner alone checks: the byte limits, the 8192 bytes of `details`, that no two subjects
+have the same `type` and `ref`, a `url`'s syntax and host, that a `url` carries no user
+name or password, and that no member name appears twice in `details`. The schema's
+lengths count characters, so they are upper bounds of the byte limits. The runner holds
+`about` to every rule here before it contacts the server: an `about` that breaks one is
+no run.
 
 Only `dev.qory.run.started` contains `about`. `about` is never sent on the run
 configuration request and never selects a policy. An empty `about` is left out.
@@ -1702,7 +1707,7 @@ the option experimental.
 | `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
-| `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule the schema cannot state, two subjects with the same `type` and `ref` or `details` over 8192 bytes compacted, and passes the schema | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the runner's check, `session.CheckAbout`, expecting a failure for every refused one |
+| `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only the runner checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the runner's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |

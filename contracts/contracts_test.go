@@ -219,9 +219,11 @@ func TestRecordedRunValidates(t *testing.T) {
 	}
 }
 
-// beyondSchema marks the refused fixtures of about whose rule the schema cannot state,
-// the 8192 bytes of details compacted and two subjects with the same type and ref: the
-// schema accepts each of them.
+// beyondSchema marks the refused fixtures of about whose rule only the runner checks: a
+// byte limit, the 8192 bytes of details as the event contains them, two subjects with
+// the same type and ref, a url's syntax and host, a url's user name or password, and a
+// member name twice in details.
+// The schema accepts each of them.
 const beyondSchema = "about-refused-beyond-schema-"
 
 // aboutFixtures lists the fixtures of about under fixtures/run, the accepted ones and

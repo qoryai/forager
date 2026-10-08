@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/server"
 )
 
@@ -42,6 +43,8 @@ func TestCheckAboutPassesWhatTheContractAccepts(t *testing.T) {
 		"empty details":         {Details: json.RawMessage(" {} ")},
 		"a title alone":         {Title: "Fix the failing build"},
 		"every member at bound": fullAbout(),
+		"an @ outside a URL's authority": {Subjects: []server.Subject{{Type: "example",
+			Ref: "7", URL: "https://example.com/a@b?c=d@e#f@g"}}},
 	} {
 		if err := server.CheckAbout(a); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -114,6 +117,21 @@ func TestCheckAboutRefusesWithTheField(t *testing.T) {
 		"a space in the host": "https://exa mple.com/",
 	} {
 		add("a URL, "+name, "about.subjects[5].url is not an absolute http or https URL",
+			func(a *server.About) { a.Subjects[5].URL = u })
+	}
+	add("a URL with U+2028", "about.subjects[5].url contains a control character",
+		func(a *server.About) { a.Subjects[5].URL = "https://example.com/7\u2028" })
+	add("a URL with a control character, not http", "about.subjects[5].url contains a "+
+		"control character", func(a *server.About) { a.Subjects[5].URL = "ftp://\x00" })
+	add("a URL of 2049 bytes with a control character",
+		"about.subjects[0].url is longer than 2048 bytes",
+		func(a *server.About) { a.Subjects[0].URL += "\x00" })
+	for name, u := range map[string]string{
+		"a user name and password": "http://user:pass@example.com/",
+		"a user name":              "https://user@example.com/7",
+		"an empty user name":       "http://@example.com/",
+	} {
+		add("a URL with "+name, "about.subjects[5].url contains a user name or password",
 			func(a *server.About) { a.Subjects[5].URL = u })
 	}
 	add("a subject title of 257 bytes", "about.subjects[0].title is longer than 256 bytes",
@@ -191,6 +209,8 @@ func TestCheckAboutReportsTheFirstFailure(t *testing.T) {
 		{&server.About{Subjects: []server.Subject{
 			{Type: "a", Ref: "1"}, {Type: "a", Ref: "1", URL: "ftp://x"}}},
 			"about.subjects[1].url is not an absolute http or https URL"},
+		{&server.About{Subjects: []server.Subject{{Type: "a", Ref: "1", URL: "ftp://u@x"}}},
+			"about.subjects[0].url is not an absolute http or https URL"},
 		{&server.About{Subjects: []server.Subject{{Type: "A"}}, Details: json.RawMessage(`[]`)},
 			"about.subjects[0].type is not words of a-z and 0-9, each joined to the next " +
 				"by one space, underscore, dot or dash"},
@@ -234,5 +254,37 @@ func TestReportedAboutIsCompacted(t *testing.T) {
 	got = server.ReportedAbout(&server.About{Kind: "k", Details: json.RawMessage(" {} ")})
 	if got == nil || got.Details != nil {
 		t.Errorf("empty details reported as %+v", got)
+	}
+}
+
+// TestDetailsAreMeasuredAsTheEventContainsThem pins the 8192 bytes of details to the
+// bytes run.started carries: compacted, with <, > and & escaped to six bytes each by the
+// event's encoding. Details of 8192 bytes so escaped pass, one byte more is refused by
+// the escaped size, and the event contains the checked bytes as they are.
+func TestDetailsAreMeasuredAsTheEventContainsThem(t *testing.T) {
+	// {"a":"…"} is 8 bytes around the string; each of < and & is 6 bytes escaped.
+	body := strings.Repeat("<&", (8192-8)/12)
+	at := &server.About{Details: json.RawMessage(`{ "a" : "` + body + `" }`)}
+	if err := server.CheckAbout(at); err != nil {
+		t.Fatalf("details of 8192 bytes escaped: %v", err)
+	}
+	over := &server.About{Details: json.RawMessage(`{"a":"` + body + `>"}`)}
+	if err := server.CheckAbout(over); err == nil ||
+		err.Error() != "about.details is 8198 bytes compacted; at most 8192" {
+		t.Errorf("details of 8198 bytes escaped, %d unescaped: %v", 8+len(body)+1, err)
+	}
+	reported := server.ReportedAbout(at)
+	want := `{"a":"` + strings.Repeat(`\u003c\u0026`, len(body)/2) + `"}`
+	if string(reported.Details) != want || len(reported.Details) != 8192 {
+		t.Fatalf("reported details of %d bytes; want the %d checked", len(reported.Details),
+			len(want))
+	}
+	line, err := event.NewEmitter(event.NewRunID(), nil).Make(event.RunStarted,
+		map[string]any{"runtime": "x", "about": reported}).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(line), `"details":`+want+`}`) {
+		t.Errorf("run.started does not contain the checked details as they are:\n%s", line)
 	}
 }
