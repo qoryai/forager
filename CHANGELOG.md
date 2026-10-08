@@ -349,7 +349,13 @@ release may change what an existing document does, and says so under Upgrading.
   holds a secret. No string in it contains a control character. Only this event
   contains it; it is never sent on the run configuration request and never selects a
   policy, and an empty `about` is left out. `fixtures/run/about-*.json` holds accepted
-  and refused ones.
+  and refused ones. `session.Spec.About` is a `session.About` of `Kind`, `Title`,
+  `Subjects`, each a `session.Subject` of `Type`, `Ref`, `URL` and `Title`, and
+  `Details`, a `json.RawMessage`; run.started reports `Details` compacted.
+  `session.CheckAbout` holds an `About` to these rules and returns the first failure as
+  a `*session.AboutError`, its `Field`, such as `about.subjects[0].ref`, and its
+  `Reason`; `session.Run` checks it before it contacts the server, and an `About` it
+  refuses is no run.
 
 ### Changed
 

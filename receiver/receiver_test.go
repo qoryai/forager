@@ -502,6 +502,43 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	}
 }
 
+// TestAboutIsStoredAsReceived pins that a run.started with about is stored as the
+// runner sent it, byte for byte. The receiver reads nothing of about and holds it to no
+// bound: one with two subjects of the same type and ref is stored all the same.
+func TestAboutIsStoredAsReceived(t *testing.T) {
+	h, _, _ := handler(t, 1700000000)
+	path := filepath.Join(t.TempDir(), "received.jsonl")
+	store, err := receiver.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h.Store = store
+	about := json.RawMessage(`{"kind":"example","title":"Example","subjects":[` +
+		`{"type":"example","ref":"7","url":"https://qory.example/examples/7"},` +
+		`{"type":"example","ref":"7"}],"details":{"a":[1,{"b":null}]}}`)
+	e := event.NewEmitter(event.NewRunID(), nil)
+	data := map[string]any{"runtime": "x", "about": about}
+	line, err := e.Make(event.RunStarted, data).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(line), `"about":`+string(about)) {
+		t.Fatalf("the event does not contain the about as given:\n%s", line)
+	}
+	req := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(line)+"]"))
+	if rec := serve(h, req); rec.Code != http.StatusAccepted || !signedAnswer(req, rec) {
+		t.Fatalf("a delivery of run.started with about: %d", rec.Code)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != string(line)+"\n" {
+		t.Errorf("stored\n%s\nwant\n%s", b, line)
+	}
+}
+
 // TestAKeyOfSmallOrderVerifiesNoRequest pins that a public key the key checks refuse,
 // listed in the receiver's configuration, verifies no request: the forged signature
 // R = identity, S = 0 under the identity key is an unsigned 401.

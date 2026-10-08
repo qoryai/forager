@@ -1104,6 +1104,101 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 	}
 }
 
+// TestAboutIsInRunStartedAlone pins what the run is about: an About CheckAbout refuses
+// is no run, before the server sees a request or a run directory is made; a valid one
+// is in run.started as the caller passed it, details compacted, and in no other event
+// and not in the run configuration request's query; an empty one leaves no about.
+func TestAboutIsInRunStartedAlone(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, "sha256="+strings.Repeat("3", 64))
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	sp.About = &session.About{Title: "Example",
+		Subjects: []session.Subject{{Type: "example"}}}
+	_, err := session.Run(context.Background(), sp)
+	var ae *session.AboutError
+	if !errors.As(err, &ae) || err.Error() != "about.subjects[0].ref is empty" {
+		t.Errorf("an About without a ref: %v", err)
+	}
+	if n := c.hits.Load(); n != 0 {
+		t.Errorf("the server saw %d requests of a refused run", n)
+	}
+	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {
+		t.Errorf("a run directory was made: %v", entries)
+	}
+
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server, sp.Heartbeat = c.server(), time.Second
+	sp.Labels = map[string]string{"forge": "example.test"}
+	sp.About = &session.About{
+		Kind:  "example-kind",
+		Title: "Example title of the run",
+		Subjects: []session.Subject{
+			{Type: "example", Ref: "example-ref-7", URL: "https://qory.example/examples/7",
+				Title: "Example subject title"},
+			{Type: "example.other", Ref: "example-ref-8"},
+		},
+		Details: json.RawMessage(`{ "example-key" : [ 1, { "b" : { "c" : true } } ] }`),
+	}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"about":{"kind":"example-kind","title":"Example title of the run",` +
+		`"subjects":[{"type":"example","ref":"example-ref-7",` +
+		`"url":"https://qory.example/examples/7","title":"Example subject title"},` +
+		`{"type":"example.other","ref":"example-ref-8"}],` +
+		`"details":{"example-key":[1,{"b":{"c":true}}]}}`
+	b, err := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != len(evs) {
+		t.Fatalf("%d lines for %d events", len(lines), len(evs))
+	}
+	started := 0
+	for i, line := range lines {
+		if evs[i]["type"] == "dev.qory.run.started" {
+			started++
+			if !strings.Contains(line, want) {
+				t.Errorf("run.started does not contain %s:\n%s", want, line)
+			}
+			continue
+		}
+		_, ok := data(evs[i])["about"]
+		if ok || strings.Contains(line, "example-ref-7") ||
+			strings.Contains(line, "example-key") ||
+			strings.Contains(line, "Example title of the run") {
+			t.Errorf("%s contains the about:\n%s", evs[i]["type"], line)
+		}
+	}
+	if started != 1 {
+		t.Errorf("%d run.started events", started)
+	}
+	c.mu.Lock()
+	query := c.query
+	c.mu.Unlock()
+	if query != "forge=example.test" {
+		t.Errorf("the run configuration request's query %q; want the labels alone", query)
+	}
+
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.About = &session.About{Details: json.RawMessage(" { } ")}
+	if res, err = session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if st := ofType(events(t, res), "dev.qory.run.started"); len(st) != 1 {
+		t.Errorf("run.started events %v", st)
+	} else if about, ok := data(st[0])["about"]; ok {
+		t.Errorf("an empty About is in run.started as %v", about)
+	}
+}
+
 func TestPolicyUnderACeilingNarrowsOnly(t *testing.T) {
 	enforce := func(allow ...string) *session.Policy {
 		return &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: allow}}

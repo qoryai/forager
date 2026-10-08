@@ -1,6 +1,7 @@
 package contracts_test
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/runner/internal/server"
 )
 
 // compile compiles every schema a test needs once.
@@ -274,6 +276,49 @@ func TestAboutFixturesValidate(t *testing.T) {
 			t.Errorf("%s is marked beyond the schema, and the schema refuses it: %v", f, err)
 		case !beyond && err == nil:
 			t.Errorf("%s passed the schema; want a failure", f)
+		}
+	}
+}
+
+// TestAboutFixturesAgreeWithCheckAbout holds the runner's check to the same fixtures as
+// the schema: every accepted one decodes into an About that CheckAbout passes, and every
+// refused one is refused, those marked beyond the schema included. A member About has no
+// field for has nothing to decode into, so the decoding refuses it, and only it: an
+// unknown member, in about or in a subject. Every other refused one decodes and
+// CheckAbout refuses it.
+func TestAboutFixturesAgreeWithCheckAbout(t *testing.T) {
+	accepted, refused := aboutFixtures(t)
+	decode := func(f string) (*server.About, error) {
+		b, err := fs.ReadFile(contracts.FS, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.DisallowUnknownFields()
+		var a server.About
+		return &a, dec.Decode(&a)
+	}
+	for _, f := range accepted {
+		a, err := decode(f)
+		if err != nil {
+			t.Errorf("%s: %v", f, err)
+			continue
+		}
+		if err := server.CheckAbout(a); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	for _, f := range refused {
+		a, err := decode(f)
+		unknown := strings.Contains(path.Base(f), "unknown-member")
+		switch {
+		case unknown && err == nil:
+			t.Errorf("%s decoded; want its unknown member refused", f)
+		case unknown:
+		case err != nil:
+			t.Errorf("%s: %v", f, err)
+		case server.CheckAbout(a) == nil:
+			t.Errorf("%s passed CheckAbout; want a failure", f)
 		}
 	}
 }
