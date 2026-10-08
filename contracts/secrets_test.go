@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/hpke"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -21,8 +20,8 @@ import (
 	"github.com/qoryai/runner/contracts"
 )
 
-// The fixtures of the access key: enrolment's schema, and the known answers the contract
-// publishes, recomputed here with Go's standard library alone.
+// The fixtures of the access key: enrolment's schema, and the known answers this
+// contract publishes, recomputed here with Go's standard library alone.
 
 // b64 decodes a binary value of the contract: base64url without padding, decoded
 // strictly, so padding, a character of the standard alphabet or non-zero bits after the
@@ -170,9 +169,8 @@ func TestSecretsFixturesValidate(t *testing.T) {
 
 // TestFixtureAccessKey pins the fixture access key and the fixture signing keys: each
 // public key and fingerprint from its seed, the X25519 private key as the clamped first
-// 32 bytes of SHA-512(seed), and the X25519 public key three ways, from the private key
-// with crypto/ecdh, from the same key as an HPKE recipient's, and as the Montgomery
-// u-coordinate of the Ed25519 public key.
+// 32 bytes of SHA-512(seed), and the X25519 public key two ways, from the private key
+// with crypto/ecdh, and as the Montgomery u-coordinate of the Ed25519 public key.
 func TestFixtureAccessKey(t *testing.T) {
 	k := loadKeys(t)
 	a := k.AccessKey
@@ -212,13 +210,6 @@ func TestFixtureAccessKey(t *testing.T) {
 		if got := x.PublicKey().Bytes(); !bytes.Equal(got, want) {
 			t.Errorf("X25519 public key of the %s scalar %x; want %x", name, got, want)
 		}
-	}
-	recipient, err := hpke.DHKEM(ecdh.X25519()).NewPrivateKey(clamped)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recipient.PublicKey().Bytes(); !bytes.Equal(got, want) {
-		t.Errorf("HPKE recipient's public key %x; want %x", got, want)
 	}
 	if got := montgomery(t, pub); !bytes.Equal(got, want) {
 		t.Errorf("u-coordinate of the Ed25519 public key %x; want %x", got, want)

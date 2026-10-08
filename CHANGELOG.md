@@ -500,7 +500,7 @@ release may change what an existing document does, and says so under Upgrading.
   installs Sysbox and runs it.
 
 - Tools: programs of the machine's that serve hosts, for what a run reaches that needs
-  more than a token in a header. `session.Spec.Tools` defines them, a name, a command
+  more than a secret in a header. `session.Spec.Tools` defines them, a name, a command
   with `${argument}`, the pattern the argument must match, the hosts the tool serves and
   its placeholders, and a policy's `tools` selects among them, by name and argument, as
   it selects credentials. Behind a wall the runner starts each selected tool outside the
@@ -530,7 +530,7 @@ release may change what an existing document does, and says so under Upgrading.
   refuses.
 - Each credential use and each tool in `dev.qory.run.policy_applied` contains
   `argument`, the argument the policy passed to the credential or the tool, when it
-  passed one, so an audit of the record reads which repositories a token was minted for
+  passed one, so an audit of the record reads which repositories a secret was minted for
   and what each tool was started for.
 
 ### Changed
@@ -842,14 +842,14 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.ReadPolicy` and `Policy.Under`: a command reads a run's own policy file and
   puts it under the machine's, which it can only narrow.
 
-- Credentials the session never holds. `Spec.Credentials` are the machine's: a token
+- Credentials the session never holds. `Spec.Credentials` are the machine's: a secret
   from a variable of the runner's environment, from a file, or from an adapter, a
   program of the machine's that knows one kind of host and prints, as
-  `credential.schema.json`, the token, its expiry, and the hosts, the scheme and the
+  `credential.schema.json`, the secret, its expiry, and the hosts, the scheme and the
   paths it is for. A policy's new `credentials` selects among them by name, with an
   argument for an adapter, and defines none. Behind a wall the proxy sets each on the
-  requests to its hosts; the enclosure gets placeholders, never a token. An adapter is
-  asked again before its token expires and when a host answers 401.
+  requests to its hosts; the enclosure gets placeholders, never a secret. An adapter is
+  asked again before its secret expires and when a host answers 401.
 - Path rules: `egress.paths` in the policy, and the `paths` of a credential. Of a host
   with paths the run reaches those and no other, so a repository's credential does not
   open another organization's on the same host. A path that could be read two ways is
@@ -871,7 +871,7 @@ release may change what an existing document does, and says so under Upgrading.
   status and no duration for such a task, so the record has neither.
 - The conformance suite checks, from inside the enclosure, that a host held to paths is
   held to them, that a terminated host is answered with the run's authority and held to
-  its credential's paths, that the credential is set outside, and that no token and no
+  its credential's paths, that the credential is set outside, and that no secret and no
   key is inside: not in the environment, not in the bundle, not in the record.
 - `session.Resend`: completes and delivers the record of a run that is over, for a
   job's last step after a runner that died or a receiver that was away. The run
@@ -905,9 +905,9 @@ release may change what an existing document does, and says so under Upgrading.
 - Behind a wall the proxy serves the run's relay alone. Its address was reached by
   other containers of the same engine, on a Linux host, and by other processes of the
   machine; the run's policy bounded what they did with it. Now the relay opens every
-  connection it forwards with a token of the run's, `Launch.ProxyToken`, given to the
+  connection it forwards with a secret of the run's, `Launch.ProxyToken`, given to the
   relay through a file and to nothing inside the enclosure, and the proxy closes
-  unanswered whatever opens otherwise. An adapter of your own passes the token to its
+  unanswered whatever opens otherwise. An adapter of your own passes the secret to its
   relay, which is `wall.Relay` with `QORY_RELAY_TOKEN` in its environment.
 - A `Spec.RunID` that is not a UUID in the canonical lower-case form is refused. It
   went unchecked into the run directory's path and into the events' `subject`, which

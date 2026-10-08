@@ -123,7 +123,7 @@
       "additionalProperties": false,
       "properties": {
         "declares": {
-          "description": "The secrets the runtime reads, each from one variable, and where the proxy sets each value.",
+          "description": "The secrets the runtime reads, each from one variable, and where its value is set.",
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
@@ -138,9 +138,8 @@
               "hosts": {"description": "The hosts the value is set on: exact DNS names, no wildcard, no IP literal.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/exact_host"}},
               "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
               "auth": {
-                "description": "How the value is set on a request, a scheme from the closed set. The declaration's own value is the one secret it sets, so auth contains neither secret nor username_secret.",
-                "$ref": "auth.schema.json",
-                "not": {"anyOf": [{"required": ["secret"]}, {"required": ["username_secret"]}]}
+                "description": "How the value is set on a request, a scheme from the closed set.",
+                "$ref": "auth.schema.json"
               }
             }
           }

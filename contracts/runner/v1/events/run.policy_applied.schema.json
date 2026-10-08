@@ -16,7 +16,7 @@
     "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a token.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a secret.",
       "type": "array",
       "items": {
         "type": "object",
@@ -24,7 +24,7 @@
         "required": ["name", "hosts", "scheme"],
         "properties": {
           "name": {"type": "string", "minLength": 1},
-          "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the token is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
+          "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the secret is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
           "paths": {"type": "array", "items": {"type": "string"}}
@@ -67,7 +67,7 @@
         "required": ["name", "lost"],
         "properties": {
           "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-          "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a later source adds a name. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
+          "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a receiver shows a name it does not know as it is. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
           "lost": {
             "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none. An open list, as from is.",
             "type": "array",

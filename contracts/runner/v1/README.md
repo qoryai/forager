@@ -110,7 +110,7 @@ Stated so a receiver reads the record for what it is.
   model endpoint each deliver data to whoever owns the account the request specifies.
 - A credential the run passes into the enclosure's environment is the agent's; one the
   policy selects stays outside (§Credentials). What is passed in is the agent's: a
-  checkout that keeps a token in the repository's configuration passes the token in with
+  checkout that keeps a secret in the repository's configuration passes the secret in with
   the workspace. Behind a wall the run directory is shown read-only and lies outside
   every place the run binds writable, so the agent can neither change nor move
   `events.jsonl`. The server's copy is out of reach as well.
@@ -120,10 +120,10 @@ Stated so a receiver reads the record for what it is.
   a signal arrives as `128` plus the signal's number, with `signal` absent.
 - The proxy behind a wall listens where the enclosure reaches it, which other
   containers of the same engine, or other processes of the machine, reach too. It
-  serves none of them: the run has a token that only its relay receives, every connection
-  the relay forwards opens with `QORY-RELAY`, a space, the token and a newline before
+  serves none of them: the run has a secret that only its relay receives, every connection
+  the relay forwards opens with `QORY-RELAY`, a space, the secret and a newline before
   the first byte of HTTP, and a connection that opens otherwise is closed unanswered
-  and reported once. The token is never inside the enclosure.
+  and reported once. The secret is never inside the enclosure.
 - On an engine inside a virtual machine, such as a Mac's, the hook socket does not cross the
   file share, so a walled run there has no session events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's only
@@ -333,7 +333,7 @@ that could be read two ways is denied in either mode, with the rule
 empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where its own paths
-match: observe mode sends no token to a path nobody configured. The host
+match: observe mode sends no secret to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
 `Host` a request contains. A denial is a `403` containing the method, the host and the path.
 A plain request is decided by the same paths, and the proxy never sets a credential on it.
@@ -344,7 +344,7 @@ over HTTPS requests three paths of a repository, on any host that serves it:
 `/<repo>.git/git-receive-pack` for a push. A run allowed the first two and not the third
 clones and fetches, with the credential set, and its push is refused before it leaves
 the machine: git reports `HTTP 403` and fails, the record contains the denied `POST`, and
-nothing reaches the repository, whatever the token itself permits. Rules match the path
+nothing reaches the repository, whatever the credential itself permits. Rules match the path
 and never the query, so the `info/refs` a push requests first is allowed; it lists the
 same refs a fetch reads.
 
@@ -353,14 +353,14 @@ its query, not its headers, not its body. What a request specifies there is outs
 rule: a subresource requested in the query, such as `?acl`; a listing whose prefix is a
 query parameter, on a host that lists at `/`; a copy that sets its source in a header,
 which writes under an allowed path what it reads from another; a GraphQL body that
-selects any repository the token reaches. A path rule limits a run to the paths it lists
+selects any repository the credential reaches. A path rule limits a run to the paths it lists
 and guarantees nothing about the rest. The rest is bounded by the credential's own
 scope, or by what serves the host, and whoever writes the policy for a host that accepts
 such requests checks them there or leaves the host out.
 
 ## Credentials
 
-A credential is a token the runner keeps outside the enclosure and the proxy sets on the
+A credential is a secret the runner keeps outside the enclosure and the proxy sets on the
 requests it applies to; the session's environment and files contain at most a
 placeholder for it.
 The machine defines credentials; the run's policy selects among them by name and
@@ -368,9 +368,9 @@ defines none, so whoever writes a policy chooses among the programs the machine'
 installed and never specifies one. They need a wall: without one a program that ignores the
 proxy is bound by nothing here.
 
-A definition defines where the token comes from, exactly one of:
+A definition defines where the secret comes from, exactly one of:
 
-| Source | The token is |
+| Source | The secret is |
 |---|---|
 | `env` | a variable of the runner's own environment, read once when the run starts |
 | `file` | a file's content, read again whenever it is used, so whatever rotates it notifies no one |
@@ -395,7 +395,7 @@ to standard error is the reason reported.
  "placeholders": ["GIT_HOST_TOKEN"]}
 ```
 
-The adapter's answer defines how its token is used, because hosts differ in it: which
+The adapter's answer defines how its secret is used, because hosts differ in it: which
 hosts, which scheme, and which paths make up what the run requests. The schemes are a
 closed set, `bearer`, `basic` with a `username`, `header` with a header's name; an
 adapter chooses among what the runner implements and adds nothing to it. Of a host with
@@ -410,9 +410,9 @@ Before the run starts every selected credential is resolved, and any of these is
 no run: a name the machine does not define, an argument it does not provide for, a host
 two credentials claim, a claim above the definition's, and under `enforce` a host the
 run's allow list does not cover. The runner runs an adapter again five minutes before
-`expires_at`, and when a host returns 401 to a request it set the token on, at most
-once every thirty seconds. The new answer changes the token and nothing else: one
-that lists other hosts, schemes or paths is refused and reported, and the old token
+`expires_at`, and when a host returns 401 to a request it set the secret on, at most
+once every thirty seconds. The new answer changes the secret and nothing else: one
+that lists other hosts, schemes or paths is refused and reported, and the old secret
 stays, because what a run reaches is fixed when it starts.
 
 **Placeholders.** A program often needs a credential set to start. A
@@ -432,16 +432,16 @@ credential and no path rule has no authority at all.
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. `argument` is the policy's
 argument to the credential, the same on every use of one credential and absent when the
-policy passes none, so the record shows what each token is minted for, such as the
+policy passes none, so the record shows what each secret is minted for, such as the
 repositories of a source code host. On a terminated host `dev.qory.run.egress` is one
 event per request, `method: HTTPS` with `request_method`, `path` without its query,
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
-and no error contains a token.
+and no error contains a secret.
 
 ## Tools
 
 A tool is a program of the machine's that serves hosts, for what a run reaches that
-needs more than a token in a header: a request signed with a key that stays outside the
+needs more than a secret in a header: a request signed with a key that stays outside the
 enclosure, a protocol with an exchange of its own, a service that exists only on the
 machine, such as an MCP server. The runner implements no protocol and a tool implements
 one, so no protocol, cloud or provider enters the runner. The machine defines tools; the
@@ -646,8 +646,8 @@ each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fi
 - A name no source's value applies to has no `from`: a value left out by the deny list
   with nothing below it, or a variable the runtime declares, which behind a wall goes in
   empty.
-- The sources and the reasons are open lists: a later source adds a word, and a
-  receiver shows a word it does not know as it is.
+- The sources and the reasons are open lists: a receiver shows a word it does not know
+  as it is.
 
 The record is fixed when the run starts: every further `policy_applied` repeats it. The
 launch spec's `OnVariables`, in Go, receives the same list once, before the agent
@@ -655,8 +655,7 @@ starts, so `qory` prints a line for an `--env` value that lost.
 
 **The document.** `variables` maps each name to an object with its `value`:
 `{"LOG_LEVEL": {"value": "info"}}`. The object is open: a runner ignores a member beside
-`value` it does not recognise, so a later attribute is one a runner may ignore, and an
-attribute a runner must honour needs a new revision.
+`value` it does not recognise; one it must honour needs a new revision.
 
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
@@ -1284,15 +1283,14 @@ declarations; a title for a person choosing one; the variable the
 runtime reads it from; the hosts its value is set on, exact DNS names; optionally the
 paths of those hosts, in the policy's path grammar; and how it is set,
 `auth.schema.json`, a scheme of the closed set, `bearer`, `header` with its `header`, or
-`basic`, with neither `secret` nor `username_secret`. `one_of` lists groups
-`{id, required, of}`, `of` being declared ids, each in one group at most: at most one
-declaration of a group applies, and one of a `required` group.
-`reserves` lists variables the runtime reads a credential from beside the declared ones;
-behind a wall, a declared or reserved variable that neither a placeholder, the run nor
-the runtime's preparation sets goes in empty (§Variables);
-`denies`, variables the runner always leaves out of the server's set for the runtime;
-`credential_files`, files in which the runtime keeps a credential of its own, `~` being
-the home of the user the runner runs as. The runner checks `secrets` when it reads the
+`basic` with its `username`. `one_of` lists groups `{id, required, of}`, `of` being
+declared ids, each in one group at most: at most one declaration of a group applies,
+and one of a `required` group. `reserves` lists variables the runtime reads a credential
+from beside the declared ones; `denies`, variables the runner always leaves out of the
+server's set for the runtime; `credential_files`, files in which the runtime keeps a
+credential of its own, `~` being the home of the user the runner runs as. Behind a wall,
+a declared or reserved variable that neither a placeholder, the run nor the runtime's
+preparation sets goes in empty (§Variables). The runner checks `secrets` when it reads the
 descriptor: the schema, that ids are distinct, and that every id of a group is declared
 and in one group at most.
 
@@ -1428,7 +1426,7 @@ for all of them.
 - a user that is not root, no added capabilities, no privileged mode, no host
   namespaces;
 - no credential the run's policy selects: a placeholder where a program requires one set
-  and the certificate of the run's authority, never a token and never the authority's
+  and the certificate of the run's authority, never a secret and never the authority's
   key;
 - never the container runtime's own socket: a process that can request a
   container on the host's network from the daemon has left the wall. A mount that is a
