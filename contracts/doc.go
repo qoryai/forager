@@ -16,5 +16,5 @@
 // drift apart.
 //
 // The package reads the contract and nothing else. It does not run a session, map a
-// record or post a batch; those are the session, node and receiver packages.
+// record or post a batch; those are the session and receiver packages.
 package contracts

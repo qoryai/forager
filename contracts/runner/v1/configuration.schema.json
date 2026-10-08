@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where the runner posts its events, where it fetches a run configuration and requests stored secrets when the server offers them, and the server's keys. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where the runner posts its events, where it fetches a run configuration when the server offers one, whether the access key is allowed stored secrets, and the server's keys. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "node_id", "events", "apiary_public_key"],
@@ -55,13 +55,13 @@
       }
     },
     "secrets": {
-      "description": "Where stored secrets are requested, listed only for an access key allowed to receive them. A server that lists it requires a wall for every run against it.",
+      "description": "Present for an access key allowed stored secrets. A server that lists it requires a wall for every run against it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url"],
       "properties": {
         "url": {
-          "description": "The endpoint the secrets request is posted to. https, or http to a loopback address only.",
+          "description": "https, or http to a loopback address only.",
           "type": "string",
           "format": "uri",
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"

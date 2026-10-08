@@ -110,7 +110,7 @@ Stated so a receiver reads the record for what it is.
   model endpoint each deliver data to whoever owns the account the request specifies.
 - A credential the run passes into the enclosure's environment is the agent's; one the
   policy selects stays outside (§Credentials). What is passed in is the agent's: a
-  checkout that keeps a token in the repository's configuration passes the token in with
+  checkout that keeps a secret in the repository's configuration passes the secret in with
   the workspace. Behind a wall the run directory is shown read-only and lies outside
   every place the run binds writable, so the agent can neither change nor move
   `events.jsonl`. The server's copy is out of reach as well.
@@ -120,10 +120,10 @@ Stated so a receiver reads the record for what it is.
   a signal arrives as `128` plus the signal's number, with `signal` absent.
 - The proxy behind a wall listens where the enclosure reaches it, which other
   containers of the same engine, or other processes of the machine, reach too. It
-  serves none of them: the run has a token that only its relay receives, every connection
-  the relay forwards opens with `QORY-RELAY`, a space, the token and a newline before
+  serves none of them: the run has a secret that only its relay receives, every connection
+  the relay forwards opens with `QORY-RELAY`, a space, the secret and a newline before
   the first byte of HTTP, and a connection that opens otherwise is closed unanswered
-  and reported once. The token is never inside the enclosure.
+  and reported once. The secret is never inside the enclosure.
 - On an engine inside a virtual machine, such as a Mac's, the hook socket does not cross the
   file share, so a walled run there has no session events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's only
@@ -244,9 +244,6 @@ the tools.
 `dev.qory.run.started` contains `wall` and `image`, and `image_name`, `container_runtime`
 and `docker` when the image is one the machine defines (§Images).
 
-Under a node runner, step 1 is the node runner passing the same spec down through the
-environment, with the run id it already has; everything after is one code path.
-
 ## The policy
 
 `policy.schema.json`. The document the command passes to the runner, from the machine's
@@ -336,7 +333,7 @@ that could be read two ways is denied in either mode, with the rule
 empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where its own paths
-match: observe mode sends no token to a path nobody configured. The host
+match: observe mode sends no secret to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
 `Host` a request contains. A denial is a `403` containing the method, the host and the path.
 A plain request is decided by the same paths, and the proxy never sets a credential on it.
@@ -347,7 +344,7 @@ over HTTPS requests three paths of a repository, on any host that serves it:
 `/<repo>.git/git-receive-pack` for a push. A run allowed the first two and not the third
 clones and fetches, with the credential set, and its push is refused before it leaves
 the machine: git reports `HTTP 403` and fails, the record contains the denied `POST`, and
-nothing reaches the repository, whatever the token itself permits. Rules match the path
+nothing reaches the repository, whatever the credential itself permits. Rules match the path
 and never the query, so the `info/refs` a push requests first is allowed; it lists the
 same refs a fetch reads.
 
@@ -356,14 +353,14 @@ its query, not its headers, not its body. What a request specifies there is outs
 rule: a subresource requested in the query, such as `?acl`; a listing whose prefix is a
 query parameter, on a host that lists at `/`; a copy that sets its source in a header,
 which writes under an allowed path what it reads from another; a GraphQL body that
-selects any repository the token reaches. A path rule limits a run to the paths it lists
+selects any repository the credential reaches. A path rule limits a run to the paths it lists
 and guarantees nothing about the rest. The rest is bounded by the credential's own
 scope, or by what serves the host, and whoever writes the policy for a host that accepts
 such requests checks them there or leaves the host out.
 
 ## Credentials
 
-A credential is a token the runner keeps outside the enclosure and the proxy sets on the
+A credential is a secret the runner keeps outside the enclosure and the proxy sets on the
 requests it applies to; the session's environment and files contain at most a
 placeholder for it.
 The machine defines credentials; the run's policy selects among them by name and
@@ -371,9 +368,9 @@ defines none, so whoever writes a policy chooses among the programs the machine'
 installed and never specifies one. They need a wall: without one a program that ignores the
 proxy is bound by nothing here.
 
-A definition defines where the token comes from, exactly one of:
+A definition defines where the secret comes from, exactly one of:
 
-| Source | The token is |
+| Source | The secret is |
 |---|---|
 | `env` | a variable of the runner's own environment, read once when the run starts |
 | `file` | a file's content, read again whenever it is used, so whatever rotates it notifies no one |
@@ -381,7 +378,8 @@ A definition defines where the token comes from, exactly one of:
 
 **An adapter** contains what one kind of host needs: a source code host, an artifact
 store. The runner contains nothing specific to any host. The runner starts the adapter
-outside the enclosure, with its own environment, a minute to answer, and `${argument}`
+outside the enclosure, with the runner's environment without the access key's
+variables, a minute to answer, and `${argument}`
 in its arguments replaced by the policy's argument, which the definition's pattern must
 match whole: one word of the command line, never a shell's. It prints one document,
 `credential.schema.json`, and exits 0; anything else is no run, and the line it writes
@@ -397,7 +395,7 @@ to standard error is the reason reported.
  "placeholders": ["GIT_HOST_TOKEN"]}
 ```
 
-The adapter's answer defines how its token is used, because hosts differ in it: which
+The adapter's answer defines how its secret is used, because hosts differ in it: which
 hosts, which scheme, and which paths make up what the run requests. The schemes are a
 closed set, `bearer`, `basic` with a `username`, `header` with a header's name; an
 adapter chooses among what the runner implements and adds nothing to it. Of a host with
@@ -412,9 +410,9 @@ Before the run starts every selected credential is resolved, and any of these is
 no run: a name the machine does not define, an argument it does not provide for, a host
 two credentials claim, a claim above the definition's, and under `enforce` a host the
 run's allow list does not cover. The runner runs an adapter again five minutes before
-`expires_at`, and when a host returns 401 to a request it set the token on, at most
-once every thirty seconds. The new answer changes the token and nothing else: one
-that lists other hosts, schemes or paths is refused and reported, and the old token
+`expires_at`, and when a host returns 401 to a request it set the secret on, at most
+once every thirty seconds. The new answer changes the secret and nothing else: one
+that lists other hosts, schemes or paths is refused and reported, and the old secret
 stays, because what a run reaches is fixed when it starts.
 
 **Placeholders.** A program often needs a credential set to start. A
@@ -434,16 +432,16 @@ credential and no path rule has no authority at all.
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. `argument` is the policy's
 argument to the credential, the same on every use of one credential and absent when the
-policy passes none, so the record shows what each token is minted for, such as the
+policy passes none, so the record shows what each secret is minted for, such as the
 repositories of a source code host. On a terminated host `dev.qory.run.egress` is one
 event per request, `method: HTTPS` with `request_method`, `path` without its query,
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
-and no error contains a token.
+and no error contains a secret.
 
 ## Tools
 
 A tool is a program of the machine's that serves hosts, for what a run reaches that
-needs more than a token in a header: a request signed with a key that stays outside the
+needs more than a secret in a header: a request signed with a key that stays outside the
 enclosure, a protocol with an exchange of its own, a service that exists only on the
 machine, such as an MCP server. The runner implements no protocol and a tool implements
 one, so no protocol, cloud or provider enters the runner. The machine defines tools; the
@@ -472,7 +470,9 @@ tools:
 **Starting.** Before the runtime starts, the runner starts every selected tool outside
 the enclosure: the command, with `${argument}` replaced by the argument, one word of the
 command line and never a shell's; the runner's own environment, without the variables
-the machine's credentials are read from, with `QORY_TOOL_LISTEN`, the path of a Unix
+the machine's credentials are read from and without the access key's,
+`QORY_ACCESS_KEY_SECRET`, `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY`, with
+`QORY_TOOL_LISTEN`, the path of a Unix
 socket in a private directory of the runner's, mode `0700`, and `QORY_RUN_ID`. The tool
 listens there within a minute; one that exits first, or does not listen in time, is no
 run, and the last line it writes to standard error is the reason reported. Once it
@@ -646,8 +646,8 @@ each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fi
 - A name no source's value applies to has no `from`: a value left out by the deny list
   with nothing below it, or a variable the runtime declares, which behind a wall goes in
   empty.
-- The sources and the reasons are open lists: a later source adds a word, and a
-  receiver shows a word it does not know as it is.
+- The sources and the reasons are open lists: a receiver shows a word it does not know
+  as it is.
 
 The record is fixed when the run starts: every further `policy_applied` repeats it. The
 launch spec's `OnVariables`, in Go, receives the same list once, before the agent
@@ -655,8 +655,7 @@ starts, so `qory` prints a line for an `--env` value that lost.
 
 **The document.** `variables` maps each name to an object with its `value`:
 `{"LOG_LEVEL": {"value": "info"}}`. The object is open: a runner ignores a member beside
-`value` it does not recognise, so a later attribute is one a runner may ignore, and an
-attribute a runner must honour needs a new revision.
+`value` it does not recognise; one it must honour needs a new revision.
 
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
@@ -698,7 +697,7 @@ The types, one namespace. The runner's own:
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the ping, or since `dev.qory.run.started` when the run has no server | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.run.exited` | the runtime exited; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
-| `dev.qory.run.refused` | the run did not start after the ping; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last | `code`, and when they apply `connection`, `names`, `providers`, `status` |
+| `dev.qory.run.refused` | the server closed the run before it started, with a signed `410` `run_closed`; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last, recorded in the file sink alone | `code`, `run_closed`, and `status`, `410` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
@@ -834,7 +833,10 @@ only the public key. The server assigns the access key its id, `ak_` and 16 lowe
 Crockford base32 characters, when the key enrols (Enrolment, below). The secret lives
 outside this document and outside any repository, in the machine's configuration
 directory, its environment or a file descriptor; it is never in a checkout and never in
-an event. The fixtures sign with the published fixture access key of
+an event. The runner leaves `QORY_ACCESS_KEY_SECRET`, `QORY_ACCESS_KEY_ID` and
+`QORY_APIARY_PUBLIC_KEY` out of the environment of every program it starts: the
+session, the tools, the credential adapters and the wall's `docker` commands, the one
+that starts the agent's container included. The fixtures sign with the published fixture access key of
 `fixtures/known-answers/keys.json`, under the id `ak_f1xt0re000000000`. `qory` refuses
 its secret, and the fixture signing keys as a pin; a server refuses its public key at
 enrolment, and the fixture signing keys as its own key. A second fixture access key,
@@ -842,7 +844,12 @@ the seed being bytes 193 to 224, whose public key is
 `dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw`, has its secret published in the
 `accesskey` package's tests and in this repository's history, and every side refuses it
 as it refuses the fixture access key. A fingerprint, of an access key's public key or
-of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22 characters.
+of the server's, is `base64url(SHA-256(raw public key)[:16])`, 22 characters. The
+`accesskey` package decodes every base64url value it reads strictly: an access key
+secret's seed, a public key, a fingerprint in an enrolment code, a signature and a
+proof. A value with padding, a character of the standard alphabet (`+` or `/`), a line
+break, non-zero bits after its last full byte, or a length other than its own is
+refused.
 
 **Nodes and instances.** An access key belongs to a node, `nd_`, a permanent machine
 that runs one instance at a time, or to a node pool, `np_`, whose instances share the
@@ -851,14 +858,20 @@ Crockford base32 characters. An instance is one running copy of `qory` with the 
 key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of every
 request, for display, audit, per-instance events and the instance limit; authorisation
 rests on the access key alone, and whoever holds the access key can claim any instance
-id. `qory` generates `i_` and 16 random bytes in base64url and keeps the id in the file
-`instance-id` with the HMAC-SHA256, keyed with `qory instance-id v1`, of the machine's
-identity, so a file copied to another machine yields a new id there. The instance's
+id. `qory` generates `i_` and 16 bytes from the system's random source in base64url, 24
+characters, and keeps the id in the file `instance-id`. It writes two lines, each ended
+by a line feed: the id, and the lower-case hex HMAC-SHA256, keyed with `qory
+instance-id v1`, of the machine's identity, `/etc/machine-id` on Linux, `IOPlatformUUID`
+on macOS, else the host name, as machine-id(5) recommends, without the white space
+around it. It reads the two lines with or without the final line feed. A file that is
+not exactly two lines, whose first line is outside the pattern or contains an access
+key secret, or whose second line is not this machine's hash, yields a new id, so a file
+copied to another machine yields a new id there. The instance's
 display name, the host name by default, is sent unsigned and serves display alone. A
 ping from a new instance id beyond its node's limit
 is a signed `409` `instance_limit`, and that run does not start; an instance counts
 while one of its runs is live. A run is live from its accepted ping until its final
-event, `dev.qory.run.exited` or `dev.qory.run.refused`, or until no accepted event of
+event, `dev.qory.run.exited`, until the server closes it, or until no accepted event of
 the run has arrived for 3 × the `interval_seconds` its ping announced.
 
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
@@ -899,7 +912,7 @@ The signature covers the access key id, the instance id, and the method, the tar
 the timestamp of a GET, or the method, the target and the body of a POST.
 `User-Agent`, `Content-Type`, `X-Qory-Contract-Version`, `X-Qory-Instance-Name`,
 `X-Qory-Delivery` and `X-Qory-Run-Configuration` are unsigned: the server takes every
-authorisation decision from the signed lines and the body. Three known answers, under
+authorisation decision from the signed lines and the body. Two known answers, under
 the fixture access key secret and the instance id `i_gYKDhIWGh4iJiouMjY6PkA`, line by
 line in `fixtures/known-answers/signatures.json`:
 
@@ -907,10 +920,7 @@ line in `fixtures/known-answers/signatures.json`:
   `qory-request-ed25519-v1\nak_f1xt0re000000000\ni_gYKDhIWGh4iJiouMjY6PkA\nGET\n/.well-known/qory-configuration\n1700000000`:
   `H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ`;
 - the same with the target `/.well-known/qory-configuration?x=1`, 119 bytes:
-  `XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ`;
-- a POST to `/v1/secrets` of the 297-byte body of
-  `fixtures/sealed/secrets-request.json`, a signed message of 383 bytes:
-  `evE_tMJMYuStWh8E3xfWNnozoq-zMznRZ4KuFpz0h_e1GUeap3diwAG01KWTZ2mxvU0Cl62LiK_u7nw6UV67Cw`.
+  `XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ`.
 
 **A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
 One `POST` per batch to the events URL, with the headers above and:
@@ -1006,7 +1016,8 @@ for a key already enrolled, a revoked one included; `409` `key_limit`; and `201`
 server signs an answer only to a proof that verifies under a key the checks pass, so a
 proof no key made, such as one under a key of small order, which plain Ed25519
 verification accepts for any message, gets no signed answer. The `201` answer contains
-the access key id, `node_id` with `node_kind`, `stored_secrets` and the server's keys,
+the access key id, `node_id` with `node_kind`, `stored_secrets`, true for an access key
+allowed stored secrets, and the server's keys,
 signed as Signed answers describes under `qory-enrol-answer-ed25519-v1` with the
 request's `proof` as line 3; the machine verifies it under the listed key whose
 fingerprint the code carries first, and pins only the keys whose fingerprints the code
@@ -1044,8 +1055,8 @@ runner, which compares it byte for byte and never recomputes it.
 of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
 display: `qory` prints it. `apiary_public_key` lists the server's current key, and
 during a rotation the next one, for information: a runner verifies under its pin alone.
-`secrets` is optional, `{url}` with `run.url`'s grammar, listed only for an access key
-allowed to receive stored secrets. Discovery lists no key endpoint: keys change through
+`secrets` is optional, `{url}` with `run.url`'s grammar: present for an access key
+allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
@@ -1268,20 +1279,21 @@ which is why the descriptor defines the inference and not the
 command.
 
 **Secrets**, optional: what the runtime needs of a run's secrets. `declares` lists the
-secrets it reads, each `{id, title, name, hosts, paths, auth}`: an id, the key a runtime
-connection supplies it under; a title for a person choosing one; the variable the
+secrets it reads, each `{id, title, name, hosts, paths, auth}`: an id, unique among the
+declarations; a title for a person choosing one; the variable the
 runtime reads it from; the hosts its value is set on, exact DNS names; optionally the
 paths of those hosts, in the policy's path grammar; and how it is set,
 `auth.schema.json`, a scheme of the closed set, `bearer`, `header` with its `header`, or
-`basic`, with neither `secret` nor `username_secret`. `one_of` lists groups
-`{id, required, of}`, `of` being declared ids, each in one group at most: a runtime
-connection supplies at most one declaration of a group, and one of a `required` group.
-`reserves` lists variables the runtime reads a credential from beside the declared ones;
-`denies`, variables the runner always leaves out of the server's set for the runtime;
-`credential_files`, files in which the runtime keeps a credential of its own, `~` being
-the home of the user the runner runs as. The runner checks `secrets` when it reads the
-descriptor: the schema, that ids are distinct, and that every id of a group is declared
-and in one group at most.
+`basic` with its `username`. `one_of` lists groups `{id, required, of}`, `of` being
+declared ids, each in one group at most: groups of declarations of which the runtime
+needs at most one, and exactly one of a `required` group. `reserves` lists variables
+the runtime reads a credential from beside the declared ones; `denies`, variables the
+runner always leaves out of the server's set for the runtime; `credential_files`, files
+in which the runtime keeps a credential of its own, `~` being the home of the user the
+runner runs as. Behind a wall, a declared or reserved variable that neither a
+placeholder, the run nor the runtime's preparation sets goes in empty (§Variables). The
+runner checks `secrets` when it reads the descriptor: the schema, that ids are
+distinct, and that every id of a group is declared and in one group at most.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
@@ -1415,7 +1427,7 @@ for all of them.
 - a user that is not root, no added capabilities, no privileged mode, no host
   namespaces;
 - no credential the run's policy selects: a placeholder where a program requires one set
-  and the certificate of the run's authority, never a token and never the authority's
+  and the certificate of the run's authority, never a secret and never the authority's
   key;
 - never the container runtime's own socket: a process that can request a
   container on the host's network from the daemon has left the wall. A mount that is a
@@ -1512,9 +1524,13 @@ is looked up in its parent, so two binds of one root are allowed:
   run, `engine_unreachable`, whose names are the earlier run's id and then the absolute
   path of its entry in the registry.
 
-The names of these refusals are paths as the caller passed them, the first always one
-of the run's mounts or its workspace, the run directory named by its runs directory.
-The runner checks again just before the enclosure binds, with the wall's own binds, and
+Each of these refusals lists its names in the order given with it. A place of this run's,
+a mount or the workspace, is named by its path as the caller passed it, and its run
+directory by the runs directory the caller passed; a bind of another run's is named as
+that run passed it, a runner's file, a link and a registry entry by their paths, and an
+earlier or another run by its id. The first name of each `mount_` refusal is one of this
+run's places, or for `mount_shared_with_run` also its run directory; the first name of
+`engine_unreachable` is the earlier run's id. The runner checks again just before the enclosure binds, with the wall's own binds, and
 a place that resolves otherwise, or whose names are looked up in other directories,
 than at the start does not start. So no name on the way to a bind source is looked up
 in a place a walled agent of this user's can write. A process outside every wall, the
@@ -1572,9 +1588,8 @@ through it.
 
 **A Docker of the agent's own.** *Experimental.* Under the nested runtime the enclosure
 has a root, and whether that root reaches the mounts the run lists as the machine's root
-is unverified, so the option is experimental: it may change or be
-withdrawn in a minor release, and a run that uses it mounts nothing the machine's root
-must protect.
+is unverified, so the option is experimental: it may change, and a run that uses it
+mounts nothing the machine's root must protect.
 
 An image the machine defines with a daemon (§Images) provides the agent a Docker daemon
 inside the enclosure, never the machine's. It needs a runtime that runs a daemon in a
@@ -1643,13 +1658,9 @@ the option experimental.
 
 | File | Defines |
 |---|---|
-| `secrets-request.schema.json` | the body of the signed POST to the configuration's `secrets.url` |
-| `secrets-answer.schema.json` | its answer, the envelope: the stored values sealed with HPKE to the access key, signed under the server's key |
-| `sealed-plaintext.schema.json` | the plaintext the envelope opens to |
 | `enrolment.schema.json` | the enrolment request's body and its answer |
-| `events/run.refused.schema.json` | the data of `dev.qory.run.refused`, a run that does not start after the ping, with its refusal code |
+| `events/run.refused.schema.json` | the data of `dev.qory.run.refused`, a run the server closed before it started, with its refusal code |
 | `denied-variables.json` | the built-in deny list of variables, `names` and `patterns`, each matching a whole name regardless of case, `*` matching any run of characters |
-| `headers.json` | the header names, `refused`, and prefixes, `refused_prefixes`, refused for a connection's header, in lower case: every field of the IANA HTTP Field Name Registry as updated on 2026-08-28; the Fetch standard's forbidden request headers as of 2026-10-06; `origin`, `content-type`, `x-request-id`, `x-correlation-id`, `forwarded`, `via`, `range`, `user-agent`, `referer`, `host`, `content-length`, `transfer-encoding`, `connection`, `keep-alive`, `te`, `trailer`, `upgrade`, `cookie` and `authorization`; and the prefixes `accept`, `if-`, `x-forwarded-`, `proxy-`, `sec-`, `x-qory-` and `qory-` |
 
 ## Fixtures
 
@@ -1659,11 +1670,10 @@ the option experimental.
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
-| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run that does not start | `batch.schema.json` |
+| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
-| `fixtures/sealed/` | the sealed fixture: a run configuration, the secrets request that lists its digest, the envelope sealed to the fixture access key with a fixed ephemeral key, the plaintext it opens to, and `vectors.json` with `info`, `aad`, the ephemeral key and the lengths and SHA-256 of the ciphertext and of the envelope's signed message | `secrets-request.schema.json`, `secrets-answer.schema.json`, `sealed-plaintext.schema.json` and `run-configuration.schema.json`; the open with Go's `crypto/hpke`, and the envelope's signature under the fixture signing key |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |

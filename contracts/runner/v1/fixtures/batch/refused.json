@@ -9,14 +9,8 @@
     "sequence": "0000000002",
     "dataschema": "https://qory.dev/contracts/runner/v1/events/run.refused.schema.json",
     "data": {
-      "code": "secret_unresolved",
-      "connection": "con_5h1k8m3p6r0t4w9x",
-      "names": [
-        "SENTRY_AUTH"
-      ],
-      "providers": [
-        "local"
-      ]
+      "code": "run_closed",
+      "status": 410
     }
   }
 ]

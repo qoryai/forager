@@ -25,7 +25,7 @@
   },
   "$defs": {
     "variable": {
-      "description": "One variable: its value, and room for later attributes. A runner ignores an attribute it does not recognise, so a later attribute is one a runner may ignore; an attribute a runner must honour needs a new revision.",
+      "description": "One variable: its value. A runner ignores an attribute it does not recognise; one it must honour needs a new revision.",
       "type": "object",
       "additionalProperties": true,
       "required": ["value"],
