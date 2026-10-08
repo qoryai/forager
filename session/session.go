@@ -127,13 +127,15 @@ type Spec struct {
 	Images []Image
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
-	// one of the same mode is reached through the outer one, which alone is bound; one
-	// of the other mode is no run, mount_mode_conflict. Dir is writable, and is bound
-	// at its own path when no mount holds it. The runner adds the run directory,
-	// read-only. A walled run refuses a mount, or Dir, that lies inside a writable bind
-	// of another walled run of this user's still going, apart from the same root, or
-	// that is writable and holds one of that run's binds: mount_shared_with_run. Without
-	// a Wall they mean nothing.
+	// one of the same mode, or reached through a link inside a writable one, is reached
+	// through the outer one, which alone is bound; one of the other mode is no run,
+	// mount_mode_conflict. Dir is writable, and is bound at its own path when no mount
+	// holds it. The runner adds the run directory, read-only. A walled run refuses a
+	// bind that lies inside, or is reached through, a writable bind of another walled
+	// run of this user's still going, apart from the same root, a writable one that
+	// holds one of that run's binds or the way to one, and one that is, holds or lies
+	// inside that run's run directory: mount_shared_with_run. Without a Wall they mean
+	// nothing.
 	Mounts []wall.Mount
 	// RunnerFiles are the absolute paths of the caller's files that are the runner's
 	// own, such as the directory of qory's runner file with the access key secret. A
@@ -321,12 +323,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	var listed *registration
 	if spec.Wall != nil {
-		release, err := register(runID, plan.sources)
-		if err != nil {
+		if listed, err = register(runID, plan.sources); err != nil {
 			return nil, err
 		}
-		defer release()
+		defer listed.release()
 	}
 	// The server, when the run has one: discovered before anything else. The run
 	// configuration it names is fetched after the ping; its policy, narrowed by the
@@ -610,19 +612,25 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path()}, own),
 	}
 	if enclosure != nil {
-		// The places again, just before the enclosure binds them. No walled agent of this
-		// user's can change a part of their paths, the start's checks saw to that; the
-		// user, or a process outside every wall, can. What changed before this point is
-		// checked as at the start, and what changes after it is not.
+		// The places again, just before the enclosure binds them, and the wall's own
+		// binds, which exist by now, against the walled runs still going; the run's entry
+		// then lists them all. No walled agent of this user's can change a directory a
+		// name on the way to a place or the run directory is looked up in, the start's
+		// checks saw to that; the user, or a process outside every wall, can. A place
+		// that resolves otherwise than at the start, or whose names are looked up in
+		// other directories, fails the run; what changes after this point is not seen.
 		again, err := checkMounts(spec, dir)
 		if err != nil {
 			return fail(err)
 		}
-		if !slices.Equal(again.Mounts, plan.Mounts) || again.Dir != plan.Dir {
-			return fail(errors.New("the places the run lists resolve otherwise than when " +
-				"it started: a link among them changed"))
+		if err := samePlan(plan, again); err != nil {
+			return fail(err)
 		}
-		if err := recheck(runID, again.sources); err != nil {
+		binds, err := wallBinds(enclosure, sock.Path(), authority)
+		if err != nil {
+			return fail(err)
+		}
+		if err := listed.update(append(again.sources, binds...)); err != nil {
 			return fail(err)
 		}
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{

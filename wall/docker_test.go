@@ -492,3 +492,40 @@ func TestDockerBindsTheWorkspaceThroughItsMount(t *testing.T) {
 		})
 	}
 }
+
+// TestDockerListsItsOwnBinds pins the adapter's own binds: the helper, read-only, the
+// hook socket's directory, writable, and the private directory it writes the run's
+// files in, read-only, the one Wrap then writes them in.
+func TestDockerListsItsOwnBinds(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"relay"}, sys: rec}
+	req := Request{RunID: runID, Image: "example.com/agent:1"}
+	e, err := d.Prepare(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.CA = []byte("-----BEGIN CERTIFICATE-----\n")
+	binds, err := e.(Binder).Binds(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := e.(*dockerEnclosure).temp
+	want := []Bind{
+		{Path: "/opt/qory/qory-linux", ReadOnly: true, Helper: true},
+		{Path: "/tmp/qory-run-1"},
+		{Path: temp, ReadOnly: true},
+	}
+	if temp == "" || !slices.Equal(binds, want) {
+		t.Fatalf("binds %+v, want %+v", binds, want)
+	}
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := "type=bind,src=" + filepath.Join(temp, "ca-bundle.pem") +
+		",dst=" + BundlePath + ",readonly"
+	if !slices.Contains(wrapped.Args, bundle) {
+		t.Errorf("the bundle is not bound from %s: %q", temp, wrapped.Args)
+	}
+}

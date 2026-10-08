@@ -41,6 +41,26 @@ type Filer interface {
 	Files() []string
 }
 
+// Binder is an enclosure that binds files and directories of this machine of its own,
+// beside the launch's mounts: for [Docker], its helper, the hook socket's directory and
+// the private directory of the files it writes for the run. A walled run checks them,
+// as it checks its mounts, against the other walled runs still going.
+type Binder interface {
+	// Binds lists them for the launch about to be wrapped, with its Socket and CA set.
+	Binds(l Launch) ([]Bind, error)
+}
+
+// Bind is one file or directory of this machine an enclosure binds of its own.
+type Bind struct {
+	// Path is the path as the caller defined it, or as the enclosure made it.
+	Path string
+	// ReadOnly says the enclosure cannot change it.
+	ReadOnly bool
+	// Helper says it is the runner's helper program, rather than a directory of the
+	// runner's.
+	Helper bool
+}
+
 // Reaper is a wall that can remove what it left of a run whose runner died before it
 // closed the enclosure. It is asked only for a run known to be over.
 type Reaper interface {

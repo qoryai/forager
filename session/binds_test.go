@@ -500,9 +500,9 @@ func TestAStaleEntryIsRemoved(t *testing.T) {
 	}
 }
 
-// TestRunsThatStartTogetherAreCheckedInTurn pins the registry's lock: of two walled
-// runs that start at once, one inside the other's writable bind, one is listed and the
-// other refused, whichever comes first.
+// TestRunsThatStartTogetherAreCheckedInTurn pins that of two walled runs that start at
+// once, one inside the other's writable bind, one goes on and the other is refused,
+// whichever comes first. TestARunWaitsForTheRegistrysLock pins the lock itself.
 func TestRunsThatStartTogetherAreCheckedInTurn(t *testing.T) {
 	for range 5 {
 		root := t.TempDir()

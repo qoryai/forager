@@ -33,8 +33,9 @@ nothing.
   the working directory inside. The run's record is mounted read-only, from a runs
   directory outside every mount.
 - Nothing else of the node is visible inside.
-- No mount comes from a place a walled agent can change: not from inside another mount
-  of the run's, and not from inside a writable mount of another walled run still going.
+- No mount comes from a place a walled agent can change: no name on the way to it is
+  looked up inside a writable mount of the run's own, or of another walled run still
+  going.
   See
   [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
 - A mount that is, contains or lies inside one of the runner's files is no run,
@@ -87,8 +88,9 @@ qory run --wall docker --image agent:1 --env ANTHROPIC_API_KEY claude -- -p "Rep
 ```
 
 The run is recorded in its run directory, as without a wall: `events.jsonl` and
-`output.log`, in a runs directory outside the checkout. `dev.qory.run.started` contains
-the wall and the image. The exit status is the agent's.
+`output.log`, in the directory `qory` prints, under its state directory and outside the
+checkout. `dev.qory.run.started` contains the wall and the image. The exit status is the
+agent's.
 
 ### On Linux and on a Mac
 
@@ -245,11 +247,12 @@ it cannot resolve. A caller uses it to word its own message.
 
 ### No bind from a place an agent can change
 
-An engine resolves a bind's source, every part of its path, when it binds it. A check
-of the path before cannot hold when a part of it lies in a directory an agent can write:
-the agent swaps a link in after the check. So a walled run's bind source never lies
-inside a writable bind, the run's own or another walled run's still going, except as
-that bind's own root.
+An engine looks up every name of a bind's source path again when it binds it, links
+included. A check of the path before cannot hold when a name is looked up in a
+directory an agent can write: the agent swaps a link in after the check. So no name on
+the way to a walled run's bind source is looked up in a writable bind, the run's own or
+another walled run's still going, or in a directory inside one. A bind's own root is
+looked up in its parent, so two binds of one root are allowed.
 
 - **One bind for the workspace.** The enclosure binds the outermost of the places the
   run lists, `Spec.Mounts` and the workspace, each once. The workspace is the working
@@ -258,45 +261,69 @@ that bind's own root.
   one bind, the checkout's root, and the working directory below it. A workspace that
   no mount holds is bound at its own path, writable.
 - **Nested places.** A mount, or the workspace, inside another one of the same mode is
-  reached through the outer one, which alone is bound. One inside another of the other
-  mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
+  reached through the outer one, which alone is bound. So is one whose path goes
+  through a link inside a writable one: the enclosure shows the link as the outer one
+  has it, and binds nothing through it. One inside another of the other mode, either
+  way, is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
   outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
-  mount /work (writable): a part of a writable mount can't be read-only".
+  mount /work (writable): a part of a writable mount can't be read-only", or, through a
+  link, "the mount /work/home (read-only) is reached through /work/home, which lies
+  inside the mount /work (writable): …". When the outer place is the workspace, it
+  says "place" for "mount".
 
   A writable place inside a read-only one is refused the same way: a part of a
   read-only mount can't be writable. Two places of one path in both modes are refused
   too.
+- **The runner's files.** A writable place that contains a directory a name on the way
+  to one of the runner's files is looked up in, such as a runs directory that is a link
+  inside the checkout, is `mount_contains_runner_files`: the agent could point the link
+  elsewhere.
 - **The run directory.** The runs directory is one of the runner's files, so the run
-  directory lies inside no place the run lists. It is bound read-only.
+  directory lies inside no place the run lists. It is bound read-only to its own run's
+  enclosure, and to no other: a bind that is, holds or lies inside another walled run's
+  run directory, whatever its mode, is `mount_shared_with_run`.
+- **The wall's own binds.** For `wall.Docker` they are the helper, read-only, the hook
+  socket's directory, writable, and the private directory of the run's environment
+  files and bundle, read-only. A wall lists them through `wall.Binder`, and the runner
+  checks them like the places, just before the enclosure binds them.
 - **Other walled runs.** The runner keeps a registry of the walled runs still going on
   the machine, per user, in `$XDG_STATE_HOME/qory-runner/walled`, else
   `~/.local/state/qory-runner/walled`: a directory of the user's, 0700, which the runner
   refuses when it is anything else. Each run holds a file there, named by its run id,
-  with its process id and its binds, each as the run passed it, as it resolved, and
-  whether it is writable, and holds it locked until the run ends. A file whose lock is
-  free is a run that is over, and the runner removes it. Under a lock of the registry's
-  own, a run reads the entries, checks its binds against them and adds its own, so two
-  runs that start together are checked one after the other. A run is no run,
-  `mount_shared_with_run`, when one of its binds lies inside a writable bind of another
-  run's, or when one of its writable binds holds a bind of another run's. Two runs that
-  bind the same root, both writable, run side by side, and two read-only binds never
-  conflict. `Names` holds this run's path, the other run's id and the other run's path,
-  as each run passed it. Its sentence reads: "the mount /work/sub (writable) lies
-  inside the writable bind /work of the walled run
-  0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that
-  run can change it".
+  with its process id and its binds: each as the run passed it, as it resolved, the
+  entries its names are looked up as, whether it is writable, and what it is when it is
+  not a place, the run directory, the helper or a directory of the runner's. The run
+  holds the file locked until it ends. A file whose lock is free is a run that is over,
+  and the runner removes it. Under a lock of the registry's own, a run reads the
+  entries, checks its binds against them and adds its own, so two runs that start
+  together are checked one after the other. A run is no run, `mount_shared_with_run`,
+  when one of its binds lies inside a writable bind of another run's or is reached
+  through one, or when one of its writable binds holds a bind of another run's or a
+  directory a name on the way to one is looked up in. Two runs that bind the same root,
+  both writable, run side by side, and two read-only binds never conflict. `Names` holds
+  this run's path, the other run's id and the other run's path, as each run passed it.
+  Its sentence reads: "the mount /work/sub (writable) lies inside the writable bind
+  /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a
+  walled agent of that run can change it".
+
+  A run whose own helper, or another directory of the runner's it binds, lies inside a
+  writable bind of another run's, or is reached through one, fails with a plain error:
+  "the runner's helper /work/bin/qory lies inside the writable bind /work of the walled
+  run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that
+  run can change it", or "the runner's directory …" for a directory.
 
   The check comes before the server is contacted, and the run leaves the registry when
   it ends, however it ends.
 
 A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
 the run directory is named by `Spec.RunsDir`. Every check runs again just before the
-enclosure binds the mounts, and a run whose places resolve otherwise than at its start
-fails.
+enclosure binds the mounts, with the wall's own binds, and the run's entry is updated. A
+place that resolves otherwise than at the start, or whose names are looked up in other
+directories, fails the run, with a sentence that says which.
 
-So no bind source lies inside a place a walled agent of this user's can write. A process
-outside every wall, the user's own or another user's, can still change a path between
-the check and the bind.
+So no name on the way to a bind source is looked up in a place a walled agent of this
+user's can write. A process outside every wall, the user's own or another user's, can
+still change a path between the last check and the bind.
 
 ### The helper
 

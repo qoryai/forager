@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/qoryai/runner/internal/program"
@@ -218,7 +219,10 @@ func runnerFiles(spec Spec) []runnerFile {
 		}
 	}
 	// The run directories hold the record, and the runner reads the runtime's settings
-	// from them; a run's own is shown to its enclosure read-only, and to no other.
+	// from them; a run's own is shown to its enclosure read-only, and to no other: no
+	// place of this run's holds the runs directory, and a walled run with a bind that
+	// is, holds or lies inside the run directory of another walled run still going does
+	// not start (checkShared).
 	out = append(out, runnerFile{spec.RunsDir, "where the run directories are kept"})
 	if dir, err := walledDir(); err == nil {
 		out = append(out, runnerFile{dir, "where the runner lists the walled runs still going"})
@@ -228,12 +232,104 @@ func runnerFiles(spec Spec) []runnerFile {
 	return out
 }
 
+// lookup is one name looked up on the way to a path: the directory it is looked up in,
+// resolved, and the names from that one on, as the path continues from there.
+type lookup struct {
+	dir  string
+	rest []string
+	// at is dir as the filesystem has it.
+	at splitPath
+}
+
+// entry is the path of the name looked up: what an agent that can write the directory
+// replaces.
+func (l lookup) entry() string { return filepath.Join(l.dir, l.rest[0]) }
+
+// lookups walks p as written, a name at a time, and returns every directory a name is
+// looked up in, in order: through a link, the names of its target, as written, before
+// the rest. It stops after the first name that does not exist, since an agent that can
+// write the directory it is looked up in can make it. An engine that binds the path
+// looks up the same names in the same directories, so a path is bound as checked only
+// while none of them can change.
+func lookups(p string) ([]lookup, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return nil, err
+	}
+	names := parts(abs)
+	cur := "/"
+	var out []lookup
+	links := 0
+	for i := 0; i < len(names); i++ {
+		switch names[i] {
+		case ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		at, err := split(cur, 0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, lookup{dir: cur, rest: append([]string(nil), names[i:]...), at: at})
+		next := filepath.Join(cur, names[i])
+		info, err := os.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		if links++; links > maxLinks {
+			return nil, fmt.Errorf("%s: too many links", abs)
+		}
+		to, err := os.Readlink(next)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.IsAbs(to) {
+			cur = "/"
+		}
+		names = append(parts(to), names[i+1:]...)
+		i = -1
+	}
+	return out, nil
+}
+
+// parts are the names of a path, as written.
+func parts(p string) []string {
+	var out []string
+	for _, n := range strings.Split(p, "/") {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// lookedUpIn is the first of the lookups whose directory is dir or lies inside it, and
+// whether there is one.
+func lookedUpIn(dir splitPath, ls []lookup) (lookup, bool) {
+	for _, l := range ls {
+		if ok, _ := holds(dir, l.at); ok {
+			return l, true
+		}
+	}
+	return lookup{}, false
+}
+
 // shown is one of the places of this machine a walled run lists: a mount or the
 // workspace, its path exactly as the caller passed it, which is what a refusal names.
 type shown struct {
 	path, what string
 	writable   bool
 	at         splitPath
+	looks      []lookup
 }
 
 // mode is how a refusal words whether the enclosure can write a place.
@@ -244,16 +340,51 @@ func mode(writable bool) string {
 	return "read-only"
 }
 
+// The kinds of a walled run's binds besides the places the run lists.
+const (
+	kindRun    = "run"
+	kindHelper = "helper"
+	kindDir    = "directory"
+)
+
 // bindSource is one bind of a walled run's: the path as the run passed it, the path
-// as it resolved when the run started, and whether the enclosure can write it.
+// as it resolved, the entries looked up on the way to it, and whether the enclosure
+// can write it.
 type bindSource struct {
 	Path     string `json:"path"`
 	Resolved string `json:"resolved"`
-	Writable bool   `json:"writable"`
-	// what names the bind in a refusal's sentence, and at is where it resolved: for
-	// this run's own checks alone.
-	what string
-	at   splitPath
+	// Lookups are the paths of the names looked up on the way to Path, each in a
+	// resolved directory: an agent that can write one of those directories can change
+	// where Path leads.
+	Lookups  []string `json:"lookups"`
+	Writable bool     `json:"writable"`
+	// Kind is empty for a place the run lists, run for the run directory, helper for
+	// the runner's helper and directory for another directory of the runner's a wall
+	// binds.
+	Kind string `json:"kind,omitempty"`
+	// what names the bind in a refusal's sentence, at is where it resolved and looks
+	// are its lookups: for this run's own checks alone.
+	what  string
+	at    splitPath
+	looks []lookup
+}
+
+// source is the bind source of a path, resolved now.
+func source(path, what, kind string, writable bool) (bindSource, error) {
+	at, err := split(path, 0)
+	if err != nil {
+		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, err)
+	}
+	looks, err := lookups(path)
+	if err != nil {
+		return bindSource{}, fmt.Errorf("cannot resolve %s: %w", what, err)
+	}
+	b := bindSource{Path: path, Resolved: at.String(), Writable: writable, Kind: kind,
+		what: what, at: at, looks: looks}
+	for _, l := range looks {
+		b.Lookups = append(b.Lookups, l.entry())
+	}
+	return b, nil
 }
 
 // mountPlan is what the enclosure of a walled run binds: the outermost of the places
@@ -277,15 +408,19 @@ type mountPlan struct {
 // the places exactly as the caller passed it:
 //
 //   - mount_contains_runner_files: a place that is, contains or lies inside one of the
-//     runner's files; the place and the file are its names, in that order.
+//     runner's files, or a writable place that contains a directory a name on the way
+//     to one is looked up in, a link say; the place and the file are its names, in that
+//     order.
 //   - mount_mode_conflict: a place inside another one, or the same, of the other mode:
 //     a read-only part of a writable bind is one the agent replaces, and a writable
-//     part of a read-only one writes what the run shows read-only. Its names are the
-//     inner place and the outer one, in that order.
+//     part of a read-only one writes what the run shows read-only. A place a name on
+//     the way to which is looked up inside a writable place lies inside that one. Its
+//     names are the inner place and the outer one, in that order.
 //
 // A place inside another one of the same mode is no bind of its own: the enclosure
-// reaches it through the outer one, at the same path. The workspace is writable, and
-// is the working directory inside, through the bind that holds it.
+// reaches it through the outer one, at the same path. So no bound place is reached
+// through a directory another bound place lets the agent write. The workspace is
+// writable, and is the working directory inside, through the bind that holds it.
 func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, p := range spec.RunnerFiles {
 		if strings.ContainsRune(p, 0) {
@@ -304,6 +439,14 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	}
 	places = append(places, shown{path: spec.Dir, what: "the workspace", writable: true})
 	files := runnerFiles(spec)
+	fileLooks := make([][]lookup, len(files))
+	for i, f := range files {
+		ls, err := lookups(f.path)
+		if err != nil {
+			return mountPlan{}, fmt.Errorf("cannot resolve the runner's file %s: %w", f.path, err)
+		}
+		fileLooks[i] = ls
+	}
 	for i, m := range places {
 		for _, f := range files {
 			how, err := overlap(m.path, f.path)
@@ -322,10 +465,30 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		if err != nil {
 			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, m.path, err)
 		}
-		places[i].at = at
+		looks, err := lookups(m.path)
+		if err != nil {
+			return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", m.what, m.path, err)
+		}
+		places[i].at, places[i].looks = at, looks
+		if !m.writable {
+			continue
+		}
+		// A link on the way to a runner's file, in a place the agent writes, is one the
+		// agent points elsewhere.
+		for j, f := range files {
+			if l, ok := lookedUpIn(at, fileLooks[j]); ok {
+				return mountPlan{}, &Refusal{
+					Code:  refusal.MountContainsRunnerFiles,
+					Names: []string{m.path, f.path},
+					Detail: fmt.Sprintf("%s %s contains %s, on the way to %s, %s",
+						m.what, m.path, l.entry(), f.path, f.what),
+				}
+			}
+		}
 	}
 	// outer[i] is the place i is bound through: the first other place that holds it, the
-	// earlier one of two that are the same; -1 when none does.
+	// earlier one of two that are the same, or a writable one a name on the way to it is
+	// looked up in; -1 when none is.
 	outer := make([]int, len(places))
 	for i, in := range places {
 		outer[i] = -1
@@ -334,11 +497,16 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 				continue
 			}
 			ok, same := holds(out.at, in.at)
-			if !ok || (same && j > i) {
+			var l lookup
+			linked := false
+			if !ok && out.writable {
+				l, linked = lookedUpIn(out.at, in.looks)
+			}
+			if (!ok && !linked) || (same && j > i) {
 				continue
 			}
 			if in.writable != out.writable {
-				return mountPlan{}, modeConflict(in, out, same)
+				return mountPlan{}, modeConflict(in, out, same, l, linked)
 			}
 			if outer[i] < 0 {
 				outer[i] = j
@@ -351,44 +519,64 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			continue
 		}
 		plan.Mounts = append(plan.Mounts, wall.Mount{Path: p.path, ReadOnly: !p.writable})
-		plan.sources = append(plan.sources, bindSource{
-			Path: p.path, Resolved: p.at.String(), Writable: p.writable,
-			what: p.what + " " + p.path, at: p.at,
-		})
+		b := bindSource{Path: p.path, Resolved: p.at.String(), Writable: p.writable,
+			what: p.what + " " + p.path, at: p.at, looks: p.looks}
+		for _, l := range p.looks {
+			b.Lookups = append(b.Lookups, l.entry())
+		}
+		plan.sources = append(plan.sources, b)
 	}
 	// The workspace is the last place: its root is the outermost place that holds it,
-	// and inside it is that place's path with the names of the workspace below it.
+	// and inside it is that place's path with the names of the workspace below it, or,
+	// reached through a link in it, the names on the way through the link.
 	ws := len(places) - 1
-	root := ws
+	root, seen := ws, map[int]bool{}
 	for outer[root] >= 0 {
+		if seen[root] {
+			return mountPlan{}, fmt.Errorf("the places the run lists lie inside each other "+
+				"through links: %s", places[root].path)
+		}
+		seen[root] = true
 		root = outer[root]
 	}
 	plan.Dir = spec.Dir
 	if root != ws {
-		rest, _ := within(places[root].at, places[ws].at)
-		plan.Dir = filepath.Join(append([]string{places[root].path}, rest...)...)
+		if rest, ok := within(places[root].at, places[ws].at); ok {
+			plan.Dir = filepath.Join(append([]string{places[root].path}, rest...)...)
+		} else if l, ok := lookedUpIn(places[root].at, places[ws].looks); ok {
+			rest, _ := within(places[root].at, l.at)
+			names := append(append([]string{places[root].path}, rest...), l.rest...)
+			plan.Dir = filepath.Join(names...)
+		}
 	}
-	at, err := split(runDir, 0)
+	run, err := source(runDir, "the run directory "+runDir, kindRun, false)
 	if err != nil {
-		return mountPlan{}, fmt.Errorf("cannot resolve the run directory %s: %w", runDir, err)
+		return mountPlan{}, err
 	}
 	plan.Mounts = append(plan.Mounts, wall.Mount{Path: runDir, ReadOnly: true})
 	// The run directory is named by the runs directory the caller passed, in which the
 	// runner makes it.
-	plan.sources = append(plan.sources, bindSource{
-		Path: spec.RunsDir, Resolved: at.String(), what: "the run directory " + runDir, at: at,
-	})
+	run.Path = spec.RunsDir
+	plan.sources = append(plan.sources, run)
 	return plan, nil
 }
 
-// modeConflict is the refusal of a place inside another one of the other mode.
-func modeConflict(in, out shown, same bool) *Refusal {
-	how, why := "lies inside", "a part of a writable mount can't be read-only"
+// modeConflict is the refusal of a place inside another one of the other mode, or
+// reached through a link inside it.
+func modeConflict(in, out shown, same bool, l lookup, linked bool) *Refusal {
+	noun := "mount"
+	if out.what == "the workspace" {
+		noun = "place"
+	}
+	how, why := "lies inside", "a part of a writable "+noun+" can't be read-only"
 	if in.writable {
-		why = "a part of a read-only mount can't be writable"
+		why = "a part of a read-only " + noun + " can't be writable"
 	}
 	if same {
 		how, why = "is", "one place can't be both writable and read-only"
+	}
+	if linked {
+		how = "is reached through " + l.entry() + ", which lies inside"
 	}
 	return &Refusal{
 		Code:  refusal.MountModeConflict,
@@ -401,4 +589,70 @@ func modeConflict(in, out shown, same bool) *Refusal {
 // String is the path as it resolved: the existing part and the names below it.
 func (s splitPath) String() string {
 	return filepath.Join(append([]string{s.exists}, s.tail...)...)
+}
+
+// samePlan fails a walled run whose places resolve otherwise just before the enclosure
+// binds them than when the run started, or whose names are looked up in other
+// directories.
+func samePlan(start, now mountPlan) error {
+	if !slices.Equal(start.Mounts, now.Mounts) || len(start.sources) != len(now.sources) {
+		return fmt.Errorf("the places the run binds changed since it started: %v then, %v now",
+			paths(start.Mounts), paths(now.Mounts))
+	}
+	for i, s := range start.sources {
+		n := now.sources[i]
+		if s.Resolved != n.Resolved {
+			return fmt.Errorf("%s resolved to %s when the run started and resolves to %s now",
+				s.what, s.Resolved, n.Resolved)
+		}
+		// A name that did not exist at the start, the run directory's own among them, is
+		// looked up further now: the start's lookups are the first of now's, and a link
+		// made since leads elsewhere, which Resolved shows.
+		if len(n.Lookups) < len(s.Lookups) ||
+			!slices.Equal(s.Lookups, n.Lookups[:len(s.Lookups)]) {
+			return fmt.Errorf("the way to %s changed since the run started: its names were "+
+				"looked up as %s, and are now looked up as %s", s.what,
+				strings.Join(s.Lookups, ", "), strings.Join(n.Lookups, ", "))
+		}
+	}
+	if start.Dir != now.Dir {
+		return fmt.Errorf("the working directory inside was %s when the run started and is "+
+			"%s now", start.Dir, now.Dir)
+	}
+	return nil
+}
+
+// paths are the paths of mounts.
+func paths(ms []wall.Mount) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.Path
+	}
+	return out
+}
+
+// wallBinds are the binds an enclosure makes of its own, as bind sources: none when
+// it lists none.
+func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, error) {
+	b, ok := e.(wall.Binder)
+	if !ok {
+		return nil, nil
+	}
+	binds, err := b.Binds(wall.Launch{Socket: socketPath, CA: ca})
+	if err != nil {
+		return nil, err
+	}
+	var out []bindSource
+	for _, m := range binds {
+		what, kind := "the runner's directory "+m.Path, kindDir
+		if m.Helper {
+			what, kind = "the runner's helper "+m.Path, kindHelper
+		}
+		src, err := source(m.Path, what, kind, !m.ReadOnly)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, src)
+	}
+	return out, nil
 }

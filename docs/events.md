@@ -22,7 +22,8 @@ qory run claude -- -p "Reply pong"      # one headless turn
 ```
 
 Every connection the runtime makes goes through the runner's proxy, and is recorded.
-The session is written to `.qory/runs/<id>/` in the checkout:
+The session is written to its run directory, `<id>/` in the runs directory the caller
+passes. `qory` keeps them under its state directory and prints the path:
 
 - `events.jsonl`: one CloudEvent per line.
 - `output.log`: the session's bytes.

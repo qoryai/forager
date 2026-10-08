@@ -414,6 +414,34 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
 }
 
+// Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
+// socket's directory, writable, when the launch has a socket, and the private
+// directory of the run's environment files and bundle, read-only, which it makes now.
+func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
+	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
+	if l.Socket != "" {
+		out = append(out, Bind{Path: filepath.Dir(l.Socket)})
+	}
+	if err := e.makeTemp(); err != nil {
+		return nil, err
+	}
+	return append(out, Bind{Path: e.temp, ReadOnly: true}), nil
+}
+
+// makeTemp makes the private directory of the run's environment files and bundle,
+// once.
+func (e *dockerEnclosure) makeTemp() error {
+	if e.temp != "" {
+		return nil
+	}
+	dir, err := e.sys.tempDir()
+	if err != nil {
+		return err
+	}
+	e.temp = dir
+	return nil
+}
+
 // bundle writes the file the enclosure trusts: the image's own authorities, read out of
 // the relay's container, which is the same image and exists by now, and the run's
 // certificate after them. An image that keeps a bundle nowhere known gets the run's
@@ -431,12 +459,8 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 			break
 		}
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, "ca-bundle.pem")
 	if len(image) > 0 && !bytes.HasSuffix(image, []byte("\n")) {
@@ -577,12 +601,8 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		}
 		b.WriteString(kv + "\n")
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, name)
 	return file, os.WriteFile(file, []byte(b.String()), 0o600)

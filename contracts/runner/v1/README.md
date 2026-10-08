@@ -1452,36 +1452,48 @@ runner's files are:
 An agent that can change a program the runner starts outside the wall, or read a file a
 credential is read from, has left the wall.
 
-**No bind from a place a walled agent can change.** An engine resolves a bind's source
-path, every part of it, when it binds it, so a check of the path before cannot hold if a
-part lies in a directory an agent can write. So a walled run's bind source never lies
-inside a writable bind, the run's own or another walled run's still going, except as
-that bind's own root:
+**No bind from a place a walled agent can change.** An engine looks up every name of a
+bind's source path again when it binds it, links included, so a check of the path
+before cannot hold if a name is looked up in a directory an agent can write. So no name
+on the way to a walled run's bind source is looked up in a writable bind, the run's own
+or another walled run's still going, or in a directory inside one. A bind's own root
+is looked up in its parent, so two binds of one root are allowed:
 
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the run directory, read-only. The workspace is writable and
   is the working directory inside, through the bind that holds it, or bound at its own
   path when no mount holds it;
-- a place inside another one, or the same, of the same mode is reached through the
-  outer one, which alone is bound. Of the other mode it is no run,
-  `mount_mode_conflict`, with the inner place and the outer one as its names, in that
-  order: a read-only part of a writable bind is one the agent replaces, and a writable
-  part of a read-only one writes what the run shows read-only;
+- a place inside another one, or the same, or reached through a link inside a writable
+  one, of the same mode is reached through the outer one, which alone is bound. Of the
+  other mode it is no run, `mount_mode_conflict`, with the inner place and the outer
+  one as its names, in that order: a read-only part of a writable bind is one the agent
+  replaces, and a writable part of a read-only one writes what the run shows read-only;
 - the runs directory is one of the runner's files, so the run directory lies in no
-  place the run lists;
+  place the run lists, and a writable place that holds a directory a name on the way
+  to one of the runner's files is looked up in is `mount_contains_runner_files`;
 - the runner keeps a registry of the walled runs still going on the machine, per user,
-  and a run is no run, `mount_shared_with_run`, when one of its binds lies inside a
-  writable bind of another run's, or when one of its writable binds holds a bind of
-  another run's. Two binds of the same root never conflict, and neither do two
-  read-only ones. Its names are the path of this run's, the other run's id and the
-  other run's path. The runner checks and lists the run in one step, before it
-  contacts the server, and the run leaves the registry when it ends, however it ends.
+  with each run's binds: the places, the run directory and the wall's own, for
+  `docker` its helper, the hook socket's directory and the directory of the run's
+  environment files and bundle. A run is no run, `mount_shared_with_run`, when one of
+  its binds lies inside a writable bind of another run's or is reached through one,
+  when one of its writable binds holds a bind of another run's or a directory a name on
+  the way to one is looked up in, or when one of its binds is, holds or lies inside
+  another run's run directory, whatever the modes: a run directory is its run's alone.
+  Two binds of the same root never conflict otherwise, and neither do two read-only
+  ones. Its names are the path of this run's, the other run's id and the other run's
+  path. A run whose own helper, or another directory of the runner's its wall binds,
+  lies inside a writable bind of another run's, or is reached through one, does not
+  start. The runner checks and lists the run in one step, before it contacts the
+  server, and the run leaves the registry when it ends, however it ends.
 
 The names of these refusals are paths as the caller passed them, the first always one
 of the run's mounts or its workspace, the run directory named by its runs directory.
-So no bind source lies inside a place a walled agent of this user's can write. A
-process outside every wall, the user's own or another user's, can still change a path
-between the runner's check and the bind.
+The runner checks again just before the enclosure binds, with the wall's own binds, and
+a place that resolves otherwise, or whose names are looked up in other directories,
+than at the start does not start. So no name on the way to a bind source is looked up
+in a place a walled agent of this user's can write. A process outside every wall, the
+user's own or another user's, can still change a path between the runner's last check
+and the bind.
 
 When the run has an authority of its own (§Credentials), a wall sets the enclosure's
 trust to one bundle, the image's own authorities with the run's certificate after them,

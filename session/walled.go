@@ -37,6 +37,10 @@ var walledDir = func() (string, error) {
 	return filepath.Join(home, ".local", "state", "qory-runner", "walled"), nil
 }
 
+// registerPause, when not nil, is called between a run's check and the writing of its
+// entry, under the registry's lock: a test holds a run there.
+var registerPause func(runID string)
+
 // walledEntry is what a walled run's file in the registry holds.
 type walledEntry struct {
 	RunID string       `json:"run_id"`
@@ -71,11 +75,19 @@ func openRegistry() (string, error) {
 	return dir, nil
 }
 
+// registration is a walled run's entry in the registry, held for as long as the run
+// goes.
+type registration struct {
+	dir, runID string
+	f          *os.File
+	// release removes the entry; it is safe to call more than once.
+	release func()
+}
+
 // register checks a walled run's binds against every other walled run of this user's
 // still going and, when none conflicts, lists the run among them, all under the
-// registry's lock. The returned function removes the run's entry; it is safe to call
-// more than once.
-func register(runID string, binds []bindSource) (func(), error) {
+// registry's lock.
+func register(runID string, binds []bindSource) (*registration, error) {
 	dir, err := openRegistry()
 	if err != nil {
 		return nil, err
@@ -88,9 +100,8 @@ func register(runID string, binds []bindSource) (func(), error) {
 	if err := checkShared(dir, runID, binds); err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(walledEntry{RunID: runID, PID: os.Getpid(), Binds: binds})
-	if err != nil {
-		return nil, err
+	if registerPause != nil {
+		registerPause(runID)
 	}
 	file := filepath.Join(dir, runID)
 	f, err := os.OpenFile(file, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -102,32 +113,48 @@ func register(runID string, binds []bindSource) (func(), error) {
 		os.Remove(file)
 		return nil, fmt.Errorf("the registry of walled runs: locking %s: %w", file, err)
 	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		os.Remove(file)
-		return nil, fmt.Errorf("the registry of walled runs: %w", err)
-	}
+	r := &registration{dir: dir, runID: runID, f: f}
 	// The file goes before its lock, so no runner takes the lock of a file that is
 	// still there for a run that is over and finds a run that is not.
-	return sync.OnceFunc(func() {
+	r.release = sync.OnceFunc(func() {
 		os.Remove(file)
 		f.Close()
-	}), nil
+	})
+	if err := r.write(binds); err != nil {
+		r.release()
+		return nil, err
+	}
+	return r, nil
 }
 
-// recheck checks a walled run's binds against every other walled run of this user's
-// still going again, its own entry left out, under the registry's lock.
-func recheck(runID string, binds []bindSource) error {
-	dir, err := openRegistry()
+// write puts the run's binds in its entry. The caller holds the registry's lock.
+func (r *registration) write(binds []bindSource) error {
+	b, err := json.Marshal(walledEntry{RunID: r.runID, PID: os.Getpid(), Binds: binds})
 	if err != nil {
 		return err
 	}
-	unlock, err := lockRegistry(dir)
+	if err := r.f.Truncate(0); err != nil {
+		return fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	if _, err := r.f.WriteAt(b, 0); err != nil {
+		return fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	return nil
+}
+
+// update checks a walled run's binds against every other walled run of this user's
+// still going again, its own entry left out, and puts them in its entry, under the
+// registry's lock.
+func (r *registration) update(binds []bindSource) error {
+	unlock, err := lockRegistry(r.dir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return checkShared(dir, runID, binds)
+	if err := checkShared(r.dir, r.runID, binds); err != nil {
+		return err
+	}
+	return r.write(binds)
 }
 
 // lockRegistry takes the registry's lock, waiting for a runner that holds it.
@@ -149,10 +176,10 @@ func lockRegistry(dir string) (func(), error) {
 	return func() { f.Close() }, nil
 }
 
-// checkShared refuses binds of this run's that a walled agent of another run still going
-// can change, or that hold one of that run's binds this run's agent could change. The
-// caller holds the registry's lock. An entry whose lock is free is a run that is over:
-// it is removed.
+// checkShared refuses binds of this run's that a walled agent of another run still
+// going can change, that hold one of that run's binds this run's agent could change, or
+// that share that run's run directory. The caller holds the registry's lock. An entry
+// whose lock is free is a run that is over: it is removed.
 func checkShared(dir, runID string, binds []bindSource) error {
 	names, err := os.ReadDir(dir)
 	if err != nil {
@@ -171,20 +198,50 @@ func checkShared(dir, runID string, binds []bindSource) error {
 			continue
 		}
 		for _, b := range other.Binds {
-			at, err := split(b.Resolved, 0)
+			ob, gone, err := resolveOther(other.RunID, b)
 			if err != nil {
-				// A bind of another run's that no longer resolves is nothing a path of
-				// this run's can lie in or hold.
+				return err
+			}
+			if gone {
 				continue
 			}
 			for _, own := range binds {
-				if r := shared(own, other.RunID, b, at); r != nil {
-					return r
+				if err := shared(own, other.RunID, ob); err != nil {
+					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// resolveOther is a bind of another run's as the filesystem has it now: its resolved
+// path and the directories its names are looked up in. gone says one of them does not
+// exist any more, which nothing of this run's lies in; any other failure to resolve one
+// is an error, since a bind this run cannot see may be one it shares.
+func resolveOther(runID string, b bindSource) (bindSource, bool, error) {
+	fail := func(p string, err error) (bindSource, bool, error) {
+		if errors.Is(err, fs.ErrNotExist) {
+			return bindSource{}, true, nil
+		}
+		return bindSource{}, false, fmt.Errorf("the registry of walled runs: cannot "+
+			"resolve %s of the walled run %s, which is still going: %w", p, runID, err)
+	}
+	at, err := split(b.Resolved, 0)
+	if err != nil {
+		return fail(b.Resolved, err)
+	}
+	b.at = at
+	for _, entry := range b.Lookups {
+		dir := filepath.Dir(entry)
+		dirAt, err := split(dir, 0)
+		if err != nil {
+			return fail(dir, err)
+		}
+		b.looks = append(b.looks,
+			lookup{dir: dir, rest: []string{filepath.Base(entry)}, at: dirAt})
+	}
+	return b, false, nil
 }
 
 // readEntry reads one entry of the registry. An entry whose lock is free is removed,
@@ -219,26 +276,107 @@ func readEntry(file string) (walledEntry, bool, error) {
 	return entry, true, nil
 }
 
-// shared is the refusal of one bind of this run's against one bind of another run's
-// still going, or nil when they do not conflict: this run's lies inside the other's,
-// strictly, and the other is writable, or this run's is writable and holds the other's,
-// strictly. Two binds of the same root never conflict: an agent cannot replace its own
-// bind's root.
-func shared(own bindSource, otherID string, other bindSource, at splitPath) *Refusal {
-	how, whose := "", "a walled agent of that run can change it"
-	if ok, same := holds(at, own.at); ok && !same && other.Writable {
-		how = "lies inside"
-	} else if ok, same := holds(own.at, at); ok && !same && own.Writable {
-		how, whose = "contains", "this run's agent could change it"
+// wallKind reports whether a bind is one a wall binds of its own: the runner's helper
+// or another directory of the runner's.
+func wallKind(b bindSource) bool { return b.Kind == kindHelper || b.Kind == kindDir }
+
+// inside reports whether a bind lies inside dir, or is dir when orIs is set, by its
+// resolved path, or whether a name on the way to it is looked up in dir or below it,
+// and then the entry it is looked up as.
+func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
+	if ok, same := holds(dir, b.at); ok && (orIs || !same) {
+		return "", true
 	}
-	if how == "" {
+	if l, ok := lookedUpIn(dir, b.looks); ok {
+		return l.entry(), true
+	}
+	return "", false
+}
+
+// shared is the error of one bind of this run's against one bind of another run's
+// still going, or nil when they do not conflict.
+//
+//   - A wall's own bind, the runner's helper or a directory of the runner's, that is or
+//     lies inside a writable bind of the other run's, or is reached through one, is a
+//     plain error; one of the other run's that a writable bind of this run's is, holds
+//     or reaches is refused.
+//   - A run directory is its runner's alone: a bind that is, holds or lies inside the
+//     other run's, or that the other run's is, holds or lies inside, whatever their
+//     modes, is refused.
+//   - Otherwise this run's bind is refused when it lies inside the other's, strictly,
+//     and the other is writable, or when it is writable and holds the other's,
+//     strictly, or when a name on the way to either is looked up inside the writable
+//     one. Two binds of the same root never conflict: each root is looked up in its
+//     parent, and an agent cannot replace its own bind's root.
+func shared(own bindSource, otherID string, other bindSource) error {
+	refuse := func(detail string, a ...any) error {
+		return &Refusal{
+			Code:   refusal.MountSharedWithRun,
+			Names:  []string{own.Path, otherID, other.Path},
+			Detail: fmt.Sprintf(detail, a...),
+		}
+	}
+	still := " of the walled run " + otherID + ", which is still going: "
+	switch {
+	case wallKind(own):
+		if _, ok := inside(own, other.at, true); ok && other.Writable {
+			return fmt.Errorf("%s lies inside the writable bind %s%sa walled agent of that run "+
+				"can change it", own.what, other.Path, still)
+		}
 		return nil
+	case wallKind(other):
+		what := "the runner's directory "
+		if other.Kind == kindHelper {
+			what = "the runner's helper "
+		}
+		entry, ok := inside(other, own.at, true)
+		switch {
+		case !ok || !own.Writable:
+			return nil
+		case entry != "":
+			return refuse("%s (writable) contains %s, on the way to %s%s%sthis run's agent "+
+				"could change it", own.what, entry, what, other.Path, still)
+		}
+		return refuse("%s (writable) contains %s%s%sthis run's agent could change it",
+			own.what, what, other.Path, still)
 	}
-	return &Refusal{
-		Code:  refusal.MountSharedWithRun,
-		Names: []string{own.Path, otherID, other.Path},
-		Detail: fmt.Sprintf(
-			"%s (%s) %s the %s bind %s of the walled run %s, which is still going: %s",
-			own.what, mode(own.Writable), how, mode(other.Writable), other.Path, otherID, whose),
+	if own.Kind == kindRun || other.Kind == kindRun {
+		how := ""
+		if ok, same := holds(other.at, own.at); ok && same {
+			how = "is"
+		} else if ok {
+			how = "lies inside"
+		} else if ok, _ := holds(own.at, other.at); ok {
+			how = "contains"
+		}
+		if how != "" {
+			theirs := "the " + mode(other.Writable) + " bind " + other.Path
+			if other.Kind == kindRun {
+				theirs = "the run directory " + other.Resolved
+			}
+			return refuse("%s (%s) %s %s%sa run directory is its runner's alone",
+				own.what, mode(own.Writable), how, theirs, still)
+		}
 	}
+	if other.Writable {
+		if entry, ok := inside(own, other.at, false); ok {
+			how := "lies inside"
+			if entry != "" {
+				how = "is reached through " + entry + ", which lies inside"
+			}
+			return refuse("%s (%s) %s the writable bind %s%sa walled agent of that run can "+
+				"change it", own.what, mode(own.Writable), how, other.Path, still)
+		}
+	}
+	if own.Writable {
+		if entry, ok := inside(other, own.at, false); ok {
+			what := "the " + mode(other.Writable) + " bind " + other.Path
+			if entry != "" {
+				what = entry + ", on the way to " + what
+			}
+			return refuse("%s (writable) contains %s%sthis run's agent could change it",
+				own.what, what, still)
+		}
+	}
+	return nil
 }
