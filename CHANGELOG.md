@@ -338,6 +338,25 @@ release may change what an existing document does, and says so under Upgrading.
   is `mount_shared_with_run`.
 - The runner passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
+- `dev.qory.run.started` contains `about` when the caller passes one: what the run is
+  about, as the caller passed it, every member optional. `kind` is the kind of run, at
+  most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
+  of `type`, an open name of words of `a-z` and `0-9` joined by one space, underscore,
+  dot or dash, at most 64 bytes, `ref`, at most 256 bytes, and `url`, an absolute `http`
+  or `https` URL of at most 2048 bytes that never carries a user name or password, and
+  `title`, with no two of the same `type` and `ref`; `details` a JSON object of at most
+  8192 bytes as the event contains it, compacted, with `<`, `>` and `&` written as
+  `\u003c`, `\u003e` and `\u0026`, nested at most 4 levels deep, with keys of 1 to 64
+  bytes, shown to every reader of the run, so it never holds a secret. No string in it
+  contains a control character. Only this event contains it; it is never sent on the
+  run configuration request and never selects a policy, and an empty `about` is left
+  out. `fixtures/run/about-*.json` holds accepted and refused ones. `session.Spec.About`
+  is a `session.About` of `Kind`, `Title`, `Subjects`, each a `session.Subject` of
+  `Type`, `Ref`, `URL` and `Title`, and `Details`, a `json.RawMessage`; run.started
+  reports `Details` as `CheckAbout` measured them. `session.CheckAbout` holds an
+  `About` to these rules and returns the first failure as a `*session.AboutError`, its
+  `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
+  before it contacts the server, and an `About` it refuses is no run.
 
 ### Changed
 
