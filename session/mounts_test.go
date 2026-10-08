@@ -160,8 +160,8 @@ func runnerDir(t *testing.T) (parent, dir string) {
 func mountRefusal(t *testing.T, err error) *session.Refusal {
 	t.Helper()
 	var r *session.Refusal
-	if !errors.As(err, &r) || r.Code != "mount_contains_runner_files" {
-		t.Fatalf("want mount_contains_runner_files, got %v", err)
+	if !errors.As(err, &r) || r.Code != "mount_contains_forager_files" {
+		t.Fatalf("want mount_contains_forager_files, got %v", err)
 	}
 	return r
 }

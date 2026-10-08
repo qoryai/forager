@@ -68,7 +68,7 @@ type Docker struct {
 	RelayArgs []string
 	// NestArgs are the arguments that make Helper run [Nest], for an image with a Docker
 	// of the agent's own; the user and the launch follow them. Without them such an
-	// image is refused. Experimental: see contracts/runner/v1/README.md §The wall.
+	// image is refused. Experimental: see contracts/forager/v1/README.md §The wall.
 	NestArgs []string
 	// CAEnv names the variables that point a program at [BundlePath] when the run has
 	// an authority of its own; nil means [DefaultCAEnv]. A program that reads another

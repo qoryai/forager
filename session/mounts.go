@@ -440,7 +440,7 @@ type mountPlan struct {
 // files, and so is where the sockets are made. A refusal's first name is always one of
 // the places exactly as the caller passed it:
 //
-//   - mount_contains_runner_files: a place that is, contains or lies inside one of the
+//   - mount_contains_forager_files: a place that is, contains or lies inside one of the
 //     runner's files, or a writable place that contains a directory a name on the way
 //     to one is looked up in, a link say; the place and the file are its names, in that
 //     order.
@@ -491,7 +491,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			}
 			if how != "" {
 				return mountPlan{}, &Refusal{
-					Code:   refusal.MountContainsRunnerFiles,
+					Code:   refusal.MountContainsForagerFiles,
 					Names:  []string{m.path, f.path},
 					Detail: fmt.Sprintf("%s %s %s %s, %s", m.what, m.path, how, f.path, f.what),
 				}
@@ -514,7 +514,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		for j, f := range files {
 			if l, ok := lookedUpIn(at, fileLooks[j]); ok {
 				return mountPlan{}, &Refusal{
-					Code:  refusal.MountContainsRunnerFiles,
+					Code:  refusal.MountContainsForagerFiles,
 					Names: []string{m.path, f.path},
 					Detail: fmt.Sprintf("%s %s contains %s, on the way to %s, %s",
 						m.what, m.path, l.entry(), f.path, f.what),

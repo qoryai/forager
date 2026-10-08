@@ -12,7 +12,7 @@ import (
 	"github.com/qoryai/runner/session/internal/variables"
 )
 
-// Policy is the run's policy document, contracts/runner/v1/policy.schema.json, as the
+// Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the
 // caller hands it to the runner. The runner validates it against the schema before
 // anything starts and pins it for the run with the digest of its canonical JSON.
 type Policy struct {
@@ -254,7 +254,7 @@ const (
 	UnwalledIgnore = variables.Ignore
 )
 
-// Server is the server document, contracts/runner/v1/server.schema.json, as the
+// Server is the server document, contracts/forager/v1/server.schema.json, as the
 // caller hands it to the runner: the server whose configuration document says where
 // events go and where the run configuration is, the access key the runner signs every
 // request as, and the pin, the server's keys every answer is verified under. The
@@ -281,7 +281,7 @@ type Server struct {
 //
 // An adapter is a program of the machine's that knows one kind of host, a source code
 // host say. The runner starts it outside the enclosure and reads one JSON document
-// from its standard output, contracts/runner/v1/credential.schema.json: the token, when
+// from its standard output, contracts/forager/v1/credential.schema.json: the token, when
 // it expires, and how it is used, the hosts, the scheme and the paths, because hosts
 // differ in those and the runner knows none of them.
 type Credential struct {
@@ -362,7 +362,7 @@ type Image struct {
 	Runtime string
 	// Docker gives the agent a Docker daemon of its own, inside the enclosure: the
 	// image holds dockerd, and the wall starts it before the agent. It needs a Runtime
-	// that runs a daemon in a container without privileges. Experimental: see contracts/runner/v1/README.md §The wall.
+	// that runs a daemon in a container without privileges. Experimental: see contracts/forager/v1/README.md §The wall.
 	Docker bool
 }
 

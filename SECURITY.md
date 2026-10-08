@@ -20,9 +20,9 @@ earlier one.
 ## What is a vulnerability here
 
 The runner's promises are written down, so the test is whether one was broken. They are
-in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-wall),
-[credentials](contracts/runner/v1/README.md#credentials) and
-[the server](contracts/runner/v1/README.md#the-server). For example:
+in the contract: [what every wall guarantees](contracts/forager/v1/README.md#the-wall),
+[credentials](contracts/forager/v1/README.md#credentials) and
+[the server](contracts/forager/v1/README.md#the-server). For example:
 
 - a session behind a wall reaches a host, or a path of a host, the run's policy denies;
 - a session reads a credential the runner keeps for it, the run's authority key, the
@@ -35,7 +35,7 @@ in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-
 
 ## What is not
 
-The contract states its [limits](contracts/runner/v1/README.md#limits), and what they
+The contract states its [limits](contracts/forager/v1/README.md#limits), and what they
 describe is how the runner works, not a flaw in it:
 
 - without a wall, enforcement is cooperative: a program that ignores the proxy variables

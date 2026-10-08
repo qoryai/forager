@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/event.schema.json",
+  "title": "Event",
+  "description": "One event the runner emits: a CloudEvents 1.0 event in the JSON format, with the attributes this contract fixes and the data of its type. One per line in events.jsonl; the members of a batch.",
+  "allOf": [
+    {
+      "$ref": "cloudevents.schema.json"
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "specversion",
+        "id",
+        "source",
+        "type",
+        "subject",
+        "time",
+        "sequence",
+        "dataschema",
+        "data"
+      ],
+      "properties": {
+        "specversion": {
+          "const": "1.0"
+        },
+        "id": {
+          "description": "A UUID, unique per event. A receiver deduplicates on it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "source": {
+          "description": "urn:qory:run: followed by the run id. One run is one source, so sequence orders within it.",
+          "type": "string",
+          "pattern": "^urn:qory:run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "dev.qory.ping",
+            "dev.qory.run.started",
+            "dev.qory.run.heartbeat",
+            "dev.qory.run.log",
+            "dev.qory.run.resized",
+            "dev.qory.run.egress",
+            "dev.qory.run.policy_applied",
+            "dev.qory.run.exited",
+            "dev.qory.run.refused",
+            "dev.qory.session.started",
+            "dev.qory.session.prompt_submitted",
+            "dev.qory.session.tool_started",
+            "dev.qory.session.tool_finished",
+            "dev.qory.session.tool_failed",
+            "dev.qory.session.turn_finished",
+            "dev.qory.session.turn_failed",
+            "dev.qory.session.subagent_started",
+            "dev.qory.session.subagent_finished",
+            "dev.qory.session.notification",
+            "dev.qory.session.ended",
+            "dev.qory.session.result"
+          ]
+        },
+        "subject": {
+          "description": "The run id, a UUID version 7. The same id as in source; a receiver keys the run on it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "time": {
+          "description": "The runner's clock, RFC 3339, UTC.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "sequence": {
+          "description": "The runner-assigned order of this event within the run: a decimal, zero-padded to ten digits, starting at 0000000001, contiguous.",
+          "type": "string",
+          "pattern": "^[0-9]{10}$"
+        },
+        "dataschema": {
+          "description": "The schema of data: events/<type without the dev.qory. prefix>.schema.json under this contract's base.",
+          "type": "string",
+          "format": "uri"
+        },
+        "datacontenttype": {
+          "const": "application/json"
+        },
+        "data": {
+          "type": "object"
+        }
+      }
+    },
+    {
+      "description": "The data of each type validates against that type's schema, the one dataschema points to.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.ping"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/ping.schema.json"
+            },
+            "data": {
+              "$ref": "events/ping.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.heartbeat"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.heartbeat.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.log"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.log.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.resized"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.resized.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.resized.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.egress"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.egress.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.policy_applied"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.policy_applied.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.exited"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.exited.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.run.refused"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/run.refused.schema.json"
+            },
+            "data": {
+              "$ref": "events/run.refused.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.started.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.prompt_submitted"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.prompt_submitted.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.prompt_submitted.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.tool_started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_started.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.tool_started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.tool_finished"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_finished.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.tool_finished.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.tool_failed"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.tool_failed.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.tool_failed.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.turn_finished"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.turn_finished.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.turn_finished.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.turn_failed"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.turn_failed.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.turn_failed.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.subagent_started"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.subagent_started.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.subagent_started.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.subagent_finished"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.subagent_finished.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.subagent_finished.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.notification"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.notification.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.notification.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.ended"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.ended.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.ended.schema.json"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "dev.qory.session.result"
+            },
+            "dataschema": {
+              "const": "https://qory.dev/contracts/forager/v1/events/session.result.schema.json"
+            },
+            "data": {
+              "$ref": "events/session.result.schema.json"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

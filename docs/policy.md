@@ -41,7 +41,7 @@ A run has one policy. It comes from one of three places:
 - **The machine's policy.** For `qory`, the `egress` section of `runner.yaml`, below.
   From Go, `Policy` in the spec.
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
-  contract's [policy](../contracts/runner/v1/README.md#the-policy).
+  contract's [policy](../contracts/forager/v1/README.md#the-policy).
   - It narrows the machine's `egress`, and never widens it.
   - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
     in the checkout, or in a mount the container may write.
@@ -134,4 +134,4 @@ Behind a wall, the proxy is guarded. It refuses some addresses in either mode. S
 ## The details
 
 Every field, and how a connection and a path are matched: the contract's
-[policy section](../contracts/runner/v1/README.md#the-policy).
+[policy section](../contracts/forager/v1/README.md#the-policy).

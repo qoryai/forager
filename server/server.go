@@ -1,6 +1,6 @@
 // Package server is the runner's client of the server contract.
 //
-// The server is the document of contracts/runner/v1/server.schema.json: a URL, an
+// The server is the document of contracts/forager/v1/server.schema.json: a URL, an
 // access key id and the pin, apiary_public_key, the server's keys every answer is
 // verified under. [Read] validates one; the schema is the reader. The access key's
 // secret lives outside the document, and a [Client] holds it as an [accesskey.Key]

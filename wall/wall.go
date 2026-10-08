@@ -7,7 +7,7 @@
 // the [Enclosure] where its proxy must listen, starts the wrapped command on the
 // pseudo-terminal or the pipes it already owns, and closes the enclosure at exit.
 //
-// What every wall guarantees is one list, contracts/runner/v1/README.md §The wall, the
+// What every wall guarantees is one list, contracts/forager/v1/README.md §The wall, the
 // same for every adapter, and the conformance suite in package e2e checks it from
 // inside the enclosure. An adapter ships when the suite passes for it. [Docker] is the
 // first.
@@ -91,7 +91,7 @@ type Request struct {
 	// holds dockerd; the wall starts it as the enclosure's root, on a Unix socket alone,
 	// and the agent as its user in the socket's group. It needs a Runtime that runs a
 	// daemon in a container without privileges, whose root is a user of the machine's
-	// that is not root. Experimental: see contracts/runner/v1/README.md §The wall.
+	// that is not root. Experimental: see contracts/forager/v1/README.md §The wall.
 	Docker bool
 }
 

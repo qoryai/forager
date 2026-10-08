@@ -266,7 +266,7 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 
 // TestAPlaceThroughALinkInAWritablePlaceOfItsOwn pins one run whose read-only place is
 // a link inside its own writable one: mount_through_link, as a writable one is. A runs
-// directory that is such a link is mount_contains_runner_files.
+// directory that is such a link is mount_contains_forager_files.
 func TestAPlaceThroughALinkInAWritablePlaceOfItsOwn(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(w, "home")

@@ -42,7 +42,7 @@ type Spec struct {
 	// own, or nothing under a Wall, where only what the run lists goes in. It is the
 	// lowest of the run's sources of variables: LaunchDefaults, Variables and the
 	// server's variables win over it, apart from it, so the runner distinguishes them
-	// from what is merely inherited (contracts/runner/v1/README.md §Variables). The
+	// from what is merely inherited (contracts/forager/v1/README.md §Variables). The
 	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them,
 	// and out of every tool's and credential program's environment too.
@@ -81,7 +81,7 @@ type Spec struct {
 	// Policy is the node's policy, the one the command passes; nil means none. Without
 	// a server's policy it is the run's, and none is mode observe. With a Server whose
 	// run configuration has a policy, it narrows that one: the node only takes away
-	// (contracts/runner/v1/README.md §The server).
+	// (contracts/forager/v1/README.md §The server).
 	Policy *Policy
 	// Server is the server the run reports to and takes its run configuration from;
 	// nil means files only, the machine's policy. Local ignores it: the server is not
@@ -141,7 +141,7 @@ type Spec struct {
 	// own, such as the directory of qory's runner file with the access key secret. A
 	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
 	// them, or one of the paths the runner knows itself, RunsDir among them,
-	// mount_contains_runner_files: see [Overlap].
+	// mount_contains_forager_files: see [Overlap].
 	RunnerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
 	// among them by name. A selected credential, like a path rule, needs a Wall: the
@@ -163,8 +163,8 @@ type Spec struct {
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
 	Forwarder []string
-	// RunnerVersion is reported in the events.
-	RunnerVersion string
+	// ForagerVersion is reported in the events.
+	ForagerVersion string
 	// RunID is the run's id when a parent already made one; empty means a new one. It is
 	// a UUID in the canonical lower-case form, because it is the events' subject and names
 	// the run directory; anything else is refused.
@@ -245,7 +245,7 @@ type Discovery struct {
 // the node's live instances are at its limit, and run_closed when the server closes
 // the run before it starts. The runner's own refusals are Refusals too, with the names
 // they concern and never a value: run_configuration_invalid, variable_reserved,
-// placeholder_conflict, tool_unknown, image_unknown, mount_contains_runner_files,
+// placeholder_conflict, tool_unknown, image_unknown, mount_contains_forager_files,
 // mount_mode_conflict and mount_shared_with_run among them. errors.As finds one in
 // what [Run] returns.
 type Refusal = accesskey.Refusal
@@ -477,7 +477,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	var beatFrom time.Time
 	if srv != nil {
 		interval := int(spec.Heartbeat / time.Second)
-		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": interval})
+		ping := emit.Make(event.Ping, map[string]any{"forager_version": spec.ForagerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": interval})
 		sinks.Write(ping)
 		body, _ := ping.JSON()
 		pingID := event.NewID()
@@ -699,7 +699,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	start := time.Now()
 	started := map[string]any{
 		"runtime": rt.Name(), "command": command, "args": args,
-		"dir": spec.Dir, "interactive": interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
+		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
@@ -953,8 +953,8 @@ func withDefaults(spec Spec) Spec {
 		stderr := spec.Stderr
 		spec.Report = func(line string) { fmt.Fprintln(stderr, "qory run:", line) }
 	}
-	if spec.RunnerVersion == "" {
-		spec.RunnerVersion = "dev"
+	if spec.ForagerVersion == "" {
+		spec.ForagerVersion = "dev"
 	}
 	return spec
 }

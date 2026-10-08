@@ -1,5 +1,5 @@
 // Package e2e is the conformance suite of the wall: one list of guarantees,
-// contracts/runner/v1/README.md §The wall, checked from inside the enclosure, the same
+// contracts/forager/v1/README.md §The wall, checked from inside the enclosure, the same
 // for every adapter. An adapter ships when the suite passes for it.
 //
 // The suite runs a real session behind the adapter with a probe as its runtime. The
@@ -691,13 +691,13 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 			Credentials: policyCreds,
 			Tools:       []session.PolicyTool{{Name: "suite-tool"}},
 			Image:       selected},
-		Tools:         []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
-		Credentials:   creds,
-		Forwarder:     o.Forwarder,
-		Wall:          o.Wall,
-		Image:         o.Image,
-		Images:        images,
-		RunnerVersion: "walltest",
+		Tools:          []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
+		Credentials:    creds,
+		Forwarder:      o.Forwarder,
+		Wall:           o.Wall,
+		Image:          o.Image,
+		Images:         images,
+		ForagerVersion: "walltest",
 		Report: func(l string) {
 			t.Log("report:", l)
 			reportsMu.Lock()

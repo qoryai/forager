@@ -1,7 +1,7 @@
 // Package event is the CloudEvents envelope the runner emits and the emitter that
 // numbers events within a run.
 //
-// An [Event] is one event of the contract, contracts/runner/v1/event.schema.json, as Go
+// An [Event] is one event of the contract, contracts/forager/v1/event.schema.json, as Go
 // sees it: the fixed attributes, the sequence extension and a data value that encodes to
 // a JSON object. An [Emitter] belongs to one run and hands out ids, times and the
 // contiguous sequence; every event of a run goes through it, so the order the sinks see
@@ -20,7 +20,7 @@ import (
 )
 
 // Base is the contract's base URI; dataschema is Base plus the type's schema path.
-const Base = "https://qory.dev/contracts/runner/v1"
+const Base = "https://qory.dev/contracts/forager/v1"
 
 // The event types of the contract. A type name is stable; a breaking change to its data
 // is a new type.

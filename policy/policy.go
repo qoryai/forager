@@ -1,6 +1,6 @@
 // Package policy reads the run policy and answers what it allows.
 //
-// The policy is the document of contracts/runner/v1/policy.schema.json, given to the
+// The policy is the document of contracts/forager/v1/policy.schema.json, given to the
 // runner once by its caller and pinned for the run. [Read] reads it from bytes: a
 // document the schema refuses is a [*Error] and no run; [None] is the absent policy,
 // mode observe with no list to deny by. The schema is the reader: a refused document

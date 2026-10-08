@@ -1,0 +1,18 @@
+{
+  "specversion": "1.0",
+  "id": "7e1c0000-0000-7000-8000-000000000006",
+  "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "type": "dev.qory.run.egress",
+  "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "time": "2026-09-16T12:00:01.500Z",
+  "sequence": "0000000006",
+  "dataschema": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+  "data": {
+    "host": "api.anthropic.com",
+    "port": 443,
+    "method": "CONNECT",
+    "decision": "terminated",
+    "mode": "enforce",
+    "rule": "api.anthropic.com"
+  }
+}

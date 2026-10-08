@@ -1,7 +1,7 @@
 // Package descriptor reads a runtime descriptor and maps the runtime's records to
 // session events.
 //
-// A [Descriptor] is the document of contracts/runner/v1/descriptor.schema.json: how
+// A [Descriptor] is the document of contracts/forager/v1/descriptor.schema.json: how
 // the runner attaches to one runtime and the rules that turn its records into session
 // events. [Load] takes the embedded default for a runtime and an optional override
 // directory; [Parse] validates a document against the schema before decoding it, so the

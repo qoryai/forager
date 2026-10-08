@@ -377,16 +377,16 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	check("labels the contract refuses", signedGET(receiver.DefaultRunPath+"?Forge=x", fixtureKey, "1700000000"), 400, "invalid_request")
 
 	e := event.NewEmitter(event.NewRunID(), nil)
-	ping, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
+	ping, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
 	pingBody := []byte("[" + string(ping) + "]")
-	long, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
+	long, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
 	check("a ping with an interval over 300 seconds", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(long)+"]")), 400, "invalid_request")
 	admitted := true
 	h.Admit = func(id, instance string) bool { return admitted && id == key && instance == inst }
 	check("a ping it admits", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
 	admitted = false
 	check("the same ping again", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
-	other, _ := event.NewEmitter(event.NewRunID(), nil).Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
+	other, _ := event.NewEmitter(event.NewRunID(), nil).Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
 	check("a ping it does not admit", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(other)+"]")), 409, "instance_limit")
 
 	beat, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}).JSON()

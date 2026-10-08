@@ -133,12 +133,12 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		Policy: &session.Policy{Version: 1,
 			Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{r.host}},
 			Credentials: []session.PolicyCredential{{Name: "model"}}},
-		Credentials:   []session.Credential{{Name: "model", Env: apiKeyVar, Hosts: []string{r.host}, Scheme: c.scheme, Header: c.header, Placeholders: []string{c.standIn}}},
-		Forwarder:     []string{wall.HelperPath, "forward"},
-		Wall:          &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
-		Image:         r.image,
-		RunnerVersion: "walltest",
-		Report:        func(l string) { t.Log("report:", l) },
+		Credentials:    []session.Credential{{Name: "model", Env: apiKeyVar, Hosts: []string{r.host}, Scheme: c.scheme, Header: c.header, Placeholders: []string{c.standIn}}},
+		Forwarder:      []string{wall.HelperPath, "forward"},
+		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
+		Image:          r.image,
+		ForagerVersion: "walltest",
+		Report:         func(l string) { t.Log("report:", l) },
 	}
 	var out, errs syncBuffer
 	spec.Stdout, spec.Stderr = &out, &errs

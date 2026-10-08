@@ -101,16 +101,16 @@ A program that needs code of its own implements the interface.
   [the record](events.md#following-a-run).
 
 The whole sequence, every event type and every file are in the
-[contract](../contracts/runner/v1/README.md).
+[contract](../contracts/forager/v1/README.md).
 
 ## Layout
 
 The module is a core and three parts over it, the session, the gateway and the wall,
 with `e2e` to check them together.
 
-- `contracts/runner/v1/`: the contract. It contains the documents, a JSON schema for
+- `contracts/forager/v1/`: the contract. It contains the documents, a JSON schema for
   each, the runtime descriptors and the fixtures.
-  [Its README](../contracts/runner/v1/README.md) is the specification.
+  [Its README](../contracts/forager/v1/README.md) is the specification.
 - The core, at the module's root, which every part may import:
   - `contracts/`: the Go package that embeds the contract and validates every fixture.
   - `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and

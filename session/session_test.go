@@ -322,23 +322,23 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		}
 	})
 	return session.Spec{
-		Runtime:       claudeCode(t),
-		Command:       os.Args[0],
-		Args:          []string{"--settings", writeSettings(t, dir)},
-		Env:           append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
-		Dir:           dir,
-		RunsDir:       filepath.Join(t.TempDir(), "runs"),
-		Stdin:         strings.NewReader(""),
-		Stdout:        &out,
-		Stderr:        &errs,
-		Policy:        pol,
-		Forwarder:     []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
-		RunnerVersion: "test",
-		AccessKey:     testAccessKey,
-		InstanceID:    testInstance,
-		InstanceName:  "build-01",
-		Heartbeat:     10 * time.Millisecond,
-		Report:        func(l string) { t.Log("report:", l) },
+		Runtime:        claudeCode(t),
+		Command:        os.Args[0],
+		Args:           []string{"--settings", writeSettings(t, dir)},
+		Env:            append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
+		Dir:            dir,
+		RunsDir:        filepath.Join(t.TempDir(), "runs"),
+		Stdin:          strings.NewReader(""),
+		Stdout:         &out,
+		Stderr:         &errs,
+		Policy:         pol,
+		Forwarder:      []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
+		ForagerVersion: "test",
+		AccessKey:      testAccessKey,
+		InstanceID:     testInstance,
+		InstanceName:   "build-01",
+		Heartbeat:      10 * time.Millisecond,
+		Report:         func(l string) { t.Log("report:", l) },
 	}
 }
 
@@ -1318,7 +1318,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	}
 	evs := events(t, res)
 	last := evs[len(evs)-1]
-	if !sent.Closed || last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "runner_lost" || data(last)["state"] != "failed" {
+	if !sent.Closed || last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "gateway_lost" || data(last)["state"] != "failed" {
 		t.Errorf("the record was not closed: %+v, last event %v", sent, last)
 	}
 	if len(evs) != len(lines) || store.Count()-before != len(evs) {
@@ -1507,7 +1507,7 @@ func TestServerRefusalsAreCoded(t *testing.T) {
 		t.Fatalf("an instance beyond the limit: %v", err)
 	}
 	entries, _ := os.ReadDir(sp.RunsDir)
-	if evs, _ := os.ReadFile(filepath.Join(sp.RunsDir, entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1,`) {
+	if evs, _ := os.ReadFile(filepath.Join(sp.RunsDir, entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 || !strings.Contains(string(evs), `"interval_seconds":1}`) {
 		t.Errorf("the refused run's file:\n%s", evs)
 	}
 }

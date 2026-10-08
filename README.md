@@ -170,7 +170,7 @@ os.Exit(res.ExitCode)                             // the runtime's status; res.D
 ```
 
 `qory` imports the runner, and the runner imports nothing of `qory`. What the runner
-reads and writes is specified in [contracts/runner/v1](contracts/runner/v1/README.md).
+reads and writes is specified in [contracts/forager/v1](contracts/forager/v1/README.md).
 
 More: [docs/go.md](docs/go.md).
 

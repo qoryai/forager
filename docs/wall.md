@@ -41,14 +41,14 @@ nothing.
   See
   [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
 - A mount that is, contains or lies inside one of the runner's files is no run,
-  `mount_contains_runner_files`: the runner file's directory with the access key
+  `mount_contains_forager_files`: the runner file's directory with the access key
   secret, the programs the runner starts outside the wall, their configuration. See
   [the runner's files](#the-runners-files).
 - The session runner, the policy and the access key secret stay outside, on the node.
   The record is written from outside.
 
 What every wall guarantees is in the contract's
-[wall section](../contracts/runner/v1/README.md#the-wall). The
+[wall section](../contracts/forager/v1/README.md#the-wall). The
 [conformance suite](../e2e/e2e.go) checks it from inside the container, in this
 repository's CI.
 
@@ -204,7 +204,7 @@ refused.
 
 A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
 the runner's files. Such a run returns a `*session.Refusal` with the code
-`mount_contains_runner_files`, and `Names` holds the mount, then the runner's file. The
+`mount_contains_forager_files`, and `Names` holds the mount, then the runner's file. The
 check comes before the server is contacted and before anything starts, `Local` included.
 An agent that changes a program the runner starts outside the wall, or reads the access
 key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
@@ -288,7 +288,7 @@ looked up in its parent, so two binds of one root are allowed.
   lies inside no writable place of the run's is followed by the engine as it binds.
 - **The runner's files.** A writable place that contains a directory a name on the way
   to one of the runner's files is looked up in, such as a runs directory that is a link
-  inside the checkout, is `mount_contains_runner_files`: the agent could point the link
+  inside the checkout, is `mount_contains_forager_files`: the agent could point the link
   elsewhere.
 - **The run directory.** The runs directory is one of the runner's files, so the run
   directory lies inside no place the run lists. It is bound read-only to its own run's
@@ -429,5 +429,5 @@ the mounts the run lists as the machine's root. It has not been verified. So:
 ## The details
 
 What every wall guarantees, what crosses it, and its limits: the contract's
-[wall section](../contracts/runner/v1/README.md#the-wall). The
+[wall section](../contracts/forager/v1/README.md#the-wall). The
 [`e2e`](../e2e/e2e.go) suite checks the list from inside the enclosure. Every adapter passes it before it ships.

@@ -59,5 +59,5 @@ that needs more than a credential in a header.
 ## The details
 
 The rules, the adapter's document and the tools: the contract's
-[credentials section](../contracts/runner/v1/README.md#credentials) and
-[tools section](../contracts/runner/v1/README.md#tools).
+[credentials section](../contracts/forager/v1/README.md#credentials) and
+[tools section](../contracts/forager/v1/README.md#tools).

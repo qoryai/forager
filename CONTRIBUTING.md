@@ -6,11 +6,11 @@ Thank you for considering a contribution.
 
 Everywhere. Three kinds are the most useful:
 
-- **A runtime descriptor.** One YAML file under `contracts/runner/v1/runtimes/<name>/`
+- **A runtime descriptor.** One YAML file under `contracts/forager/v1/runtimes/<name>/`
   that maps what a runtime emits, JSON lines on its standard output and hook calls, to the
   session events of the contract, with the fixtures that prove the mapping. A descriptor
   matches and copies; it never computes. A descriptor without fixtures is not accepted.
-- **The contract.** The documents under `contracts/runner/v1/`, their schemas and their
+- **The contract.** The documents under `contracts/forager/v1/`, their schemas and their
   fixtures. A receiver follows the contract and lives in your own repository; nothing in
   this one has to change for it.
 - **The runner** and the receiver: the parts `session`, `gateway` and `wall`, the
@@ -46,7 +46,7 @@ The toolchain is pinned in `mise.toml`; `mise install` provides it. Go 1.27.
 
 ```sh
 go build ./...
-go test ./...           # every fixture under contracts/runner/v1, and the unit tests
+go test ./...           # every fixture under contracts/forager/v1, and the unit tests
 go test ./... -cover    # per-package statement coverage
 gofmt -l .              # must print nothing
 go vet ./...
@@ -55,7 +55,7 @@ go run github.com/mgechev/revive@v1.16.0 -config revive.toml ./...
 
 A change to the contract starts with a fixture. A policy, a server document, a
 configuration document or an event fixture is one document under
-`contracts/runner/v1/fixtures/` that the schema accepts, or one under
+`contracts/forager/v1/fixtures/` that the schema accepts, or one under
 `fixtures/invalid/` that it refuses; a signed request is one under `fixtures/signed/`
 with the status a receiver answers. A descriptor fixture is one
 directory under `runtimes/<name>/fixtures/` holding the recorded records and the events

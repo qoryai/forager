@@ -70,7 +70,7 @@ jobs:
         run: go vet $DIRS
 
       - name: Test
-        # In the core, every fixture under contracts/runner/v1 is validated against its
+        # In the core, every fixture under contracts/forager/v1 is validated against its
         # schema, and the import rules between the parts are checked.
         env:
           DIRS: ${{ steps.part.outputs.dirs }}

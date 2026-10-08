@@ -77,4 +77,4 @@ on standard output, with the lines `events.jsonl` contains.
 ## The details
 
 The whole sequence, every event type and every file are in the
-[contract](../contracts/runner/v1/README.md#the-events).
+[contract](../contracts/forager/v1/README.md#the-events).

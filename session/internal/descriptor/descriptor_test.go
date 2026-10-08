@@ -163,7 +163,7 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Errorf("contracts/runner/v1/%s differs from the descriptors; run go generate ./contracts\n%s",
+		t.Errorf("contracts/forager/v1/%s differs from the descriptors; run go generate ./contracts\n%s",
 			descriptor.RuntimesFile, got)
 	}
 }

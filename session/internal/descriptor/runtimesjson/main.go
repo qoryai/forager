@@ -1,4 +1,4 @@
-// Command runtimesjson writes contracts/runner/v1/runtimes.json from the descriptors
+// Command runtimesjson writes contracts/forager/v1/runtimes.json from the descriptors
 // the contract ships. go generate ./contracts runs it with the file's path; a test of
 // package descriptor fails while the file in the repository differs from what it
 // writes.

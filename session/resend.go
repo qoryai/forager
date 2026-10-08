@@ -33,8 +33,8 @@ type ResendSpec struct {
 	InstanceID, InstanceName string
 	// Wall, when it is a [wall.Reaper], is asked to remove what the run's wall left.
 	Wall wall.Wall
-	// RunnerVersion is reported in the deliveries' user agent.
-	RunnerVersion string
+	// ForagerVersion is reported in the deliveries' user agent.
+	ForagerVersion string
 	// Report receives one line per thing worth telling the user; nil means nothing is.
 	Report func(string)
 }
@@ -43,7 +43,7 @@ type ResendSpec struct {
 type ResendResult struct {
 	RunID string
 	// Closed says the record had no run.exited and got one, with the reason
-	// runner_lost: the runner died before the runtime's exit was recorded.
+	// gateway_lost: the runner died before the runtime's exit was recorded.
 	Closed bool
 	// Reaped is how many containers and networks the run's wall had left.
 	Reaped int
@@ -59,15 +59,15 @@ type ResendResult struct {
 // of its events the server accepted, so Resend sends the rest, the ones the server's
 // configuration wants, in order and in the run's own batches, until they are accepted
 // or the context ends. A record with run.started and without run.exited gets one
-// first, with the reason runner_lost, and what the run's wall left is removed. A run
+// first, with the reason gateway_lost, and what the run's wall left is removed. A run
 // whose runner still lives is [ErrRunning]; a server that said stop during the run, or
 // closed it, is sent nothing.
 func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if spec.Report == nil {
 		spec.Report = func(string) {}
 	}
-	if spec.RunnerVersion == "" {
-		spec.RunnerVersion = "dev"
+	if spec.ForagerVersion == "" {
+		spec.ForagerVersion = "dev"
 	}
 	runID := filepath.Base(spec.Dir)
 	if err := CheckRunID(runID); err != nil {
@@ -81,7 +81,7 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.RunnerVersion}
+	client := &server.Client{Config: cfg, Key: spec.AccessKey, InstanceID: spec.InstanceID, InstanceName: spec.InstanceName, UserAgent: "qory-runner/" + spec.ForagerVersion}
 	conf, _, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func closeRecord(file, runID string, lines *[]recorded) (bool, error) {
 	if end, err := time.Parse(time.RFC3339Nano, last.Time); err == nil && !started.IsZero() && end.After(started) {
 		ran = end.Sub(started).Milliseconds()
 	}
-	ev := event.NewEmitterAfter(runID, seq, nil).Make(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": "runner_lost", "duration_ms": ran})
+	ev := event.NewEmitterAfter(runID, seq, nil).Make(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": "gateway_lost", "duration_ms": ran})
 	line, err := ev.JSON()
 	if err != nil {
 		return false, err

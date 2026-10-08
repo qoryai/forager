@@ -25,7 +25,7 @@ import (
 	"github.com/qoryai/runner/contracts"
 )
 
-// read reads one file of the contract, by its path under runner/v1.
+// read reads one file of the contract, by its path under forager/v1.
 func read(t *testing.T, name string) []byte {
 	t.Helper()
 	b, err := fs.ReadFile(contracts.FS, name)

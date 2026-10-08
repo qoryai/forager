@@ -2,7 +2,7 @@
 //
 // The runner opens a Unix domain socket before the runtime starts and names it in the
 // session's environment as QORY_RUN_SOCKET. A client connects, writes records, one per
-// line in the shape of contracts/runner/v1/record.schema.json, and closes; there is no
+// line in the shape of contracts/forager/v1/record.schema.json, and closes; there is no
 // answer. [Listen] opens the socket in a private directory of its own, because a socket
 // path has a short limit on some systems and a run directory inside a deep checkout can
 // exceed it. [Forward] is the client the runner installs as a hook: it wraps what it

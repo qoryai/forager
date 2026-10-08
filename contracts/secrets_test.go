@@ -35,7 +35,7 @@ func b64(t *testing.T, s string) []byte {
 	return b
 }
 
-// read reads one file of the contract, by its path under runner/v1.
+// read reads one file of the contract, by its path under forager/v1.
 func read(t *testing.T, name string) []byte {
 	t.Helper()
 	b, err := fs.ReadFile(contracts.FS, name)
@@ -781,7 +781,7 @@ func TestRunRefusedCodes(t *testing.T) {
 	want := []string{
 		"answer_unsigned", "apiary_public_key_missing", "bad_request", "engine_unreachable",
 		"image_unknown", "instance_limit", "invalid_request", "key_invalid", "key_limit",
-		"labels_changed", "mount_contains_runner_files", "mount_mode_conflict",
+		"labels_changed", "mount_contains_forager_files", "mount_mode_conflict",
 		"mount_shared_with_run", "mount_through_link", "placeholder_conflict", "rate_limited",
 		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
 		"secrets_not_allowed", "server_needs_wall", "tool_unknown", "unauthorized",

@@ -5,7 +5,7 @@
 // An adapter is a program of the machine's that knows one kind of host, a source code
 // host say. The runner starts it outside the enclosure, with one argument the run's
 // policy chose, and reads one JSON document from its standard output,
-// contracts/runner/v1/credential.schema.json: the token, when it expires, and how it is
+// contracts/forager/v1/credential.schema.json: the token, when it expires, and how it is
 // used, the hosts, the scheme and the paths, because hosts differ in all three and the
 // runner knows none of them. The runner asks again before the token expires and when a
 // host refuses it; the answer then changes the token and nothing else.

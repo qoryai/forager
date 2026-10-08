@@ -1,5 +1,5 @@
 // Package refusal is a run the runner refuses before it starts, with the refusal code
-// of the contract, contracts/runner/v1, that says why, and the names it concerns.
+// of the contract, contracts/forager/v1, that says why, and the names it concerns.
 //
 // A refusal is an [*accesskey.Refusal], the type of every refused run, the server's
 // codes included. Its Detail reads as a sentence for the caller's user and contains
@@ -29,10 +29,10 @@ const (
 	VariableReserved = "variable_reserved"
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
-	// MountContainsRunnerFiles is a walled run with a mount that is, contains or lies
+	// MountContainsForagerFiles is a walled run with a mount that is, contains or lies
 	// inside one of the runner's files: its names are the mount and the file, in that
 	// order.
-	MountContainsRunnerFiles = "mount_contains_runner_files"
+	MountContainsForagerFiles = "mount_contains_forager_files"
 	// MountModeConflict is a walled run with a mount, or the workspace, inside another
 	// one, or the same, of the other mode, writable or read-only: its names are the
 	// inner and the outer, in that order.
@@ -60,7 +60,7 @@ const (
 func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsRunnerFiles, MountModeConflict, MountSharedWithRun,
+		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}

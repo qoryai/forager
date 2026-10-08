@@ -97,7 +97,7 @@ and for each name the run takes the value of the highest that sets it:
   server value is left out.
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
-  [`denied-variables.json`](../contracts/runner/v1/denied-variables.json), the runtime's
+  [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
   `denies`, and `Spec.Variables.Deny`. It holds the runner's own names, the proxy's, the
   trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
   computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
@@ -166,9 +166,9 @@ A control plane is the same server every run has:
 ## Writing a server
 
 - **The rules**: the contract's
-  [server section](../contracts/runner/v1/README.md#the-server).
+  [server section](../contracts/forager/v1/README.md#the-server).
 - **A worked example**: the public package [`receiver`](../receiver/receiver.go). It is a
   server of the contract that is not a control plane. The runner's tests run against
   it, and it is tested against the signed fixtures.
-- **The test data**: `contracts/runner/v1/fixtures/signed/`. Any receiver is tested
+- **The test data**: `contracts/forager/v1/fixtures/signed/`. Any receiver is tested
   against it.
