@@ -300,11 +300,10 @@ func (v signedVector) body(t *testing.T) []byte {
 	return bytes.TrimSpace(read(t, v.Body))
 }
 
-// TestRequestKnownAnswers signs the published GET and POST strings under the fixture
-// access key and instance id, and checks each string, its length and its signature
-// against the known answer. A POST's signature covers its path: the same body under
-// another target does not verify, and neither does a request whose access key id or
-// instance id line differs.
+// TestRequestKnownAnswers signs the published GET strings under the fixture access key
+// and instance id, and checks each string, its length and its signature against the
+// known answer. A signature does not verify for another target, nor for a request
+// whose access key id or instance id line differs.
 func TestRequestKnownAnswers(t *testing.T) {
 	k := keys(t)
 	key := k.accessKey(t)

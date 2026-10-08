@@ -28,6 +28,5 @@
 //     runtime's structured output, to session events through the runtime's descriptor
 //
 // The package knows nothing of stacks, modules, homes or reports. The caller, the qory
-// command, turns those into the spec; a node runner hands the same spec down through
-// the environment.
+// command, turns those into the spec.
 package session
