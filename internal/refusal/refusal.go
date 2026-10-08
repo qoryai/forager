@@ -45,6 +45,11 @@ const (
 	// that run's wall binds of its own: its names are this run's path, the other run's
 	// id and its path.
 	MountSharedWithRun = "mount_shared_with_run"
+	// MountThroughLink is a walled run with a mount, or the workspace, whose path goes
+	// through a link inside another of its places and does not resolve into that place:
+	// its names are the place, the link and the other place, the place and the other
+	// one as passed.
+	MountThroughLink = "mount_through_link"
 )
 
 // Decides reports whether the runner decides the code, one of this package's: a
@@ -52,7 +57,8 @@ const (
 func Decides(code string) bool {
 	switch code {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsRunnerFiles, MountModeConflict, MountSharedWithRun:
+		PlaceholderConflict, MountContainsRunnerFiles, MountModeConflict, MountSharedWithRun,
+		MountThroughLink:
 		return true
 	}
 	return false

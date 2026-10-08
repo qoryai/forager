@@ -128,9 +128,9 @@ type Spec struct {
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
 	// one of the same mode is reached through the outer one, which alone is bound; one of
-	// the other mode is no run, mount_mode_conflict. One reached through a link inside a
-	// writable one is bound at its target, the path it resolves to; read-only, it is
-	// mount_mode_conflict. Dir is writable, and is bound at its own path when no mount
+	// the other mode is no run, mount_mode_conflict. One whose path goes through a link
+	// inside a writable one, and that does not resolve into it, is no run, whatever its
+	// mode, mount_through_link. Dir is writable, and is bound at its own path when no mount
 	// holds it. The runner adds the run directory, read-only. A walled run refuses a
 	// bind that lies inside, or is reached through, a writable bind of another walled
 	// run of this user's still going, apart from the same root, a writable one that

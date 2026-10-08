@@ -239,6 +239,8 @@ type lookup struct {
 	rest []string
 	// at is dir as the filesystem has it.
 	at splitPath
+	// link says the name looked up is a link, which the walk followed.
+	link bool
 }
 
 // entry is the path of the name looked up: what an agent that can write the directory
@@ -285,6 +287,7 @@ func lookups(p string) ([]lookup, error) {
 			cur = next
 			continue
 		}
+		out[len(out)-1].link = true
 		if links++; links > maxLinks {
 			return nil, fmt.Errorf("%s: too many links", abs)
 		}
@@ -312,6 +315,33 @@ func parts(p string) []string {
 	return out
 }
 
+// linkIn is the path of the last link looked up inside the place out, the one whose
+// target leads out of it, below the place's path as passed: absolute, clean, and a link
+// when the walk followed it. A path without one is an error, so a refusal never names a
+// link that is not one.
+func linkIn(out shown, ls []lookup) (string, error) {
+	for i := len(ls) - 1; i >= 0; i-- {
+		l := ls[i]
+		if !l.link {
+			continue
+		}
+		rest, ok := within(out.at, l.at)
+		if !ok {
+			continue
+		}
+		link, err := filepath.Abs(filepath.Join(append(append([]string{out.path}, rest...),
+			l.rest[0])...))
+		if err != nil {
+			return "", err
+		}
+		if info, err := os.Lstat(link); err != nil || info.Mode()&fs.ModeSymlink == 0 {
+			return "", fmt.Errorf("the link on the way, %s, is no link now", link)
+		}
+		return link, nil
+	}
+	return "", errors.New("no link on the way lies inside it")
+}
+
 // lookedUpIn is the first of the lookups whose directory is dir or lies inside it, and
 // whether there is one.
 func lookedUpIn(dir splitPath, ls []lookup) (lookup, bool) {
@@ -330,8 +360,7 @@ type shown struct {
 	writable   bool
 	at         splitPath
 	looks      []lookup
-	// bound is the path the enclosure binds the place at: its own, or, for a place
-	// reached through a link inside a writable place of the run's, its target.
+	// bound is the path the enclosure binds the place at: its own, clean.
 	bound string
 }
 
@@ -419,15 +448,17 @@ type mountPlan struct {
 //     order.
 //   - mount_mode_conflict: a place inside another one, or the same, of the other mode:
 //     a read-only part of a writable bind is one the agent replaces, and a writable
-//     part of a read-only one writes what the run shows read-only. A read-only place a
-//     name on the way to which is looked up inside a writable place is one too. Its
-//     names are the inner place and the outer one, in that order.
+//     part of a read-only one writes what the run shows read-only. Its names are the
+//     inner place and the outer one, in that order.
+//   - mount_through_link: a place, of either mode, whose path goes through a link
+//     inside a writable place and does not resolve into it: the agent that writes the
+//     link chooses what is bound. Its names are the place, the link and the writable
+//     place, in that order.
 //
 // A place inside another one of the same mode is no bind of its own: the enclosure
-// reaches it through the outer one, at the same path. A place reached through a link
-// inside a writable one, and not lying inside it, is bound at its target. So no bound
-// place is reached through a directory another bound place lets the agent write. The
-// workspace is writable, and is the working directory inside, in one of the binds.
+// reaches it through the outer one, at the same path. So no bound place is reached
+// through a directory another bound place lets the agent write. The workspace is
+// writable, and is the working directory inside, in one of the binds.
 func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, p := range spec.RunnerFiles {
 		if strings.ContainsRune(p, 0) {
@@ -493,33 +524,34 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			}
 		}
 	}
-	// A place reached through a link inside a writable place of the run's, and not
-	// lying inside it, is bound at its target, the path it resolves to, which holds no
-	// link: the link inside leads there as it does here, and the agent that can change
-	// the link changes nothing that is bound. Its names are those of the target. Of the
-	// other mode than the place the link is in, it is no run.
+	// A place, of either mode, whose path goes through a link inside a writable place of
+	// the run's, and that does not resolve into that place, is no run: the link chooses
+	// what is bound, and the agent that can write where the link lies chooses it. A
+	// place that resolves into the writable one is reached through it, below, and
+	// nothing is bound through the link.
 	for i, in := range places {
-		for _, out := range places {
-			if !out.writable {
+		for j, out := range places {
+			if j == i || !out.writable {
 				continue
 			}
 			if ok, _ := holds(out.at, in.at); ok {
 				continue
 			}
-			l, linked := lookedUpIn(out.at, in.looks)
-			if !linked {
+			if _, ok := lookedUpIn(out.at, in.looks); !ok {
 				continue
 			}
-			if !in.writable {
-				return mountPlan{}, modeConflict(in, out, false, l, true)
-			}
-			target := in.at.String()
-			looks, err := lookups(target)
+			link, err := linkIn(out, in.looks)
 			if err != nil {
-				return mountPlan{}, fmt.Errorf("cannot resolve %s %s: %w", in.what, in.path, err)
+				return mountPlan{}, fmt.Errorf("%s %s is looked up inside %s %s and resolves "+
+					"outside it: %w", in.what, in.path, out.what, out.path, err)
 			}
-			places[i].bound, places[i].looks = target, looks
-			break
+			return mountPlan{}, &Refusal{
+				Code:  refusal.MountThroughLink,
+				Names: []string{in.path, link, out.path},
+				Detail: fmt.Sprintf("%s is reached through the link %s inside %s, which a "+
+					"walled agent can change: list the link's target itself",
+					in.path, link, out.path),
+			}
 		}
 	}
 	// outer[i] is the place i is bound through: the first other place that holds it, or
@@ -536,7 +568,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 				continue
 			}
 			if in.writable != out.writable {
-				return mountPlan{}, modeConflict(in, out, same, lookup{}, false)
+				return mountPlan{}, modeConflict(in, out, same)
 			}
 			if outer[i] < 0 {
 				outer[i] = j
@@ -558,10 +590,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	}
 	// The workspace is the last place: its root is the outermost place that holds it,
 	// and inside it is the path that place is bound at with the names of the workspace
-	// below it. A workspace reached through a link inside a writable place is the path
-	// as passed, which leads through the link inside as it does here, when a bound place
-	// holds that path by its names; else it is the path it is bound at, so no engine
-	// binds a path through the link.
+	// below it.
 	ws := len(places) - 1
 	root, seen := ws, map[int]bool{}
 	for outer[root] >= 0 {
@@ -577,12 +606,6 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		if rest, ok := within(places[root].at, places[ws].at); ok {
 			plan.Dir = filepath.Join(append([]string{places[root].bound}, rest...)...)
 		}
-	}
-	if asPassed := filepath.Clean(spec.Dir); places[ws].bound != asPassed &&
-		slices.ContainsFunc(plan.Mounts, func(m wall.Mount) bool {
-			return m.Path != places[ws].bound && under(m.Path, asPassed)
-		}) {
-		plan.Dir = asPassed
 	}
 	if err := dirInBinds(plan.Dir, plan.Mounts); err != nil {
 		return mountPlan{}, err
@@ -617,9 +640,8 @@ func under(dir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
-// modeConflict is the refusal of a place inside another one of the other mode, or
-// reached through a link inside it.
-func modeConflict(in, out shown, same bool, l lookup, linked bool) *Refusal {
+// modeConflict is the refusal of a place inside another one of the other mode.
+func modeConflict(in, out shown, same bool) *Refusal {
 	noun := "mount"
 	if out.what == "the workspace" {
 		noun = "place"
@@ -630,9 +652,6 @@ func modeConflict(in, out shown, same bool, l lookup, linked bool) *Refusal {
 	}
 	if same {
 		how, why = "is", "one place can't be both writable and read-only"
-	}
-	if linked {
-		how = "is reached through " + l.entry() + ", which lies inside"
 	}
 	return &Refusal{
 		Code:  refusal.MountModeConflict,

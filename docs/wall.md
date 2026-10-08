@@ -267,27 +267,23 @@ looked up in its parent, so two binds of one root are allowed.
   reached through the outer one, which alone is bound. One inside another of the other
   mode is no run, `mount_mode_conflict`, and `Names` holds the inner path, then the
   outer one. Its sentence reads: "the mount /work/vendor (read-only) lies inside the
-  mount /work (writable): a part of a writable mount can't be read-only", or, through a
-  link, "the mount /work/home (read-only) is reached through /work/home, which lies
-  inside the mount /work (writable): …". When the outer place is the workspace, it
-  says "place" for "mount".
+  mount /work (writable): a part of a writable mount can't be read-only". When the
+  outer place is the workspace, it says "place" for "mount".
 
   A writable place inside a read-only one is refused the same way: a part of a
   read-only mount can't be writable. Two places of one path in both modes are refused
   too.
-- **Places through a link.** A place whose path goes through a link inside a writable
-  place of the run's, and that does not lie inside that place, is bound at its target:
-  the path it resolves to, with no link in it, at that same path inside. The link
-  inside leads to it as it does here, and the agent that changes the link changes
-  nothing that is bound. The target is checked as every bind is: inside another place
-  of the run's, of the same mode, it is reached through that one; inside a writable
-  bind of another walled run, it is refused. A workspace bound at its target is the
-  working directory at its path as passed, when a bound place holds that path by its
-  names, and at its target otherwise. A read-only place through a link inside a
-  writable one is `mount_mode_conflict`, with the sentence above.
-
-  Inside, the link reads as it does here. A link whose text goes through another link
-  of this machine, outside every place, such as `/tmp` on macOS, leads nowhere inside.
+- **Places through a link.** A mount, or the workspace, of either mode, whose path goes
+  through a link inside a writable place of the run's, and that does not resolve into
+  that place, is no run, `mount_through_link`: the agent that writes the link would
+  choose the directory of this machine that is bound. `Names` holds the place as
+  passed, the link, absolute and clean, and the writable place as passed. The link is
+  the last one inside the writable place on the way to the place, the one that leads
+  out of it. Its sentence reads: "/work/home is reached through the link /work/home
+  inside /work, which a walled agent can change: list the link's target itself". A
+  place whose link leads back into the writable place lies inside it and is reached
+  through it, and nothing is bound through the link. A link on the way to a place that
+  lies inside no writable place of the run's is followed by the engine as it binds.
 - **The runner's files.** A writable place that contains a directory a name on the way
   to one of the runner's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_runner_files`: the agent could point the link

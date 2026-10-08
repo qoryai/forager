@@ -1470,12 +1470,11 @@ is looked up in its parent, so two binds of one root are allowed:
   `mount_mode_conflict`, with the inner place and the outer one as its names, in that
   order: a read-only part of a writable bind is one the agent replaces, and a writable
   part of a read-only one writes what the run shows read-only;
-- a place reached through a link inside a writable place of the run's, and not lying
-  inside it, is bound at its target, the path it resolves to, with no link in it, at
-  that same path inside, so the link inside leads to it; the target is checked as every
-  bind is. A read-only one is `mount_mode_conflict`. A workspace bound at its target is
-  the working directory at its path as passed when a bound place holds that path by its
-  names, else at its target;
+- a place, of either mode, whose path goes through a link inside a writable place of
+  the run's and that does not resolve into it is no run, `mount_through_link`: the
+  agent that writes the link would choose what is bound. Its names are the place as
+  passed, the link, absolute and clean, the last one inside the writable place on the
+  way, and the writable place as passed;
 - the runs directory is one of the runner's files, so the run directory lies in no
   place the run lists, and a writable place that holds a directory a name on the way
   to one of the runner's files is looked up in is `mount_contains_runner_files`;

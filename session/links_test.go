@@ -87,111 +87,147 @@ func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 	}
 }
 
-// resolved is a path resolved, with no link in it.
-func resolved(t *testing.T, p string) string {
+// throughLink checks a mount_through_link refusal: its names, and its sentence.
+func throughLink(t *testing.T, err error, place, link, outer string) {
 	t.Helper()
-	r, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		t.Fatal(err)
+	r := refusalOf(t, "mount_through_link", err)
+	want := place + " is reached through the link " + link + " inside " + outer +
+		", which a walled agent can change: list the link's target itself"
+	if !slices.Equal(r.Names, []string{place, link, outer}) || r.Detail != want {
+		t.Errorf("names %q, detail %q\nwant names %q, detail %q",
+			r.Names, r.Detail, []string{place, link, outer}, want)
 	}
-	return r
 }
 
-// TestAWorkspaceThroughALinkInItsOwnRootIsBoundAtItsTarget pins two runs with the same
-// root, the second's workspace a link in it to elsewhere: the workspace is bound at
-// its target, beside the root, which the other run binds too, and is the working
-// directory at its path as passed, which leads there through the link inside.
-func TestAWorkspaceThroughALinkInItsOwnRootIsBoundAtItsTarget(t *testing.T) {
+// TestAPlaceThroughALinkInAWritablePlaceIsNoRun pins a link an agent plants inside a
+// writable place, at a directory of this machine's such as one a login session reads
+// programs from, listed as a second place: the link would choose what is bound, so the
+// run is refused, writable or read-only, the place itself the link.
+func TestAPlaceThroughALinkInAWritablePlaceIsNoRun(t *testing.T) {
+	root := t.TempDir()
+	agents := mkdirs(t, filepath.Join(t.TempDir(), "Library", "LaunchAgents"))
+	out := filepath.Join(root, "out")
+	link(t, agents, out)
+	for _, readOnly := range []bool{false, true} {
+		sp := walledSpec(t, &openWall{})
+		sp.Mounts = []wall.Mount{{Path: root}, {Path: out, ReadOnly: readOnly}}
+		sp.Dir = root
+		throughLink(t, runErr(sp), out, out, root)
+	}
+}
+
+// TestAWorkspaceThroughALinkInItsOwnRootIsNoRun pins two runs with the same root, the
+// second's workspace a link in it that the first run's agent can plant: the workspace
+// is refused, so that agent does not choose what the second run binds.
+func TestAWorkspaceThroughALinkInItsOwnRootIsNoRun(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	ws := filepath.Join(w, "ws")
 	link(t, outside, ws)
 	hold(t, []wall.Mount{{Path: w}}, w)
+	sp := walledSpec(t, &openWall{})
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}}, ws
+	throughLink(t, runErr(sp), ws, ws, w)
+}
+
+// TestTheLinkNamedIsTheOneThatLeadsOut pins the link a mount_through_link refusal
+// names: a link, absolute and clean, inside the writable place, the last one on the
+// way, whether it lies deeper than the first name, follows another link inside, or
+// has a target with "..".
+func TestTheLinkNamedIsTheOneThatLeadsOut(t *testing.T) {
+	top := t.TempDir()
+	w, x := mkdirs(t, filepath.Join(top, "w")), mkdirs(t, filepath.Join(top, "x"))
+	mkdirs(t, filepath.Join(x, "c"))
+	run := func(place string) error {
+		sp := walledSpec(t, &openWall{})
+		sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: place}}, w
+		return runErr(sp)
+	}
+
+	deep := filepath.Join(mkdirs(t, filepath.Join(w, "a")), "l")
+	link(t, x, deep)
+	place := filepath.Join(deep, "c")
+	throughLink(t, run(place), place, deep, w)
+
+	d := mkdirs(t, filepath.Join(w, "d"))
+	l1, l2 := filepath.Join(w, "l1"), filepath.Join(d, "l2")
+	link(t, d, l1)
+	link(t, x, l2)
+	place = filepath.Join(l1, "l2")
+	throughLink(t, run(place), place, l2, w)
+
+	up := filepath.Join(w, "up")
+	link(t, "a/../../x", up)
+	throughLink(t, run(up), up, up, w)
+}
+
+// TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt pins a link inside a writable
+// place to a directory of that place: the place lies inside it, and is reached through
+// it with nothing bound through the link.
+func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
+	w := t.TempDir()
+	v2 := mkdirs(t, filepath.Join(w, "v2"))
+	cur := filepath.Join(w, "current")
+	link(t, v2, cur)
 	o := &openWall{}
 	sp := walledSpec(t, o)
-	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}}, ws
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: cur}}, cur
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []wall.Mount{{Path: w}, {Path: resolved(t, outside)},
+	want := []wall.Mount{{Path: w}, {Path: res.Dir, ReadOnly: true}}
+	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != v2 {
+		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
+	}
+}
+
+// TestALinkInsideNoPlaceIsFollowedWhereItLeads pins a place whose own path has a link
+// that lies inside none of the run's places: it is bound at its path as passed, which
+// the engine follows to the link's target.
+func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
+	ws, outside := t.TempDir(), t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	link(t, outside, home)
+	o := &openWall{}
+	sp := walledSpec(t, o)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true}}, ws
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true},
 		{Path: res.Dir, ReadOnly: true}}
 	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != ws {
 		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
 	}
 }
 
-// TestAMountThroughALinkInItsRootIsBoundAtItsTarget pins a mount whose path goes
-// through a link inside a writable mount of the same run: it is bound at its target,
-// which holds no link, so it is in the enclosure, and the link inside leads to it.
-func TestAMountThroughALinkInItsRootIsBoundAtItsTarget(t *testing.T) {
-	root, outside := t.TempDir(), t.TempDir()
-	out := filepath.Join(root, "out")
-	link(t, outside, out)
-	o := &openWall{}
-	sp := walledSpec(t, o)
-	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}, {Path: out}}, root
-	res, err := session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []wall.Mount{{Path: root}, {Path: resolved(t, outside)},
-		{Path: res.Dir, ReadOnly: true}}
-	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != root {
-		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
-	}
-}
-
-// TestALinkedTargetInsideAnotherRunsBindIsNoRun pins a place bound at its target: the
-// target is checked as every bind is, so one inside another walled run's writable bind
-// is refused, with the place as passed as the first name.
-func TestALinkedTargetInsideAnotherRunsBindIsNoRun(t *testing.T) {
-	e, root := t.TempDir(), t.TempDir()
-	x := mkdirs(t, filepath.Join(e, "x"))
-	first, _ := hold(t, []wall.Mount{{Path: e}}, e)
-	out := filepath.Join(root, "out")
-	link(t, x, out)
-	sp := walledSpec(t, &openWall{})
-	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}, {Path: out}}, root
-	r := refusalOf(t, "mount_shared_with_run", runErr(sp))
-	want := "the mount " + out + " (writable) lies inside the writable bind " + e +
-		" of the walled run " + first.RunID +
-		", which is still going: a walled agent of that run can change it"
-	if !slices.Equal(r.Names, []string{out, first.RunID, e}) || r.Detail != want {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
-	}
-
-	// A target that is one of the runner's files is one, as every place is.
-	runs := t.TempDir()
+// TestALinkToTheRunnersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
+// writable place to a runs directory: it is one of the runner's files, as every place
+// that resolves to one is.
+func TestALinkToTheRunnersFilesInsideAPlaceIsTheirs(t *testing.T) {
+	root, runs := t.TempDir(), t.TempDir()
 	to := filepath.Join(root, "records")
 	link(t, runs, to)
-	sp = walledSpec(t, &openWall{})
+	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: root}, {Path: to}}, root, runs
 	if r := mountRefusal(t, runErr(sp)); !slices.Equal(r.Names, []string{to, runs}) {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}
 }
 
-// TestAChainOfLinkedPlacesBindsTheWorkspacesRoot pins a chain: a mount through a link
-// in another mount, to the root another walled run binds, and the workspace inside
-// that root. The linked mount is bound at its target, the root both runs bind, and the
-// working directory lies in it, so nothing is bound that the run did not check.
-func TestAChainOfLinkedPlacesBindsTheWorkspacesRoot(t *testing.T) {
+// TestAChainOfLinkedPlacesIsNoRun pins a chain: a mount through a link in another
+// mount, to the root another walled run binds, and the workspace inside that root. The
+// linked mount is refused, so nothing is bound that the run did not list as it is.
+func TestAChainOfLinkedPlacesIsNoRun(t *testing.T) {
 	e, w := t.TempDir(), t.TempDir()
 	mkdirs(t, filepath.Join(e, "ws"))
 	hold(t, []wall.Mount{{Path: e}}, e)
 	l := filepath.Join(w, "link")
 	link(t, e, l)
-	o := &openWall{}
-	sp := walledSpec(t, o)
+	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: l}}, filepath.Join(e, "ws")
-	res, err := session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []wall.Mount{{Path: w}, {Path: resolved(t, e)}, {Path: res.Dir, ReadOnly: true}}
-	if !slices.Equal(o.got.Mounts, want) || o.got.Dir != filepath.Join(resolved(t, e), "ws") {
-		t.Errorf("mounts %v, working directory %q", o.got.Mounts, o.got.Dir)
-	}
+	throughLink(t, runErr(sp), l, l, w)
 }
 
 // TestARunsDirectoryThroughAnotherRunsBindIsNoRun pins a runs directory that is a link
@@ -229,29 +265,22 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 }
 
 // TestAPlaceThroughALinkInAWritablePlaceOfItsOwn pins one run whose read-only place is
-// a link inside its own writable one: it lies inside that one, through the link, and
-// is mount_mode_conflict. A runs directory that is such a link is
-// mount_contains_runner_files.
+// a link inside its own writable one: mount_through_link, as a writable one is. A runs
+// directory that is such a link is mount_contains_runner_files.
 func TestAPlaceThroughALinkInAWritablePlaceOfItsOwn(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(w, "home")
 	link(t, outside, home)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: home, ReadOnly: true}}, w
-	r := refusalOf(t, "mount_mode_conflict", runErr(sp))
-	want := "the mount " + home + " (read-only) is reached through " + entry(t, home) +
-		", which lies " +
-		"inside the mount " + w + " (writable): a part of a writable mount can't be read-only"
-	if !slices.Equal(r.Names, []string{home, w}) || r.Detail != want {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
-	}
+	throughLink(t, runErr(sp), home, home, w)
 
 	runs := filepath.Join(w, "runs")
 	link(t, t.TempDir(), runs)
 	sp = walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: w}}, w, runs
-	r = mountRefusal(t, runErr(sp))
-	want = "the mount " + w + " contains " + entry(t, runs) + ", on the way to " + runs +
+	r := mountRefusal(t, runErr(sp))
+	want := "the mount " + w + " contains " + entry(t, runs) + ", on the way to " + runs +
 		", where the run directories are kept"
 	if !slices.Equal(r.Names, []string{w, runs}) || r.Detail != want {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)

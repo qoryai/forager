@@ -105,7 +105,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The runner's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
   `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
-  `mount_contains_runner_files`, `mount_mode_conflict` and `mount_shared_with_run`.
+  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run` and
+  `mount_through_link`.
   `errors.As` finds one in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
@@ -270,18 +271,21 @@ release may change what an existing document does, and says so under Upgrading.
   the way to a bind source is looked up in a writable bind, the run's own or another
   walled run's still going, or in a directory inside one. A walled run is refused with
   `mount_mode_conflict` when a mount, or the workspace, lies inside another one of the
-  run's, or is the same, or is reached through a link inside a writable one, of the other
-  mode; `Names` holds the inner path and the outer one, as passed. It is refused with
-  `mount_shared_with_run` when one of its binds lies inside a writable bind of another
-  walled run still going, apart from the same root, or is reached through one; when one of
-  its writable binds holds a bind of such a run, or a directory a name on the way to one
-  is looked up in; or when one of its binds is, holds or lies inside such a run's run
-  directory, whatever the modes. `Names` holds this run's path, the other run's id and the
-  other run's path, each as its run passed it. Two runs that bind the same root run side
-  by side, and two read-only binds never conflict. A run whose own helper, or another
-  directory of the runner's its wall binds, lies inside a writable bind of such a run, or
-  is reached through one, does not start. The runner keeps the walled runs still going in
-  a registry of its own, per user, `$XDG_STATE_HOME/qory-runner/walled`, else
+  run's, or is the same, of the other mode; `Names` holds the inner path and the outer
+  one, as passed. It is refused with `mount_through_link` when a mount, or the workspace,
+  of either mode, goes through a link inside a writable place of the run's and does not
+  resolve into it, since the agent that writes the link would choose what is bound;
+  `Names` holds the place as passed, the link's path and the writable place as passed. It
+  is refused with `mount_shared_with_run` when one of its binds lies inside a writable
+  bind of another walled run still going, apart from the same root, or is reached through
+  one; when one of its writable binds holds a bind of such a run, or a directory a name on
+  the way to one is looked up in; or when one of its binds is, holds or lies inside such a
+  run's run directory, whatever the modes. `Names` holds this run's path, the other run's
+  id and the other run's path, each as its run passed it. Two runs that bind the same root
+  run side by side, and two read-only binds never conflict. A run whose own helper, or
+  another directory of the runner's its wall binds, lies inside a writable bind of such a
+  run, or is reached through one, does not start. The runner keeps the walled runs still
+  going in a registry of its own, per user, `$XDG_STATE_HOME/qory-runner/walled`, else
   `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with its
   process id and its binds, each as passed, as resolved, with the entries its names are
   looked up as, whether writable, and what it is when it is not a place; the file is held
@@ -290,7 +294,7 @@ release may change what an existing document does, and says so under Upgrading.
   compared by its names, like a part that does not exist yet; any other failure to resolve
   one stops the run. A run checks its binds and adds its own entry under a lock of the
   registry's, before it contacts the server, and again, with its wall's own binds, just
-  before the enclosure binds them. `events/run.refused.schema.json` lists both codes.
+  before the enclosure binds them. `events/run.refused.schema.json` lists the three codes.
 - `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
   machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
   directory the enclosure makes later. `wall.Docker` lists its helper and the pattern
@@ -301,12 +305,8 @@ release may change what an existing document does, and says so under Upgrading.
   with the pattern of the runs' socket directories, and the enclosure's just before it
   binds them. A place that lies inside a writable directory another run's wall binds
   is `mount_shared_with_run`.
-- A place reached through a link inside a writable place of the same run, and not
-  lying inside it, is bound at its target, the path it resolves to, at that same path
-  inside, and its target is checked as every bind is. A workspace bound at its target
-  is the working directory at its path as passed when a bound place holds that path by
-  its names, else at its target. The runner passes every bind's path clean, and a run
-  whose working directory lies in none of its binds fails.
+- The runner passes every bind's path clean, and a run whose working directory lies in
+  none of its binds fails.
 
 ### Changed
 
