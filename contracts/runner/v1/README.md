@@ -1587,9 +1587,8 @@ through it.
 
 **A Docker of the agent's own.** *Experimental.* Under the nested runtime the enclosure
 has a root, and whether that root reaches the mounts the run lists as the machine's root
-is unverified, so the option is experimental: it may change or be
-withdrawn in a minor release, and a run that uses it mounts nothing the machine's root
-must protect.
+is unverified, so the option is experimental: it may change, and a run that uses it
+mounts nothing the machine's root must protect.
 
 An image the machine defines with a daemon (§Images) provides the agent a Docker daemon
 inside the enclosure, never the machine's. It needs a runtime that runs a daemon in a
