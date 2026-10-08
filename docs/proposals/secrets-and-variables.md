@@ -67,9 +67,10 @@ Fixtures on main the fixtures, and Sources the sources.
   pool, `np_`, whose instances share it up to an optional limit. An instance has an
   instance id, signed into every request for display, audit, per-instance events and the
   instance limit, `instance_limit`; authorisation rests on the access key.
-- Access keys enrol with a code or by a pasted public key, and either way the key is
-  active at once. A key's stored-secrets flag is fixed when it is created; a new key for
-  the same node replaces one. One new endpoint: enrolment (Wire format).
+- An access key enrols with a code, or an owner or administrator makes it for a node or
+  node pool in the server's console, which receives only its public key; either way the
+  key is active at once. A key's stored-secrets flag is fixed when it is created; a new
+  key for the same node replaces one. One new endpoint: enrolment (Wire format).
 
 **§The server: documents**
 
@@ -590,8 +591,8 @@ runs with it.**
   access key belongs to exactly one node or node pool, and a node to exactly one
   workspace in every edition in 0.7.0, so a fleet that serves several workspaces has one
   node pool per workspace. In what follows, "a node" covers both kinds unless a sentence
-  says otherwise. Every change to a node's access keys, an enrolment, a paste or a
-  revocation, takes the node row's lock, so they happen one at a time.
+  says otherwise. Every change to a node's access keys, an enrolment, a key made in the
+  console or a revocation, takes the node row's lock, so they happen one at a time.
 - **An access key** is one Ed25519 key with its id, `ak_` and 16 lower-case Crockford
   base32 characters, which the server assigns when the key enrols. Its secret signs every
   request the runner sends, and the same key, converted to X25519, opens what the server
@@ -677,8 +678,9 @@ runs with it.**
   secret only with the server whose `url` the runner file names beside it, and moves it
   aside before it enrols with another. The reason is hygiene: a compromise of one
   server's records then involves no key another server trusts. This is a `qory` rule
-  and a known limit, not a cryptographic guarantee: a public key pasted into two servers
-  is outside `qory`'s reach (Security considerations).
+  and a known limit, not a cryptographic guarantee: a public key another server receives
+  by other means, such as a plain receiver's configuration, is outside `qory`'s reach
+  (Security considerations).
 - **The secret.** One line: `qak_` and the 32-byte Ed25519 seed in base64url without
   padding, 47 characters. The prefix lets secret scanners recognise it. `qory` generates
   the seed from the system's random source and reads the secret from the file
@@ -707,14 +709,14 @@ runs with it.**
   processes start without them.
 - **The runner module keeps everything in memory; `qory` owns the files.** The module
   takes the secret and the instance id through `session.Spec`.
-- **Locks.** Every command that generates a key, `enrol` and `create`, takes
-  `locks/key.lock` exclusively with `flock`. A run, in order: takes `locks/key.lock`
-  shared; checks the marker; creates its own lock file `locks/<run id>.lock`, naming
-  whether it is walled, and holds it with `flock` for its life; then drops the key lock.
-  So a key command waits for starting runs, and starting runs wait for it. A key command
-  refuses while any unwalled run's lock file is held, and prints that those sessions
-  must stop first. A key command, holding the key lock exclusively, removes every run
-  lock file whose `flock` it can take, since that run has ended.
+- **Locks.** The command that generates a key, `enrol`, takes `locks/key.lock` exclusively
+  with `flock`. A run, in order: takes `locks/key.lock` shared; checks the marker; creates
+  its own lock file `locks/<run id>.lock`, naming whether it is walled, and holds it with
+  `flock` for its life; then drops the key lock. So a key command waits for starting runs,
+  and starting runs wait for it. A key command refuses while any unwalled run's lock file
+  is held, and prints that those sessions must stop first. A key command, holding the key
+  lock exclusively, removes every run lock file whose `flock` it can take, since that run
+  has ended.
 - **The marker and key commands.** Every key command that keeps its key on this machine
   writes the `stored-secrets` marker before it generates the key, unconditionally, and a
   marker it cannot write means no key. The marker belongs to the runner file's
@@ -767,7 +769,7 @@ runs with it.**
   it, `qory access-key enrol` refuses before it generates a key: the code is from another
   server, or the pin is out of date, and the operator updates the pin out of band.
   `qory` writes a pin from an answer only where none exists.
-- **Enrolment** assigns an access key its id, with a code or by a pasted key.
+- **Enrolment** assigns an access key its id, with a code or in the server's console.
   - (a) **An enrolment code.** On the machine, `qory access-key enrol <server> <code>`
     takes the key lock, writes the marker, generates the secret, keeps it as above,
     records the code's SHA-256 and the time in `enrolment-pending`, prints the key's
@@ -794,32 +796,30 @@ runs with it.**
     - `qory access-key enrol --print` writes no file, the marker included, and prints
       `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY` for a
       CI's settings.
-  - (b) **A pasted key.** `qory access-key create` takes the key lock, writes the marker,
-    generates the secret, keeps it as above, and prints the public key and its
-    fingerprint; with `--print` it writes no file, the marker included, and prints
-    `QORY_ACCESS_KEY_SECRET` as well. An owner or administrator adds the access key to an
-    existing node or node pool by pasting the public key, with its settings, and the key
-    is active at once; a paste creates no node.
-    The server then shows `QORY_ACCESS_KEY_ID` and the pin, which the machine sets in
-    `runner.yaml` or its environment. A pasted key the key checks or the index refuse
-    gets one message, "this key cannot be used", whatever the reason, so a paste reveals
-    nothing about other access keys; a paste beyond the node's keys is `key_limit`
-    (Replacing a key).
+  - (b) **A key made in the server's console.** An owner or administrator makes an
+    access key for an existing node or node pool in the server's console, with its
+    settings. The browser generates the key pair and the server receives only the public
+    key; the key is active at once, and the console creates no node. The console then
+    shows `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and `QORY_APIARY_PUBLIC_KEY`,
+    each to copy, the secret shown once, which the machine sets in its environment or a
+    CI's settings. A key the key checks or the index refuse is not added, with the same
+    refusal whatever the reason, so the console reveals nothing about other access keys;
+    the console refuses a new key while the node holds two keys (Replacing a key).
 
   A fingerprint is `base64url(SHA-256(raw public key)[:16])`, 22 characters, for an
   access key's key and the server's alike.
 - **One public key, one access key.** A public key serves one access key, ever. The
   server keeps a global unique index over every access key's public key and every
-  tombstone, checks it at enrolment and paste, and keeps it beyond the deletion of a
-  workspace. A key already in the index is `409` `key_invalid`. At paste it is the same
-  answer as an invalid key. At enrolment an invalid key or a proof that does not verify
-  gets an unsigned `409` and a key in the index a signed one, and only the holder of a
-  key's secret makes a proof that reaches the index check. Either way, a refusal reveals
-  nothing about other access keys. An enrolment retry is exempt for its own row.
+  tombstone, checks it at enrolment and in the console, and keeps it beyond the deletion
+  of a workspace. A key already in the index is `409` `key_invalid`. In the console it is
+  the same refusal as an invalid key. At enrolment an invalid key or a proof that does not
+  verify gets an unsigned `409` and a key in the index a signed one, and only the holder
+  of a key's secret makes a proof that reaches the index check. Either way, a refusal
+  reveals nothing about other access keys. An enrolment retry is exempt for its own row.
 - **What the server checks.** At enrolment it checks the key first, then verifies the
   proof of possession under it, and only then looks the key up in the index, so it
   reveals a key's status only to whoever holds its private key. It checks every public
-  key it is given, the pasted key included:
+  key it is given, a key made in the console included:
   - a canonical encoding: decode, re-encode and compare the bytes, since a lenient
     decoder such as `filippo.io/edwards25519` `SetBytes` accepts non-canonical encodings;
   - a point on the curve;
@@ -840,27 +840,26 @@ runs with it.**
   of its workspace and organisation: that public key and that access key id stay retired
   for good, and a revoked key stays refused wherever it is posted again.
 - **Activation.** An access key is active as soon as it enrols: the use of a valid code
-  activates the key it enrols, and a pasted key is active as it is entered. The server
-  shows how a key enrolled with a code arrived: by which code, created by whom and when,
-  used when and from which address.
+  activates the key it enrols, and a key made in the console is active as it is made. The
+  server shows how a key enrolled with a code arrived: by which code, created by whom and
+  when, used when and from which address.
 - **Stored secrets are fixed when a key is created.** An access key's stored-secrets
-  flag comes from its code's settings, or from the settings entered with a pasted key,
-  and never changes; it is in the key row and its integrity code. Off is the default,
-  and only owners and administrators set it on. Discovery lists `secrets` only for an
-  access key allowed stored secrets, the variant follows the key's flag (Decision 6), and
-  stored values open only with such a key. Enrolment generates a fresh key, and an owner
-  pastes a key `qory access-key create` generated for that purpose, so a secret an
-  earlier unwalled agent read unlocks none. A developer's own access key keeps
-  unwalled runs; a CI's or a shared one receives stored secrets and runs walled.
+  flag comes from its code's settings, or from the settings entered with a key made in the
+  console, and never changes; it is in the key row and its integrity code. Off is the
+  default, and only owners and administrators set it on. Discovery lists `secrets` only
+  for an access key allowed stored secrets, the variant follows the key's flag (Decision
+  6), and stored values open only with such a key. Enrolment and the console each generate
+  a fresh key, so a secret an earlier unwalled agent read unlocks none. A developer's own
+  access key keeps unwalled runs; a CI's or a shared one receives stored secrets and runs
+  walled.
 - **Replacing a key.** Changing the flag, or replacing a lost or compromised key, means
-  enrolling a new access key for the same node, with a new code, or pasting a new key. A
-  node holds at most two access keys, the current one and its replacement, under the
-  node row's lock:
+  enrolling a new access key for the same node, with a new code, or making a new key in
+  the console. A node holds at most two access keys, the current one and its replacement,
+  under the node row's lock:
   - an enrolment for a node that already holds two keys is `409` `key_limit`, and the
     code stays unused, so the same command succeeds within the code's 15 minutes once an
     owner or administrator has made room;
-  - a paste is refused while the node holds two keys; the server shows the refusal as
-    `key_limit`.
+  - the console refuses a new key while the node holds two keys, before it makes one.
 
   An owner or administrator revokes a key, usually the old one, to make room; revocation
   is immediate. A node pool's operator enrols the new key with `--print`, puts the new
@@ -1099,7 +1098,8 @@ it, whoever can sign answers, a holder of the server's signing secret on the pat
 serve forged connections under a real digest and have real values routed to a host of
 its choosing. With it, such a holder seals only values of its own: the real ones are
 sealed to the access key for the rendering the server stored, it holds no access key
-secret, and every new key needs a valid code or an administrator's paste (Decision 4).
+secret, and every new key needs a valid code or an owner or administrator in the
+server's console (Decision 4).
 
 **A write to the server's database.** Whoever can edit a service definition's hosts, a
 connection's link to a secret, or a stored rendering, in the server's database, reroutes
@@ -1208,15 +1208,15 @@ the machine pins:
   `apiary_public_key_missing`, decided before the first request.
 - **How a machine gets the pin.** Enrolment with a code installs it verifiably: the code
   carries the key's fingerprint, and `qory` writes the pin only after the signed answer
-  verifies under that key. For a pasted key, the server shows the pin beside the new
-  access key id. The pin
-  is a public key, so it needs no secret store: it comes through the runner file, baked
-  into the machine's image, or through a plain CI variable, `QORY_APIARY_PUBLIC_KEY`,
-  whose value is the same list as `apiary_public_key`, written as JSON: `[{"alg":
-  "ed25519", "public_key": "<32 bytes, base64url>"}]`. `qory` takes the pin from the
-  variable when the runner file's `server` section has no `apiary_public_key`, and refuses
-  to start when both are set, so the pin has one source. `qory` removes the variable from
-  its own environment and keeps it out of the enclosure, because only the runner needs it.
+  verifies under that key. For a key made in the console, the console shows the pin beside
+  the new access key id and its secret. The pin is a public key, so it needs no secret
+  store: it comes through the runner file, baked into the machine's image, or through a
+  plain CI variable, `QORY_APIARY_PUBLIC_KEY`, whose value is the same list as
+  `apiary_public_key`, written as JSON: `[{"alg": "ed25519", "public_key": "<32 bytes,
+  base64url>"}]`. `qory` takes the pin from the variable when the runner file's `server`
+  section has no `apiary_public_key`, and refuses to start when both are set, so the pin
+  has one source. `qory` removes the variable from its own environment and keeps it out of
+  the enclosure, because only the runner needs it.
 
 ### 7. Machine values and the runner file
 
@@ -2104,8 +2104,8 @@ set, as for the pin.
   through enrolment. With `--local`, or with no
   server, everything comes from the machine.
 - **A plain receiver** still works. It serves discovery and the events endpoint, and signs
-  its answers under its own key, with no exemption. It may accept only public keys pasted
-  into its own configuration and skip enrolment codes, and it lists no `secrets`. Its
+  its answers under its own key, with no exemption. It may accept only public keys listed
+  in its own configuration and skip enrolment codes, and it lists no `secrets`. Its
   discovery lists `version`, `node_id`, `events` and `apiary_public_key`. The reference
   receiver in this repository is such a receiver, and it answers labels the contract
   refuses with a signed `400` `invalid_request`.
@@ -2745,8 +2745,8 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | `invalid_request` | server, `400` | a body that is not JSON, fails its schema or has an unknown member, a ping with `interval_seconds` above 300 included; labels the contract refuses |
 | `rate_limited` | server, `429` | the access key's rate, or the enrolment path's, is exceeded |
 | `unavailable` | server, `503` | a stored rendering fails its integrity code, on the GET or the secrets request; a failing key row is `401` |
-| `key_invalid` | server, `409` | at enrolment or paste, about a public key: a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; a `proof` that does not verify under the key; or a key the index holds, any access key's or any tombstone's. At enrolment the first two are unsigned and the last signed; only the holder of a key's secret makes a proof that reaches it, so a refusal reveals nothing about other access keys |
-| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds two keys; the code stays unused. The server shows the same code when it refuses a paste to a node holding two keys |
+| `key_invalid` | server, `409` | at enrolment, about a public key: a key that is not a canonical encoding of a point on the curve, is of small order or not of prime order, has y = 1, or is the published fixture key; a `proof` that does not verify under the key; or a key the index holds, any access key's or any tombstone's. At enrolment the first two are unsigned and the last signed; only the holder of a key's secret makes a proof that reaches it, so a refusal reveals nothing about other access keys |
+| `key_limit` | server, `409` | at enrolment, signed: the code's node or node pool already holds two keys; the code stays unused. The console refuses a new key for a node holding two keys before it makes one |
 | `instance_limit` | server, `409` | on the ping alone, after the events endpoint's deduplication, signed: a new instance id beyond the node's limit, 1 for a node, a node pool's own; counted over distinct instance ids with a live run, and admitted under the node row's lock |
 | `secrets_not_allowed` | server, `409` | the access key is not allowed stored secrets |
 | `run_closed` | server, `410` | the server has closed the run's row, such as when an owner or administrator cleared its instance or revoked its access key; on the events endpoint it ends the run, `reason: run_closed` |
@@ -2818,7 +2818,7 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A write to the server's database | Integrity codes over connections, custom definitions, every rendering, every key row and every code, with a per-row version, verified on every request and before sealing: a writer cannot swap an access key's public key, move an access key to another node or a node to another workspace, set the stored-secrets flag, raise an instance limit, insert a code, or insert an access key; seals taken from the verified rendering's bytes; audit | A writer with the server's encryption key, or a change through the server's own pages |
 | A compromised server or operator | — | It reads every stored value, routes it, chooses an integration's argument, settings and `ways`, sends an observe-everything policy, and learns which `secrets.local` names exist from `secret_unresolved`. The machine's `hosts` bounds, its `arguments`, `settings` and `ways` bounds, the first two required for a server-sent integration with a machine value, the refusal of a `<name>_file` setting from a server, so it cannot point a program at a file of the node's, installing only on the owner's command, and the pin, required on every machine, are what remain |
 | A workspace administrator, or anyone who may save a custom service and link a secret | In 0.7.0 only owners and administrators may: linking needs `secret.use` on the secret, which only they hold, and only they define custom services, edit variables, create codes and set an access key's stored-secrets flag | Choosing the host is reading the value |
-| A party that can rewrite the administrator's browser session with the server | — | The session is trusted: such a party can show a false pin, fingerprint or code, and can equally create codes or paste keys itself. Comparing fingerprints out of band, such as over another channel with the machine's operator, is the operator's option |
+| A party that can rewrite the administrator's browser session with the server | — | The session is trusted: such a party can show a false pin, fingerprint or code, read a key the console makes, and can equally create codes or make keys in the console itself. Comparing fingerprints out of band, such as over another channel with the machine's operator, is the operator's option |
 | Whoever may edit variables | Only owners and administrators; an unwalled run receives no server variable unless the machine sets `variables.unwalled: accept`; the deny list, the runtime's `denies` and the machine's `variables.deny` leave out what would undermine the wall, the proxy or the runner | The deny list protects the wall and the runner, not the developer: with `accept`, the server has the developer's shell |
 | A compromised node, such as through an agent that writes `runner.yaml` | The server leads: its value of a name wins over every source of the node's but the fixed names, and each value that loses is recorded; the node's policy only narrows, and public roots apply to every stored value (Decision 9) | A node can still narrow a run until it fails, and it chooses its own variables for names the server leaves unset |
 | A holder of an access key secret, on the path | Every runner pins the server's key, so it forges no answer and no envelope; routing is bound to the document | It signs requests as that key, under any instance id, and opens what is sealed to it, as the next rows say |
@@ -2829,12 +2829,12 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
 | A server that sends a machine value elsewhere | The machine's own `hosts` on each `secrets.local` entry, compared with the hosts of the roles that list the secret: `secret_hosts_exceeded`; a server-sent `<name>_file` setting refused, `integration_settings_not_allowed`, so a server cannot have a program read a file of the node's | — |
 | A node, choosing labels | Labels resolve only within the node's workspace | Repository scope is no boundary against a node: a node is scoped to its workspace |
 | An agent choosing the next run's labels, such as by rewriting `.git/config`'s origin | A CI or job spec passes labels explicitly; for a local checkout, `qory` pins the labels of its first run the server accepts, in the runner file's directory, which walled agents cannot reach, and a later run whose derived labels differ is `labels_changed` until the user confirms with `--relabel` | Pinning is trust on first use: a checkout's first run, or the same checkout at a new path, pins what the origin says then. An unwalled agent of the same user can rewrite the pin file as easily as `.git/config`. A user who confirms without reading the change |
-| An access key secret an unwalled agent read before stored secrets were wanted | The stored-secrets flag is fixed when a key is created, so stored values need a new key, enrolled with a new code; every key command writes the `stored-secrets` marker before it generates the key and refuses while an unwalled run's lock is held, and no run starts while a key command runs; an enrolment retry reuses a secret only for the same code within 15 minutes | A pasted key generated earlier and pasted with the flag; the owner pastes a key generated for the purpose. An agent that keeps a process running outside `qory` after its session ends, and so holds no lock |
+| An access key secret an unwalled agent read before stored secrets were wanted | The stored-secrets flag is fixed when a key is created, so stored values need a new key, enrolled with a new code or made in the console; every key command writes the `stored-secrets` marker before it generates the key and refuses while an unwalled run's lock is held, and no run starts while a key command runs; an enrolment retry reuses a secret only for the same code within 15 minutes | An agent that keeps a process running outside `qory` after its session ends, and so holds no lock |
 | An unwalled agent reading a moved-aside secret, such as the old key of a node whose new key has no stored secrets | The marker stays while any moved-aside secret is in the runner file's directory; `qory` deletes moved-aside secrets once the current key's first signed discovery succeeds, or once a signed answer shows the old key revoked, and removes the marker only when one secret remains and discovery signed for it lists no `secrets`; a secret from the environment or a file descriptor never removes it | An old key that stays active keeps its stored values until it is revoked; revoking the old key is the administrator's last step of a replacement |
 | A run under another runner file's directory, such as another `XDG_CONFIG_HOME` | The marker belongs to its directory, and with a server, signed discovery still lists `secrets` for a key allowed them | Such a run sees another directory's marker nowhere; an unwalled agent can read the original secret file by its path anyway (Issues, item 4) |
 | A stolen code | Single use, valid for at most 15 minutes, bound to one node or node pool, new or existing, and one access key's settings; the server shows how each key enrolled with a code arrived, and `qory` prints to its user when their code was already used, so an owner or administrator revokes that key; a node holds at most two keys | A key enrolled with a stolen code works until it is revoked |
 | A stolen access key secret | Stored secrets only for access keys allowed them; revocation, immediate, which closes the key's live runs and cuts off every instance using the key; a batch that verifies only under the revoked key's tombstone gets a signed `410` `run_closed` and the server stores nothing from it, so a thief holding the key cannot write into a run's record, and that path stays open only for the runs live at the revocation, until 3 × their `interval_seconds` after their last accepted event, then `401`; sealing and revocation serialised on the key row, so nothing is sealed after a revocation commits; a new key for the same node, enrolled with a new code; the recomputed digest binds values to the document the server rendered | Whoever has it is the access key, on any machine, and receives the stored values sealed to it until it is revoked. Base mode has no forward secrecy: with recorded traffic or the server's logs, the secret opens every past payload sealed to it, so access keys are replaced from time to time |
-| One public key on two servers | `qory` keeps one secret per server and moves a secret aside before it enrols with another, so a compromise of one server's records involves no key another server trusts | This is a `qory` rule, not a cryptographic guarantee: an administrator who pastes one public key into two servers is outside its reach, and the request string names no server |
+| One public key on two servers | `qory` keeps one secret per server and moves a secret aside before it enrols with another, so a compromise of one server's records involves no key another server trusts | This is a `qory` rule, not a cryptographic guarantee: a public key another server receives by other means, such as a plain receiver's configuration, is outside its reach, and the request string names no server |
 | A member of the machine's `docker` group | — | It is root on the machine, with every file and process of the runner |
 | Whoever chooses a run's labels, such as a repository's workflow file | — | Labels select the holder, and so whose connections and credentials the run receives |
 | An agent reading the machine's configuration, or replacing a program the runner starts | `server_needs_wall`; `qory` refusing every unwalled run while `stored-secrets` exists, whichever key the run signs with; `mount_contains_runner_files`; `QORY_ACCESS_KEY_SECRET` and `secrets.local` sources refused in the enclosure | An unwalled agent of the same user outside `qory` (Issues, item 4) |
@@ -2955,8 +2955,9 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   answers are unchanged, no new record appears and the count on the node grows; a resent
   delivery keeps its first instance id; an instance name outside its pattern is ignored
   and the last valid one is kept; a public key the index holds is `key_invalid` at
-  enrolment and paste, with one answer whether another access key holds it or it is a
-  tombstone; deleting a node or its workspace makes its keys tombstones.
+  enrolment and is not added in the console, with one answer whether another access key
+  holds it or it is a tombstone; deleting a node or its workspace makes its keys
+  tombstones.
 - **Locks and the marker:** every key command writes the marker before it generates a
   key, and with an unwalled run's lock held refuses; a run takes the key lock shared,
   checks the marker, creates its lock file, and then drops the key lock, so it waits
@@ -2969,12 +2970,12 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   every unwalled run, before the run without a server and after the ping with one, a
   run signing with a key from the environment included; `--print` leaves the marker as
   it is.
-- **Key checks and enrolment:** enrolment and paste each refuse the torsion key of
-  Decision 5, `key_invalid`; enrolment answers an unsigned `409` `key_invalid` to a key
-  the checks refuse, checked first, and to a bad proof, before the `429` per code; a
-  degenerate proof under a key of small order is refused, unsigned; an enrolment answer's
-  signature does not verify as the answer to a signed request, nor the reverse; a
-  base64url value with padding, a `+` or `/`, or non-zero spare bits is
+- **Key checks and enrolment:** enrolment and the console each refuse the torsion key of
+  Decision 5, enrolment with `key_invalid`; enrolment answers an unsigned `409`
+  `key_invalid` to a key the checks refuse, checked first, and to a bad proof, before the
+  `429` per code; a degenerate proof under a key of small order is refused, unsigned; an
+  enrolment answer's signature does not verify as the answer to a signed request, nor the
+  reverse; a base64url value with padding, a `+` or `/`, or non-zero spare bits is
   refused; enrolment answers in its own order, with every `401` unsigned; a code typed in
   lower case or with hyphens normalises to the published fixture code, a code with two
   fingerprints is accepted, and the server refuses a code outside the pattern, `U`
@@ -2991,10 +2992,11 @@ memory alone; at run end they are unreferenced, since Go cannot wipe a string.
   a retry for 15 minutes after its first use; a cancelled code is `401`.
 - **Replacing a key:** a node or node pool holds at most two keys; an enrolment beyond
   that is `409` `key_limit`, the code stays unused, and the same command succeeds within
-  the code's 15 minutes once a key is revoked; a paste to a node holding two keys is
-  refused as `key_limit`; a paste goes into an existing node or node pool and creates
-  none; both keys of a node verify until one is revoked; a key's stored-secrets flag is
-  the one its code or paste set, and nothing changes it.
+  the code's 15 minutes once a key is revoked; the console refuses a new key for a node
+  holding two keys, before it makes one; a key made in the console goes into an existing
+  node or node pool and creates none; both keys of a node verify until one is revoked; a
+  key's stored-secrets flag is the one its code or the console set, and nothing changes
+  it.
 - **Stored secrets:** a key created without the flag gets `409` `secrets_not_allowed` at
   the secrets request and the variant without stored values, whatever other keys its
   node holds; a key created with the flag receives them.
@@ -3069,15 +3071,15 @@ What a node's owner sets up and meets in 0.7.0:
   instances share one access key, up to the pool's limit, if it has one. Its access key
   is one secret, `access-key-secret` or `QORY_ACCESS_KEY_SECRET`, an Ed25519 key that
   signs its requests and, converted to X25519, opens the values sealed to it. The server
-  stores only the public key. `qory access-key enrol` enrols a key with a code; `qory
-  access-key create` prints a public key for an owner or administrator to paste. A key's
-  stored-secrets flag is fixed when it is created: to change it, or to replace a lost
-  key, the operator enrols a new key for the same node with a new code, and the
-  administrator then revokes the old key, which closes the old key's live runs. A node
-  holds at most two keys. Every key command writes the `stored-secrets` marker first and
-  waits for unwalled runs to end; a moved-aside secret keeps the marker until the new
-  key's first signed discovery; the operator of a node pool, or of a key held in the
-  environment, uses `--print`.
+  stores only the public key. `qory access-key enrol` enrols a key with a code, and an
+  owner or administrator can make a key for a node or node pool in the server's console,
+  which receives only its public key. A key's stored-secrets flag is fixed when it is
+  created: to change it, or to replace a lost key, the operator enrols a new key for the
+  same node with a new code, and the administrator then revokes the old key, which closes
+  the old key's live runs. A node holds at most two keys. Every key command writes the
+  `stored-secrets` marker first and waits for unwalled runs to end; a moved-aside secret
+  keeps the marker until the new key's first signed discovery; the operator of a node
+  pool, or of a key held in the environment, uses `--print`.
 - Each instance has an instance id, kept in `instance-id` with a hash of the machine's
   identity when it can be, for display, audit and the instance limit, and a display
   name, the host name by default; the server lists the live instances of each node. A
@@ -3089,9 +3091,9 @@ What a node's owner sets up and meets in 0.7.0:
   passes its labels explicitly; a local checkout's labels are pinned at its first run
   the server accepts, and `--relabel` confirms a change. Everything `qory` keeps lives in
   the runner file's directory.
-- An access key is active once it enrols, with a code or by a paste. Stored values are
-  sealed to the access key and fetched from the secrets endpoint for the connections
-  the run applies.
+- An access key is active once it enrols with a code, or as it is made in the server's
+  console. Stored values are sealed to the access key and fetched from the secrets
+  endpoint for the connections the run applies.
 - Every request is signed with the access key secret, the access key id and the instance
   id among the signed lines, and carries `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id` and
   `X-Qory-Signature-Ed25519`; every answer of the server is signed with the server's key,
@@ -3296,13 +3298,12 @@ and version, with `describe`'s name required to match.
     `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id` and `X-Qory-Signature-Ed25519`; its known
     answers are the Ed25519 ones of Wire format. Every receiver, the reference receiver
     included, verifies Ed25519 requests and signs its answers with a key of its own.
-20. **Enrolment and the pasted key are `qory` commands**, `qory access-key enrol` and
-    `create`. `qory` keeps everything in the runner file's directory, which every walled
-    run refuses to mount: the secret, `instance-id`, the `stored-secrets` marker,
-    `enrolment-pending`, the pinned labels under `labels/`, and the per-run lock files
-    and the key lock under `locks/`. The runner module takes the access key secret and
-    the instance id through `session.Spec` and keeps everything in memory, and the
-    ping carries the run's `interval_seconds`.
+20. **Enrolment is a `qory` command**, `qory access-key enrol`. `qory` keeps everything in
+    the runner file's directory, which every walled run refuses to mount: the secret,
+    `instance-id`, the `stored-secrets` marker, `enrolment-pending`, the pinned labels
+    under `labels/`, and the per-run lock files and the key lock under `locks/`. The
+    runner module takes the access key secret and the instance id through `session.Spec`
+    and keeps everything in memory, and the ping carries the run's `interval_seconds`.
 21. **Where the setter is tied to the routing.** A broker (Later: a credentials broker)
     replaces who sets a value. Today the following sit with the runner on the agent's
     machine and would move with it: the seal opens with the access key secret, which also

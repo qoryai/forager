@@ -17,9 +17,10 @@ example is in [the policy](policy.md#in-runneryaml).
 - `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
-  id and the pin; the code's use activates the key at once. `qory access-key create`
-  prints a public key for the server's owner to paste, and a pasted key is active as it
-  is entered.
+  id and the pin; the code's use activates the key at once. A key made for an existing
+  node or node pool in the server's console is active at once: the machine takes its id,
+  secret and pin as `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and
+  `QORY_APIARY_PUBLIC_KEY`.
 - The run's policy comes from the server, when the server offers one. The node's
   policy, `Spec.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
