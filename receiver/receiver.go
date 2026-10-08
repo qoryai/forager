@@ -5,13 +5,24 @@
 //
 // A [Handler] serves the three endpoints of the contract: discovery at the well-known
 // path, the events endpoint, and the run configuration, the last two where its fields
-// say. It verifies every request the way the contract asks: the key's shape before any
-// lookup, either of a key's secrets, the timestamp of a GET within the window, the
-// signature in constant time over the raw body or the canonical string, and answers
-// every failure alike, 401 with {"error":"unauthorized"} and nothing about the
-// headers said or logged. A delivery it verified is deduplicated on each event's id,
+// say. It accepts the access keys its configuration holds, each a public key, and
+// skips enrolment. It answers in the contract's order of refusals: a body over its
+// limit, 413; a delivery of another content type, 415; a header the signature depends
+// on sent twice, an unsigned 400 bad_request; then verification, the access key id's
+// shape before any lookup and the Ed25519 signature over the request string, every
+// failure alike an unsigned 401 with {"error":"unauthorized"} and nothing about the
+// headers said or logged. Every answer after verification but a 401 is signed under
+// the receiver's own key and bound to the request by its signature: an instance id
+// absent or outside its pattern, 400 bad_request; another contract revision, 400
+// unsupported_contract_version; a body or query the contract refuses, 400
+// invalid_request; a GET's timestamp outside the window, the unsigned 401; then each
+// endpoint's own. Of an event's data it reads a ping's interval_seconds and a
+// run.started's labels. A delivery it verified is deduplicated on each event's id,
 // handed to a [Store], and answered 202 with the digests in force. [File] is a store
-// that appends events to one JSON lines file and remembers the ids it holds.
+// that appends events to one JSON lines file and remembers the ids it holds. It keeps
+// one store and one map of labels for every access key alike, as a test needs; a
+// server of many access keys scopes runs, event ids and labels per access key, so one
+// key's events never deduplicate or label another's.
 package receiver
 
 import (
@@ -30,6 +41,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/server"
 )
 
@@ -44,8 +56,17 @@ const (
 	DefaultRunPath    = "/v1/run-configuration"
 )
 
-// keyShape is the access key's form: ak_ and 16 lowercase Crockford base32 characters.
-var keyShape = regexp.MustCompile(`^ak_[0-9a-hjkmnp-tv-z]{16}$`)
+// unknownKey is the public key a request under an access key id the lookup does not
+// hold is verified under: a fixed public key, of the zero seed, used only so such a
+// request spends the time a known one does. The request is refused whatever the
+// verification says.
+var unknownKey = func() accesskey.PublicKey {
+	k, err := accesskey.NewKey(make([]byte, accesskey.SeedSize))
+	if err != nil {
+		panic(err)
+	}
+	return k.PublicKey()
+}()
 
 // timestampShape is a decimal integer, and nothing else.
 var timestampShape = regexp.MustCompile(`^[0-9]{1,19}$`)
@@ -58,12 +79,22 @@ type Store interface {
 	Append(id string, line []byte) error
 }
 
+// AccessKey is one access key a receiver accepts: the public key its requests verify
+// under, listed in the receiver's configuration. A public key
+// [accesskey.PublicKey.Check] refuses verifies no request.
+type AccessKey struct {
+	PublicKey accesskey.PublicKey
+}
+
 // Handler is the receiving endpoint.
 type Handler struct {
-	// Keys looks an access key up, once its shape is checked: the secrets that
-	// verify for it, two after a rotation, and whether the key is known and not
-	// revoked. Nil knows no key.
-	Keys func(accessKey string) (secrets []string, ok bool)
+	// Keys looks an access key up by its id, once the id's shape is checked: its public
+	// key, and whether the key is known and not revoked. Nil knows no key.
+	Keys func(accessKeyID string) (AccessKey, bool)
+	// Signer is the receiver's own signing key: every answer to a verified request is
+	// signed under it, and a runner pins its public key. Nil answers every verified
+	// request with an unsigned 500.
+	Signer *accesskey.Key
 	// Store keeps the events accepted.
 	Store Store
 	// Now is the receiver's clock; nil means the wall clock.
@@ -72,7 +103,8 @@ type Handler struct {
 	// the contract's 300 seconds.
 	Window time.Duration
 	// Configuration answers discovery with the configuration document and the
-	// receiver's digest of it. Nil means discovery is not served.
+	// receiver's digest of it. The document lists version, node_id, events and
+	// apiary_public_key, the receiver's public key. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration answers the run configuration for a run's labels, with the
 	// receiver's digest of it; ok false means none for them, a 404. Which labels name
@@ -87,14 +119,29 @@ type Handler struct {
 	EventsPath, RunPath string
 	// Log receives one line per delivery, and may be nil. It never sees a header.
 	Log func(string)
-	// Stop, when set, is asked per run id whether the receiver wants nothing more; a
-	// true answer is a 410. Nil means never.
+	// Stop, when set, is called per run id to learn whether the receiver wants nothing
+	// more; true is a signed 410 without a code, after which the runner sends no
+	// further batch and its run goes on. Nil means never.
 	Stop func(runID string) bool
+	// Closed, when set, is called per run id to learn whether the receiver has closed
+	// the run; true is a signed 410 run_closed, which ends the run. Nil means never.
+	Closed func(runID string) bool
+	// Admit, when set, is called for a ping to learn whether the instance may start a
+	// run; false is a signed 409 instance_limit, and the run does not start. Nil
+	// admits every instance.
+	Admit func(accessKeyID, instanceID string) bool
 
 	// labels are the labels of each run whose run.started passed, so an answer to a
 	// later delivery says which run configuration is in force for it.
 	mu     sync.Mutex
 	labels map[string]map[string]string
+}
+
+// verified is a request that verified: its access key and the signature an answer is
+// bound to.
+type verified struct {
+	key       AccessKey
+	signature string
 }
 
 // ServeHTTP routes one request.
@@ -106,56 +153,84 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if run == "" {
 		run = DefaultRunPath
 	}
-	switch r.URL.Path {
-	case server.WellKnown:
-		if h.Configuration == nil {
-			http.NotFound(w, r)
+	var method string
+	switch {
+	case r.URL.Path == server.WellKnown && h.Configuration != nil:
+		method = http.MethodGet
+	case r.URL.Path == run && h.RunConfiguration != nil:
+		method = http.MethodGet
+	case r.URL.Path == events:
+		method = http.MethodPost
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != method {
+		w.Header().Set("Allow", method)
+		http.Error(w, method+" is the method here", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
+	if err != nil || len(body) > MaxBody {
+		refuse(w, http.StatusRequestEntityTooLarge, "")
+		return
+	}
+	if method == http.MethodPost {
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(ct), server.ContentType) {
+			refuse(w, http.StatusUnsupportedMediaType, "")
 			return
 		}
-		if !allow(w, r, http.MethodGet) {
+	}
+	for _, name := range []string{server.HeaderAccessKeyID, server.HeaderInstanceID, server.HeaderSignature, server.HeaderTimestamp} {
+		if len(r.Header.Values(name)) > 1 {
+			refuse(w, http.StatusBadRequest, "bad_request")
 			return
 		}
-		if !h.verifyGET(r) {
-			unauthorized(w)
+	}
+	v, ok := h.verify(r, body)
+	if !ok {
+		refuse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if h.Signer == nil {
+		refuse(w, http.StatusInternalServerError, "")
+		return
+	}
+	switch {
+	case accesskey.CheckInstanceID(r.Header.Get(server.HeaderInstanceID)) != nil:
+		h.refuseSigned(w, v, http.StatusBadRequest, "bad_request")
+	case r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision):
+		h.refuseSigned(w, v, http.StatusBadRequest, "unsupported_contract_version")
+	case r.URL.Path == server.WellKnown:
+		if !h.fresh(r.Header.Get(server.HeaderTimestamp)) {
+			refuse(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		doc, digest := h.Configuration()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderConfiguration, digest)
-		w.Write(doc)
-	case events:
-		if !allow(w, r, http.MethodPost) {
-			return
-		}
-		h.deliver(w, r)
-	case run:
-		if h.RunConfiguration == nil {
-			http.NotFound(w, r)
-			return
-		}
-		if !allow(w, r, http.MethodGet) {
-			return
-		}
-		if !h.verifyGET(r) {
-			unauthorized(w)
-			return
-		}
+		h.answer(w, v, http.StatusOK, doc)
+	case r.URL.Path == run:
 		labels, err := queryLabels(r.URL.RawQuery)
 		if err != nil {
-			http.Error(w, "the query is not the run's labels: "+err.Error(), http.StatusBadRequest)
+			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if !h.fresh(r.Header.Get(server.HeaderTimestamp)) {
+			refuse(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		doc, digest, ok := h.RunConfiguration(labels)
 		if !ok {
-			http.NotFound(w, r)
+			h.answer(w, v, http.StatusNotFound, nil)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderRunConfiguration, digest)
 		w.Header().Set("ETag", strconv.Quote(digest))
-		w.Write(doc)
+		h.answer(w, v, http.StatusOK, doc)
 	default:
-		http.NotFound(w, r)
+		h.deliver(w, r, v, body)
 	}
 }
 
@@ -180,64 +255,70 @@ func queryLabels(raw string) (map[string]string, error) {
 	return labels, nil
 }
 
-// allow answers 405 unless the request has the method, and says whether it does.
-func allow(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method {
-		w.Header().Set("Allow", method)
-		http.Error(w, method+" is the method here", http.StatusMethodNotAllowed)
-		return false
-	}
-	return true
-}
-
-// unauthorized answers every authentication failure alike.
-func unauthorized(w http.ResponseWriter) {
+// refuse answers before verification, or with a 401, unsigned: with the code in a
+// coded refusal's body when there is one.
+func refuse(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	io.WriteString(w, `{"error":"unauthorized"}`)
+	w.WriteHeader(status)
+	if code != "" {
+		io.WriteString(w, `{"error":"`+code+`"}`)
+	}
 }
 
-// secrets are the secrets of the request's key: none when a header is sent twice, the
-// key is not shaped as one, or the lookup does not know it. The lookup is asked only
-// for a key that has the shape.
-func (h *Handler) secrets(r *http.Request) ([]string, bool) {
-	for _, name := range []string{server.HeaderAccessKey, server.HeaderSignature, server.HeaderTimestamp} {
-		if len(r.Header.Values(name)) > 1 {
-			return nil, false
-		}
-	}
-	key := r.Header.Get(server.HeaderAccessKey)
-	if !keyShape.MatchString(key) || h.Keys == nil {
-		return nil, false
-	}
-	return h.Keys(key)
+// refuseSigned answers a verified request with a coded refusal, signed.
+func (h *Handler) refuseSigned(w http.ResponseWriter, v verified, status int, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	h.answer(w, v, status, []byte(`{"error":"`+code+`"}`))
 }
 
-// verifyPOST reports whether the delivery's signature over body verifies under one of
-// the key's secrets.
-func (h *Handler) verifyPOST(r *http.Request, body []byte) bool {
-	secrets, ok := h.secrets(r)
+// answer writes a signed answer: the signature under the receiver's key over the
+// status, the request's signature, the body and the digest headers already set, and
+// Cache-Control: no-store, no-transform, so no cache keeps it and no proxy re-codes it.
+func (h *Handler) answer(w http.ResponseWriter, v verified, status int, body []byte) {
+	a := accesskey.Answer{Status: status, RequestSignature: v.signature, Body: body,
+		Configuration: w.Header().Get(server.HeaderConfiguration), RunConfiguration: w.Header().Get(server.HeaderRunConfiguration)}
+	w.Header().Set("Cache-Control", "no-store, no-transform")
+	w.Header().Set(server.HeaderSignature, h.Signer.SignAnswer(a))
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+// verify reports whether the request verifies: an access key id of the right shape,
+// which is looked up only then, a key the lookup holds, and the Ed25519 signature over
+// the request string under the key's public key. The request string's instance line is
+// the header as sent, empty when it is absent; the target is the request-target as
+// sent. A GET's timestamp is checked against the window later, in the contract's order
+// of refusals.
+func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
+	id, sig := r.Header.Get(server.HeaderAccessKeyID), r.Header.Get(server.HeaderSignature)
+	if id == "" || sig == "" || accesskey.CheckID(id) != nil || h.Keys == nil {
+		return verified{}, false
+	}
+	key, ok := h.Keys(id)
 	if !ok {
-		return false
+		// An unknown access key costs what a known one does, so the time of a 401
+		// says nothing of which access key ids exist.
+		key = AccessKey{PublicKey: unknownKey}
 	}
-	header := r.Header.Get(server.HeaderSignature)
-	for _, s := range secrets {
-		if server.Verify(s, body, header) {
-			return true
-		}
+	target := r.RequestURI
+	if target == "" {
+		target = r.URL.RequestURI()
 	}
-	return false
+	req := accesskey.Request{AccessKeyID: id, InstanceID: r.Header.Get(server.HeaderInstanceID), Method: r.Method, Target: target}
+	if r.Method == http.MethodPost {
+		req.Body = body
+	} else {
+		req.Timestamp = r.Header.Get(server.HeaderTimestamp)
+	}
+	if !key.PublicKey.VerifyRequest(req, sig) || !ok {
+		return verified{}, false
+	}
+	return verified{key: key, signature: sig}, true
 }
 
-// verifyGET reports whether the GET's timestamp is within the window and its signature
-// over the canonical string verifies under one of the key's secrets. The target is the
-// request-target as sent.
-func (h *Handler) verifyGET(r *http.Request) bool {
-	secrets, ok := h.secrets(r)
-	if !ok {
-		return false
-	}
-	ts := r.Header.Get(server.HeaderTimestamp)
+// fresh reports whether a GET's timestamp is a decimal integer within the window of
+// the receiver's clock, either way.
+func (h *Handler) fresh(ts string) bool {
 	if !timestampShape.MatchString(ts) {
 		return false
 	}
@@ -253,77 +334,82 @@ func (h *Handler) verifyGET(r *http.Request) bool {
 	if window == 0 {
 		window = server.Window
 	}
-	if d := now().Unix() - n; d > int64(window/time.Second) || -d > int64(window/time.Second) {
-		return false
-	}
-	target := r.RequestURI
-	if target == "" {
-		target = r.URL.RequestURI()
-	}
-	header := r.Header.Get(server.HeaderSignature)
-	for _, s := range secrets {
-		if server.VerifyGET(s, r.Method, target, ts, header) {
-			return true
-		}
-	}
-	return false
+	d := now().Unix() - n
+	return d <= int64(window/time.Second) && -d <= int64(window/time.Second)
 }
 
-// deliver answers one delivery.
-func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
-	if err != nil || len(body) > MaxBody {
-		http.Error(w, "body unreadable or over 2 MiB", http.StatusRequestEntityTooLarge)
-		return
-	}
-	if !h.verifyPOST(r, body) {
-		unauthorized(w)
-		return
-	}
-	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(ct), server.ContentType) {
-		http.Error(w, "content type is not "+server.ContentType, http.StatusUnsupportedMediaType)
-		return
-	}
+// head is what the receiver reads of each event of a batch.
+type head struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	Type    string `json:"type"`
+	Data    struct {
+		Labels   map[string]string `json:"labels"`
+		Interval *int64            `json:"interval_seconds"`
+	} `json:"data"`
+}
+
+// deliver answers one verified delivery, in the events endpoint's order: a batch that
+// is not one, or a ping whose interval_seconds is absent or outside 1 to 300, 400
+// invalid_request; one whose events the store holds every one of,
+// 202 again; an event of a run the receiver closed, 410 run_closed; of a run it wants
+// nothing more of, 410; a ping from an instance it does not admit, 409
+// instance_limit; otherwise each new event stored and 202.
+func (h *Handler) deliver(w http.ResponseWriter, r *http.Request, v verified, body []byte) {
 	var batch []json.RawMessage
 	if err := json.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
-		http.Error(w, "body is not a non-empty batch", http.StatusBadRequest)
+		h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	stored, dup := 0, 0
-	subject := ""
-	for _, raw := range batch {
-		var head struct {
-			ID      string `json:"id"`
-			Subject string `json:"subject"`
-			Type    string `json:"type"`
-			Data    struct {
-				Labels map[string]string `json:"labels"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(raw, &head); err != nil || head.ID == "" || head.Subject == "" || head.Type == "" {
-			http.Error(w, "an event lacks id, subject or type", http.StatusBadRequest)
+	heads := make([]head, len(batch))
+	fresh := false
+	for i, raw := range batch {
+		if err := json.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" {
+			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 			return
 		}
-		subject = head.Subject
-		if h.Stop != nil && h.Stop(head.Subject) {
+		if n := heads[i].Data.Interval; heads[i].Type == "dev.qory.ping" && (n == nil || *n < 1 || *n > server.MaxInterval) {
+			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if !h.Store.Seen(heads[i].ID) {
+			fresh = true
+		}
+	}
+	subject := heads[len(heads)-1].Subject
+	if fresh {
+		if h.Closed != nil && h.Closed(subject) {
 			h.digests(w, subject)
-			w.WriteHeader(http.StatusGone)
+			h.refuseSigned(w, v, http.StatusGone, "run_closed")
 			return
 		}
-		if head.Type == "dev.qory.run.started" {
+		if h.Stop != nil && h.Stop(subject) {
+			h.digests(w, subject)
+			h.answer(w, v, http.StatusGone, nil)
+			return
+		}
+		if len(heads) == 1 && heads[0].Type == "dev.qory.ping" && h.Admit != nil && !h.Admit(r.Header.Get(server.HeaderAccessKeyID), r.Header.Get(server.HeaderInstanceID)) {
+			h.refuseSigned(w, v, http.StatusConflict, "instance_limit")
+			return
+		}
+	}
+	stored, dup := 0, 0
+	for i, raw := range batch {
+		hd := heads[i]
+		if hd.Type == "dev.qory.run.started" {
 			h.mu.Lock()
 			if h.labels == nil {
 				h.labels = map[string]map[string]string{}
 			}
-			h.labels[head.Subject] = head.Data.Labels
+			h.labels[hd.Subject] = hd.Data.Labels
 			h.mu.Unlock()
 		}
-		if h.Store.Seen(head.ID) {
+		if h.Store.Seen(hd.ID) {
 			dup++
 			continue
 		}
-		if err := h.Store.Append(head.ID, raw); err != nil {
-			http.Error(w, "store: "+err.Error(), http.StatusInternalServerError)
+		if err := h.Store.Append(hd.ID, raw); err != nil {
+			h.answer(w, v, http.StatusInternalServerError, nil)
 			return
 		}
 		stored++
@@ -332,12 +418,12 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		h.Log("delivery for run " + subject + ": " + itoa(stored) + " stored, " + itoa(dup) + " duplicates")
 	}
 	h.digests(w, subject)
-	w.WriteHeader(http.StatusAccepted)
+	h.answer(w, v, http.StatusAccepted, nil)
 }
 
 // digests sets on an answer the digests in force: the configuration's, and the run
 // configuration's for the run's labels as its run.started said, none when the receiver
-// has not seen it.
+// has not seen it. The answer's signature covers both.
 func (h *Handler) digests(w http.ResponseWriter, runID string) {
 	if h.Configuration != nil {
 		_, digest := h.Configuration()

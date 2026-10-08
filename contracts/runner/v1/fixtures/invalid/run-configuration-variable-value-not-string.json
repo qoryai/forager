@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "variables": {
+    "WORKERS": {"value": 4}
+  }
+}

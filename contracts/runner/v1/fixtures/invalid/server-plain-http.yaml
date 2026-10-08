@@ -1,5 +1,6 @@
-# Plain http is for loopback only; a secret signs, it does not encrypt.
+# Plain http is for loopback only.
 version: 1
 url: http://qory.example
-access_key: ak_f1xt0re000000000
-secret: fixture-secret-not-a-real-one
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}

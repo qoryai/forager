@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
 )
@@ -421,6 +422,8 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		args[i] = strings.ReplaceAll(a, "${argument}", h.argument)
 	}
 	cmd := exec.CommandContext(ctx, d.Adapter[0], args...)
+	// The access key's variables are the runner's, and no credential program's.
+	cmd.Env = accesskey.WithoutVariables(os.Environ())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

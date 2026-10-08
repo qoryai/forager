@@ -1,9 +1,8 @@
 package contracts_test
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -109,15 +108,16 @@ func TestDocumentFixturesValidate(t *testing.T) {
 }
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
-// the schema its name starts with: a policy that widens, a server without a key, a
-// configuration without events, an event with an unpadded sequence, a descriptor with
+// the schema its name starts with: a policy that widens, a server without its access
+// key id or its pin or with a secret, a configuration without events, a ping whose
+// interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
 // an expression. The longest schema name the file name starts with is the schema, so
-// run-configuration-no-policy is held to the run configuration and not to a schema
-// named run.
+// run-configuration-variable-value-not-string is held to the run configuration and not to a
+// schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json")
+		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := ""
 		for name := range s {
@@ -229,16 +229,31 @@ func TestBatchFixturesValidate(t *testing.T) {
 
 // TestSignedFixtures pins the shape of every request under fixtures/signed, what any
 // receiver is replayed: a method the contract signs, a target from the root, the
-// headers every request carries and the ones its method adds, a revision from 1 to the
-// contract's own, a body on a POST that is a batch and none on a GET, a status a
-// receiver answers and a note. On a request a receiver accepts, the signature is the
-// HMAC under the published secret, over the body on a POST and over the canonical
-// string on a GET, so the published signatures cannot drift from the fixtures they
-// sign.
+// headers every request contains and the ones its method adds, a revision from 1 to
+// the contract's own, a body on a POST that is a batch and none on a GET, a status a
+// receiver answers, the code of a coded refusal, and a note. A header a list holds is
+// one sent once per value. On every request whose signature a receiver verifies, the
+// signature is the Ed25519 one under the fixture access key secret over the request
+// string, its lines the domain, the access key id and the instance id as the headers
+// contain them, the method, the target, then the timestamp on a GET or the raw body on
+// a POST, so the published signatures cannot drift from the fixtures they sign.
 func TestSignedFixtures(t *testing.T) {
 	s := compile(t, "batch.schema.json")
-	const secret = "fixture-secret-not-a-real-one"
-	const key = "ak_f1xt0re000000000"
+	var keys struct {
+		AccessKey struct {
+			PublicKey  string `json:"public_key"`
+			InstanceID string `json:"instance_id"`
+		} `json:"access_key"`
+	}
+	b, err := fs.ReadFile(contracts.FS, "fixtures/known-answers/keys.json")
+	if err != nil || json.Unmarshal(b, &keys) != nil {
+		t.Fatalf("keys.json: %v", err)
+	}
+	pub, err := base64.RawURLEncoding.DecodeString(keys.AccessKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/signed") {
 		doc, err := contracts.Document(f)
 		if err != nil {
@@ -249,6 +264,7 @@ func TestSignedFixtures(t *testing.T) {
 		target, _ := m["target"].(string)
 		headers, _ := m["headers"].(map[string]any)
 		expect, _ := m["expect"].(json.Number)
+		code, _ := m["expect_code"].(string)
 		note, _ := m["note"].(string)
 		if method != "GET" && method != "POST" {
 			t.Errorf("%s: method %q; want GET or POST", f, method)
@@ -260,24 +276,43 @@ func TestSignedFixtures(t *testing.T) {
 			t.Errorf("%s: no note", f)
 		}
 		status := expect.String()
-		if status != "200" && status != "202" && status != "401" {
-			t.Errorf("%s: expect %s; want 200, 202 or 401", f, status)
+		seen[status+" "+code] = true
+		switch status + " " + code {
+		case "200 ", "202 ", "401 unauthorized", "400 bad_request":
+		default:
+			t.Errorf("%s: expect %s %s; want 200, 202, 401 unauthorized or 400 bad_request", f, status, code)
 		}
-		header := func(name string) string {
-			v, ok := headers[name].(string)
-			if !ok || v == "" {
+		twice := false
+		value := func(name string, required bool) string {
+			switch v := headers[name].(type) {
+			case string:
+				return v
+			case []any:
+				twice = true
+				if len(v) == 2 && v[0] == v[1] {
+					s, _ := v[0].(string)
+					return s
+				}
+			}
+			if required {
 				t.Errorf("%s: no %s header", f, name)
 			}
-			return v
+			return ""
 		}
-		header("User-Agent")
-		accessKey := header("X-Qory-Access-Key")
-		v := header("X-Qory-Contract-Version")
+		value("User-Agent", true)
+		accessKeyID := value("X-Qory-Access-Key-Id", true)
+		instanceID := value("X-Qory-Instance-Id", false)
+		v := value("X-Qory-Contract-Version", true)
 		if n, err := strconv.Atoi(v); err != nil || n < 1 || n > contracts.Revision || strconv.Itoa(n) != v {
 			t.Errorf("%s: X-Qory-Contract-Version %q; want a revision from 1 to %d", f, v, contracts.Revision)
 		}
-		signature := header("X-Qory-Signature-256")
-		var signed []byte
+		signature := value("X-Qory-Signature-Ed25519", true)
+		for name := range headers {
+			if strings.HasPrefix(name, "X-Qory-Signature-") && name != "X-Qory-Signature-Ed25519" || name == "X-Qory-Access-Key" {
+				t.Errorf("%s: header %s, which the contract does not define", f, name)
+			}
+		}
+		lines := []string{"qory-request-ed25519-v1", accessKeyID, instanceID, method, target}
 		switch method {
 		case "POST":
 			body, ok := m["body"].(string)
@@ -285,8 +320,8 @@ func TestSignedFixtures(t *testing.T) {
 				t.Errorf("%s: a POST carries a body", f)
 				continue
 			}
-			header("X-Qory-Delivery")
-			if ct := header("Content-Type"); ct != "application/cloudevents-batch+json" {
+			value("X-Qory-Delivery", true)
+			if ct := value("Content-Type", true); ct != "application/cloudevents-batch+json" {
 				t.Errorf("%s: Content-Type %q", f, ct)
 			}
 			if _, ok := headers["X-Qory-Timestamp"]; ok {
@@ -299,24 +334,34 @@ func TestSignedFixtures(t *testing.T) {
 			if err := s["batch.schema.json"].Validate(batch); err != nil {
 				t.Errorf("%s: body: %v", f, err)
 			}
-			signed = []byte(body)
+			lines = append(lines, body)
 		case "GET":
 			if m["body"] != nil {
 				t.Errorf("%s: a GET carries no body", f)
 			}
-			timestamp := header("X-Qory-Timestamp")
-			signed = []byte(method + "\n" + target + "\n" + timestamp)
+			lines = append(lines, value("X-Qory-Timestamp", true))
 		}
-		if status[0] != '2' {
-			continue
+		sig, err := base64.RawURLEncoding.Strict().DecodeString(signature)
+		valid := err == nil && ed25519.Verify(pub, []byte(strings.Join(lines, "\n")), sig)
+		// A request a receiver verifies is signed under the fixture key: every one but a
+		// header sent twice, refused before verification, and the 401s, one of which
+		// is a correct signature over a stale timestamp.
+		switch {
+		case twice:
+			if status != "400" {
+				t.Errorf("%s: a header sent twice is answered %s; want 400", f, status)
+			}
+		case status == "401":
+		case !valid:
+			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s", f, strings.Join(lines, "\n"))
 		}
-		if accessKey != key {
-			t.Errorf("%s: accepted under the key %q; want the published key", f, accessKey)
+		if status[0] == '2' && (accessKeyID != "ak_f1xt0re000000000" || instanceID != keys.AccessKey.InstanceID) {
+			t.Errorf("%s: accepted as %s, %s; want the fixture access key and instance", f, accessKeyID, instanceID)
 		}
-		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write(signed)
-		if want := "sha256=" + hex.EncodeToString(mac.Sum(nil)); signature != want {
-			t.Errorf("%s: signature %s; want %s under the published secret", f, signature, want)
+	}
+	for _, want := range []string{"200 ", "202 ", "401 unauthorized", "400 bad_request"} {
+		if !seen[want] {
+			t.Errorf("no signed fixture expects %s", want)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -96,5 +97,18 @@ func TestTheVariableIsAnAddress(t *testing.T) {
 	defer mu.Unlock()
 	if n != 1 {
 		t.Errorf("%d records arrived", n)
+	}
+}
+
+// TestDirsMatchesWhatListenMakes pins that the pattern of the runs' private directories
+// matches the one Listen makes.
+func TestDirsMatchesWhatListenMakes(t *testing.T) {
+	l, err := socket.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if ok, _ := filepath.Match(socket.Dirs(), filepath.Dir(l.Path())); !ok {
+		t.Errorf("%s does not match %s", filepath.Dir(l.Path()), socket.Dirs())
 	}
 }

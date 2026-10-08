@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "runtimes": [
+    {
+      "name": "claude",
+      "title": "Claude Code",
+      "reserves": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "denies": [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_AWS_BASE_URL",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_SHELL",
+        "CLAUDE_CODE_SHELL_PREFIX",
+        "CLAUDE_ENV_FILE",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_CLIENT_CERT",
+        "CLAUDE_CODE_CLIENT_KEY",
+        "CLAUDE_CODE_CERT_STORE"
+      ],
+      "credential_files": [
+        "~/.claude/.credentials.json"
+      ],
+      "declares": [
+        {
+          "id": "api_key",
+          "title": "Anthropic API key",
+          "name": "ANTHROPIC_API_KEY",
+          "hosts": [
+            "api.anthropic.com"
+          ],
+          "auth": {
+            "scheme": "header",
+            "header": "x-api-key"
+          },
+          "paths": [
+            "/v1/*"
+          ]
+        },
+        {
+          "id": "oauth_token",
+          "title": "Claude OAuth credential",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN",
+          "hosts": [
+            "api.anthropic.com"
+          ],
+          "auth": {
+            "scheme": "bearer"
+          },
+          "paths": [
+            "/v1/*"
+          ]
+        }
+      ],
+      "one_of": [
+        {
+          "id": "model_key",
+          "required": true,
+          "of": [
+            "api_key",
+            "oauth_token"
+          ]
+        }
+      ]
+    }
+  ]
+}

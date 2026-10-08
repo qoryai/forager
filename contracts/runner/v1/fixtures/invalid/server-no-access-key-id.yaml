@@ -1,0 +1,5 @@
+# The access key id is a signed line of every request; a server without one is refused.
+version: 1
+url: https://qory.example
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}

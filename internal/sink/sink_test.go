@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
@@ -69,7 +70,23 @@ func TestWriterSinkWritesTheLineTheFileHolds(t *testing.T) {
 	}
 }
 
-// station is a receiver in front of a store, with a failure mode the test flips.
+// The keys of the tests: the access key the sink signs with and the receiver's own,
+// each fresh.
+var (
+	accessKey = mustGenerate()
+	signer    = mustGenerate()
+)
+
+func mustGenerate() *accesskey.Key {
+	k, err := accesskey.Generate()
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+// station is a receiver in front of a store, with a failure mode the test flips: a
+// status every request gets, unsigned, instead of the receiver's answer.
 type station struct {
 	srv   *httptest.Server
 	store *receiver.File
@@ -79,7 +96,7 @@ type station struct {
 	runDigest atomic.Pointer[string]
 }
 
-func newStation(t *testing.T, stop func(string) bool) *station {
+func newStation(t *testing.T, stop, closed func(string) bool) *station {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
 	if err != nil {
@@ -87,9 +104,13 @@ func newStation(t *testing.T, stop func(string) bool) *station {
 	}
 	s := &station{store: store}
 	h := &receiver.Handler{
-		Keys:          func(string) ([]string, bool) { return []string{"fixture-secret-not-a-real-one"}, true },
+		Keys: func(string) (receiver.AccessKey, bool) {
+			return receiver.AccessKey{PublicKey: accessKey.PublicKey()}, true
+		},
+		Signer:        signer,
 		Store:         store,
 		Stop:          stop,
+		Closed:        closed,
 		Configuration: func() ([]byte, string) { return []byte("{}"), "sha256=configuration" },
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +129,8 @@ func newStation(t *testing.T, stop func(string) bool) *station {
 }
 
 func client(s *station) *server.Client {
-	return &server.Client{Config: &server.Config{Version: 1, URL: s.srv.URL, AccessKey: "ak_f1xt0re000000000", Secret: "fixture-secret-not-a-real-one"}, UserAgent: "qory-runner/test"}
+	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
+	return &server.Client{Config: &server.Config{Version: 1, URL: s.srv.URL, AccessKeyID: "ak_f1xt0re000000000", ApiaryPublicKey: pin}, Key: accessKey, InstanceID: "i_test", UserAgent: "qory-runner/test"}
 }
 
 // target is the station's events endpoint with a filter; none means every type.
@@ -136,14 +158,14 @@ func waitFor(t *testing.T, cond func() bool) {
 // set on the sink goes with every delivery after it, and the answers' digests come
 // back to the caller.
 func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
-	s := newStation(t, nil)
+	s := newStation(t, nil, nil)
 	var mu sync.Mutex
 	var answers []server.Digests
 	w := sink.NewServer(client(s), target(s, "dev.qory.run.started", "dev.qory.run.heartbeat"), t.TempDir(), nil, func(d server.Digests) {
 		mu.Lock()
 		answers = append(answers, d)
 		mu.Unlock()
-	})
+	}, nil)
 	w.SetRunDigest("sha256=run")
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
@@ -176,20 +198,21 @@ func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
 // TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest pins the retry and the spool: a
 // receiver that fails then recovers gets the batch once it recovers, under the same
 // delivery id; a receiver that stays down leaves the batch in undelivered/ with the
-// count reported at close.
+// count reported at close. Its answers are unsigned, so they are no answers, a 410
+// among them, and are retried.
 func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
-	s := newStation(t, nil)
+	s := newStation(t, nil, nil)
 	s.fail.Store(500)
 	var notes []string
 	dir := t.TempDir()
-	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil)
+	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, func() bool { return s.hits.Load() >= 1 })
 	s.fail.Store(0)
 	waitFor(t, func() bool { return s.store.Count() == 1 })
 
-	s.fail.Store(503)
+	s.fail.Store(410)
 	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed"}))
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
@@ -212,17 +235,95 @@ func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
 	}
 }
 
-// TestReceiverStopEndsDeliveries pins 410: the sink sends nothing more for the run and
-// drops what follows without spooling it.
+// TestReceiverStopEndsDeliveries pins a signed 410: the sink sends nothing more for
+// the run and drops what follows without spooling it, and the run is not closed.
 func TestReceiverStopEndsDeliveries(t *testing.T) {
-	s := newStation(t, func(string) bool { return true })
-	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil)
+	s := newStation(t, func(string) bool { return true }, nil)
+	closed := false
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil, func() { closed = true })
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, w.Stopped)
 	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed"}))
 	w.Close(context.Background())
-	if s.hits.Load() != 1 || w.Undelivered() != 0 {
-		t.Errorf("%d deliveries, %d undelivered after stop", s.hits.Load(), w.Undelivered())
+	if s.hits.Load() != 1 || w.Undelivered() != 0 || w.RunClosed() || closed {
+		t.Errorf("%d deliveries, %d undelivered after stop, closed %v", s.hits.Load(), w.Undelivered(), closed)
 	}
+}
+
+// TestRunClosedEndsDeliveriesAndTheRun pins a signed 410 run_closed: the sink calls
+// its caller once, sends nothing more, and records the stop, so a resend sends nothing
+// either.
+func TestRunClosedEndsDeliveriesAndTheRun(t *testing.T) {
+	s := newStation(t, nil, func(string) bool { return true })
+	var calls atomic.Int32
+	dir := t.TempDir()
+	w := sink.NewServer(client(s), target(s), dir, nil, nil, func() { calls.Add(1) })
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	waitFor(t, w.RunClosed)
+	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
+	w.Close(context.Background())
+	if s.hits.Load() != 1 || calls.Load() != 1 || !w.Stopped() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, %d calls, stopped %v", s.hits.Load(), calls.Load(), w.Stopped())
+	}
+	if _, stopped, err := sink.Delivered(dir); err != nil || !stopped {
+		t.Errorf("the record of accepted batches has no stop: %v", err)
+	}
+}
+
+// TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a signed 410 run_closed ends
+// the deliveries at once: the batches already queued behind the closed one are
+// dropped, not posted, and the caller hears of the close once.
+func TestRunClosedDropsTheBatchesQueuedBeforeIt(t *testing.T) {
+	s := newStation(t, nil, func(string) bool { return true })
+	var calls atomic.Int32
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil, func() { calls.Add(1) })
+	e := event.NewEmitter(event.NewRunID(), nil)
+	for i := 0; i < 3*sink.BatchEvents+50; i++ {
+		w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": i, "interval_seconds": 30}))
+	}
+	w.Close(context.Background())
+	if s.hits.Load() != 1 || calls.Load() != 1 || !w.RunClosed() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, %d calls, closed %v, %d undelivered", s.hits.Load(), calls.Load(), w.RunClosed(), w.Undelivered())
+	}
+}
+
+// TestAStopCarriesNoDigests pins that the digests of a signed 410 reach no caller: a
+// run_closed answer that carries a new run configuration digest leads to no reload,
+// and no request reaches the server after it.
+func TestAStopCarriesNoDigests(t *testing.T) {
+	s := newStation(t, nil, func(string) bool { return true })
+	s.srv.Config.Handler = digestOn410(s.srv.Config.Handler)
+	var digests atomic.Int32
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, func(server.Digests) { digests.Add(1) }, nil)
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	waitFor(t, w.RunClosed)
+	hits := s.hits.Load()
+	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
+	w.Close(context.Background())
+	if digests.Load() != 0 || s.hits.Load() != hits || hits != 1 {
+		t.Errorf("%d digests handed on, %d requests, %d after the close", digests.Load(), hits, s.hits.Load()-hits)
+	}
+}
+
+// digestOn410 sets a run configuration digest on the receiver's answers, signed
+// again over it, as a server whose 410 carries a changed digest.
+func digestOn410(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(resigning{ResponseWriter: w, sig: r.Header.Get(server.HeaderSignature)}, r)
+	})
+}
+
+type resigning struct {
+	http.ResponseWriter
+	sig string
+}
+
+func (r resigning) WriteHeader(status int) {
+	r.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("e", 64))
+	a := accesskey.Answer{Status: status, RequestSignature: r.sig, Body: []byte(`{"error":"run_closed"}`), Configuration: r.Header().Get(server.HeaderConfiguration), RunConfiguration: r.Header().Get(server.HeaderRunConfiguration)}
+	r.Header().Set(server.HeaderSignature, signer.SignAnswer(a))
+	r.ResponseWriter.WriteHeader(status)
 }

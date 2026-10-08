@@ -5,9 +5,12 @@ import (
 	"regexp"
 	"slices"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/internal/variables"
 )
 
 // Policy is the run's policy document, contracts/runner/v1/policy.schema.json, as the
@@ -19,9 +22,12 @@ type Policy struct {
 	// Egress is the egress mode, the allow list and the deny list.
 	Egress PolicyEgress `json:"egress"`
 	// Credentials are the credentials of [Spec.Credentials] the run may use, by name.
-	Credentials []PolicyCredential `json:"credentials,omitempty"`
-	// Tools are the tools of [Spec.Tools] the run may reach, by name.
-	Tools []PolicyTool `json:"tools,omitempty"`
+	// Nil is no member; an empty list is a member that lists none, which as the node's
+	// policy beside a server's allows none of the server's.
+	Credentials []PolicyCredential `json:"credentials,omitzero"`
+	// Tools are the tools of [Spec.Tools] the run may reach, by name, nil and empty as
+	// for Credentials.
+	Tools []PolicyTool `json:"tools,omitzero"`
 	// Image is the name of the image of [Spec.Images] the run starts in; empty is the
 	// machine's default, [Spec.Image].
 	Image string `json:"image,omitempty"`
@@ -66,8 +72,14 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
 	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
+	if p.Credentials != nil {
+		out.Credentials = []PolicyCredential{}
+	}
 	for _, c := range p.Credentials {
 		out.Credentials = append(out.Credentials, PolicyCredential{Name: c.Name, Argument: c.Argument})
+	}
+	if p.Tools != nil {
+		out.Tools = []PolicyTool{}
 	}
 	for _, t := range p.Tools {
 		out.Tools = append(out.Tools, PolicyTool{Name: t.Name, Argument: t.Argument})
@@ -155,22 +167,112 @@ func bothDeny(ceiling, own []string) []string {
 	return out
 }
 
+// Variables are the run's and the machine's variables and how a run takes the
+// server's: for qory, --env, wall.env and the runner file's variables section.
+//
+// For each name the highest source that sets it wins: the run's fixed names, those
+// the runner, the wall, the runtime's preparation and the placeholders set and
+// [Spec.LaunchFixed]; the server's variables, which it resolved among its own levels;
+// Run; Machine; [Spec.LaunchDefaults]; [Spec.Env]. A walled run refuses first what
+// must stay outside the enclosure: a QORY_ name other than QORY_RUN_ID and
+// QORY_RUN_SOCKET, or a variable a machine value is read from, from any of them,
+// variable_reserved; any run refuses a value for a placeholder, placeholder_conflict.
+// The deny list, the contract's denied-variables.json, the runtime's denies and Deny,
+// then leaves out a value of the server, Run, Machine or LaunchDefaults; the built-in
+// list alone leaves out one of LaunchFixed. The server's are left out of a run without
+// a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out and the
+// run starts; dev.qory.run.policy_applied records each name, its source and what lost,
+// never a value, and [Spec.OnVariables] receives the same.
+type Variables struct {
+	// Run are the run's own variables, NAME=value: for qory, --env. They apply with or
+	// without a wall.
+	Run []string
+	// Machine are the machine's variables, NAME=value: for qory, wall.env.
+	Machine []string
+	// Deny are names and patterns, in which * matches any run of characters, of
+	// variables the run leaves out of the server's, Run, Machine and
+	// [Spec.LaunchDefaults], matched regardless of case: the runner file's
+	// variables.deny.
+	Deny []string
+	// Unwalled is how a run without a Wall takes the server's variables:
+	// [UnwalledAccept] applies them as a walled run does, after the deny list;
+	// [UnwalledIgnore], which empty means, leaves them all out. The deny list keeps the
+	// wall and the runner whole, not the developer's shell, which accept opens to the
+	// server.
+	Unwalled string
+}
+
+// Applied is the run's variables as resolved: one entry per name, sorted by name, as
+// dev.qory.run.policy_applied records them. A name is in it when the server, the run,
+// the machine or the harness's defaults set it; a fixed name, and a name of the
+// environment the run inherits, only beside one of those.
+type Applied []AppliedVariable
+
+// AppliedVariable is one name: the source whose value the run applies, empty when none
+// does, and the values that lost, the highest source first.
+type AppliedVariable struct {
+	Name, From string
+	Lost       []Loss
+}
+
+// Loss is one source's value that lost, and why.
+type Loss struct {
+	From, Why string
+}
+
+// The sources of a variable, the highest first, and why a value lost, as
+// [AppliedVariable] and [Loss] contain them.
+const (
+	FromFixed   = variables.FromFixed
+	FromApiary  = variables.FromApiary
+	FromRun     = variables.FromRun
+	FromMachine = variables.FromMachine
+	FromHarness = variables.FromHarness
+	FromShell   = variables.FromShell
+
+	WhyOverridden = variables.WhyOverridden
+	WhyDenied     = variables.WhyDenied
+	WhyFixed      = variables.WhyFixed
+	WhyUnwalled   = variables.WhyUnwalled
+)
+
+// applied is the record of a resolution as [Spec.OnVariables] receives it.
+func applied(entries []variables.Entry) Applied {
+	out := make(Applied, len(entries))
+	for i, e := range entries {
+		lost := make([]Loss, len(e.Lost))
+		for j, l := range e.Lost {
+			lost[j] = Loss{From: l.From, Why: l.Why}
+		}
+		out[i] = AppliedVariable{Name: e.Name, From: e.From, Lost: lost}
+	}
+	return out
+}
+
+// The two values of [Variables.Unwalled].
+const (
+	UnwalledAccept = variables.Accept
+	UnwalledIgnore = variables.Ignore
+)
+
 // Server is the server document, contracts/runner/v1/server.schema.json, as the
 // caller hands it to the runner: the server whose configuration document says where
-// events go and where the run configuration is, the key the runner reports as, and the
-// secret that signs every request. The runner validates it, fetches the configuration
-// document, and posts a ping the server must accept, before anything starts.
+// events go and where the run configuration is, the access key the runner signs every
+// request as, and the pin, the server's keys every answer is verified under. The
+// access key's secret is outside the document: [Spec.AccessKey]. The runner validates
+// the document, fetches the configuration document, and posts a ping the server must
+// accept, before anything starts.
 type Server struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
 	// URL is the server's origin: https, or http to a loopback address; no path.
 	URL string `json:"url"`
-	// AccessKey names the runner to the server: "ak_" and 16 lowercase Crockford
-	// base32 characters.
-	AccessKey string `json:"access_key"`
-	// Secret signs every request; at least 16 characters, shared with the server and
-	// never sent.
-	Secret string `json:"secret"`
+	// AccessKeyID is the access key's id, "ak_" and 16 lower-case Crockford base32
+	// characters, which the server assigned when the key enrolled.
+	AccessKeyID string `json:"access_key_id"`
+	// ApiaryPublicKey is the pin: the server's Ed25519 public keys, one or more. A
+	// server without a pin is no run, apiary_public_key_missing, before any request.
+	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
 
 // Credential is one credential as the machine defines it, [Spec.Credentials]: a token
@@ -307,7 +409,7 @@ func image(spec Spec, selected string) (Image, error) {
 		return spec.Images[i], nil
 	}
 	if selected != "" {
-		return Image{}, fmt.Errorf("the policy selects the image %q, which this machine does not define", selected)
+		return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
 	}
 	return Image{Ref: spec.Image}, nil
 }

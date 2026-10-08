@@ -15,10 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/internal/refusal"
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
@@ -34,13 +36,40 @@ type Spec struct {
 	// one. Nil means a bare runtime named after the Command: the run is recorded, the
 	// session inside it is not.
 	Runtime runtimes.Runtime
-	// Command, Args, Env and Dir are what to start. A nil Env is the process's own, or
-	// nothing under a Wall, where only what Env lists goes in; an empty Dir is the
-	// working directory.
+	// Command, Args and Dir are what to start; an empty Dir is the working directory.
 	Command string
 	Args    []string
-	Env     []string
-	Dir     string
+	// Env is the environment the run inherits, NAME=value: a nil Env is the process's
+	// own, or nothing under a Wall, where only what the run lists goes in. It is the
+	// lowest of the run's sources of variables: LaunchDefaults, Variables and the
+	// server's variables win over it, apart from it, so the runner distinguishes them
+	// from what is merely inherited (contracts/runner/v1/README.md §Variables). The
+	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
+	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them,
+	// and out of every tool's and credential program's environment too.
+	Env []string
+	Dir string
+	// LaunchFixed is the values the harness computes itself, NAME=value. They are fixed
+	// names of the run: they win over every other source of a variable, the built-in
+	// deny list, denied-variables.json, leaves one out, and the runtime's denies and
+	// Variables.Deny do not. The runner's, the wall's and the runtime preparation's
+	// names win over them.
+	LaunchFixed []string
+	// LaunchDefaults is the values the harness's author wrote as defaults, NAME=value.
+	// They win over Env and lose to every other source.
+	LaunchDefaults []string
+	// Variables are the run's and the machine's variables, and how the run takes the
+	// variables of the server's run configuration.
+	Variables Variables
+	// HarnessHome is the harness's home as the agent's process sees it, an absolute
+	// path; empty means none. When set, the runner sets QORY_HARNESS_HOME to it, as one
+	// of its own names, like QORY_RUN_ID.
+	HarnessHome string
+	// OnVariables, when not nil, is called once the run's variables are resolved,
+	// before the tools, the wall and the agent start, with each name, its source and
+	// the values that lost, as dev.qory.run.policy_applied records them: qory prints a
+	// line for an --env value that lost. A run refused before then does not call it.
+	OnVariables func(Applied)
 	// Interactive says the caller has a terminal: the session runs on a pseudo-terminal
 	// attached to Stdin and Stdout, unless Args holds an argument the Runtime names as
 	// headless, -p for Claude Code, in which case it runs on pipes as if the caller had
@@ -50,15 +79,31 @@ type Spec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Policy is the run's policy; nil means no policy, mode observe. With a Server
-	// whose configuration document names a run configuration, the fetched policy is
-	// the policy and this one is ignored: a command refuses the pair before the run.
+	// Policy is the node's policy, the one the command passes; nil means none. Without
+	// a server's policy it is the run's, and none is mode observe. With a Server whose
+	// run configuration has a policy, it narrows that one: the node only takes away
+	// (contracts/runner/v1/README.md §The server).
 	Policy *Policy
 	// Server is the server the run reports to and takes its run configuration from;
 	// nil means files only, the machine's policy. Local ignores it: the server is not
 	// contacted.
 	Server *Server
 	Local  bool
+	// AccessKey is the access key every request to the Server is signed with, held from
+	// its secret, which the caller reads; for qory from a file descriptor, else
+	// QORY_ACCESS_KEY_SECRET, else the file access-key-secret. A Server needs it.
+	AccessKey *accesskey.Key
+	// InstanceID is this instance's id, sent in X-Qory-Instance-Id and signed into every
+	// request to the Server; for qory the id of its instance-id file. A Server needs it,
+	// and it matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$.
+	InstanceID string
+	// InstanceName is this instance's display name, sent in X-Qory-Instance-Name on
+	// every request to the Server, unsigned and for display alone; empty sends none.
+	InstanceName string
+	// Discovered, when not nil, is called once the Server's signed configuration
+	// document is read, before the ping, with what it lists of the access key: qory
+	// prints the node id. An error it returns is no run, and nothing more is sent.
+	Discovered func(Discovery) error
 	// Events, when not nil, gets every event as one JSON line as well, the line
 	// events.jsonl holds: a run with no receiver is followed on standard output this
 	// way. Local does not silence it.
@@ -69,9 +114,9 @@ type Spec struct {
 	ProxyBind string
 	// Wall, when not nil, encloses the runtime: the command is started inside an
 	// enclosure whose only route out leads to the proxy, in Image, with Dir as its
-	// workspace. Command, Args and Forwarder are then paths inside the enclosure. Nil
-	// means no wall: the runtime is this machine's process, and enforcement is
-	// cooperative.
+	// workspace and working directory. Command, Args and Forwarder are then paths
+	// inside the enclosure. Nil means no wall: the runtime is this machine's process,
+	// and enforcement is cooperative.
 	Wall wall.Wall
 	// Image is the agent's image under a Wall when the policy selects none: the name
 	// of one of Images, or a reference.
@@ -80,10 +125,25 @@ type Spec struct {
 	// by name, as it selects credentials and tools, and a selection needs a Wall. The
 	// image a run starts in is fixed when it starts.
 	Images []Image
-	// Mounts are what the enclosure shows of this machine beside Dir, each at its own
-	// path: the checkout around Dir, a composed home outside it. The runner adds the
-	// run directory, read-only. Without a Wall they mean nothing.
+	// Mounts are what the enclosure shows of this machine, each at its own path: the
+	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
+	// one of the same mode is reached through the outer one, which alone is bound; one of
+	// the other mode is no run, mount_mode_conflict. One whose path goes through a link
+	// inside a writable one, and that does not resolve into it, is no run, whatever its
+	// mode, mount_through_link. Dir is writable, and is bound at its own path when no mount
+	// holds it. The runner adds the run directory, read-only. A walled run refuses a
+	// bind that lies inside, or is reached through, a writable bind of another walled
+	// run of this user's still going, apart from the same root, a writable one that
+	// holds one of that run's binds or the way to one, and one that is, holds or lies
+	// inside that run's run directory: mount_shared_with_run. Without a Wall they mean
+	// nothing.
 	Mounts []wall.Mount
+	// RunnerFiles are the absolute paths of the caller's files that are the runner's
+	// own, such as the directory of qory's runner file with the access key secret. A
+	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
+	// them, or one of the paths the runner knows itself, RunsDir among them,
+	// mount_contains_runner_files: see [Overlap].
+	RunnerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
 	// among them by name. A selected credential, like a path rule, needs a Wall: the
 	// proxy then terminates TLS for the hosts concerned, with an authority made for the
@@ -98,7 +158,8 @@ type Spec struct {
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
 	Declared []string
-	// RunsDir holds the run directories; empty means Dir/.qory/runs.
+	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of the
+	// runner's files, so a walled run needs one outside its mounts and Dir.
 	RunsDir string
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
@@ -133,7 +194,9 @@ type Spec struct {
 	// Limits are the resources the enclosure gives the runtime. Without a Wall they mean
 	// nothing.
 	Limits wall.Limits
-	// Heartbeat is the interval between heartbeats; zero means 30 seconds.
+	// Heartbeat is the interval between heartbeats; zero means 30 seconds. With a
+	// Server, heartbeats run from the accepted ping, which announces the interval, a
+	// whole number of seconds from 1 to 300; without one, from run.started.
 	Heartbeat time.Duration
 	// Report receives one line per thing the runner tells its user; nil means Stderr.
 	Report func(string)
@@ -154,12 +217,37 @@ type Result struct {
 	TimedOut bool
 	// Undelivered is how many events the server did not accept.
 	Undelivered int
+	// RunClosed says the server closed the run, a signed 410 run_closed: the runtime
+	// was stopped as at its time limit, and run.exited has the reason run_closed.
+	RunClosed bool
 }
 
-// The environment variables the session gets from the runner.
+// Discovery is what the Server's configuration document lists of the run's access key.
+type Discovery struct {
+	// NodeID is the id of the access key's node, nd_, or node pool, np_.
+	NodeID string
+	// Secrets is true when the document lists a secrets section.
+	Secrets bool
+}
+
+// Refusal is a run that did not start, and why: its refusal code, and the status of
+// the server's answer when the code came from one. A server's run, for one, is refused
+// with apiary_public_key_missing without a pin, unauthorized on a 401,
+// answer_unsigned on an answer that does not verify under the pin, instance_limit when
+// the node's live instances are at its limit, and run_closed when the server closes
+// the run before it starts. The runner's own refusals are Refusals too, with the names
+// they concern and never a value: run_configuration_invalid, variable_reserved,
+// placeholder_conflict, tool_unknown, image_unknown, mount_contains_runner_files,
+// mount_mode_conflict and mount_shared_with_run among them. errors.As finds one in
+// what [Run] returns.
+type Refusal = accesskey.Refusal
+
+// The environment variables the session gets from the runner. EnvHarnessHome is set
+// when the spec has a HarnessHome.
 const (
-	EnvRunID  = "QORY_RUN_ID"
-	EnvSocket = socket.Env
+	EnvRunID       = "QORY_RUN_ID"
+	EnvSocket      = socket.Env
+	EnvHarnessHome = "QORY_HARNESS_HOME"
 )
 
 // MaxLabels is how many labels a run may carry.
@@ -167,6 +255,10 @@ const MaxLabels = server.MaxLabels
 
 // errTimeout is the cause of the runtime's context ending at the spec's Timeout.
 var errTimeout = errors.New("the run's time limit")
+
+// errRunClosed is the cause of the run's context ending when the server closes the
+// run.
+var errRunClosed = errors.New("the server closed the run")
 
 var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -190,29 +282,88 @@ const closeWait = 15 * time.Second
 // flushed. An error means the run did not start: the policy or the server document
 // could not be read, the server's configuration document or run configuration could
 // not be fetched, the server did not accept the ping, the descriptor is unknown, the
-// wall could not be built, or the program could not be started. Once the runtime runs,
-// its exit is the result and not an error. The context ending stops the runtime.
+// wall could not be built, or the program could not be started. A refusal with a code
+// is a [*Refusal]. Once the runtime runs, its exit is the result and not an error. The
+// context ending stops the runtime, and so does the server closing the run.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
+	// runCtx ends when the server closes the run, a signed 410 run_closed to a
+	// delivery: the start stops, or the runtime is stopped as at its time limit.
+	runCtx, closeRun := context.WithCancelCause(ctx)
+	defer closeRun(nil)
+	// node is the node's policy, the one the command passes: the run's while no server's
+	// policy is in force, and what narrows a server's.
+	var node *policy.Loaded
 	pol := policy.None()
-	var err error
 	if spec.Policy != nil {
+		var err error
 		b, _ := json.Marshal(spec.Policy)
-		if pol, err = policy.Read("policy", b); err != nil {
+		if node, err = policy.Read("policy", b); err != nil {
 			return nil, err
 		}
+		pol = node
+	}
+	if err := checkVariables(spec.Variables); err != nil {
+		return nil, err
+	}
+	if err := checkHarnessHome(spec.HarnessHome); err != nil {
+		return nil, err
+	}
+	runID := spec.RunID
+	if runID == "" {
+		runID = event.NewRunID()
+	} else if err := CheckRunID(runID); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(spec.RunsDir, runID)
+	// Behind a wall, a place the run lists that holds one of the runner's files, or that
+	// a walled agent of another run still going can change, is no run, before the server
+	// is contacted and before anything starts. The run is then listed among the walled
+	// runs still going until it ends, however it ends.
+	plan, err := checkMounts(spec, dir)
+	if err != nil {
+		return nil, err
+	}
+	var listed *registration
+	if spec.Wall != nil {
+		// The wall's own binds are listed from the start, as far as it knows them, so a
+		// run that starts and ends before this one binds them is checked against them.
+		own, err := firstWallBinds(spec.Wall)
+		if err != nil {
+			return nil, err
+		}
+		var engine *wall.Engine
+		if e, ok := spec.Wall.(wall.Engined); ok {
+			v := e.Engine(ctx)
+			engine = &v
+		}
+		if listed, err = register(runID, append(plan.sources, own...), engine); err != nil {
+			return nil, err
+		}
+		defer listed.release()
 	}
 	// The server, when the run has one: discovered before anything else. The run
-	// configuration it names is fetched after the ping, and is then the policy.
+	// configuration it names is fetched after the ping; its policy, narrowed by the
+	// node's, is then the run's, and its variables are the run's for its whole life.
 	var srv *live
+	var served map[string]string
 	if !spec.Local && spec.Server != nil {
 		b, _ := json.Marshal(spec.Server)
 		cfg, err := server.Read("server", b)
 		if err != nil {
 			return nil, err
 		}
-		if srv, err = discover(ctx, cfg, spec); err != nil {
+		if spec.Heartbeat > server.MaxInterval*time.Second || spec.Heartbeat%time.Second != 0 {
+			return nil, fmt.Errorf("the heartbeat interval %s is not a whole number of seconds from 1 to the %d a ping announces at most", spec.Heartbeat, server.MaxInterval)
+		}
+		if srv, err = discover(runCtx, cfg, spec); err != nil {
 			return nil, err
+		}
+		srv.node = node
+		if spec.Discovered != nil {
+			if err := spec.Discovered(Discovery{NodeID: srv.conf.NodeID, Secrets: srv.conf.Secrets != nil}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	rt := spec.Runtime
@@ -241,14 +392,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Wall != nil && spec.ProxyBind != "" {
 		return nil, errors.New("the spec names a wall and a proxy address; the wall names its own")
 	}
-	runID := spec.RunID
-	if runID == "" {
-		runID = event.NewRunID()
-	} else if err := CheckRunID(runID); err != nil {
-		return nil, err
-	}
-	if spec.Timeout < 0 || spec.StopGrace < 0 {
-		return nil, errors.New("the timeout or the stop grace is negative")
+	if spec.Timeout < 0 || spec.StopGrace < 0 || spec.Heartbeat < 0 {
+		return nil, errors.New("the timeout, the stop grace or the heartbeat interval is negative")
 	}
 	if err := CheckStopSignal(spec.StopSignal); err != nil {
 		return nil, err
@@ -256,7 +401,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err := CheckLabels(spec.Labels); err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(spec.RunsDir, runID)
 	emit := event.NewEmitter(runID, nil)
 	files, err := sink.NewFile(dir)
 	if err != nil {
@@ -272,9 +416,38 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Events != nil {
 		sinks = append(sinks, sink.NewWriter(spec.Events))
 	}
+	// record numbers and writes under one lock, so the order in the sinks is the order
+	// of the sequence whichever goroutine emits: the proxy, the socket, the heartbeat,
+	// a reload. write takes the lock; record is for a caller that holds it.
+	var mu sync.Mutex
+	record := func(typ string, data any) { sinks.Write(emit.Make(typ, data)) }
+	write := func(typ string, data any) {
+		mu.Lock()
+		defer mu.Unlock()
+		record(typ, data)
+	}
+	// The heartbeats run from the accepted ping, or from run.started without a server,
+	// until the final event.
+	stopBeat := func() {}
+	// fail ends a run that does not start: the heartbeats stop, and the sinks are
+	// closed, within closeWait. A run the server closed before it started records
+	// dev.qory.run.refused with run_closed, which reaches the file sink alone.
+	fail := func(err error) (*Result, error) {
+		stopBeat()
+		if errors.Is(context.Cause(runCtx), errRunClosed) {
+			write(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
+			err = &Refusal{Code: accesskey.CodeRunClosed, Status: 410, Detail: "the server closed the run before it started"}
+		}
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeWait)
+		defer cancel()
+		sinks.Close(closeCtx)
+		return nil, err
+	}
 	var posts *sink.Server
+	var beatFrom time.Time
 	if srv != nil {
-		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision})
+		interval := int(spec.Heartbeat / time.Second)
+		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": interval})
 		sinks.Write(ping)
 		body, _ := ping.JSON()
 		pingID := event.NewID()
@@ -282,46 +455,43 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			sinks.Close(ctx)
 			return nil, err
 		}
-		posts = sink.NewServer(srv.client, sink.Target{URL: srv.conf.Events.URL, Types: srv.conf.Events.Types}, dir, spec.Report, srv.digests)
+		beatFrom = time.Now()
+		posts = sink.NewServer(srv.client, sink.Target{URL: srv.conf.Events.URL, Types: srv.conf.Events.Types}, dir, spec.Report, srv.digests, func() { closeRun(errRunClosed) })
 		posts.Accepted(pingID, ping.Sequence)
 		sinks = append(sinks, posts)
 		srv.posts = posts
 		defer srv.stop()
-		// The run configuration, when the server names one, is the policy: the
-		// machine's and the run's own are not merged with it.
+		stopBeat = heartbeat(runCtx, spec.Heartbeat, beatFrom, write)
+		// The run configuration, when the server names one: its policy, narrowed by the
+		// node's, or the node's own when it has none, and its variables.
 		if srv.conf.Run != nil {
-			if pol, err = srv.fetch(ctx, srv.conf.Run.URL); err != nil {
-				sinks.Close(ctx)
-				return nil, err
+			if pol, served, err = srv.fetch(runCtx, srv.conf.Run.URL); err != nil {
+				return fail(err)
 			}
 			srv.holds(pol.RunConfiguration)
 			posts.SetRunDigest(pol.RunConfiguration)
 		}
 	}
 	allow := pol.Policy.Egress.Allow
-	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
-		sinks.Close(ctx)
-		return nil, errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them")
+	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0) && spec.Wall == nil {
+		return fail(errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"))
 	}
 	if pol.Policy.Image != "" && spec.Wall == nil {
-		sinks.Close(ctx)
-		return nil, fmt.Errorf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", pol.Policy.Image)
+		return fail(fmt.Errorf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", pol.Policy.Image))
 	}
 	var img Image
 	if spec.Wall != nil {
 		if img, err = image(spec, pol.Policy.Image); err != nil {
-			sinks.Close(ctx)
-			return nil, err
+			return fail(err)
 		}
 	}
 	defs := make([]credential.Definition, len(spec.Credentials))
 	for i, c := range spec.Credentials {
 		defs[i] = credential.Definition(c)
 	}
-	held, err := hold(ctx, spec, defs, pol)
+	held, err := hold(runCtx, spec, defs, pol)
 	if err != nil {
-		sinks.Close(ctx)
-		return nil, err
+		return fail(err)
 	}
 	// held is replaced by a reload, which is over before this runs.
 	defer func() {
@@ -339,39 +509,48 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	chosen, err := choose(spec, toolDefs, pol, held)
 	if err != nil {
-		sinks.Close(ctx)
-		return nil, err
+		return fail(err)
 	}
-	tools, err := tool.Start(ctx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
+	// The runtime prepares the launch before the variables are resolved, because what it
+	// sets is the runner's own and wins over a server's variable of the same name. Behind
+	// a wall the run directory goes in read-only, apart from every place the run binds:
+	// the settings are read from it, and the record in it is not the agent's to rewrite
+	// or move. Behind a wall the runtime learns the placeholders the run sets.
+	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
+	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}
+	if spec.Wall != nil {
+		attach.Placeholders = append(slices.Clone(held.Placeholders), tool.Placeholders(chosen)...)
+	}
+	if prepared, err = rt.Prepare(attach); err != nil {
+		return fail(fmt.Errorf("runtime %s: %w", rt.Name(), err))
+	}
+	vars, emptied, err := resolve(spec, rt, served, prepared, held, chosen)
 	if err != nil {
-		sinks.Close(ctx)
-		return nil, err
+		return fail(err)
+	}
+	if spec.OnVariables != nil {
+		spec.OnVariables(applied(vars.Applied))
+	}
+	tools, err := tool.Start(runCtx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
+	if err != nil {
+		return fail(err)
 	}
 	defer tools.Close()
-	// record numbers and writes under one lock, so the order in the sinks is the order
-	// of the sequence whichever goroutine emits: the proxy, the socket, the heartbeat,
-	// a reload. write takes the lock; record is for a caller that holds it.
-	var mu sync.Mutex
-	record := func(typ string, data any) { sinks.Write(emit.Make(typ, data)) }
-	write := func(typ string, data any) {
-		mu.Lock()
-		defer mu.Unlock()
-		record(typ, data)
-	}
-
 	// The wall comes before the proxy, because it says where the proxy must listen, and
 	// goes after everything else, because the proxy outlives the last connection.
 	var enclosure wall.Enclosure
 	bind := spec.ProxyBind
 	if spec.Wall != nil {
-		if enclosure, err = spec.Wall.Prepare(ctx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
-			sinks.Close(ctx)
-			return nil, err
+		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
+			return fail(err)
 		}
 		defer func() {
 			// The run's context may be what ended the run; the wall is removed regardless.
 			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
 				spec.Report("removing the wall: " + err.Error())
+				// Its containers may outlive the run: the entry stays, and is the run's
+				// while one of them exists.
+				listed.keep()
 			}
 		}()
 		bind = enclosure.ProxyAddr()
@@ -379,8 +558,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 
 	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, pol.Policy.Egress.Deny, func(d proxy.Decision) { write(event.RunEgress, egress(d)) })
 	if err != nil {
-		sinks.Close(ctx)
-		return nil, err
+		return fail(err)
 	}
 	defer px.Close()
 	if spec.Wall != nil || spec.ProxyBind != "" {
@@ -388,16 +566,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// addresses are not its to reach.
 		px.Guard(pol.Policy.Egress.Allow)
 	}
+	// The node's path rules, beside a server's: fixed for the run, so a reload that
+	// brings a server's policy is narrowed by them as the start is.
+	if node != nil && srv != nil {
+		px.NodePaths(node.Policy.Egress.Paths)
+	}
 	// The run's authority: for the hosts a credential is for and the hosts with path
 	// rules, and behind a wall with a server always, since a reload may bring a run
 	// configuration with path rules or credentials, and the enclosure trusts only what
 	// it was given at start.
 	var authority []byte
-	if len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && srv != nil) {
+	if len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || (spec.Wall != nil && srv != nil) {
 		ca, err := proxy.NewCA(runID)
 		if err != nil {
-			sinks.Close(ctx)
-			return nil, err
+			return fail(err)
 		}
 		px.Terminate(ca, proxyUses(held), pol.Policy.Egress.Paths, proxyTools(tools))
 		authority = ca.PEM()
@@ -415,8 +597,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 
 	sock, err := socket.Listen()
 	if err != nil {
-		sinks.Close(ctx)
-		return nil, err
+		return fail(err)
 	}
 	records := func(r runtimes.Record) {
 		if typ, data, ok := rt.Map(r); ok {
@@ -427,35 +608,64 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
-	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
-	// The run directory goes in read-only, over whatever mount holds it: the settings
-	// are read from it, and the record in it is not the agent's to rewrite.
-	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
-	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}); err != nil {
-		sinks.Close(ctx)
-		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
-	}
 	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
-	// enclosure reaches them on.
+	// enclosure reaches them on. The environment is what the run inherits, then the
+	// variables as resolved, the harness's computed values, what the runtime's
+	// preparation sets and the runner's own, each over the ones before, and behind a
+	// wall the placeholders and, empty, the runtime's declared and reserved variables
+	// nothing sets, so an image's own value for one does not reach the runtime. The
+	// resolution has left out every value of a fixed name, so what wins here by position
+	// is what the record says.
+	own := []string{EnvRunID + "=" + runID}
+	if spec.HarnessHome != "" {
+		own = append(own, EnvHarnessHome+"="+spec.HarnessHome)
+	}
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
+		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path()}, own),
 	}
 	if enclosure != nil {
-		launch, err = enclosure.Wrap(ctx, wall.Launch{
-			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen))),
+		// The places again, just before the enclosure binds them, and the wall's own
+		// binds, which exist by now, against the walled runs still going; the run's entry
+		// then lists them all. No walled agent of this user's can change a directory a
+		// name on the way to a place or the run directory is looked up in, the start's
+		// checks saw to that; the user, or a process outside every wall, can. A place
+		// that resolves otherwise than at the start, or whose names are looked up in
+		// other directories, fails the run; what changes after this point is not seen.
+		again, err := checkMounts(spec, dir)
+		if err != nil {
+			return fail(err)
+		}
+		if err := samePlan(plan, again); err != nil {
+			return fail(err)
+		}
+		binds, err := wallBinds(enclosure, sock.Path(), authority)
+		if err != nil {
+			return fail(err)
+		}
+		listed.askID(runCtx, spec.Wall)
+		if err := listed.update(append(again.sources, binds...)); err != nil {
+			return fail(err)
+		}
+		launch, err = enclosure.Wrap(runCtx, wall.Launch{
+			Command: command, Args: args, Dir: plan.Dir, Interactive: interactive,
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, own, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen)), emptied),
 			CA:    authority,
-			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
+			Proxy: px.Addr(), Socket: sock.Path(), Mounts: plan.Mounts, Limits: spec.Limits,
+			ProxyToken: token,
 		})
 		if err != nil {
-			sinks.Close(ctx)
-			return nil, err
+			return fail(err)
 		}
 	}
 
+	// A run the server closed during its start does not start: the start's steps run
+	// under runCtx, and whatever they reached ends here.
+	if errors.Is(context.Cause(runCtx), errRunClosed) {
+		return fail(errRunClosed)
+	}
 	start := time.Now()
 	started := map[string]any{
 		"runtime": rt.Name(), "command": command, "args": args,
@@ -489,9 +699,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		started["labels"] = spec.Labels
 	}
 	write(event.RunStarted, started)
-	// applied is the policy_applied event of a policy: the one pinned at start, and
-	// each one a reload puts in its place.
-	applied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
+	// policyApplied is the policy_applied event of a policy: the one pinned at start,
+	// and each one a reload puts in its place.
+	policyApplied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
 		allow, deny := pol.Policy.Egress.Allow, pol.Policy.Egress.Deny
 		if allow == nil {
 			allow = []string{}
@@ -503,9 +713,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if pol.Source != "none" {
 			a["digest"] = pol.Digest
 		}
-		if pol.Source == "fetched" {
+		if pol.URL != "" {
 			a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 		}
+		if pol.Node != nil {
+			np := map[string]any{"digest": pol.Node.Digest}
+			if len(pol.Node.Paths) > 0 {
+				np["paths"] = pol.Node.Paths
+			}
+			a["node_policy"] = np
+		}
+		a["variables"] = vars.Applied
 		if spec.Declared != nil {
 			a["harness_hosts"] = spec.Declared
 		}
@@ -543,7 +761,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		return a
 	}
-	write(event.PolicyApplied, applied(pol, held))
+	write(event.PolicyApplied, policyApplied(pol, held))
 	if srv != nil {
 		// A reload is as strict as a start. What a start refuses, a policy that selects
 		// credentials without a wall, a credential that does not resolve, fails the
@@ -592,7 +810,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			old := held
 			held = fresh
 			posts.SetRunDigest(in.RunConfiguration)
-			record(event.PolicyApplied, applied(&in, fresh))
+			record(event.PolicyApplied, policyApplied(&in, fresh))
 			for _, d := range refused {
 				record(event.RunEgress, egress(d))
 			}
@@ -611,12 +829,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	resized := func(cols, rows int) { write(event.RunResized, map[string]any{"cols": cols, "rows": rows}) }
 	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output, cols: cols, rows: rows, resized: resized}
-	stop := heartbeat(ctx, spec.Heartbeat, start, write)
+	if srv == nil {
+		stopBeat = heartbeat(runCtx, spec.Heartbeat, start, write)
+	}
 	// The limit ends the runtime and nothing else: the sinks and the wall are closed on
-	// the caller's context, as after any exit.
-	limited, cancelLimit := ctx, context.CancelFunc(func() {})
+	// the caller's context, as after any exit. The server closing the run ends it the
+	// same way.
+	limited, cancelLimit := context.WithCancel(runCtx)
 	if spec.Timeout > 0 {
-		limited, cancelLimit = context.WithTimeoutCause(ctx, spec.Timeout, errTimeout)
+		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
 	}
 	var exit exitStatus
 	if interactive {
@@ -626,26 +847,36 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	// A runtime that exited with 0 as the limit fell finished; the limit was not why.
 	timedOut := exit.code != 0 && errors.Is(context.Cause(limited), errTimeout)
+	// A run the server closed has nothing further sent, whatever the runtime's status.
+	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
-	stop()
+	stopBeat()
 	closeSocket()
 	if srv != nil {
 		// A reload still in flight ends here: nothing of it goes after run.exited.
 		srv.stop()
 	}
-	if err != nil {
+	if err != nil && !closed {
 		sinks.Close(ctx)
 		return nil, err
 	}
+	// A runtime the close kept from starting has no status of its own: the run ends as
+	// a closed one, with -1.
+	if err != nil {
+		exit = exitStatus{code: -1}
+	}
 	state := "failed"
-	if exit.code == 0 {
+	if exit.code == 0 && !closed {
 		state = "succeeded"
 	}
 	exited := map[string]any{"state": state, "exit_code": exit.code, "duration_ms": time.Since(start).Milliseconds()}
 	if exit.signal != "" {
 		exited["signal"] = exit.signal
 	}
-	if timedOut {
+	switch {
+	case closed:
+		exited["reason"] = accesskey.CodeRunClosed
+	case timedOut:
 		exited["reason"] = "timeout"
 		spec.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 	}
@@ -655,7 +886,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err := sinks.Close(closeCtx); err != nil {
 		spec.Report("closing the sinks: " + err.Error())
 	}
-	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, TimedOut: timedOut}
+	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, TimedOut: timedOut && !closed, RunClosed: closed}
 	if posts != nil {
 		res.Undelivered = posts.Undelivered()
 	}
@@ -706,7 +937,8 @@ func placeholders(names []string) []string {
 }
 
 // environment is the session's environment: base with the runner's variables set,
-// replacing any of the same names.
+// replacing any of the same names, and without the access key's variables, whichever
+// of them brought one.
 func environment(base []string, sets ...[]string) []string {
 	var extra []string
 	for _, s := range sets {
@@ -724,10 +956,11 @@ func environment(base []string, sets ...[]string) []string {
 			out = append(out, kv)
 		}
 	}
-	return append(out, extra...)
+	return accesskey.WithoutVariables(append(out, extra...))
 }
 
-// heartbeat emits run.heartbeat every interval until the returned function is called.
+// heartbeat emits run.heartbeat every interval, its elapsed seconds counted from
+// start, until the returned function is called; calling it again does nothing.
 func heartbeat(ctx context.Context, interval time.Duration, start time.Time, write func(string, any)) func() {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
@@ -746,7 +979,7 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 			}
 		}
 	}()
-	return func() { close(done); <-stopped }
+	return sync.OnceFunc(func() { close(done); <-stopped })
 }
 
 // hold resolves the credentials a policy selects, as the machine defines them, and
@@ -758,9 +991,9 @@ func hold(ctx context.Context, spec Spec, defs []credential.Definition, pol *pol
 		return nil, err
 	}
 	for _, name := range held.Placeholders {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+		if passes(spec, name) {
 			held.Close()
-			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return held, nil
@@ -777,8 +1010,8 @@ func choose(spec Spec, defs []tool.Definition, pol *policy.Loaded, held *credent
 		return nil, err
 	}
 	for _, name := range tool.Placeholders(chosen) {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
-			return nil, fmt.Errorf("%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
+		if passes(spec, name) {
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return chosen, nil
@@ -812,10 +1045,11 @@ func sameTools(a, b []policy.Selected) bool {
 }
 
 // toolEnv is the environment a tool gets: the runner's own, without the variables the
-// machine's credentials are read from, which are the runner's to hold and no tool's.
+// machine's credentials and the access key are read from, which are the runner's to
+// hold and no tool's.
 func toolEnv(creds []Credential) []string {
 	var out []string
-	for _, kv := range os.Environ() {
+	for _, kv := range accesskey.WithoutVariables(os.Environ()) {
 		name, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(creds, func(c Credential) bool { return c.Env == name }) {
 			out = append(out, kv)

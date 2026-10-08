@@ -1,5 +1,7 @@
 # A server on this machine: plain http is allowed to a loopback address and nowhere else.
+# Every answer is signed under the pinned key here too.
 version: 1
 url: http://127.0.0.1:8787
-access_key: ak_f1xt0re000000000
-secret: fixture-secret-not-a-real-one
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}

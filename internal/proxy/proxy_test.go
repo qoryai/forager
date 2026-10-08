@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
 )
@@ -369,9 +370,9 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 }
 
 // TestTerminateSetsTheCredentialAndHoldsThePaths pins termination: to a host a
-// credential is for, the proxy answers with the run's authority, sets the token on a
-// path the credential covers and nowhere else, denies the rest under enforce, records
-// every request, and leaves every other host a tunnel it does not read.
+// credential is for, the proxy answers with the run's authority, sets the credential
+// on a path it covers and nowhere else, denies the rest under enforce, records every
+// request, and leaves every other host a tunnel the proxy passes through as bytes.
 func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]string{}
@@ -557,6 +558,173 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 	}
 }
 
+// TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt pins a model provider's two
+// credentials, the OAuth one set as a bearer and the API key set in a header of its
+// own: the host the credential is for gets the key in the credential's header, once,
+// in place of the stand-in the session sent; a stand-in in the other header goes as the
+// session sent it; an allowed host with no credential, plain or through a tunnel, gets
+// the stand-ins and never the key; and the record contains no key.
+func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
+	for _, c := range []struct {
+		name, scheme, header, key, set string
+	}{
+		{"oauth as a bearer", "bearer", "", "sk-ant-oat01-test-REAL-not-a-secret-0002", "Authorization"},
+		{"api key in x-api-key", "header", "X-Api-Key", "sk-ant-test-REAL-not-a-secret-0001", "X-Api-Key"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var mu sync.Mutex
+			got := map[string]http.Header{}
+			record := func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				mu.Lock()
+				got[r.Host+r.URL.Path] = r.Header.Clone()
+				mu.Unlock()
+				io.WriteString(w, `{"type":"message"}`)
+			}
+			model := httptest.NewTLSServer(http.HandlerFunc(record))
+			defer model.Close()
+			// The other host is localhost, which no credential is for: plain, and over
+			// TLS through a tunnel the proxy passes through as bytes.
+			plain := httptest.NewServer(http.HandlerFunc(record))
+			defer plain.Close()
+			secure := httptest.NewTLSServer(http.HandlerFunc(record))
+			defer secure.Close()
+			host, port, _ := net.SplitHostPort(model.Listener.Addr().String())
+			modelAt := net.JoinHostPort(host, port)
+
+			var decisions []proxy.Decision
+			p, err := proxy.Listen("", policy.Enforce, []string{host, "localhost"}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(model.Certificate())
+			p.TrustUpstream(roots)
+			p.Terminate(ca, []proxy.Credential{{
+				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header, Paths: []string{"/v1/*"},
+				Token: func() string { return c.key },
+			}}, nil, nil)
+
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			// The tunnelled origin's certificate is for example.com and not localhost;
+			// the session verifies it, through a tunnel the proxy passes through as bytes.
+			tunnel := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com"}}}
+			bearer, apiKey := "Bearer "+credential.Placeholder, credential.Placeholder
+			var answers []string
+			send := func(client *http.Client, target string, both bool) {
+				req, _ := http.NewRequest("POST", target, strings.NewReader(`{"model":"m"}`))
+				// In lower case, as Claude Code's HTTP client writes them.
+				if c.scheme == "bearer" || both {
+					req.Header["authorization"] = []string{bearer}
+				}
+				if c.scheme == "header" || both {
+					req.Header["x-api-key"] = []string{apiKey}
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("%s: %v", target, err)
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				answers = append(answers, fmt.Sprint(resp.StatusCode, resp.Header, string(b)))
+			}
+			own := "https://" + modelAt + "/v1/messages"
+			both := "https://" + modelAt + "/v1/messages/both"
+			otherPlain := strings.Replace(plain.URL, "127.0.0.1", "localhost", 1) + "/v1/messages"
+			otherSecure := strings.Replace(secure.URL, "127.0.0.1", "localhost", 1) + "/v1/messages"
+			send(client, own, false)
+			send(client, both, true)
+			send(client, otherPlain, true)
+			send(tunnel, otherSecure, true)
+			send(client, "https://"+modelAt+"/v2/outside-the-paths", true)
+
+			mu.Lock()
+			defer mu.Unlock()
+			at := func(raw string) http.Header {
+				u, _ := url.Parse(raw)
+				return got[u.Host+u.Path]
+			}
+			want := c.key
+			if c.scheme == "bearer" {
+				want = "Bearer " + c.key
+			}
+			// The stand-in of this credential alone, as Claude Code sends it.
+			h := at(own)
+			if v := h.Values(c.set); len(v) != 1 || v[0] != want {
+				t.Errorf("the host the credential is for got %s %q, want the key once", c.set, v)
+			}
+			for name, vs := range h {
+				for _, v := range vs {
+					if strings.Contains(v, credential.Placeholder) {
+						t.Errorf("the stand-in reached the host the credential is for in %s: %q", name, v)
+					}
+				}
+			}
+			// Both stand-ins: the credential's header is set, the other goes as the
+			// session sent it.
+			h = at(both)
+			if v := h.Values(c.set); len(v) != 1 || v[0] != want {
+				t.Errorf("with both stand-ins the host got %s %q, want the key once", c.set, v)
+			}
+			other, standIn := "X-Api-Key", apiKey
+			if c.scheme == "header" {
+				other, standIn = "Authorization", bearer
+			}
+			if v := h.Values(other); len(v) != 1 || v[0] != standIn {
+				t.Errorf("with both stand-ins the host got %s %q, want the session's stand-in", other, v)
+			}
+			// The other host, plain and through a tunnel: the stand-ins, untouched.
+			for _, target := range []string{otherPlain, otherSecure} {
+				if h := at(target); h == nil {
+					t.Errorf("%s was not reached", target)
+				} else if h.Get("Authorization") != bearer || h.Get("X-Api-Key") != apiKey {
+					t.Errorf("%s got Authorization %q and X-Api-Key %q, want the stand-ins", target, h.Get("Authorization"), h.Get("X-Api-Key"))
+				}
+			}
+			for where, h := range got {
+				if strings.HasPrefix(where, modelAt+"/") {
+					continue
+				}
+				for name, vs := range h {
+					for _, v := range vs {
+						if strings.Contains(v, c.key) {
+							t.Errorf("%s, which no credential is for, got the key in %s", where, name)
+						}
+					}
+				}
+			}
+			if _, reached := got[modelAt+"/v2/outside-the-paths"]; reached {
+				t.Error("a path outside the credential's reached the host")
+			}
+			for _, a := range answers {
+				if strings.Contains(a, c.key) {
+					t.Errorf("an answer to the session contains the key: %s", a)
+				}
+			}
+			if s := fmt.Sprintf("%+v", decisions); strings.Contains(s, c.key) || strings.Contains(s, credential.Placeholder) {
+				t.Errorf("the record contains a credential: %s", s)
+			}
+			set := 0
+			for _, d := range decisions {
+				if d.Credential == "model" {
+					set++
+				}
+			}
+			if set != 2 {
+				t.Errorf("the record lists the credential on %d requests, want 2: %+v", set, decisions)
+			}
+		})
+	}
+}
+
 // TestDenyIsDecidedFirstInEitherMode pins the deny list: a host it covers is refused
 // under observe as under enforce, before the dial, with the first matching entry as
 // the rule; it beats an allow entry of any shape, a host both lists name included; a
@@ -640,5 +808,65 @@ func TestDenyIsDecidedFirstInEitherMode(t *testing.T) {
 	resp.Body.Close()
 	if d := o.last(t); resp.StatusCode != 403 || d.Rule != proxy.GuardRule || d.Allowed {
 		t.Errorf("guarded: status %d, decision %+v", resp.StatusCode, d)
+	}
+}
+
+// TestNodePathsNarrowThePolicysPaths pins the node's path rules beside the policy's: a
+// request to a host both list must match an entry of each, and its rule is the
+// narrowest that matched; a miss of either is denied under enforce with no rule and
+// passed under observe; and the hosts of both are terminated, a host only the node
+// lists included.
+func TestNodePathsNarrowThePolicysPaths(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	for _, mode := range []policy.Mode{policy.Enforce, policy.Observe} {
+		t.Run(string(mode), func(t *testing.T) {
+			var o observer
+			p, err := proxy.Listen("", mode, []string{host, "localhost"}, nil, o.observe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(origin.Certificate())
+			p.TrustUpstream(roots)
+			p.NodePaths(map[string][]string{host: {"/repos/acme/*", "/user"}, "localhost": {"/only-the-node/*"}})
+			p.Terminate(ca, nil, map[string][]string{host: {"/repos/*", "/user"}}, nil)
+			if got := strings.Join(p.Terminated(), " "); !strings.Contains(got, host) || !strings.Contains(got, "localhost") {
+				t.Errorf("terminated %q", got)
+			}
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			for _, tc := range []struct {
+				path, rule string
+				both       bool
+			}{
+				{"/repos/acme/shop", "/repos/acme/*", true},
+				{"/user", "/user", true},
+				{"/repos/other/lib", "", false},
+				{"/elsewhere", "", false},
+			} {
+				resp, err := client.Get("https://" + net.JoinHostPort(host, port) + tc.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				d := o.last(t)
+				wantCode := 200
+				if !tc.both && mode == policy.Enforce {
+					wantCode = 403
+				}
+				if resp.StatusCode != wantCode || d.PathRule != tc.rule || d.Allowed != (wantCode == 200) {
+					t.Errorf("%s: %d, recorded %+v; want %d with the rule %q", tc.path, resp.StatusCode, d, wantCode, tc.rule)
+				}
+			}
+		})
 	}
 }

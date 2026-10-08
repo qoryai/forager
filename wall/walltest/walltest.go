@@ -22,9 +22,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +37,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -48,12 +51,13 @@ import (
 
 // The modes of the helper, its first argument.
 const (
-	modeRelay   = "relay"
-	modeForward = "forward"
-	modeProbe   = "probe"
-	modeTool    = "tool"
-	modeNest    = "nest"
-	modeInner   = "inner"
+	modeRelay    = "relay"
+	modeForward  = "forward"
+	modeProbe    = "probe"
+	modeTool     = "tool"
+	modeNest     = "nest"
+	modeInner    = "inner"
+	modeRecorder = "recorder"
 )
 
 // RelayArgs are the arguments that make the helper run the relay.
@@ -81,6 +85,25 @@ const (
 	credentialPath = "/inside-the-paths"
 )
 
+// What a runtime's credentials are in the suite: Claude Code's API key, set in
+// x-api-key, and its OAuth credential, set as a bearer, each a fake key in the suite's
+// own environment for a recorder of its own, with the variable Claude Code reads it
+// from inside as its stand-in. keyMark is in both keys and nowhere else: the full keys
+// are made when the suite runs, so they exist only in the suite's environment while it
+// runs.
+const (
+	keyMark        = "-REAL-not-a-secret-"
+	apiKeyVar      = "QORY_WALLTEST_API_KEY"
+	oauthVar       = "QORY_WALLTEST_OAUTH_KEY"
+	apiKeyStandIn  = "ANTHROPIC_API_KEY"
+	oauthStandIn   = "CLAUDE_CODE_OAUTH_TOKEN"
+	apiKeyHeader   = "X-Api-Key"
+	modelPath      = "/v1/messages"
+	apiKeyCred     = "runtime-api-key"
+	oauthCred      = "runtime-oauth"
+	recordersCAVar = "PROBE_RECORDERS_CA"
+)
+
 // What the suite's tool is: the test binary on this machine, serving a name that
 // exists nowhere, held to one prefix of its paths.
 const (
@@ -93,8 +116,8 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder, the probe, the start of a Docker of the agent's own, or the probe in a
-// container the agent started. It returns at once otherwise.
+// forwarder, the probe, the start of a Docker of the agent's own, the probe in a
+// container the agent started, or a recorder. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -122,6 +145,8 @@ func Main() {
 		os.Exit(1)
 	case modeInner:
 		os.Exit(innerProbe(os.Args[2:]))
+	case modeRecorder:
+		os.Exit(serveRecorder())
 	}
 }
 
@@ -183,6 +208,16 @@ type Options struct {
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
 	EngineID string
+	// Recorders are three recorders: the first acts as the host of a runtime's API key,
+	// the second as the host of its OAuth credential, the third as a host the policy
+	// allows with no credential. Without them the checks of a runtime's key are skipped,
+	// which [EnvRequire] turns into failures. With Recorders, Run points the roots of
+	// the process, and the programs it starts within Run, at the suite's authority
+	// alone, with SSL_CERT_FILE and SSL_CERT_DIR. The process reads its roots once, at
+	// its first verification of a certificate, so the test binary's first verification
+	// must come within Run; from then on, for the rest of the process, it trusts only
+	// the suite's authority.
+	Recorders []Recorder
 }
 
 // Run checks the adapter against the guarantees.
@@ -203,6 +238,19 @@ func Run(t *testing.T, o Options) {
 	origin := hosts{origin: o.Origin, own: fmt.Sprintf("http://127.0.0.1:%d/", ln.Addr().(*net.TCPAddr).Port), port: ln.Addr().(*net.TCPAddr).Port}
 	t.Setenv(hostOnly, "1")
 	t.Setenv(tokenVar, tokenMark+"-"+strconv.Itoa(os.Getpid()))
+	keys := runtimeKeys{api: "sk-ant-test" + keyMark + "0001-" + strconv.Itoa(os.Getpid()), oauth: "sk-ant-oat01-test" + keyMark + "0002-" + strconv.Itoa(os.Getpid())}
+	t.Setenv(apiKeyVar, keys.api)
+	t.Setenv(oauthVar, keys.oauth)
+	var trusted error
+	if n := len(o.Recorders); n != 0 && n != 3 {
+		t.Fatalf("Recorders lists %d recorders; the suite takes three: the API key's host, the OAuth credential's host, and an allowed host with none", n)
+	}
+	if len(o.Recorders) == 3 {
+		trusted = trustRecorders(t)
+		for _, rec := range o.Recorders {
+			origin.recorders = append(origin.recorders, rec.Host)
+		}
+	}
 	outside := filepath.Join(t.TempDir(), "host-file")
 	if err := os.WriteFile(outside, []byte("the host's"), 0o644); err != nil {
 		t.Fatal(err)
@@ -232,6 +280,13 @@ func Run(t *testing.T, o Options) {
 	}
 	originHost := mustHost(t, o.Origin)
 	want := "[" + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
+	if len(origin.recorders) == 3 {
+		// A runtime's two credentials to their hosts, then the other host plainly and
+		// through a tunnel.
+		for _, h := range []string{origin.recorders[0], origin.recorders[1], origin.recorders[2], origin.recorders[2]} {
+			want += " " + h + " allowed " + h
+		}
+	}
 	if o.Docker {
 		// Each container the agent starts reaches the origin once, through the relay: one
 		// of each kind through the Engine API, and one with the docker command.
@@ -261,6 +316,7 @@ func Run(t *testing.T, o Options) {
 	record, _ := os.ReadFile(filepath.Join(r.res.Dir, "events.jsonl"))
 	check("no credential inside the enclosure", p.Placeholder == credential.Placeholder && len(p.TokenSeen) == 0 && p.BundleCerts > 0 && p.BundleKeys == 0 && !bytes.Contains(record, []byte(tokenMark)),
 		fmt.Sprintf("the placeholder is %q; the token was seen in %v; the bundle holds %d certificates and %d keys; the token is in the record: %v", p.Placeholder, p.TokenSeen, p.BundleCerts, p.BundleKeys, bytes.Contains(record, []byte(tokenMark))))
+	checkKeys(t, o, r, keys, trusted)
 	check("no way to this machine through the proxy unless the policy names it", p.OwnViaProxy == 403 && p.MetaViaProxy == 403 && own.Load() == 0, fmt.Sprintf("this machine's listener answered %d through the proxy and was reached %d times; the metadata address answered %d", p.OwnViaProxy, own.Load(), p.MetaViaProxy))
 	check("no way to the engine's host by the network's first address", len(p.HostByGateway) == 0, p.HostByGateway)
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
@@ -308,7 +364,7 @@ func Run(t *testing.T, o Options) {
 	}
 	t.Run("the hook reaches the runner", func(t *testing.T) {
 		if !o.Hooks {
-			t.Skip("the adapter carries no hook socket across on this machine; the forwarder's network transport is not in this release")
+			t.Skip("the adapter carries no hook socket across on this machine")
 		}
 		for _, e := range r.events {
 			if e["type"] == "dev.qory.session.ended" {
@@ -341,7 +397,151 @@ func Run(t *testing.T, o Options) {
 		if r.probe.OwnViaProxy != 200 || own.Load() == 0 || r.probe.MetaViaProxy != 403 {
 			t.Errorf("with 127.0.0.1 named in the allow list this machine's listener answered %d through the proxy, and the metadata address %d", r.probe.OwnViaProxy, r.probe.MetaViaProxy)
 		}
+		t.Run("no runtime's key in the record", func(t *testing.T) {
+			if len(o.Recorders) != 3 {
+				Skip(t, "the adapter's test starts no recorders")
+			}
+			checkNoKey(t, r)
+		})
 	})
+}
+
+// runtimeKeys are the keys of a runtime's two credentials, in the suite's own
+// environment.
+type runtimeKeys struct{ api, oauth string }
+
+// checkKeys checks a runtime's two credentials, from the probe, the recorders and the
+// record: each key reaches its own host in its own header, in place of the stand-in the
+// session sent, and no other host; inside, every environment the probe can read
+// contains the stand-ins and no key; and nothing the run recorded contains a key.
+func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted error) {
+	t.Helper()
+	names := []string{
+		"a runtime's API key reaches its host in x-api-key, in place of the stand-in",
+		"a runtime's OAuth credential reaches its host as a bearer, in place of the stand-in",
+		"only the stand-ins inside the enclosure, in every environment it can read",
+		"no other host gets a runtime's key",
+		"no runtime's key in the record",
+	}
+	if len(o.Recorders) != 3 {
+		for _, n := range names {
+			t.Run(n, func(t *testing.T) { Skip(t, "the adapter's test starts no recorders") })
+		}
+		return
+	}
+	var got [3][]recorded
+	for i, rec := range o.Recorders {
+		b, err := rec.Recorded()
+		if err == nil {
+			got[i], err = readRecorded(b)
+		}
+		if err != nil {
+			for _, n := range names {
+				t.Run(n, func(t *testing.T) { t.Errorf("the recorder at %s: %v", rec.Host, err) })
+			}
+			return
+		}
+	}
+	p := r.probe
+	arrived := func(t *testing.T, i int, header, want, cred string, status int, statusErr string) {
+		t.Helper()
+		if trusted != nil {
+			t.Fatalf("this machine's roots are not the suite's authority, so the proxy cannot verify a recorder: %v", trusted)
+		}
+		var at []recorded
+		for _, req := range got[i] {
+			if req.Path == modelPath {
+				at = append(at, req)
+			}
+		}
+		if len(at) != 1 || status != 200 {
+			t.Fatalf("the host got %d requests at %s, want 1; the probe was answered %d (%s)", len(at), modelPath, status, statusErr)
+		}
+		h := at[0].Header
+		if v := h.Values(header); len(v) != 1 || v[0] != want {
+			t.Errorf("the host got %s %q, want the key once", header, v)
+		}
+		for name, vs := range h {
+			for _, v := range vs {
+				if strings.Contains(v, credential.Placeholder) {
+					t.Errorf("the stand-in reached the host in %s: %q", name, v)
+				}
+			}
+		}
+		set := ""
+		for _, e := range r.events {
+			if d, _ := e["data"].(map[string]any); e["type"] == "dev.qory.run.egress" && d["host"] == o.Recorders[i].Host && d["path"] == modelPath {
+				set, _ = d["credential"].(string)
+			}
+		}
+		if set != cred {
+			t.Errorf("the request is recorded with the credential %q, want %q", set, cred)
+		}
+	}
+	t.Run(names[0], func(t *testing.T) { arrived(t, 0, apiKeyHeader, keys.api, apiKeyCred, p.APIKeyHost, p.APIKeyHostErr) })
+	t.Run(names[1], func(t *testing.T) {
+		arrived(t, 1, "Authorization", "Bearer "+keys.oauth, oauthCred, p.OAuthHost, p.OAuthHostErr)
+	})
+	t.Run(names[2], func(t *testing.T) {
+		if p.APIKeyStandIn != credential.Placeholder || p.OAuthStandIn != credential.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
+			t.Errorf("%s is %q and %s is %q; a key was seen in %v; %d environments were read", apiKeyStandIn, p.APIKeyStandIn, oauthStandIn, p.OAuthStandIn, p.KeySeen, p.Environs)
+		}
+	})
+	t.Run(names[3], func(t *testing.T) {
+		if p.OtherPlain != 200 || p.OtherTunnel != 200 {
+			t.Errorf("the other host answered %d (%s) plainly and %d (%s) through a tunnel", p.OtherPlain, p.OtherPlainErr, p.OtherTunnel, p.OtherTunnelErr)
+		}
+		reached := map[bool]bool{}
+		for _, req := range got[2] {
+			reached[req.TLS] = true
+			if req.Header.Get("Authorization") != "Bearer "+credential.Placeholder || req.Header.Get(apiKeyHeader) != credential.Placeholder {
+				t.Errorf("the other host got Authorization %q and %s %q, want the stand-ins", req.Header.Get("Authorization"), apiKeyHeader, req.Header.Get(apiKeyHeader))
+			}
+		}
+		if !reached[false] || !reached[true] {
+			t.Errorf("the other host was reached plainly %v and through a tunnel %v", reached[false], reached[true])
+		}
+		for i, reqs := range got {
+			for _, req := range reqs {
+				for name, vs := range req.Header {
+					for _, v := range vs {
+						own := (i == 0 && name == apiKeyHeader && v == keys.api) || (i == 1 && name == "Authorization" && v == "Bearer "+keys.oauth)
+						if strings.Contains(v, keyMark) && !own {
+							t.Errorf("%s got a key in %s, at %s", o.Recorders[i].Host, name, req.Path)
+						}
+					}
+				}
+			}
+		}
+	})
+	t.Run(names[4], func(t *testing.T) { checkNoKey(t, r) })
+}
+
+// checkNoKey checks that the run's directory, its output and what the runner reported
+// contain no runtime's key.
+func checkNoKey(t *testing.T, r result) {
+	t.Helper()
+	var where []string
+	// r.runs holds the run directory, r.res.Dir; r.dir is the workspace.
+	for _, root := range []string{r.dir, r.runs} {
+		filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte(keyMark)) {
+				where = append(where, path)
+			}
+			return nil
+		})
+	}
+	for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
+		if strings.Contains(s, keyMark) {
+			where = append(where, name)
+		}
+	}
+	if len(where) != 0 {
+		t.Errorf("a key is in %v", where)
+	}
 }
 
 // hosts are the addresses a run's probe is told.
@@ -351,6 +551,8 @@ type hosts struct {
 	port   int
 	// named puts this machine's loopback in the allow list by name.
 	named bool
+	// recorders are the hosts of [Options.Recorders], when there are three.
+	recorders []string
 }
 
 // mustHost is the host of a URL.
@@ -397,18 +599,23 @@ func decoys(workspace string) (string, error) {
 
 // result is one run behind the wall.
 type result struct {
-	res    *session.Result
-	dir    string
-	probe  report
-	events []map[string]any
+	res *session.Result
+	// dir is the workspace, and runs the runs directory, outside it.
+	dir, runs string
+	probe     report
+	events    []map[string]any
+	// out, errs and reports are the run's standard output and error, and what the
+	// runner reported.
+	out, errs, reports string
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
 // reported and what the runner recorded.
 func run(t *testing.T, o Options, interactive bool, h hosts, outside string) result {
 	t.Helper()
-	dir := t.TempDir()
-	var out, errs bytes.Buffer
+	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
+	var out, errs, reports bytes.Buffer
+	var reportsMu sync.Mutex
 	settings := filepath.Join(dir, "launch-settings.json")
 	if err := os.WriteFile(settings, []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -448,6 +655,18 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
+	policyCreds := []session.PolicyCredential{{Name: "suite"}}
+	creds := []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
+	if len(h.recorders) == 3 {
+		cert, _ := authority()
+		env = append(env, "PROBE_API_KEY_HOST="+h.recorders[0], "PROBE_OAUTH_HOST="+h.recorders[1], "PROBE_OTHER_HOST="+h.recorders[2],
+			recordersCAVar+"="+base64.StdEncoding.EncodeToString(cert.Raw))
+		allow = append(allow, h.recorders...)
+		policyCreds = append(policyCreds, session.PolicyCredential{Name: apiKeyCred}, session.PolicyCredential{Name: oauthCred})
+		creds = append(creds,
+			session.Credential{Name: apiKeyCred, Env: apiKeyVar, Hosts: []string{h.recorders[0]}, Scheme: "header", Header: apiKeyHeader, Paths: []string{"/v1/*"}, Placeholders: []string{apiKeyStandIn}},
+			session.Credential{Name: oauthCred, Env: oauthVar, Hosts: []string{h.recorders[1]}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{oauthStandIn}})
+	}
 	// With a runtime or a Docker the machine defines the image and the policy selects
 	// it by name; otherwise the image is the machine's default, a reference.
 	var images []session.Image
@@ -462,28 +681,37 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Args:        []string{modeProbe, "--settings", settings},
 		Env:         env,
 		Dir:         dir,
+		RunsDir:     runs,
 		Interactive: interactive,
 		Stdin:       strings.NewReader(""),
 		Stdout:      &out,
 		Stderr:      &errs,
 		Policy: &session.Policy{Version: 1,
 			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}, toolHost: {toolPaths}}},
-			Credentials: []session.PolicyCredential{{Name: "suite"}},
+			Credentials: policyCreds,
 			Tools:       []session.PolicyTool{{Name: "suite-tool"}},
 			Image:       selected},
 		Tools:         []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
-		Credentials:   []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}},
+		Credentials:   creds,
 		Forwarder:     o.Forwarder,
 		Wall:          o.Wall,
 		Image:         o.Image,
 		Images:        images,
 		RunnerVersion: "walltest",
-		Report:        func(l string) { t.Log("report:", l) },
+		Report: func(l string) {
+			t.Log("report:", l)
+			reportsMu.Lock()
+			reports.WriteString(l + "\n")
+			reportsMu.Unlock()
+		},
 	})
 	if err != nil {
 		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
 	}
-	r := result{res: res, dir: dir}
+	reportsMu.Lock()
+	r := result{res: res, dir: dir, runs: runs, out: out.String(), errs: errs.String(),
+		reports: reports.String()}
+	reportsMu.Unlock()
 	found := false
 	for _, line := range strings.Split(out.String(), "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), probePrefix); ok {

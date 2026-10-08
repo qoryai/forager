@@ -1,5 +1,8 @@
-# A server elsewhere: https, the origin only. The runner finds the endpoints under it.
+# A server elsewhere: https, the origin only. The runner finds the endpoints under it,
+# signs every request as the access key, and verifies every answer under the pin. The
+# access key's secret lives outside this document.
 version: 1
 url: https://qory.example
-access_key: ak_f1xt0re000000000
-secret: fixture-secret-not-a-real-one
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}

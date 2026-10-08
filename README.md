@@ -51,13 +51,14 @@ With `qory` and Claude Code installed:
 mkdir hello && cd hello
 qory setup example              # a stack with two modules
 qory harness compose            # build the harness into this folder
-qory run -- -p "/hello"         # one headless turn, inside the runner
-cat .qory/runs/*/events.jsonl   # what it reached, what it printed, how it ended
+qory run -- -p "/hello"         # one headless turn; prints "the record is in <dir>"
+cat <dir>/events.jsonl          # what it reached, what it printed, how it ended
 ```
 
 ## 1. Record the session
 
-Each run gets a directory in the checkout, `.qory/runs/<id>/`:
+Each run gets a directory, `<id>/`, in the runs directory the caller passes. `qory` keeps
+them under its state directory and prints the path:
 
 - `events.jsonl`: one CloudEvent per line, in order.
 - `output.log`: the session's bytes.
@@ -89,8 +90,9 @@ The policy comes from one of three places:
 - **Your server**: its run configuration, chosen by the run's labels, such as its
   repository. See [Report to a server](#4-report-to-a-server).
 
-When your server sends a run configuration, that is the policy. With no policy, the
-runner observes and records everything.
+When your server sends a policy, the runner narrows it by the policy it is passed,
+`Spec.Policy` in Go: the node only takes away. With no policy, the runner observes and
+records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
 Behind a wall, a policy can also limit a host to paths, and select the credentials, the
@@ -104,7 +106,7 @@ The proxy sees only programs that honour it. A **wall** makes the rest fail:
 
 - The agent starts in a container, on a network with no route out.
 - A relay leads to the proxy, and nowhere else.
-- The runner, the policy and the server's secret stay outside. The record is written
+- The runner, the policy and the access key secret stay outside. The record is written
   from outside.
 
 Credentials stay outside too. The machine defines them, and a run's policy selects them
@@ -126,9 +128,10 @@ Every event goes to files. With a server, the events it selects go there too:
 
 - Before the run starts, the runner fetches the server's configuration, signed. The run
   starts only when the server answers.
-- It posts them in batches, signed with an HMAC.
-- The server can return the run's policy, chosen by the run's labels. It can change the
-  policy while the run goes.
+- It posts them in batches. Every request is signed with the machine's access key, an
+  Ed25519 key, and every answer is verified under the server's key the machine pins.
+- The server can return the run's policy and variables, chosen by the run's labels. It
+  can change the policy while the run goes.
 
 A server is your control plane, or a receiver of your own. The package `receiver` is a
 worked example.

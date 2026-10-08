@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -15,13 +16,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/server"
 )
 
+// accessKeyID is the fixture access key's id, and instance the fixture instance.
 const (
-	secret = "fixture-secret-not-a-real-one"
-	key    = "ak_f1xt0re000000000"
+	accessKeyID = "ak_f1xt0re000000000"
+	instance    = "i_gYKDhIWGh4iJiouMjY6PkA"
 )
 
 // fixture is the bytes of a contract fixture.
@@ -34,8 +37,36 @@ func fixture(t *testing.T, name string) []byte {
 	return b
 }
 
+// generate makes a key for a test, a fresh one, never a published fixture's.
+func generate(t *testing.T) *accesskey.Key {
+	t.Helper()
+	k, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// pinOf is the pin of one signing key.
+func pinOf(k *accesskey.Key) accesskey.Pin {
+	return accesskey.Pin{{Alg: "ed25519", PublicKey: k.PublicKey().String()}}
+}
+
+// code returns the code of a refusal, or the error's text.
+func code(err error) string {
+	var r *accesskey.Refusal
+	if errors.As(err, &r) {
+		return r.Code
+	}
+	if err == nil {
+		return "nil"
+	}
+	return err.Error()
+}
+
 // TestServerDocumentReads pins the fixtures reading and that a refused document is an
-// error naming it.
+// error naming it: one without its access key id, with plain http elsewhere than
+// loopback, or with a secret. A document without its pin is apiary_public_key_missing.
 func TestServerDocumentReads(t *testing.T) {
 	for _, f := range []string{"fixtures/server/loopback.yaml", "fixtures/server/https.yaml"} {
 		c, err := server.Read(f, fixture(t, f))
@@ -43,63 +74,69 @@ func TestServerDocumentReads(t *testing.T) {
 			t.Errorf("%s: %v", f, err)
 			continue
 		}
-		if c.Version != 1 || c.URL == "" || c.AccessKey != key || len(c.Secret) < 16 {
+		if c.Version != 1 || c.URL == "" || c.AccessKeyID != accessKeyID || len(c.ApiaryPublicKey) != 1 {
 			t.Errorf("%s read as %+v", f, c)
 		}
 	}
-	for _, f := range []string{"fixtures/invalid/server-no-key.yaml", "fixtures/invalid/server-plain-http.yaml"} {
+	for _, f := range []string{"fixtures/invalid/server-no-access-key-id.yaml", "fixtures/invalid/server-plain-http.yaml", "fixtures/invalid/server-secret-member.yaml"} {
 		_, err := server.Read(f, fixture(t, f))
 		var se *server.Error
 		if !errors.As(err, &se) || se.Name != f {
 			t.Errorf("%s: %v", f, err)
 		}
-	}
-}
-
-// TestSignatureRoundTrips pins the header value and constant-time verification.
-func TestSignatureRoundTrips(t *testing.T) {
-	sig := server.Sign(secret, []byte("[]"))
-	if len(sig) != len("sha256=")+64 || sig[:7] != "sha256=" {
-		t.Errorf("signature %s", sig)
-	}
-	if !server.Verify(secret, []byte("[]"), sig) {
-		t.Error("a valid signature was refused")
-	}
-	if server.Verify(secret, []byte("[{}]"), sig) || server.Verify("other", []byte("[]"), sig) || server.Verify(secret, []byte("[]"), "") {
-		t.Error("an invalid signature was accepted")
-	}
-}
-
-// TestSignedGETMatchesTheKnownAnswers pins the canonical string and the signature of a
-// GET against the contract's published answers: the one under test-secret, and the
-// signed fixtures under the fixture secret.
-func TestSignedGETMatchesTheKnownAnswers(t *testing.T) {
-	if got := server.Canonical("get", "/.well-known/qory-configuration?x=1", "1700000000"); got != "GET\n/.well-known/qory-configuration?x=1\n1700000000" {
-		t.Errorf("canonical %q", got)
-	}
-	const want = "sha256=e8cc6260e2740e9282f2b45fa8bc590e3afe0e59eb53882b19cdb0f87a613c02"
-	if got := server.SignGET("test-secret", "GET", "/.well-known/qory-configuration?x=1", "1700000000"); got != want {
-		t.Errorf("SignGET = %s, want %s", got, want)
-	}
-	if !server.VerifyGET("test-secret", "GET", "/.well-known/qory-configuration?x=1", "1700000000", want) || server.VerifyGET("test-secret", "GET", "/.well-known/qory-configuration", "1700000000", want) {
-		t.Error("VerifyGET disagrees with the known answer")
-	}
-	if got := server.Timestamp(time.Unix(1700000000, 999)); got != "1700000000" {
-		t.Errorf("Timestamp = %s", got)
-	}
-	for _, name := range []string{"get-configuration-valid", "get-run-configuration-valid", "get-run-configuration-labels-valid"} {
-		f := signedFixture(t, name)
-		if !server.VerifyGET(secret, f.Method, f.Target, f.Headers[server.HeaderTimestamp], f.Headers[server.HeaderSignature]) {
-			t.Errorf("%s: the fixture's signature is not what SignGET makes of its target", name)
+		if strings.Contains(fmt.Sprint(err), "AQIDBAUGBwgJCgsMDQ4P") {
+			t.Errorf("%s: the error contains the secret: %v", f, err)
 		}
 	}
-	f := signedFixture(t, "batch-valid")
-	if !server.Verify(secret, []byte(f.Body), f.Headers[server.HeaderSignature]) {
-		t.Error("batch-valid: the fixture's signature is not what Sign makes of its body")
+	f := "fixtures/invalid/server-no-pin.yaml"
+	if _, err := server.Read(f, fixture(t, f)); code(err) != accesskey.CodeApiaryPublicKeyMissing {
+		t.Errorf("%s: %v", f, err)
+	}
+	empty := []byte(`{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[]}`)
+	if _, err := server.Read("server", empty); code(err) != accesskey.CodeApiaryPublicKeyMissing {
+		t.Errorf("an empty pin: %v", err)
+	}
+	small := []byte(`{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[{"alg":"ed25519","public_key":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`)
+	if _, err := server.Read("server", small); !errors.Is(err, accesskey.ErrKeyInvalid) {
+		t.Errorf("a pin of small order: %v", err)
 	}
 }
 
-// signed is one fixture under fixtures/signed.
+// TestClientCheck pins what a client refuses before it sends anything: no pin, which
+// is apiary_public_key_missing, a pin of a key the key checks refuse, no access key,
+// and an instance id or name outside the pattern.
+func TestClientCheck(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+	good := func() *server.Client {
+		return &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-runner/test"}
+	}
+	for name, c := range map[string]func(*server.Client){
+		"no pin": func(c *server.Client) { c.Config.ApiaryPublicKey = nil },
+		"a pin of small order": func(c *server.Client) {
+			c.Config.ApiaryPublicKey = accesskey.Pin{{Alg: "ed25519", PublicKey: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
+		},
+		"no key":                 func(c *server.Client) { c.Key = nil },
+		"no instance id":         func(c *server.Client) { c.InstanceID = "" },
+		"an instance id too odd": func(c *server.Client) { c.InstanceID = "-x" },
+		"a name outside":         func(c *server.Client) { c.InstanceName = "a b" },
+		"an access key id":       func(c *server.Client) { c.Config.AccessKeyID = "ak_F1XT0RE000000000" },
+	} {
+		cl := good()
+		c(cl)
+		if _, _, err := cl.Discover(context.Background()); err == nil {
+			t.Errorf("%s: discovery went ahead", name)
+		} else if name == "no pin" && code(err) != accesskey.CodeApiaryPublicKeyMissing {
+			t.Errorf("no pin: %v", err)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("%d requests reached the server", n)
+	}
+}
+
+// signedFixture is one fixture under fixtures/signed.
 type signed struct {
 	Method  string            `json:"method"`
 	Target  string            `json:"target"`
@@ -117,7 +154,9 @@ func signedFixture(t *testing.T, name string) signed {
 	m := doc.(map[string]any)
 	f := signed{Method: m["method"].(string), Target: m["target"].(string), Headers: map[string]string{}}
 	for k, v := range m["headers"].(map[string]any) {
-		f.Headers[http.CanonicalHeaderKey(k)] = v.(string)
+		if s, ok := v.(string); ok {
+			f.Headers[http.CanonicalHeaderKey(k)] = s
+		}
 	}
 	if b, ok := m["body"].(string); ok {
 		f.Body = b
@@ -127,13 +166,42 @@ func signedFixture(t *testing.T, name string) signed {
 	return f
 }
 
-// verified is a server of the test's own that checks what every request carries and
-// answers as told: the configuration document, the run configuration, and the events
-// endpoint with digests on its answer.
+// TestTheClientSignsTheFixturesRequests pins that the request string the client signs
+// is the one the signed fixtures carry: under the fixture access key, each accepted
+// fixture's signature verifies over the request the client would build from its
+// method, target, timestamp and body.
+func TestTheClientSignsTheFixturesRequests(t *testing.T) {
+	key, err := accesskey.ParseSecret("qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"get-configuration-valid", "get-run-configuration-valid", "get-run-configuration-labels-valid", "batch-valid"} {
+		f := signedFixture(t, name)
+		r := accesskey.Request{AccessKeyID: f.Headers[server.HeaderAccessKeyID], InstanceID: f.Headers[server.HeaderInstanceID], Method: f.Method, Target: f.Target, Timestamp: f.Headers[server.HeaderTimestamp], Body: []byte(f.Body)}
+		if got, _ := key.SignRequest(r); got != f.Headers[server.HeaderSignature] {
+			t.Errorf("%s: signed %s, the fixture has %s", name, got, f.Headers[server.HeaderSignature])
+		}
+	}
+	if got := accesskey.Timestamp(time.Unix(1700000000, 999)); got != "1700000000" {
+		t.Errorf("Timestamp = %s", got)
+	}
+}
+
+// verified is a server of the test's own that checks what every request contains,
+// verifies its signature under the access key, and answers as told, signing each
+// answer under its own key: the configuration document, the run configuration, and
+// the events endpoint with digests on its answer.
 type verified struct {
 	t      *testing.T
 	srv    *httptest.Server
+	key    *accesskey.Key
+	signer *accesskey.Key
+	// status and code are what the events endpoint answers; sign is how every answer
+	// is signed: "" under signer, "none" not at all, "other" under another key, and
+	// "elsewhere" under signer bound to another request.
 	status int
+	code   string
+	sign   string
 	// seen is the last request's target and headers.
 	seen   *http.Request
 	body   []byte
@@ -142,40 +210,64 @@ type verified struct {
 
 func newVerified(t *testing.T) *verified {
 	t.Helper()
-	v := &verified{t: t, status: 202, runDoc: `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}}`}
+	v := &verified{t: t, key: generate(t), signer: generate(t), status: 202, runDoc: `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}}`}
+	other := generate(t)
 	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.seen = r
 		v.body, _ = io.ReadAll(r.Body)
-		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
+		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKeyID) != accessKeyID || r.Header.Get(server.HeaderInstanceID) != instance || r.Header.Get(server.HeaderInstanceName) != "build-01" || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
 			t.Errorf("%s %s: headers %v", r.Method, r.URL, r.Header)
 		}
+		req := accesskey.Request{AccessKeyID: r.Header.Get(server.HeaderAccessKeyID), InstanceID: r.Header.Get(server.HeaderInstanceID), Method: r.Method, Target: r.RequestURI}
 		if r.Method == http.MethodGet {
 			ts := r.Header.Get(server.HeaderTimestamp)
 			if n, err := strconv.ParseInt(ts, 10, 64); err != nil || time.Since(time.Unix(n, 0)).Abs() > time.Minute {
 				t.Errorf("timestamp %q", ts)
 			}
-			if !server.VerifyGET(secret, r.Method, r.URL.RequestURI(), ts, r.Header.Get(server.HeaderSignature)) {
-				t.Errorf("GET %s: the signature does not verify over the target as sent", r.URL.RequestURI())
+			req.Timestamp = ts
+		} else {
+			req.Body = v.body
+		}
+		sig := r.Header.Get(server.HeaderSignature)
+		if !v.key.PublicKey().VerifyRequest(req, sig) {
+			t.Errorf("%s %s: the signature does not verify over the request as sent", r.Method, r.RequestURI)
+		}
+		reply := func(status int, body string) {
+			a := accesskey.Answer{Status: status, RequestSignature: sig, Body: []byte(body), Configuration: w.Header().Get(server.HeaderConfiguration), RunConfiguration: w.Header().Get(server.HeaderRunConfiguration)}
+			switch v.sign {
+			case "":
+				w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(a))
+			case "other":
+				w.Header().Set(server.HeaderSignature, other.SignAnswer(a))
+			case "elsewhere":
+				a.RequestSignature = strings.Repeat("A", 86)
+				w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(a))
 			}
+			w.WriteHeader(status)
+			io.WriteString(w, body)
 		}
 		switch {
 		case r.URL.Path == server.WellKnown:
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"version":1,"events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/run-configuration"},"later":{"x":1}}`)
+			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/run-configuration"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
 		case r.URL.Path == "/v1/run-configuration":
 			w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("0", 64))
 			w.Header().Set("ETag", `"sha256=`+strings.Repeat("0", 64)+`"`)
-			io.WriteString(w, v.runDoc)
+			reply(200, v.runDoc)
 		case r.URL.Path == "/v1/events" && r.Method == http.MethodPost:
-			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) == "" || !server.Verify(secret, v.body, r.Header.Get(server.HeaderSignature)) {
+			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) == "" {
 				t.Errorf("POST headers %v", r.Header)
 			}
 			w.Header().Set(server.HeaderConfiguration, "sha256=c1")
 			w.Header().Set(server.HeaderRunConfiguration, "sha256=r1")
-			w.WriteHeader(v.status)
+			body := ""
+			if v.code != "" {
+				body = `{"error":"` + v.code + `"}`
+			}
+			reply(v.status, body)
 		default:
-			http.NotFound(w, r)
+			reply(404, "")
 		}
 	}))
 	t.Cleanup(v.srv.Close)
@@ -183,12 +275,12 @@ func newVerified(t *testing.T) *verified {
 }
 
 func (v *verified) client() *server.Client {
-	return &server.Client{Config: &server.Config{Version: 1, URL: v.srv.URL, AccessKey: key, Secret: secret}, UserAgent: "qory-runner/test"}
+	return &server.Client{Config: &server.Config{Version: 1, URL: v.srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(v.signer)}, Key: v.key, InstanceID: instance, InstanceName: "build-01", UserAgent: "qory-runner/test"}
 }
 
 // TestDiscoverReadsTheConfigurationAndItsDigest pins discovery: the well-known path,
-// the document decoded with a section the runner does not know ignored, the digest
-// from the header, and no run on a status that is not 200.
+// the document decoded with a section the runner does not know ignored, the node id,
+// the digest from the header, and no run on a status that is not 200.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -196,7 +288,7 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256=c0" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/run-configuration" {
+	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/run-configuration" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
 		t.Errorf("discovered %+v, digest %s", conf, digest)
 	}
 	if !conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.ping") {
@@ -213,6 +305,97 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v.srv.Close()
 	if _, _, err := c.Discover(context.Background()); err == nil {
 		t.Error("discovery of a server that is down succeeded")
+	}
+}
+
+// TestEveryAnswerIsVerifiedUnderThePin pins that the client reads an answer only when
+// its signature verifies under the pin and is bound to the request it answers: an
+// unsigned answer, one under another key, one bound to another request, and one under
+// a key the pin does not hold are answer_unsigned at run start, and a delivery's is no
+// answer, its digests unread.
+func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
+	for _, sign := range []string{"none", "other", "elsewhere", "pin"} {
+		v := newVerified(t)
+		c := v.client()
+		v.sign = sign
+		if sign == "pin" {
+			v.sign = ""
+			c.Config.ApiaryPublicKey = pinOf(generate(t))
+		}
+		if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: discovery: %v", sign, err)
+		}
+		if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: run configuration: %v", sign, err)
+		}
+		if err := c.Ping(context.Background(), v.srv.URL+"/v1/events", "d1", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: ping: %v", sign, err)
+		}
+		d, err := c.Deliver(context.Background(), v.srv.URL+"/v1/events", "d2", []byte("[]"), "")
+		if err != nil || d.Signed || d.Accepted() || d.Digests != (server.Digests{}) || d.Status != 202 {
+			t.Errorf("%s: delivery %+v, %v", sign, d, err)
+		}
+	}
+}
+
+// TestRefusalsAreCoded pins the codes a run start reads: an unsigned 401 is
+// unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
+// instance_limit to the ping is instance_limit, and a signed 410 run_closed to a
+// delivery closes the run while a signed 410 without that code stops the deliveries
+// alone. A 401 that carries a signature is unauthorized all the same.
+func TestRefusalsAreCoded(t *testing.T) {
+	v := newVerified(t)
+	c := v.client()
+	events := v.srv.URL + "/v1/events"
+	v.status, v.code = 409, "instance_limit"
+	if err := c.Ping(context.Background(), events, "d1", []byte("[]")); code(err) != accesskey.CodeInstanceLimit || !strings.Contains(err.Error(), events) {
+		t.Errorf("ping: %v", err)
+	}
+	v.status, v.code = 401, "unauthorized"
+	for _, sign := range []string{"none", ""} {
+		v.sign = sign
+		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized {
+			t.Errorf("ping on 401 signed %q: %v", sign, err)
+		}
+	}
+	v.sign = ""
+	v.status, v.code = 500, ""
+	if err := c.Ping(context.Background(), events, "d3", []byte("[]")); !errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), events) {
+		t.Errorf("ping on a signed 500: %v", err)
+	}
+	v.status, v.code = 410, "run_closed"
+	d, err := c.Deliver(context.Background(), events, "d4", []byte("[]"), "")
+	if err != nil || !d.Closed() || !d.Stop() || d.Accepted() || d.Code != "run_closed" {
+		t.Errorf("410 run_closed: %+v %v", d, err)
+	}
+	v.code = ""
+	if d, _ := c.Deliver(context.Background(), events, "d5", []byte("[]"), ""); d.Closed() || !d.Stop() {
+		t.Errorf("410 without a code: %+v", d)
+	}
+	v.sign = "none"
+	v.code = "run_closed"
+	if d, _ := c.Deliver(context.Background(), events, "d6", []byte("[]"), ""); d.Closed() || d.Stop() {
+		t.Errorf("an unsigned 410: %+v", d)
+	}
+	limited := newVerified(t)
+	lc := limited.client()
+	limited.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := `{"error":"rate_limited"}`
+		w.Header().Set(server.HeaderSignature, limited.signer.SignAnswer(accesskey.Answer{Status: 429, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(body)}))
+		w.WriteHeader(429)
+		io.WriteString(w, body)
+	})
+	if _, _, err := lc.Discover(context.Background()); code(err) != "rate_limited" {
+		t.Errorf("discovery answered a signed 429 rate_limited: %v", err)
+	}
+	unauthorized := newVerified(t)
+	uc := unauthorized.client()
+	unauthorized.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		io.WriteString(w, `{"error":"unauthorized"}`)
+	})
+	if _, _, err := uc.Discover(context.Background()); code(err) != accesskey.CodeUnauthorized {
+		t.Errorf("discovery answered 401: %v", err)
 	}
 }
 
@@ -253,8 +436,8 @@ func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
 		}
 	}
 	v.runDoc = `{"version":1}`
-	if _, _, err := c.RunConfiguration(context.Background(), run, nil); err == nil || !strings.Contains(err.Error(), "security_policy") {
-		t.Errorf("a run configuration without a policy: %v", err)
+	if rc, _, err := c.RunConfiguration(context.Background(), run, nil); err != nil || rc.SecurityPolicy != nil || rc.Variables != nil {
+		t.Errorf("a run configuration without a policy: %+v %v", rc, err)
 	}
 	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/missing", nil); err == nil || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("a run URL that does not answer: %v", err)
@@ -295,16 +478,16 @@ func TestLabelsBoundTheQuery(t *testing.T) {
 }
 
 // TestDeliveryCarriesTheHeadersAndReadsTheDigests pins one POST: content type, user
-// agent, key, revision, delivery id, a signature the server verifies, the run
-// configuration digest when the run holds one, the answer's digests, and the ping's
-// fail-closed rule.
+// agent, access key id, instance, revision, delivery id, a signature the server
+// verifies over the target and the body, the run configuration digest when the run
+// holds one, the answer's digests, and the ping's fail-closed rule.
 func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
 	events := v.srv.URL + "/v1/events"
-	status, answer, err := c.Deliver(context.Background(), events, "d1", []byte("[]"), "sha256=r0")
-	if err != nil || status != 202 || answer.Configuration != "sha256=c1" || answer.RunConfiguration != "sha256=r1" {
-		t.Errorf("deliver: %d %+v %v", status, answer, err)
+	d, err := c.Deliver(context.Background(), events, "d1", []byte("[]"), "sha256=r0")
+	if err != nil || !d.Accepted() || d.Digests.Configuration != "sha256=c1" || d.Digests.RunConfiguration != "sha256=r1" {
+		t.Errorf("deliver: %+v %v", d, err)
 	}
 	if v.seen.Header.Get(server.HeaderRunConfiguration) != "sha256=r0" || v.seen.Header.Get(server.HeaderTimestamp) != "" {
 		t.Errorf("POST headers %v", v.seen.Header)
@@ -315,10 +498,6 @@ func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 	if _, ok := v.seen.Header[server.HeaderRunConfiguration]; ok {
 		t.Error("the ping sent a run configuration digest with none held")
 	}
-	v.status = 500
-	if err := c.Ping(context.Background(), events, "d3", []byte("[]")); !errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), events) {
-		t.Errorf("ping on 500: %v", err)
-	}
 	v.srv.Close()
 	if err := c.Ping(context.Background(), events, "d4", []byte("[]")); err == nil {
 		t.Error("ping on a closed server succeeded")
@@ -326,9 +505,9 @@ func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 }
 
 // TestARedirectIsNotFollowed pins that a 3xx is a status like any other: the host it
-// points at sees no request, so no key, signature or timestamp reaches it, whether the
-// client is the package's own or the caller's; discovery is then no run, and a
-// delivery is not accepted.
+// points at sees no request, so no access key id, signature or timestamp reaches it,
+// whether the client is the package's own or the caller's; discovery is then no run,
+// and a delivery is not accepted.
 func TestARedirectIsNotFollowed(t *testing.T) {
 	var elsewhere atomic.Int32
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,22 +521,152 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	}))
 	defer origin.Close()
 	for name, hc := range map[string]*http.Client{"the package's client": nil, "the caller's client": {}} {
-		c := &server.Client{Config: &server.Config{Version: 1, URL: origin.URL, AccessKey: key, Secret: secret}, UserAgent: "qory-runner/test", HTTP: hc}
+		c := &server.Client{Config: &server.Config{Version: 1, URL: origin.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(generate(t))}, Key: generate(t), InstanceID: instance, UserAgent: "qory-runner/test", HTTP: hc}
 		if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: discovery through a redirect: %v", name, err)
 		}
 		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/run-configuration", nil); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: a run configuration through a redirect: %v", name, err)
 		}
-		status, _, err := c.Deliver(context.Background(), origin.URL+"/v1/events", "d1", []byte("[]"), "")
-		if err != nil || status != http.StatusFound || server.Accepted(status) {
-			t.Errorf("%s: a delivery through a redirect: %d %v", name, status, err)
+		d, err := c.Deliver(context.Background(), origin.URL+"/v1/events", "d1", []byte("[]"), "")
+		if err != nil || d.Status != http.StatusFound || d.Accepted() {
+			t.Errorf("%s: a delivery through a redirect: %+v %v", name, d, err)
 		}
-		if err := c.Ping(context.Background(), origin.URL+"/v1/events", "d2", []byte("[]")); !errors.Is(err, server.ErrNotAccepted) {
+		if err := c.Ping(context.Background(), origin.URL+"/v1/events", "d2", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned {
 			t.Errorf("%s: a ping through a redirect: %v", name, err)
 		}
 	}
 	if n := elsewhere.Load(); n != 0 {
 		t.Errorf("the host a redirect named saw %d requests", n)
+	}
+}
+
+// TestAnswersThatCannotBeReadAsSignedAreUnsigned pins the edges of an answer's
+// signature: a signature header or a digest header sent twice, and a refusal body over
+// 64 KiB, each make the answer unsigned, so its code and its digests are never read.
+// Each header sent twice is split so that its values joined are the signed one: a
+// reader that joined them would verify the answer.
+func TestAnswersThatCannotBeReadAsSignedAreUnsigned(t *testing.T) {
+	key, signer := generate(t), generate(t)
+	mode := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, body, conf := 429, `{"error":"rate_limited"}`, ""
+		if mode == "large" {
+			body = `{"error":"rate_limited","names":["` + strings.Repeat("x", server.MaxRefusal) + `"]}`
+		}
+		if mode == "digest" {
+			conf = "sha256=a"
+			w.Header().Add(server.HeaderConfiguration, "sha256=")
+			w.Header().Add(server.HeaderConfiguration, "a")
+		}
+		sig := signer.SignAnswer(accesskey.Answer{Status: status, RequestSignature: r.Header.Get(server.HeaderSignature), Body: []byte(body), Configuration: conf})
+		if mode == "twice" {
+			w.Header().Add(server.HeaderSignature, sig[:43])
+			w.Header().Add(server.HeaderSignature, sig[43:])
+		} else {
+			w.Header().Add(server.HeaderSignature, sig)
+		}
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	c := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer)}, Key: key, InstanceID: instance, UserAgent: "qory-runner/test"}
+	if _, _, err := c.Discover(context.Background()); code(err) != "rate_limited" {
+		t.Fatalf("a signed 429: %v", err)
+	}
+	for _, m := range []string{"twice", "digest", "large"} {
+		mode = m
+		if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: %v", m, err)
+		}
+	}
+}
+
+// TestTheClientKeepsNoCookie pins that a cookie a server sets reaches no later request,
+// whatever jar the caller's client has.
+func TestTheClientKeepsNoCookie(t *testing.T) {
+	v := newVerified(t)
+	seen := 0
+	inner := v.srv.Config.Handler
+	v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" {
+			seen++
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "kept", Path: "/"})
+		inner.ServeHTTP(w, r)
+	})
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := v.client()
+	c.HTTP = &http.Client{Jar: jar}
+	for range 2 {
+		if _, _, err := c.Discover(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seen != 0 {
+		t.Errorf("%d requests sent a cookie", seen)
+	}
+}
+
+// TestAServerDocumentWithASecretQuotesNothing pins that a secret pasted into the
+// server document, as the access key id, the url, a pin's public key or a member's
+// name, or into a pin, is refused with a fixed message that does not contain it.
+func TestAServerDocumentWithASecretQuotesNothing(t *testing.T) {
+	const secret = "qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"the access key id": `{"version":1,"url":"https://qory.example","access_key_id":"` + secret + `","apiary_public_key":` + pin + `}`,
+		"the url":           `{"version":1,"url":"https://` + secret + `","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `}`,
+		"a public key":      `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[{"alg":"ed25519","public_key":"` + secret + `"}]}`,
+		"a member's name":   `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","` + secret + `":1,"apiary_public_key":` + pin + `}`,
+		"upper case":        `{"version":1,"url":"https://qory.example","access_key_id":"` + strings.ToUpper(secret) + `","apiary_public_key":` + pin + `}`,
+	} {
+		_, err := server.Read("server.json", []byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(secret[4:20])) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	yaml := "version: 1\nurl: https://qory.example\naccess_key_id: " + secret + "\n"
+	if _, err := server.Read("server.yaml", []byte(yaml)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("YAML: %v", err)
+	}
+	if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + secret + `"}]`)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("a pin: %v", err)
+	}
+	if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + secret + `":"x"}]`)); !errors.Is(err, accesskey.ErrSecretInDocument) {
+		t.Errorf("a pin's member name: %v", err)
+	}
+}
+
+// TestAnEscapedSecretQuotesNothing pins that a secret hidden from the bytes by an
+// escape, a JSON q, a YAML \x71, or a YAML double-quoted line break between qak
+// and the underscore, in a value or a member name, is refused with the fixed message
+// that does not contain it, as a secret in plain text is.
+func TestAnEscapedSecretQuotesNothing(t *testing.T) {
+	const rest = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"server.json": `{"version":1,"url":"https://qory.example","access_key_id":"qak_` + rest + `","apiary_public_key":` + pin + `}`,
+		"member.json": `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","qak_` + rest + `":1,"apiary_public_key":` + pin + `}`,
+		"x71.yaml":    "version: 1\nurl: https://qory.example\naccess_key_id: \"\\x71ak_" + rest + "\"\n",
+		"fold.yaml":   "version: 1\nurl: https://qory.example\naccess_key_id: \"qak\\\n  _" + rest + "\"\n",
+		"key.yaml":    "version: 1\nurl: https://qory.example\naccess_key_id: ak_f1xt0re000000000\n\"\\x71ak_" + rest + "\": 1\n",
+	} {
+		_, err := server.Read(name, []byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(err.Error(), rest[:12]) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, doc := range map[string]string{
+		"a public key":    `[{"alg":"ed25519","public_key":"qak_` + rest + `"}]`,
+		"a member's name": `[{"alg":"ed25519","qak_` + rest + `":"x"}]`,
+	} {
+		_, err := accesskey.ParsePin([]byte(doc))
+		if !errors.Is(err, accesskey.ErrSecretInDocument) || strings.Contains(err.Error(), rest[:12]) {
+			t.Errorf("a pin, %s: %v", name, err)
+		}
 	}
 }

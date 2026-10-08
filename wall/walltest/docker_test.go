@@ -1,6 +1,7 @@
 package walltest_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,6 +75,29 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Three recorders, the helper in a busybox of its own each: the hosts of a runtime's
+	// two credentials and a host with none.
+	var recorders []walltest.Recorder
+	for i := range 3 {
+		name := fmt.Sprintf("qory-walltest-recorder-%d-%d", os.Getpid(), i)
+		args := []string{"run", "--detach", "--name", name, "--mount", "type=bind,src=" + helper + ",dst=/walltest,readonly"}
+		for _, kv := range walltest.RecorderEnv() {
+			args = append(args, "--env", kv)
+		}
+		args = append(append(args, "--entrypoint", "/walltest", "busybox:stable"), walltest.RecorderArgs...)
+		if out, err := exec.Command(command, args...).CombinedOutput(); err != nil {
+			t.Fatalf("a recorder: %v: %s", err, out)
+		}
+		t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+		walltest.AwaitRecorder(t, command, name)
+		ip, err := exec.Command(command, "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorders = append(recorders, walltest.Recorder{Host: strings.TrimSpace(string(ip)), Recorded: func() ([]byte, error) {
+			return exec.Command(command, "exec", name, "cat", walltest.RecorderFile).Output()
+		}})
+	}
 	volumes := func() map[string]bool {
 		out, _ := exec.Command(command, "volume", "ls", "--quiet").Output()
 		m := map[string]bool{}
@@ -83,13 +107,21 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		return m
 	}
 	before := volumes()
+	// The engine is recorded first, as a session records it, so every command of the
+	// adapter's runs with the recorded selection.
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: walltest.RelayArgs,
+		NestArgs: walltest.NestArgs}
+	if e := w.Engine(context.Background()); e.ID != strings.TrimSpace(string(engine)) {
+		t.Fatalf("the engine recorded: %+v", e)
+	}
 	walltest.Run(t, walltest.Options{
 		Origin:    "http://" + strings.TrimSpace(string(ip)) + ":8080/",
-		Wall:      &wall.Docker{Command: command, Helper: helper, RelayArgs: walltest.RelayArgs, NestArgs: walltest.NestArgs},
+		Wall:      w,
 		Image:     image,
 		Runtime:   rt,
 		Docker:    docker,
 		EngineID:  strings.TrimSpace(string(engine)),
+		Recorders: recorders,
 		Forwarder: []string{wall.HelperPath, "forward"},
 		Probe:     wall.HelperPath,
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file

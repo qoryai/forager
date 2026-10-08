@@ -1,0 +1,82 @@
+package accesskey
+
+import (
+	jsonv2 "encoding/json/v2"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// The refusal codes this package and the runner's client decide or read. The contract's
+// table of refusal codes lists every code and when each applies.
+const (
+	// CodeUnauthorized is a 401: the access key is unknown or revoked, or the request
+	// does not verify. Every 401 is unsigned.
+	CodeUnauthorized = "unauthorized"
+	// CodeAnswerUnsigned is an answer other than a 401 without a valid signature under
+	// the pin.
+	CodeAnswerUnsigned = "answer_unsigned"
+	// CodeApiaryPublicKeyMissing is a server and no pin, decided before any request.
+	CodeApiaryPublicKeyMissing = "apiary_public_key_missing"
+	// CodeKeyInvalid is the server's 409 at enrolment: signed to a key already enrolled,
+	// a revoked one included, and unsigned to a key the checks refuse or a proof that
+	// does not verify under it, which a machine reads as answer_unsigned.
+	CodeKeyInvalid = "key_invalid"
+	// CodeKeyLimit is the server's signed 409 at enrolment to a node that already holds
+	// two keys.
+	CodeKeyLimit = "key_limit"
+	// CodeRateLimited is the server's signed 429 at enrolment, per code: too many
+	// attempts with one code.
+	CodeRateLimited = "rate_limited"
+	// CodeInstanceLimit is the server's signed 409 to a ping from a new instance beyond
+	// its node's limit.
+	CodeInstanceLimit = "instance_limit"
+	// CodeRunClosed is the server's signed 410 to an event of a run it has closed.
+	CodeRunClosed = "run_closed"
+)
+
+// Refusal is an answer, or a decision, that means no run or no key, with its code: the
+// server's, read from the body of a signed answer, or one the runner or this package
+// decides. Status is the answer's HTTP status, or 0 when no answer is concerned.
+type Refusal struct {
+	Code   string
+	Status int
+	// Names are the names the server's body lists, when it lists any.
+	Names []string
+	// Detail says more about where the refusal came from, a URL say; it never contains
+	// a secret.
+	Detail string
+}
+
+func (r *Refusal) Error() string {
+	var b strings.Builder
+	if r.Detail != "" {
+		b.WriteString(r.Detail + ": ")
+	}
+	b.WriteString(r.Code)
+	if r.Status != 0 {
+		b.WriteString(" (status " + strconv.Itoa(r.Status) + ")")
+	}
+	if len(r.Names) > 0 {
+		b.WriteString(": " + strings.Join(r.Names, ", "))
+	}
+	return b.String()
+}
+
+// codeShape is a refusal code's form.
+var codeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// ReadRefusal reads the code of a coded refusal, {"error": "<code>", "names": [...]},
+// from the body of an answer whose signature verified. It returns nil when the body
+// contains no such code: a code is read from a signed answer alone, so a caller
+// verifies the answer first.
+func ReadRefusal(status int, body []byte) *Refusal {
+	var doc struct {
+		Error string   `json:"error"`
+		Names []string `json:"names"`
+	}
+	if jsonv2.Unmarshal(body, &doc) != nil || !codeShape.MatchString(doc.Error) {
+		return nil
+	}
+	return &Refusal{Code: doc.Error, Status: status, Names: doc.Names}
+}

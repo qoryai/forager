@@ -49,13 +49,15 @@ with the tests.
 
 - how its launch is prepared,
 - what its records mean,
-- how it is stopped.
+- how it is stopped,
+- the secrets it declares, through the optional `runtimes.Secrets`; a runtime without
+  it declares nothing.
 
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
 1. A descriptor `<name>.yaml` in `dir`. This is how a machine describes a runtime nothing
    ships for.
-2. The contract's own descriptor. Today that is Claude Code's.
+2. The contract's own descriptor: Claude Code's.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
@@ -75,7 +77,26 @@ runs the same checks on it.
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
+  `Mounts` are what else of the machine the wall shows, and `RunnerFiles` the caller's
+  own files, which no mount may hold. See [the runner's files](wall.md#the-runners-files).
 - `Server` defines the server the run reports to. See [the server](server.md).
+- `Policy` is the node's policy. Without a server's policy it is the run's; with one it
+  narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
+- The variables come from several sources, and for each name the highest wins. See
+  [variables](server.md#variables).
+  - `LaunchFixed` is the values the harness computes itself. They win over every source
+    but the runner's own names. The server's variables come next.
+  - `Variables.Run` is the run's own, `--env`, and `Variables.Machine` the machine's,
+    `wall.env`. `Variables` also holds the deny entries and how an unwalled run takes
+    the server's.
+  - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
+    what the run inherits, the lowest.
+  - `HarnessHome` is the harness's home as the agent sees it. The runner sets
+    `QORY_HARNESS_HOME` to it.
+  - `OnVariables` receives each name, its source and the values that lost, once, before
+    the agent starts.
+- A run refused before it starts returns a `*session.Refusal`, with the contract's code
+  and the names it concerns. `errors.As` finds it.
 - `Events` is any stream that gets every event as well. See
   [the record](events.md#following-a-run).
 
@@ -105,13 +126,14 @@ The whole sequence, every event type and every file are in the
   - `wall.Relay`, the one peer an enclosure reaches.
   - `wall.Nest`, which starts a Docker of the agent's own inside it. Experimental.
   - `wall/walltest` is the conformance suite every adapter passes before it ships.
+- `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and
+  answers, the pin of the server's keys, enrolment, the instance id and its file, and the
+  refusal codes of the server's answers.
 - `receiver/`: a server of the contract that is not a control plane. It is the handler
   the tests run the runner against. It is tested against the signed fixtures. It is a
   worked example of the contract's receiving rules.
 - `internal/`: what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`,
-  `sink`, `server`, `descriptor`, `socket`, `chunk`.
-- `node/`: the node runner's fleet layer, not built yet. See
-  [the node runner](node.md).
+  `sink`, `server`, `descriptor`, `socket`, `chunk`, `variables`, `jcs`, `refusal`.
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the
 launch template. The hook command it installs calls `session.Forward`.
@@ -121,7 +143,6 @@ launch template. The hook command it installs calls `session.Forward`.
 **The runner takes a spec.** `qory` imports `runner`; `runner` imports nothing of
 `qory`. Stacks, modules, homes and reports stay in `qory`. Inside the module:
 
-- `node` imports `session`, and `session` never imports `node`.
 - `session` imports `wall` for the interface.
 - Only `wall/walltest` imports `session`.
 

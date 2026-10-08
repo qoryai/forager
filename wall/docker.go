@@ -16,8 +16,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/runner/internal/program"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/socket"
 )
@@ -43,6 +46,9 @@ const (
 // Docker is the wall built with the docker command, and with podman or nerdctl when the
 // conformance suite passes for them. It uses the command and no library, and serves
 // whatever engine that command reaches.
+//
+// One *Docker serves one run at a time: [Docker.Engine] records that run's engine
+// selection on it, and every engine command of the adapter's runs with it.
 //
 // A run gets two networks and two containers. The agent's container is on a network
 // created with --internal and on nothing else, so it has no route out and its resolver
@@ -74,15 +80,34 @@ type Docker struct {
 	User string
 
 	sys system
+
+	// recorded is the engine's command and selection as [Docker.Engine] recorded them;
+	// every engine command of the adapter's then runs with the selection. nil until
+	// they are recorded, or when a variable was left out.
+	selectionMu sync.Mutex
+	recorded    *Engine
+}
+
+// selected is the engine's selection the adapter's commands run with, nil for the
+// runner's own environment.
+func (d *Docker) selected() []string {
+	d.selectionMu.Lock()
+	defer d.selectionMu.Unlock()
+	if d.recorded == nil {
+		return nil
+	}
+	return d.recorded.Env
 }
 
 // system is what the adapter asks of the machine, so a test records the commands and
 // needs neither Docker nor Linux.
 type system interface {
-	// run runs a command and returns its output, standard error included.
-	run(ctx context.Context, argv []string) ([]byte, error)
-	// output runs a command and returns its standard output alone.
-	output(ctx context.Context, argv []string) ([]byte, error)
+	// run runs a command and returns its output, standard error included. env, when
+	// not nil, is the selection of the engine the command reaches, in place of the
+	// runner's own.
+	run(ctx context.Context, argv, env []string) ([]byte, error)
+	// output runs a command and returns its standard output alone; env is as for run.
+	output(ctx context.Context, argv, env []string) ([]byte, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
@@ -94,6 +119,54 @@ type system interface {
 	socket(path string) bool
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
+	// engine runs a command against a recorded engine, with the variables that select
+	// it, and returns its standard output; an error holds its standard error.
+	engine(ctx context.Context, argv, env []string) ([]byte, error)
+}
+
+// Sets lists the variables the enclosure's environment receives from the adapter
+// itself: the proxy's, the hook socket's and the ones that point a program at the
+// run's bundle.
+func (d *Docker) Sets() []string {
+	names := d.CAEnv
+	if names == nil {
+		names = DefaultCAEnv
+	}
+	var out []string
+	for _, kv := range proxy.EnvFor("") {
+		name, _, _ := strings.Cut(kv, "=")
+		out = append(out, name)
+	}
+	return append(append(out, socket.Env), names...)
+}
+
+// Files lists the adapter's own files on this machine: the directory of the docker
+// command, found in PATH as the adapter runs it, the directory of the helper, each with
+// the directory of the file a symbolic link leads to, and the command's configuration
+// directory, DOCKER_CONFIG as the command reads it, else ~/.docker, whose context and
+// credential helpers name programs the command starts.
+func (d *Docker) Files() []string {
+	out := program.Dirs(d.command())
+	// The helper is a path, never looked up in PATH.
+	if helper, err := filepath.Abs(d.Helper); d.Helper != "" && err == nil {
+		out = append(out, program.Dirs(helper)...)
+	}
+	if conf := os.Getenv("DOCKER_CONFIG"); conf != "" {
+		if abs, err := filepath.Abs(conf); err == nil {
+			out = append(out, abs)
+		}
+	} else if home, err := os.UserHomeDir(); err == nil {
+		out = append(out, filepath.Join(home, ".docker"))
+	}
+	return out
+}
+
+// command is the program the adapter runs.
+func (d *Docker) command() string {
+	if d.Command == "" {
+		return "docker"
+	}
+	return d.Command
 }
 
 // DefaultCAEnv are the variables the common programs read a bundle's path from:
@@ -167,7 +240,8 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
 		return nil, errors.New("wall docker: the agent does not run as root; name a user")
 	}
-	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID}
+	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
+		env: d.selected()}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
 	// the context may still have been carried out by the engine.
 	//
@@ -208,6 +282,9 @@ type dockerEnclosure struct {
 	// made holds the commands that remove what was created, in the order created.
 	made [][]string
 	temp string
+	// env is the engine's selection every command of the run's runs with, nil for the
+	// runner's own environment.
+	env []string
 }
 
 func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
@@ -219,19 +296,14 @@ func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunI
 // docker runs one docker command; a failure carries what the command printed.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
 	argv := append([]string{e.command()}, args...)
-	out, err := e.sys.run(ctx, argv)
+	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
 		return out, fmt.Errorf("wall docker: %s: %w: %s", strings.Join(argv[:min(3, len(argv))], " "), err, bytes.TrimSpace(out))
 	}
 	return out, nil
 }
 
-func (e *dockerEnclosure) command() string {
-	if e.d.Command == "" {
-		return "docker"
-	}
-	return e.d.Command
-}
+func (e *dockerEnclosure) command() string { return e.d.command() }
 
 // ProxyAddr is the gateway's address when this machine holds it, else loopback.
 func (e *dockerEnclosure) ProxyAddr() string {
@@ -252,7 +324,8 @@ const relayWait = 5 * time.Minute
 
 // Wrap starts the relay towards the proxy, waits until it listens, and returns the
 // docker run that starts the launch in the agent's container: on the internal network
-// only, the workspace and the launch's mounts at their own paths, the helper read-only,
+// only, the launch's mounts at their own paths, the workspace as the working directory
+// inside one of them, the helper read-only,
 // the socket's directory, and the launch's environment through a file, so no value is on a
 // command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
@@ -368,7 +441,55 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
-	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
+	// The docker CLI that starts the agent's container runs without the access key's
+	// variables, as every other command of the run's, and reaches the engine recorded.
+	cli := accesskey.WithoutVariables(os.Environ())
+	if e.env != nil {
+		cli = withSelection(cli, e.env)
+	}
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: l.Dir}, nil
+}
+
+// Binds lists the adapter's own binds before an enclosure is prepared: the helper,
+// read-only, and, read-only, the pattern of the private directories that hold a run's
+// environment files and, with a CA, the bundle the enclosure binds.
+func (d *Docker) Binds(Launch) ([]Bind, error) {
+	if d.Helper == "" {
+		return nil, errors.New("wall docker: the helper binary is required")
+	}
+	return []Bind{
+		{Path: d.Helper, ReadOnly: true, Helper: true},
+		{Path: TempDirs(), ReadOnly: true, Pattern: true},
+	}, nil
+}
+
+// Binds lists the adapter's own binds for the launch: the helper, read-only, the hook
+// socket's directory, writable, when the launch has a socket, and, read-only, the
+// private directory that holds the run's environment files and, with a CA, the bundle
+// the enclosure binds, which it makes now.
+func (e *dockerEnclosure) Binds(l Launch) ([]Bind, error) {
+	out := []Bind{{Path: e.d.Helper, ReadOnly: true, Helper: true}}
+	if l.Socket != "" {
+		out = append(out, Bind{Path: filepath.Dir(l.Socket)})
+	}
+	if err := e.makeTemp(); err != nil {
+		return nil, err
+	}
+	return append(out, Bind{Path: e.temp, ReadOnly: true}), nil
+}
+
+// makeTemp makes the private directory that holds the run's environment files and
+// bundle, once.
+func (e *dockerEnclosure) makeTemp() error {
+	if e.temp != "" {
+		return nil
+	}
+	dir, err := e.sys.tempDir()
+	if err != nil {
+		return err
+	}
+	e.temp = dir
+	return nil
 }
 
 // bundle writes the file the enclosure trusts: the image's own authorities, read out of
@@ -379,7 +500,8 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
 	var image []byte
 	for _, p := range imageBundles {
-		out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"})
+		argv := []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"}
+		out, err := e.sys.output(ctx, argv, e.env)
 		if err != nil {
 			continue
 		}
@@ -388,12 +510,8 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 			break
 		}
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, "ca-bundle.pem")
 	if len(image) > 0 && !bytes.HasSuffix(image, []byte("\n")) {
@@ -419,12 +537,16 @@ func firstFile(stream []byte) ([]byte, error) {
 	}
 }
 
-// mounts are the launch's own: the workspace, what it lists, the socket's directory.
+// mounts are the launch's own: what it lists and the socket's directory. The workspace
+// is the working directory inside; a mount whose path holds it, by whole components,
+// shows it, and a launch none of whose mounts does is refused: the adapter binds
+// nothing of the caller's the launch does not list.
 func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	if !filepath.IsAbs(l.Dir) {
 		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
 	}
-	binds := []bind{{l.Dir, l.Dir, false}}
+	var binds []bind
+	held := false
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
 			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
@@ -433,6 +555,11 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
 		}
 		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
+		held = held || under(m.Path, l.Dir)
+	}
+	if !held {
+		return nil, fmt.Errorf("wall docker: the workspace %q lies in none of the "+
+			"launch's mounts", l.Dir)
 	}
 	if l.Socket != "" {
 		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
@@ -440,7 +567,6 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, b := range binds {
-		// The workspace is often one of the mounts the run lists; the first wins.
 		if seen[b.dst] {
 			continue
 		}
@@ -452,6 +578,14 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// under reports whether path is dir or lies below it, by whole components of the
+// paths as written.
+func under(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	up := ".." + string(filepath.Separator)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
 // limits are the agent's resource flags. The relay gets none: it is the runner's own.
@@ -520,12 +654,8 @@ func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 		}
 		b.WriteString(kv + "\n")
 	}
-	if e.temp == "" {
-		dir, err := e.sys.tempDir()
-		if err != nil {
-			return "", err
-		}
-		e.temp = dir
+	if err := e.makeTemp(); err != nil {
+		return "", err
 	}
 	file := filepath.Join(e.temp, name)
 	return file, os.WriteFile(file, []byte(b.String()), 0o600)
@@ -590,7 +720,7 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 	if sys == nil {
 		sys = hostSystem{}
 	}
-	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}}
+	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}, env: d.selected()}
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
 	removed := 0
@@ -618,12 +748,30 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 // hostSystem is the machine itself.
 type hostSystem struct{}
 
-func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
-	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+func (hostSystem) run(ctx context.Context, argv, env []string) ([]byte, error) {
+	return selectedCommand(ctx, argv, env).CombinedOutput()
 }
 
-func (hostSystem) output(ctx context.Context, argv []string) ([]byte, error) {
-	return exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+func (hostSystem) output(ctx context.Context, argv, env []string) ([]byte, error) {
+	return selectedCommand(ctx, argv, env).Output()
+}
+
+// selectedCommand is hostCommand, with the engine's selection in place of the runner's
+// own when env is not nil.
+func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
+	if env == nil {
+		return hostCommand(ctx, argv)
+	}
+	return engineCommand(ctx, argv, env)
+}
+
+// hostCommand is a command of the machine's the wall runs, the docker CLI say, with
+// the runner's environment without the access key's variables, which neither the CLI
+// nor a credential helper it starts receives.
+func hostCommand(ctx context.Context, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = accesskey.WithoutVariables(os.Environ())
+	return cmd
 }
 
 func (hostSystem) local(ip string) bool {
@@ -639,7 +787,16 @@ func (hostSystem) local(ip string) bool {
 	return false
 }
 
-func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", tempPrefix) }
+
+// tempPrefix begins the name of the private directory the adapter writes a run's
+// environment files in, the relay's with the proxy's secret among them.
+const tempPrefix = "qory-wall-"
+
+// TempDirs is the pattern of the private directories the Docker adapter writes the
+// runs' environment files in, the system's temporary directory with qory-wall- and a
+// random part: every run's, whichever wall a run has.
+func TempDirs() string { return filepath.Join(os.TempDir(), tempPrefix+"*") }
 
 // runtimeSockets are the names a container runtime's socket goes by.
 var runtimeSockets = []string{"docker.sock", "podman/podman.sock", "containerd/containerd.sock", "crio/crio.sock"}

@@ -8,7 +8,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
 )
@@ -236,7 +238,7 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
 	ow := &openWall{}
 	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Server = c.server()
+	sp.Server, sp.Heartbeat = c.server(), time.Second
 	sp.Wall, sp.Image = ow, "example.com/agent:1"
 	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}
 	w := startWaiting(t, sp)
@@ -268,5 +270,45 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	record, _ := os.ReadFile(filepath.Join(w.res.Dir, "events.jsonl"))
 	if strings.Contains(string(record), "the-token-held-outside") {
 		t.Error("the token reached the record")
+	}
+}
+
+// attached is a runtime that keeps the Attach its Prepare receives.
+type attached struct {
+	runtimes.Runtime
+	got runtimes.Attach
+}
+
+func (a *attached) Prepare(at runtimes.Attach) (runtimes.Launch, error) {
+	a.got = at
+	return a.Runtime.Prepare(at)
+}
+
+// TestPrepareIsGivenTheStandInsOfAWalledRun pins what a runtime learns of the stand-ins:
+// behind a wall, the variables the enclosure gets a stand-in in, a credential's and a
+// tool's; without one, none, since then there are none.
+func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
+	sp, _ := toolSpec(t, filepath.Join(t.TempDir(), "invocations"))
+	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
+	sp.Policy.Credentials = []session.PolicyCredential{{Name: "model"}}
+	sp.Policy.Egress.Allow = append(sp.Policy.Egress.Allow, "api.model.example")
+	rt := &attached{Runtime: sp.Runtime}
+	sp.Runtime = rt
+	if _, err := runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"MODEL_TOKEN", "FILES_KEY"}; !slices.Equal(rt.got.Placeholders, want) {
+		t.Errorf("Prepare received %v, want %v", rt.got.Placeholders, want)
+	}
+
+	sp = spec(t, nil, "FAKE_EXIT=0")
+	rt = &attached{Runtime: sp.Runtime}
+	sp.Runtime = rt
+	if _, err := runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.got.Placeholders) != 0 || rt.got.RunDir == "" {
+		t.Errorf("Prepare received %v without a wall", rt.got.Placeholders)
 	}
 }

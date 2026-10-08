@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "node_id": "nd_f1xt0re000000000",
   "events": {
     "url": "http://127.0.0.1:8787/v1/events",
     "types": ["*"]
@@ -9,5 +10,8 @@
   },
   "artifacts": {
     "url": "http://127.0.0.1:8787/v1/artifacts"
-  }
+  },
+  "apiary_public_key": [
+    {"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}
+  ]
 }

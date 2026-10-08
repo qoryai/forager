@@ -3,6 +3,9 @@ package walltest
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,6 +74,21 @@ type report struct {
 	ToolSaw        string            `json:"tool_saw"`
 	ToolDenied     int               `json:"tool_denied"`
 	Nested         *nested           `json:"nested,omitempty"`
+	APIKeyStandIn  string            `json:"api_key_stand_in"`
+	OAuthStandIn   string            `json:"oauth_stand_in"`
+	APIKeyHost     int               `json:"api_key_host"`
+	APIKeyHostErr  string            `json:"api_key_host_err"`
+	OAuthHost      int               `json:"oauth_host"`
+	OAuthHostErr   string            `json:"oauth_host_err"`
+	OtherPlain     int               `json:"other_plain"`
+	OtherPlainErr  string            `json:"other_plain_err"`
+	OtherTunnel    int               `json:"other_tunnel"`
+	OtherTunnelErr string            `json:"other_tunnel_err"`
+	// KeySeen are where a runtime's key was seen: a variable, a process's environment,
+	// an answer.
+	KeySeen []string `json:"key_seen"`
+	// Environs is how many of the processes' environments under /proc were read.
+	Environs int `json:"environs"`
 }
 
 // wait is how long an attempt that must fail is given to fail.
@@ -108,6 +126,7 @@ func probe(args []string) int {
 	r.ToolAllowed, r.ToolSaw, r.ToolAllowedErr = fetch("https://"+toolHost+"/tool/inside", "Qory-Path-Rule", "/")
 	r.ToolDenied, _ = get("https://" + toolHost + "/outside-the-tool")
 	r.Placeholder = os.Getenv(placeholderVar)
+	probeKeys(&r)
 	for _, kv := range os.Environ() {
 		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, tokenMark) {
 			r.TokenSeen = append(r.TokenSeen, name)
@@ -213,6 +232,75 @@ func probe(args []string) int {
 	code := 0
 	fmt.Sscan(os.Getenv("PROBE_EXIT"), &code)
 	return code
+}
+
+// probeKeys sends a runtime's two credentials' stand-ins as Claude Code does, the API
+// key in x-api-key and the OAuth credential as a bearer, each to the recorder that is
+// its host, then both to the recorder that is a host with no credential, plainly and
+// through a tunnel; and looks for a key in every environment it can read.
+func probeKeys(r *report) {
+	r.APIKeyStandIn, r.OAuthStandIn = os.Getenv(apiKeyStandIn), os.Getenv(oauthStandIn)
+	if host := os.Getenv("PROBE_API_KEY_HOST"); host != "" {
+		bearer := "Bearer " + r.OAuthStandIn
+		r.APIKeyHost, r.APIKeyHostErr = send(r, "https://"+net.JoinHostPort(host, recorderTLS)+modelPath, "x-api-key", r.APIKeyStandIn)
+		r.OAuthHost, r.OAuthHostErr = send(r, "https://"+net.JoinHostPort(os.Getenv("PROBE_OAUTH_HOST"), recorderTLS)+modelPath, "authorization", bearer)
+		other := os.Getenv("PROBE_OTHER_HOST")
+		r.OtherPlain, r.OtherPlainErr = send(r, "http://"+net.JoinHostPort(other, recorderPlain)+modelPath, "x-api-key", r.APIKeyStandIn, "authorization", bearer)
+		r.OtherTunnel, r.OtherTunnelErr = send(r, "https://"+net.JoinHostPort(other, recorderTLS)+modelPath, "x-api-key", r.APIKeyStandIn, "authorization", bearer)
+	}
+	for _, kv := range os.Environ() {
+		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, keyMark) {
+			r.KeySeen = append(r.KeySeen, name)
+		}
+	}
+	environs, _ := filepath.Glob("/proc/[0-9]*/environ")
+	for _, e := range environs {
+		b, err := os.ReadFile(e)
+		if err != nil {
+			continue
+		}
+		r.Environs++
+		if strings.Contains(string(b), keyMark) {
+			r.KeySeen = append(r.KeySeen, e)
+		}
+	}
+}
+
+// send posts a body to u through the proxy of HTTP_PROXY, with the headers
+// written in lower case, as Node writes them, and trusting the run's bundle and the
+// suite's authority; an answer that contains a key is noted in r.
+func send(r *report, u string, header ...string) (int, string) {
+	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
+	if err != nil || proxyURL.Host == "" {
+		return 0, "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return 0, err.Error()
+	}
+	if der, err := base64.StdEncoding.DecodeString(os.Getenv(recordersCAVar)); err == nil {
+		if cert, err := x509.ParseCertificate(der); err == nil {
+			roots.AddCert(cert)
+		}
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots}}, Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", u, strings.NewReader(`{"model":"walltest","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		return 0, err.Error()
+	}
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header[header[i]] = []string{header[i+1]}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(b), keyMark) || strings.Contains(fmt.Sprint(resp.Header), keyMark) {
+		r.KeySeen = append(r.KeySeen, "the answer of "+u)
+	}
+	return resp.StatusCode, ""
 }
 
 // dial reports the error of connecting, or nothing when the connection opened.
