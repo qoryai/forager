@@ -57,7 +57,7 @@ with the tests.
 
 1. A descriptor `<name>.yaml` in `dir`. This is how a machine describes a runtime nothing
    ships for.
-2. The contract's own descriptor. Today that is Claude Code's.
+2. The contract's own descriptor: Claude Code's.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
@@ -126,13 +126,14 @@ The whole sequence, every event type and every file are in the
   - `wall.Relay`, the one peer an enclosure reaches.
   - `wall.Nest`, which starts a Docker of the agent's own inside it. Experimental.
   - `wall/walltest` is the conformance suite every adapter passes before it ships.
+- `accesskey/`: the access key: its secret and Ed25519 key, the signed requests and
+  answers, the pin of the server's keys, enrolment, the instance id and its file, and the
+  refusal codes of the server's answers.
 - `receiver/`: a server of the contract that is not a control plane. It is the handler
   the tests run the runner against. It is tested against the signed fixtures. It is a
   worked example of the contract's receiving rules.
 - `internal/`: what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`,
   `sink`, `server`, `descriptor`, `socket`, `chunk`, `variables`, `jcs`, `refusal`.
-- `node/`: the node runner's fleet layer, not built yet. See
-  [the node runner](node.md).
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the
 launch template. The hook command it installs calls `session.Forward`.
@@ -142,7 +143,6 @@ launch template. The hook command it installs calls `session.Forward`.
 **The runner takes a spec.** `qory` imports `runner`; `runner` imports nothing of
 `qory`. Stacks, modules, homes and reports stay in `qory`. Inside the module:
 
-- `node` imports `session`, and `session` never imports `node`.
 - `session` imports `wall` for the interface.
 - Only `wall/walltest` imports `session`.
 

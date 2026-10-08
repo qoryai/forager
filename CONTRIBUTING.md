@@ -14,7 +14,7 @@ Everywhere. Three kinds are the most useful:
   fixtures. A receiver follows the contract and lives in your own repository; nothing in
   this one has to change for it.
 - **The runner** and the receiver: the packages `session` and `receiver` and what they
-  share under `internal/`. The node runner, `node`, is not built yet.
+  share under `internal/`.
 
 ## Contributor Licence Agreement
 
@@ -73,9 +73,8 @@ receiver. Fixtures hold synthetic data only: no real host names of
 anyone's infrastructure, no real secrets, no recorded session of anyone's work. Name a test
 for the behaviour it pins, not for the function it calls.
 
-Two dependency directions are invariants. `qory` imports this module and this module
+One dependency direction is an invariant. `qory` imports this module and this module
 imports nothing of `qory`: the runner knows nothing of stacks, modules, homes or reports.
-Inside the module, `node` will import `session` and `session` never imports `node`.
 
 Dependencies stay few: the standard library, a pseudo-terminal package, a terminal
 package for raw mode, YAML, and JSON schema validation. No CloudEvents SDK: the

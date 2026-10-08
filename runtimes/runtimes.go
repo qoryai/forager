@@ -97,7 +97,7 @@ type Secrets interface {
 
 // Declarations is what a runtime declares of a run's secrets, the secrets section of a
 // descriptor: Declares, the secrets it reads, each from one variable; OneOf, the
-// groups of them of which a runtime connection supplies one at most; Reserves, the
+// groups of them of which the runtime needs one at most; Reserves, the
 // variables it reads a credential from beside the declared ones; Denies, the
 // variables the runner leaves out of a server's set for it; and CredentialFiles, the
 // files in which it keeps a credential of its own, ~ being the home of the user the
@@ -113,8 +113,8 @@ type Declaration = descriptor.Declaration
 // the header of header, Username the fixed user of basic.
 type Auth = descriptor.Auth
 
-// Group is a set of declarations of which a runtime connection supplies one at most,
-// and exactly one when Required.
+// Group is a set of declarations of which the runtime needs one at most, and exactly
+// one when Required.
 type Group = descriptor.Group
 
 // Record is one unit of what a program reports.

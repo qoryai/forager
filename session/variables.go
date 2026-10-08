@@ -100,8 +100,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	}
 	runtimeNames = append(runtimeNames, decl.Reserves...)
 	placeholderNames := slices.Concat(held.Placeholders, tool.Placeholders(chosen))
-	// What a value of the machine's is read from: today a credential's variable. The
-	// local values of the runner file's secrets section join it here.
+	// What a value of the machine's is read from: a credential's variable.
 	var readFrom []string
 	for _, c := range spec.Credentials {
 		if c.Env != "" {

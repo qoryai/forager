@@ -32,6 +32,8 @@ nothing.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs
   directory outside every mount.
+- In a git worktree the repository's data lies in the main checkout; git inside the
+  container works only with that directory mounted.
 - Nothing else of the node is visible inside.
 - No mount comes from a place a walled agent can change: no name on the way to it is
   looked up inside a writable mount of the run's own, or of another walled run still
@@ -390,8 +392,9 @@ The machine defines the images a run may start in. The run's policy selects one 
 with `image`, as it selects credentials and tools. Without a selection, the run starts
 in `Image`.
 
-From Go, images and a Docker of the agent's own work today. `qory` reads one image from
-`runner.yaml`, `wall.image`, and starts every `qory run` in it.
+`qory` reads `wall.images` from `runner.yaml`: named images, each with a `ref`, and a
+`runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
+starts in when its policy selects none.
 
 ## A Docker of the agent's own
 
@@ -420,19 +423,8 @@ What to know:
 It is experimental because one question is open: whether the enclosure's root reaches
 the mounts the run lists as the machine's root. It has not been verified. So:
 
-- the option may change, or be withdrawn, in a minor release;
+- the option may change;
 - a run that uses it mounts nothing the machine's root must protect.
-
-## Not built yet
-
-- Hook events on an engine inside a virtual machine. They come when the forwarder has a
-  network transport through the relay.
-- Git inside the container when the checkout is a git worktree. The repository's data
-  lies outside the mounts. Git works there once the run lists that directory among its
-  mounts.
-- Images selected by the policy, and a Docker of the agent's own, from `runner.yaml`.
-  The runner has both. See [images](#images).
-- The fleet layer. See [the node runner](node.md).
 
 ## The details
 
