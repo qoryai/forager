@@ -475,7 +475,8 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 }
 
 // TestAStaleEntryIsRemoved pins that an entry no runner holds, that of a run whose
-// runner died, decides nothing and is removed.
+// runner died and whose engine holds no container of it, decides nothing and is
+// removed.
 func TestAStaleEntryIsRemoved(t *testing.T) {
 	root := t.TempDir()
 	reg := registry(t)
@@ -485,11 +486,14 @@ func TestAStaleEntryIsRemoved(t *testing.T) {
 	stale := filepath.Join(reg, "0191f2a4-0000-7000-8000-0000000000ff")
 	b, _ := json.Marshal(map[string]any{
 		"run_id": filepath.Base(stale), "pid": 1,
-		"binds": []map[string]any{{"path": "/", "resolved": "/", "writable": true}},
+		"binds":  []map[string]any{{"path": "/", "resolved": "/", "writable": true}},
+		"engine": leftEngine,
 	})
 	if err := os.WriteFile(stale, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.Remove(stale) })
+	answer(t, false, nil)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {

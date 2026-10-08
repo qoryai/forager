@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
@@ -45,6 +46,9 @@ const (
 // Docker is the wall built with the docker command, and with podman or nerdctl when the
 // conformance suite passes for them. It uses the command and no library, and serves
 // whatever engine that command reaches.
+//
+// One *Docker serves one run at a time: [Docker.Engine] records that run's engine
+// selection on it, and every engine command of the adapter's runs with it.
 //
 // A run gets two networks and two containers. The agent's container is on a network
 // created with --internal and on nothing else, so it has no route out and its resolver
@@ -76,15 +80,34 @@ type Docker struct {
 	User string
 
 	sys system
+
+	// recorded is the engine's command and selection as [Docker.Engine] recorded them;
+	// every engine command of the adapter's then runs with the selection. nil until
+	// they are recorded, or when a variable was left out.
+	selectionMu sync.Mutex
+	recorded    *Engine
+}
+
+// selected is the engine's selection the adapter's commands run with, nil for the
+// runner's own environment.
+func (d *Docker) selected() []string {
+	d.selectionMu.Lock()
+	defer d.selectionMu.Unlock()
+	if d.recorded == nil {
+		return nil
+	}
+	return d.recorded.Env
 }
 
 // system is what the adapter asks of the machine, so a test records the commands and
 // needs neither Docker nor Linux.
 type system interface {
-	// run runs a command and returns its output, standard error included.
-	run(ctx context.Context, argv []string) ([]byte, error)
-	// output runs a command and returns its standard output alone.
-	output(ctx context.Context, argv []string) ([]byte, error)
+	// run runs a command and returns its output, standard error included. env, when
+	// not nil, is the selection of the engine the command reaches, in place of the
+	// runner's own.
+	run(ctx context.Context, argv, env []string) ([]byte, error)
+	// output runs a command and returns its standard output alone; env is as for run.
+	output(ctx context.Context, argv, env []string) ([]byte, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
@@ -96,6 +119,9 @@ type system interface {
 	socket(path string) bool
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
+	// engine runs a command against a recorded engine, with the variables that select
+	// it, and returns its standard output; an error holds its standard error.
+	engine(ctx context.Context, argv, env []string) ([]byte, error)
 }
 
 // Sets lists the variables the enclosure's environment receives from the adapter
@@ -214,7 +240,8 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
 		return nil, errors.New("wall docker: the agent does not run as root; name a user")
 	}
-	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID}
+	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
+		env: d.selected()}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
 	// the context may still have been carried out by the engine.
 	//
@@ -255,6 +282,9 @@ type dockerEnclosure struct {
 	// made holds the commands that remove what was created, in the order created.
 	made [][]string
 	temp string
+	// env is the engine's selection every command of the run's runs with, nil for the
+	// runner's own environment.
+	env []string
 }
 
 func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
@@ -266,7 +296,7 @@ func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunI
 // docker runs one docker command; a failure carries what the command printed.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
 	argv := append([]string{e.command()}, args...)
-	out, err := e.sys.run(ctx, argv)
+	out, err := e.sys.run(ctx, argv, e.env)
 	if err != nil {
 		return out, fmt.Errorf("wall docker: %s: %w: %s", strings.Join(argv[:min(3, len(argv))], " "), err, bytes.TrimSpace(out))
 	}
@@ -411,7 +441,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
-	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
+	// The docker CLI that starts the agent's container runs without the access key's
+	// variables, as every other command of the run's, and reaches the engine recorded.
+	cli := accesskey.WithoutVariables(os.Environ())
+	if e.env != nil {
+		cli = withSelection(cli, e.env)
+	}
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: l.Dir}, nil
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,
@@ -464,7 +500,8 @@ func (e *dockerEnclosure) makeTemp() error {
 func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
 	var image []byte
 	for _, p := range imageBundles {
-		out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"})
+		argv := []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"}
+		out, err := e.sys.output(ctx, argv, e.env)
 		if err != nil {
 			continue
 		}
@@ -683,7 +720,7 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 	if sys == nil {
 		sys = hostSystem{}
 	}
-	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}}
+	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}, env: d.selected()}
 	ctx, cancel := context.WithTimeout(ctx, closeWait)
 	defer cancel()
 	removed := 0
@@ -711,12 +748,21 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 // hostSystem is the machine itself.
 type hostSystem struct{}
 
-func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
-	return hostCommand(ctx, argv).CombinedOutput()
+func (hostSystem) run(ctx context.Context, argv, env []string) ([]byte, error) {
+	return selectedCommand(ctx, argv, env).CombinedOutput()
 }
 
-func (hostSystem) output(ctx context.Context, argv []string) ([]byte, error) {
-	return hostCommand(ctx, argv).Output()
+func (hostSystem) output(ctx context.Context, argv, env []string) ([]byte, error) {
+	return selectedCommand(ctx, argv, env).Output()
+}
+
+// selectedCommand is hostCommand, with the engine's selection in place of the runner's
+// own when env is not nil.
+func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
+	if env == nil {
+		return hostCommand(ctx, argv)
+	}
+	return engineCommand(ctx, argv, env)
 }
 
 // hostCommand is a command of the machine's the wall runs, the docker CLI say, with

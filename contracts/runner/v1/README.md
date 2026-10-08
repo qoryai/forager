@@ -1498,7 +1498,18 @@ is looked up in its parent, so two binds of one root are allowed:
   helper, or another directory of the runner's its wall binds, lies inside a writable bind
   of another run's, or is reached through one, does not start. The runner checks and lists
   the run in one step, before it contacts the server, and the run leaves the registry when
-  it ends, however it ends.
+  it ends, however it ends, unless its wall could not be removed. A run is still going
+  while its runner holds its entry, or, once its runner is gone, while the container
+  engine its entry records, pinned by its selection and by its id when it gave one, holds
+  a container labelled `dev.qory.run=<id>`, in any state. The selection is pinned by the
+  variables the command reads: for the command named podman, `CONTAINER_HOST` or
+  `CONTAINER_CONNECTION` set and recorded; for any other command, `DOCKER_HOST` or
+  `DOCKER_CONTEXT` set and recorded, or the context the command shows. A variable of the
+  other kind never pins. A command other than podman is asked by its id, through its
+  pinned selection; podman is asked by its pinned selection when it gave no id. A run that
+  cannot ask that engine, reaches another, or finds an entry whose engine is a command
+  other than podman with no id, or podman with neither a pinned selection nor an id, is no
+  run, `engine_unreachable`, with the earlier run's id as its name.
 
 The names of these refusals are paths as the caller passed them, the first always one
 of the run's mounts or its workspace, the run directory named by its runs directory.

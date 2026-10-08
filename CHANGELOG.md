@@ -105,8 +105,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The runner's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
   `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
-  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run` and
-  `mount_through_link`.
+  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run`,
+  `mount_through_link` and `engine_unreachable`.
   `errors.As` finds one in the error `session.Run` returns.
 - The runner reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
@@ -290,12 +290,47 @@ release may change what an existing document does, and says so under Upgrading.
   `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with its
   process id and its binds, each as passed, as resolved, with the entries its names are
   looked up as, whether writable, and what it is when it is not a place; the file is held
-  locked for the run's life and removed when it ends. A file whose lock is free is
-  removed. A bind of another run's, or a directory on the way to it, that is gone is
-  compared by its names, like a part that does not exist yet; any other failure to resolve
-  one stops the run. A run checks its binds and adds its own entry under a lock of the
-  registry's, before it contacts the server, and again, with its wall's own binds, just
-  before the enclosure binds them. `events/run.refused.schema.json` lists the three codes.
+  locked for the run's life and removed when it ends, kept when the wall could not be
+  removed. A file whose lock is free is the run of a runner that is gone: it is still
+  going while the container engine its entry records holds a container labelled with its
+  run id, in any state, and is removed when the engine holds none. A run that cannot ask
+  that engine, whose engine answers with another id than the one recorded, or that reads
+  such an entry that records no id for a command other than podman, neither a pinned
+  selection nor an id for podman, no engine, or that cannot be read, is refused with
+  `engine_unreachable`; `Names` holds the earlier run's id, and the sentence reads "Docker
+  could not be asked whether the walled run <id> is still going, so the run does not
+  start: <the error>". A bind of another run's, or a directory on the way to it, that is
+  gone is compared by its names, like a part that does not exist yet; any other failure to
+  resolve one stops the run. A run checks its binds and adds its own entry under a lock of
+  the registry's, before it contacts the server, and again, with its wall's own binds,
+  just before the enclosure binds them. `events/run.refused.schema.json` lists the four
+  codes.
+- `wall.Engined` is a wall whose enclosures are containers of an engine; its `Engine` is a
+  `wall.Engine`: the adapter, `docker` whichever command it runs, the command, absolute
+  when found in PATH, the variables that select the engine, `DOCKER_HOST`,
+  `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`,
+  `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS` and
+  `CONTAINERD_NAMESPACE`, a password in an address left out and an address that cannot be
+  read left out whole, `Pinned`, and the engine's id, `info --format {{.ID}}`, when it
+  gives one. `Pinned` follows the variables the command reads. For the command named
+  podman, it is true when `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded.
+  For any other command, it is true when `DOCKER_HOST` or `DOCKER_CONTEXT` is set and
+  recorded; with neither set, it pins the context the command shows, `context show`, and
+  `DOCKER_CONFIG`, else `~/.docker`, and a command whose `context show` fails is unpinned.
+  A variable of the other kind stays recorded and never makes `Pinned` true. An address
+  that cannot be read leaves the selection unpinned, and then neither the context nor the
+  id is asked. Every engine command of `wall.Docker`'s, and the agent's container, then
+  runs with the recorded selection in place of the runner's own; with an address left out,
+  with the runner's own environment. `EngineID` asks the engine's id again through the
+  recorded selection; a run whose engine gave none as it started asks once the enclosure
+  is prepared, and records the answer. A walled run's registry entry records the engine.
+  `wall.RunContainersExist` asks the engine's id again, when one is recorded, and then
+  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with
+  the recorded variables in place of the runner's own. It asks a command other than podman
+  by its id, through its pinned selection, and refuses one recorded without an id, since
+  podman installed under another name reads no `DOCKER_HOST` and every Docker engine gives
+  an id; it asks the command named podman by its pinned selection when it gave no id, and
+  refuses one recorded with neither.
 - `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
   machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
   directory the enclosure makes later. `wall.Docker` lists its helper and the pattern

@@ -332,7 +332,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		if listed, err = register(runID, append(plan.sources, own...)); err != nil {
+		var engine *wall.Engine
+		if e, ok := spec.Wall.(wall.Engined); ok {
+			v := e.Engine(ctx)
+			engine = &v
+		}
+		if listed, err = register(runID, append(plan.sources, own...), engine); err != nil {
 			return nil, err
 		}
 		defer listed.release()
@@ -543,6 +548,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			// The run's context may be what ended the run; the wall is removed regardless.
 			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
 				spec.Report("removing the wall: " + err.Error())
+				// Its containers may outlive the run: the entry stays, and is the run's
+				// while one of them exists.
+				listed.keep()
 			}
 		}()
 		bind = enclosure.ProxyAddr()
@@ -637,6 +645,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err != nil {
 			return fail(err)
 		}
+		listed.askID(runCtx, spec.Wall)
 		if err := listed.update(append(again.sources, binds...)); err != nil {
 			return fail(err)
 		}
