@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/link"
 )
 
 // RelayTokenEnv is the variable of the relay's environment that holds the run's proxy
@@ -40,7 +40,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 	}
 	preamble := ""
 	if token := os.Getenv(RelayTokenEnv); token != "" {
-		preamble = proxy.Preamble + " " + token + "\n"
+		preamble = link.RelayPreamble + " " + token + "\n"
 	}
 	var lc net.ListenConfig
 	var wg sync.WaitGroup

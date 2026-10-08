@@ -14,7 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/gateway/internal/proxy"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 )
 
@@ -54,12 +55,12 @@ func listenTool(t *testing.T) (string, map[string]seen, *sync.Mutex, func()) {
 		for _, h := range []http.Header{r.Header, r.Trailer} {
 			for name, vs := range h {
 				n := strings.ReplaceAll(strings.ToLower(name), "_", "-")
-				if strings.HasPrefix(n, "qory-") && (len(vs) != 1 || (name != proxy.RequestIDHeader && name != proxy.PathRuleHeader) || strings.Contains(vs[0], "forged")) {
+				if strings.HasPrefix(n, "qory-") && (len(vs) != 1 || (name != link.RequestIDHeader && name != link.PathRuleHeader) || strings.Contains(vs[0], "forged")) {
 					forged = append(forged, name)
 				}
 			}
 		}
-		got[r.URL.Path] = seen{host: r.Host, target: r.RequestURI, requestID: r.Header.Get(proxy.RequestIDHeader), pathRule: r.Header.Get(proxy.PathRuleHeader), body: string(b), trailer: r.Trailer.Get("X-Checksum"), forged: forged}
+		got[r.URL.Path] = seen{host: r.Host, target: r.RequestURI, requestID: r.Header.Get(link.RequestIDHeader), pathRule: r.Header.Get(link.PathRuleHeader), body: string(b), trailer: r.Trailer.Get("X-Checksum"), forged: forged}
 		mu.Unlock()
 		w.Header().Set("X-Tool", "answered")
 		w.WriteHeader(http.StatusCreated)
@@ -205,7 +206,7 @@ func TestUnderObserveAToolGetsNoRuleForAPathNoneCovers(t *testing.T) {
 	proxyURL, _ := url.Parse(p.URL())
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
 	req, _ := http.NewRequest("GET", "https://"+toolHost+"/media/acme/other/c.png", nil)
-	req.Header.Set(proxy.PathRuleHeader, "/media/acme/other/*")
+	req.Header.Set(link.PathRuleHeader, "/media/acme/other/*")
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +215,7 @@ func TestUnderObserveAToolGetsNoRuleForAPathNoneCovers(t *testing.T) {
 	mu.Lock()
 	s, reached := got["/media/acme/other/c.png"]
 	mu.Unlock()
-	if resp.StatusCode != 201 || !reached || s.pathRule != proxy.NoPathRule {
+	if resp.StatusCode != 201 || !reached || s.pathRule != link.NoPathRule {
 		t.Errorf("under observe the tool answered %d, was reached %v, with the path rule %q", resp.StatusCode, reached, s.pathRule)
 	}
 	for _, dec := range obs.all() {

@@ -26,8 +26,8 @@ func entry(t *testing.T, p string) string {
 	return filepath.Join(parent, filepath.Base(p))
 }
 
-// link makes a symbolic link at at to to.
-func link(t *testing.T, to, at string) {
+// symlink makes a symbolic link at at to to.
+func symlink(t *testing.T, to, at string) {
 	t.Helper()
 	if err := os.Symlink(to, at); err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func link(t *testing.T, to, at string) {
 func TestAPlaceReachedThroughAnotherRunsBindIsNoRun(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	out := filepath.Join(root, "out")
-	link(t, outside, out)
+	symlink(t, outside, out)
 	first, _ := hold(t, []wall.Mount{{Path: root}}, root)
 	for _, mounts := range [][]wall.Mount{{{Path: out}}, nil} {
 		sp := walledSpec(t, &openWall{})
@@ -70,7 +70,7 @@ func TestAPlaceReachedThroughAnotherRunsBindIsNoRun(t *testing.T) {
 func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 	p, elsewhere := t.TempDir(), t.TempDir()
 	l := filepath.Join(p, "link")
-	link(t, elsewhere, l)
+	symlink(t, elsewhere, l)
 	first, _ := hold(t, nil, l)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: p}}, p
@@ -107,7 +107,7 @@ func TestAPlaceThroughALinkInAWritablePlaceIsNoRun(t *testing.T) {
 	root := t.TempDir()
 	agents := mkdirs(t, filepath.Join(t.TempDir(), "Library", "LaunchAgents"))
 	out := filepath.Join(root, "out")
-	link(t, agents, out)
+	symlink(t, agents, out)
 	for _, readOnly := range []bool{false, true} {
 		sp := walledSpec(t, &openWall{})
 		sp.Mounts = []wall.Mount{{Path: root}, {Path: out, ReadOnly: readOnly}}
@@ -122,7 +122,7 @@ func TestAPlaceThroughALinkInAWritablePlaceIsNoRun(t *testing.T) {
 func TestAWorkspaceThroughALinkInItsOwnRootIsNoRun(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	ws := filepath.Join(w, "ws")
-	link(t, outside, ws)
+	symlink(t, outside, ws)
 	hold(t, []wall.Mount{{Path: w}}, w)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}}, ws
@@ -144,19 +144,19 @@ func TestTheLinkNamedIsTheOneThatLeadsOut(t *testing.T) {
 	}
 
 	deep := filepath.Join(mkdirs(t, filepath.Join(w, "a")), "l")
-	link(t, x, deep)
+	symlink(t, x, deep)
 	place := filepath.Join(deep, "c")
 	throughLink(t, run(place), place, deep, w)
 
 	d := mkdirs(t, filepath.Join(w, "d"))
 	l1, l2 := filepath.Join(w, "l1"), filepath.Join(d, "l2")
-	link(t, d, l1)
-	link(t, x, l2)
+	symlink(t, d, l1)
+	symlink(t, x, l2)
 	place = filepath.Join(l1, "l2")
 	throughLink(t, run(place), place, l2, w)
 
 	up := filepath.Join(w, "up")
-	link(t, "a/../../x", up)
+	symlink(t, "a/../../x", up)
 	throughLink(t, run(up), up, up, w)
 }
 
@@ -167,7 +167,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 	w := t.TempDir()
 	v2 := mkdirs(t, filepath.Join(w, "v2"))
 	cur := filepath.Join(w, "current")
-	link(t, v2, cur)
+	symlink(t, v2, cur)
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: cur}}, cur
@@ -187,7 +187,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 	ws, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
-	link(t, outside, home)
+	symlink(t, outside, home)
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true}}, ws
@@ -208,7 +208,7 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 func TestALinkToTheRunnersFilesInsideAPlaceIsTheirs(t *testing.T) {
 	root, runs := t.TempDir(), t.TempDir()
 	to := filepath.Join(root, "records")
-	link(t, runs, to)
+	symlink(t, runs, to)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: root}, {Path: to}}, root, runs
 	if r := mountRefusal(t, runErr(sp)); !slices.Equal(r.Names, []string{to, runs}) {
@@ -224,7 +224,7 @@ func TestAChainOfLinkedPlacesIsNoRun(t *testing.T) {
 	mkdirs(t, filepath.Join(e, "ws"))
 	hold(t, []wall.Mount{{Path: e}}, e)
 	l := filepath.Join(w, "link")
-	link(t, e, l)
+	symlink(t, e, l)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: l}}, filepath.Join(e, "ws")
 	throughLink(t, runErr(sp), l, l, w)
@@ -236,7 +236,7 @@ func TestAChainOfLinkedPlacesIsNoRun(t *testing.T) {
 func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 	w, target := t.TempDir(), t.TempDir()
 	runs := filepath.Join(w, "runs")
-	link(t, target, runs)
+	symlink(t, target, runs)
 	first, _ := hold(t, []wall.Mount{{Path: w}}, w)
 	sp := walledSpec(t, &openWall{})
 	sp.RunsDir = runs + "/"
@@ -270,13 +270,13 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 func TestAPlaceThroughALinkInAWritablePlaceOfItsOwn(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(w, "home")
-	link(t, outside, home)
+	symlink(t, outside, home)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: home, ReadOnly: true}}, w
 	throughLink(t, runErr(sp), home, home, w)
 
 	runs := filepath.Join(w, "runs")
-	link(t, t.TempDir(), runs)
+	symlink(t, t.TempDir(), runs)
 	sp = walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: w}}, w, runs
 	r := mountRefusal(t, runErr(sp))
@@ -326,7 +326,7 @@ func (w *repointingWall) Prepare(
 func TestALinkPointedElsewhereBeforeTheWrapFailsTheRun(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	ws := filepath.Join(t.TempDir(), "ws")
-	link(t, a, ws)
+	symlink(t, a, ws)
 	w := &repointingWall{link: ws, to: b}
 	sp := walledSpec(t, w)
 	sp.Dir = ws

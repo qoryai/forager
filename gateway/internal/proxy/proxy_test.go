@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/gateway/internal/proxy"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 )
 
@@ -354,10 +354,10 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 		b, _ := io.ReadAll(c)
 		return string(b)
 	}
-	if got := ask(proxy.Preamble + " the-runs-token\n"); !strings.HasPrefix(got, "HTTP/1.1 400") {
+	if got := ask(link.RelayPreamble + " the-runs-token\n"); !strings.HasPrefix(got, "HTTP/1.1 400") {
 		t.Errorf("with the token the proxy answered %q, want its refusal of a request that names no target", got)
 	}
-	for _, open := range []string{"", proxy.Preamble + " another-runs-token\n"} {
+	for _, open := range []string{"", link.RelayPreamble + " another-runs-token\n"} {
 		if got := ask(open); got != "" {
 			t.Errorf("opened with %q the proxy answered %q", open, got)
 		}
@@ -617,7 +617,7 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 			// The tunnelled origin's certificate is for example.com and not localhost;
 			// the session verifies it, through a tunnel the proxy passes through as bytes.
 			tunnel := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com"}}}
-			bearer, apiKey := "Bearer "+credential.Placeholder, credential.Placeholder
+			bearer, apiKey := "Bearer "+link.Placeholder, link.Placeholder
 			var answers []string
 			send := func(client *http.Client, target string, both bool) {
 				req, _ := http.NewRequest("POST", target, strings.NewReader(`{"model":"m"}`))
@@ -663,7 +663,7 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 			}
 			for name, vs := range h {
 				for _, v := range vs {
-					if strings.Contains(v, credential.Placeholder) {
+					if strings.Contains(v, link.Placeholder) {
 						t.Errorf("the stand-in reached the host the credential is for in %s: %q", name, v)
 					}
 				}
@@ -709,7 +709,7 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 					t.Errorf("an answer to the session contains the key: %s", a)
 				}
 			}
-			if s := fmt.Sprintf("%+v", decisions); strings.Contains(s, c.key) || strings.Contains(s, credential.Placeholder) {
+			if s := fmt.Sprintf("%+v", decisions); strings.Contains(s, c.key) || strings.Contains(s, link.Placeholder) {
 				t.Errorf("the record contains a credential: %s", s)
 			}
 			set := 0

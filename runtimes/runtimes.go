@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/descriptor"
+	"github.com/qoryai/runner/link"
 )
 
 // Runtime is one program the runner can run a session of.
@@ -84,7 +84,7 @@ type Attach struct {
 
 // Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that
 // is no credential and says what it is to whoever reads it.
-const Placeholder = credential.Placeholder
+const Placeholder = link.Placeholder
 
 // Secrets is implemented by a runtime that declares the secrets it needs. It is
 // optional and checked by type assertion, so [Runtime] keeps its methods: a runtime

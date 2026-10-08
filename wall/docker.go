@@ -20,8 +20,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/proxy"
-	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/program"
 )
 
@@ -133,11 +132,11 @@ func (d *Docker) Sets() []string {
 		names = DefaultCAEnv
 	}
 	var out []string
-	for _, kv := range proxy.EnvFor("") {
+	for _, kv := range link.ProxyEnv("") {
 		name, _, _ := strings.Cut(kv, "=")
 		out = append(out, name)
 	}
-	return append(append(out, socket.Env), names...)
+	return append(append(out, link.EnvRunSocket), names...)
 }
 
 // Files lists the adapter's own files on this machine: the directory of the docker
@@ -308,7 +307,7 @@ func (e *dockerEnclosure) command() string { return e.d.command() }
 // ProxyAddr is the gateway's address when this machine holds it, else loopback.
 func (e *dockerEnclosure) ProxyAddr() string {
 	if e.host == hostName {
-		return proxy.Loopback
+		return link.Loopback
 	}
 	return net.JoinHostPort(e.host, "0")
 }
@@ -347,9 +346,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
-	env = append(env, proxy.EnvFor(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
+	env = append(env, link.ProxyEnv(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
 	if l.Socket != "" {
-		env = append(env, socket.Env+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
+		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
 	if len(l.CA) > 0 {
 		names := e.d.CAEnv

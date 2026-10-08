@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
 )
@@ -80,7 +80,7 @@ func (w *relayWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error
 					return
 				}
 				defer up.Close()
-				fmt.Fprintf(up, "%s %s\n", proxy.Preamble, l.ProxyToken)
+				fmt.Fprintf(up, "%s %s\n", link.RelayPreamble, l.ProxyToken)
 				go io.Copy(up, c)
 				io.Copy(c, up)
 			}()

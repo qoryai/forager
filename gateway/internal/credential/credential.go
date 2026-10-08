@@ -79,10 +79,6 @@ func (u *Use) Token() string { return u.held.token(u.index) }
 // adapter again, not more often than every [retryWait].
 func (u *Use) Rejected() { u.held.rejected() }
 
-// Placeholder is the value a placeholder variable gets: it says what it is to whoever
-// reads it, and is no credential anywhere.
-const Placeholder = "qory-sets-the-credential-outside-the-enclosure"
-
 // Timing of an adapter.
 const (
 	// adapterWait is how long an adapter has to answer.

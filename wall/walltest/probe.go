@@ -19,10 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qoryai/runner/link"
 	"golang.org/x/term"
-
-	"github.com/qoryai/runner/internal/proxy"
-	"github.com/qoryai/runner/internal/tool"
 )
 
 // probePrefix starts the one line of standard output that holds the probe's report.
@@ -346,13 +344,13 @@ func fetch(u string, header ...string) (int, string, string) {
 // serveTool is the suite's tool: it listens where the runner says and answers every
 // request with the path rule and the id the proxy handed it.
 func serveTool() int {
-	ln, err := net.Listen("unix", os.Getenv(tool.EnvListen))
+	ln, err := net.Listen("unix", os.Getenv(link.EnvToolListen))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "rule=%s id=%s", r.Header.Get(proxy.PathRuleHeader), r.Header.Get(proxy.RequestIDHeader))
+		fmt.Fprintf(w, "rule=%s id=%s", r.Header.Get(link.PathRuleHeader), r.Header.Get(link.RequestIDHeader))
 	}))
 	return 0
 }

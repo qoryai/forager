@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/credential"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
@@ -210,7 +210,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		}
 		for header, vs := range req.Header {
 			for _, v := range vs {
-				if strings.Contains(v, credential.Placeholder) {
+				if strings.Contains(v, link.Placeholder) {
 					t.Errorf("%s %s carried the stand-in in %s", req.Method, req.Path, header)
 				}
 			}

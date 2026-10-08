@@ -4,7 +4,7 @@
 // A tool is a program of the machine's that serves hosts. The runner starts it for the
 // run, outside the enclosure, with one argument the run's policy chose, and tells it
 // where to listen: a Unix socket in a private directory of the runner's, named in the
-// tool's environment as [EnvListen]. The proxy ends the session's TLS for the hosts the
+// tool's environment as [link.EnvToolListen]. The proxy ends the session's TLS for the hosts the
 // tool serves, decides the host and the path as for any host, and hands each request it
 // lets through to the tool over that socket as plain HTTP/1.1. What the tool does with a
 // request, and whom it calls, is the tool's: the runner knows no protocol, holds none of
@@ -32,12 +32,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/refusal"
 )
-
-// EnvListen names, in a tool's environment, the path of the Unix socket it listens on.
-const EnvListen = "QORY_TOOL_LISTEN"
 
 // EnvRunID names, in a tool's environment, the run it was started for.
 const EnvRunID = "QORY_RUN_ID"
@@ -286,7 +284,7 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		args[i] = strings.ReplaceAll(a, "${argument}", c.Argument)
 	}
 	cmd := exec.Command(c.Command[0], args...)
-	cmd.Env = append(slices.Clone(env), EnvListen+"="+sock, EnvRunID+"="+runID)
+	cmd.Env = append(slices.Clone(env), link.EnvToolListen+"="+sock, EnvRunID+"="+runID)
 	// A group of its own, so what the tool starts in turn is stopped with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Standard output goes to the null device: a pipe the runner copied would make
@@ -387,7 +385,7 @@ func (t *Running) listens(ctx context.Context) error {
 			}
 			return fmt.Errorf("%s exited before it listened: %v%s", t.cmd.Path, t.err, t.reason())
 		case <-deadline.C:
-			return fmt.Errorf("%s did not listen on %s within %s%s", t.cmd.Path, EnvListen, listenWait, t.reason())
+			return fmt.Errorf("%s did not listen on %s within %s%s", t.cmd.Path, link.EnvToolListen, listenWait, t.reason())
 		case <-tick.C:
 		}
 	}

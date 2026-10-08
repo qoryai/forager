@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qoryai/runner/gateway"
 	"github.com/qoryai/runner/internal/socket"
-	"github.com/qoryai/runner/internal/tool"
 	"github.com/qoryai/runner/program"
 	"github.com/qoryai/runner/refusal"
 	"github.com/qoryai/runner/wall"
@@ -210,7 +210,7 @@ func runnerFiles(spec Spec) []runnerFile {
 	// sockets and of the Docker wall's environment files, which hold the proxy's
 	// secret: this run's are made after the check, and other runs' exist.
 	out = append(out,
-		runnerFile{tool.SocketDirs(), "where the tools' sockets are made"},
+		runnerFile{gateway.ToolSocketDirs(), "where the tools' sockets are made"},
 		runnerFile{socket.Dirs(), "where the runs' record sockets are made"},
 		runnerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {

@@ -9,10 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/proxy"
-	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/gateway"
 	"github.com/qoryai/runner/internal/variables"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/wall"
@@ -89,7 +88,7 @@ func nodePaths(pol *policy.Loaded) int {
 // resolution and, for a walled run, the runtime's declared and reserved variables that
 // neither a placeholder, the run nor the runtime's preparation sets, each as an empty
 // value.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, held *credential.Held, chosen []tool.Chosen) (variables.Resolved, []string, error) {
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, held *gateway.HeldCredentials, chosen []gateway.ChosenTool) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -99,7 +98,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		runtimeNames = append(runtimeNames, d.Name)
 	}
 	runtimeNames = append(runtimeNames, decl.Reserves...)
-	placeholderNames := slices.Concat(held.Placeholders, tool.Placeholders(chosen))
+	placeholderNames := slices.Concat(held.Placeholders, gateway.ToolPlaceholders(chosen))
 	// What a value of the machine's is read from: a credential's variable.
 	var readFrom []string
 	for _, c := range spec.Credentials {
@@ -113,7 +112,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	if spec.HarnessHome != "" {
 		runner = append(runner, EnvHarnessHome)
 	}
-	runner = append(runner, names(proxy.EnvFor(""))...)
+	runner = append(runner, names(link.ProxyEnv(""))...)
 	runner = append(runner, names(prepared.Env)...)
 	if s, ok := spec.Wall.(wall.Setter); ok {
 		runner = append(runner, s.Sets()...)

@@ -43,7 +43,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/credential"
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
@@ -314,7 +314,7 @@ func Run(t *testing.T, o Options) {
 	check("a tool is reached through the proxy, held to its paths, and handed the proxy's word", p.ToolAllowed == 200 && p.ToolDenied == 403 && p.ToolSaw == "rule=/tool/* id="+fmt.Sprint(invoked["request_id"]) && invoked["tool"] == "suite-tool" && invoked["status"] == float64(200),
 		fmt.Sprintf("inside the paths answered %d (%s), handed %q; outside them %d; recorded as %v", p.ToolAllowed, p.ToolAllowedErr, p.ToolSaw, p.ToolDenied, invoked))
 	record, _ := os.ReadFile(filepath.Join(r.res.Dir, "events.jsonl"))
-	check("no credential inside the enclosure", p.Placeholder == credential.Placeholder && len(p.TokenSeen) == 0 && p.BundleCerts > 0 && p.BundleKeys == 0 && !bytes.Contains(record, []byte(tokenMark)),
+	check("no credential inside the enclosure", p.Placeholder == link.Placeholder && len(p.TokenSeen) == 0 && p.BundleCerts > 0 && p.BundleKeys == 0 && !bytes.Contains(record, []byte(tokenMark)),
 		fmt.Sprintf("the placeholder is %q; the token was seen in %v; the bundle holds %d certificates and %d keys; the token is in the record: %v", p.Placeholder, p.TokenSeen, p.BundleCerts, p.BundleKeys, bytes.Contains(record, []byte(tokenMark))))
 	checkKeys(t, o, r, keys, trusted)
 	check("no way to this machine through the proxy unless the policy names it", p.OwnViaProxy == 403 && p.MetaViaProxy == 403 && own.Load() == 0, fmt.Sprintf("this machine's listener answered %d through the proxy and was reached %d times; the metadata address answered %d", p.OwnViaProxy, own.Load(), p.MetaViaProxy))
@@ -463,7 +463,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		}
 		for name, vs := range h {
 			for _, v := range vs {
-				if strings.Contains(v, credential.Placeholder) {
+				if strings.Contains(v, link.Placeholder) {
 					t.Errorf("the stand-in reached the host in %s: %q", name, v)
 				}
 			}
@@ -483,7 +483,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		arrived(t, 1, "Authorization", "Bearer "+keys.oauth, oauthCred, p.OAuthHost, p.OAuthHostErr)
 	})
 	t.Run(names[2], func(t *testing.T) {
-		if p.APIKeyStandIn != credential.Placeholder || p.OAuthStandIn != credential.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
+		if p.APIKeyStandIn != link.Placeholder || p.OAuthStandIn != link.Placeholder || len(p.KeySeen) != 0 || p.Environs == 0 {
 			t.Errorf("%s is %q and %s is %q; a key was seen in %v; %d environments were read", apiKeyStandIn, p.APIKeyStandIn, oauthStandIn, p.OAuthStandIn, p.KeySeen, p.Environs)
 		}
 	})
@@ -494,7 +494,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 		reached := map[bool]bool{}
 		for _, req := range got[2] {
 			reached[req.TLS] = true
-			if req.Header.Get("Authorization") != "Bearer "+credential.Placeholder || req.Header.Get(apiKeyHeader) != credential.Placeholder {
+			if req.Header.Get("Authorization") != "Bearer "+link.Placeholder || req.Header.Get(apiKeyHeader) != link.Placeholder {
 				t.Errorf("the other host got Authorization %q and %s %q, want the stand-ins", req.Header.Get("Authorization"), apiKeyHeader, req.Header.Get(apiKeyHeader))
 			}
 		}

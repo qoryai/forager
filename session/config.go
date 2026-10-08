@@ -6,8 +6,7 @@ import (
 	"slices"
 
 	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/tool"
+	"github.com/qoryai/runner/gateway"
 	"github.com/qoryai/runner/internal/variables"
 	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/refusal"
@@ -312,7 +311,7 @@ type Credential struct {
 
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
-func (c Credential) Check() error { return credential.Definition(c).Check() }
+func (c Credential) Check() error { return gateway.CredentialDefinition(c).Check() }
 
 // Tool is one tool as the machine defines it, [Spec.Tools]: a program the runner starts
 // for the run, outside the enclosure, that serves hosts. The proxy ends the session's
@@ -347,7 +346,7 @@ type Tool struct {
 
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
-func (t Tool) Check() error { return tool.Definition(t).Check() }
+func (t Tool) Check() error { return gateway.ToolDefinition(t).Check() }
 
 // Image is one image as the machine defines it, [Spec.Images]: what an agent's
 // enclosure is started from, and how. A run's policy selects images by name and names

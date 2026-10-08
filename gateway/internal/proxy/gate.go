@@ -7,14 +7,9 @@ import (
 	"net"
 	"sync"
 	"time"
-)
 
-// Preamble is what opens a connection to a proxy that requires a token: this word, a
-// space, the token and a newline, before the first byte of HTTP. The wall's relay
-// writes it on every connection it forwards, so the proxy serves the run's relay and
-// nobody else who can reach its address: another container of the same engine, a
-// process of the machine.
-const Preamble = "QORY-RELAY"
+	"github.com/qoryai/runner/link"
+)
 
 // preambleWait is how long a connection has to send its preamble.
 const preambleWait = 10 * time.Second
@@ -47,7 +42,7 @@ func (g *gate) Accept() (net.Conn, error) {
 	if token == nil {
 		return c, nil
 	}
-	return &gated{Conn: c, want: Preamble + " " + *token + "\n", refused: g.p.refused}, nil
+	return &gated{Conn: c, want: link.RelayPreamble + " " + *token + "\n", refused: g.p.refused}, nil
 }
 
 // gated is a connection that must open with the preamble.

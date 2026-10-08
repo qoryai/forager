@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 )
 
@@ -23,7 +24,7 @@ func TestMain(m *testing.M) {
 	case "":
 		os.Exit(m.Run())
 	case "serve":
-		ln, err := net.Listen("unix", os.Getenv(EnvListen))
+		ln, err := net.Listen("unix", os.Getenv(link.EnvToolListen))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

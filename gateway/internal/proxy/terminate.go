@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 )
 
@@ -51,23 +52,11 @@ type Tool struct {
 	transport http.RoundTripper
 }
 
-// The headers the proxy sets on a request it hands to a tool. A request the session
-// sends with a header of the prefix has it taken off first, so a tool reads these as the
-// proxy's word.
-const (
-	// RequestIDHeader carries the proxy's id of the request, the request_id of its
-	// egress event.
-	RequestIDHeader = "Qory-Request-Id"
-	// PathRuleHeader carries the path rule that let the request through, [NoPathRule]
-	// when the host has path rules and under observe none covers the path; it is absent
-	// when the host has none.
-	PathRuleHeader = "Qory-Path-Rule"
-	// NoPathRule is the path rule a tool is handed for a request observed and let
-	// through that no rule covers: never a path, which starts with a slash.
-	NoPathRule = "none"
-	// headerPrefix is the prefix of every header that is the proxy's to set.
-	headerPrefix = "Qory-"
-)
+// headerPrefix is the prefix of every header that is the proxy's to set, those of
+// [link.RequestIDHeader] and [link.PathRuleHeader] among them. A request the session
+// sends with a header of the prefix has it taken off first, so a tool reads these as
+// the proxy's word.
+const headerPrefix = "Qory-"
 
 // Terminate makes the proxy end the session's TLS itself for the hosts the credentials
 // are for, the hosts with path rules and the hosts the tools serve, answering as each
@@ -478,7 +467,7 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 	rule := d.PathRule
 	if t.ruled(d.Host) && rule == "" {
 		// Observed and let through: the host has rules and none covers the path.
-		rule = NoPathRule
+		rule = link.NoPathRule
 	}
 	host := strings.TrimSuffix(d.Host, ".")
 	rp := &httputil.ReverseProxy{
@@ -491,9 +480,9 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 			pr.Out.URL.Host = host
 			pr.Out.Host = host
 			scrub(pr.Out.Header)
-			pr.Out.Header.Set(RequestIDHeader, d.RequestID)
+			pr.Out.Header.Set(link.RequestIDHeader, d.RequestID)
 			if rule != "" {
-				pr.Out.Header.Set(PathRuleHeader, rule)
+				pr.Out.Header.Set(link.PathRuleHeader, rule)
 			}
 			// The trailer is announced before the body and filled after it: the tool
 			// gets one of its own, without the proxy's prefix, filled once the body is

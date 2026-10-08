@@ -26,10 +26,8 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/descriptor"
+	"github.com/qoryai/runner/link"
 )
-
-// Env is the variable that names the socket in the session's environment.
-const Env = "QORY_RUN_SOCKET"
 
 // Listener is an open socket.
 type Listener struct {
@@ -62,7 +60,7 @@ func Listen() (*Listener, error) {
 	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{})}, nil
 }
 
-// Path is the socket's path, the value of [Env].
+// Path is the socket's path, the value of [link.EnvRunSocket].
 func (l *Listener) Path() string { return l.path }
 
 // Serve accepts connections until the listener is closed and hands every record read
@@ -134,7 +132,7 @@ func (l *Listener) Close() error {
 	return err
 }
 
-// network reads the value of [Env]. It is an address, not a path: a path, or unix: and a
+// network reads the value of [link.EnvRunSocket]. It is an address, not a path: a path, or unix: and a
 // path, is the local socket; another scheme is a transport, and a forwarder that does
 // not have it says so instead of opening a file of that name.
 func network(addr string) (string, string, error) {
@@ -142,13 +140,13 @@ func network(addr string) (string, string, error) {
 		return "unix", path, nil
 	}
 	if scheme, _, ok := strings.Cut(addr, ":"); ok && !strings.ContainsAny(scheme, "/.") {
-		return "", "", fmt.Errorf("%s names the transport %q, which this forwarder does not have", Env, scheme)
+		return "", "", fmt.Errorf("%s names the transport %q, which this forwarder does not have", link.EnvRunSocket, scheme)
 	}
 	return "unix", addr, nil
 }
 
 // Forward reads one JSON object from r, wraps it as a record of the hooks source and
-// writes it to the socket at addr, the value of [Env], as one line. It is what a hook command does: the
+// writes it to the socket at addr, the value of [link.EnvRunSocket], as one line. It is what a hook command does: the
 // runtime writes the hook's input on the command's standard input, the command forwards
 // it and exits 0 with no output, which the runtime reads as no decision. An input that
 // is not a JSON object is an error and nothing is sent.

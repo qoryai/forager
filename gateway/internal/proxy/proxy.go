@@ -47,6 +47,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 )
 
@@ -83,7 +84,7 @@ type Decision struct {
 	// serves.
 	Tool string
 	// RequestID is the proxy's own id of a request it read, the one a tool is handed as
-	// [RequestIDHeader]; Status is the status the host or the tool answered it with,
+	// [link.RequestIDHeader]; Status is the status the host or the tool answered it with,
 	// zero when nothing answered.
 	RequestID string
 	Status    int
@@ -142,10 +143,6 @@ type tunnel struct {
 // entry, the wall's own refusal.
 const GuardRule = "wall:own-address"
 
-// Loopback is the address the proxy binds when it is given none: a port of the
-// system's choosing on loopback.
-const Loopback = "127.0.0.1:0"
-
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial.
 type guardError struct{ msg string }
@@ -153,14 +150,14 @@ type guardError struct{ msg string }
 func (e *guardError) Error() string { return e.msg }
 
 // Listen starts a proxy on addr, host:port, in the given mode with the given allow
-// and deny lists, handing every decision to observe. An empty addr is [Loopback];
+// and deny lists, handing every decision to observe. An empty addr is [link.Loopback];
 // port 0 is a port of the system's choosing. Close stops it.
 func Listen(addr string, mode policy.Mode, allow, deny []string, observe func(Decision)) (*Proxy, error) {
 	if err := mode.Validate(); err != nil {
 		return nil, err
 	}
 	if addr == "" {
-		addr = Loopback
+		addr = link.Loopback
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -200,25 +197,9 @@ func (p *Proxy) Addr() string { return p.ln.Addr().String() }
 // URL is the proxy's URL for the proxy variables.
 func (p *Proxy) URL() string { return "http://" + p.Addr() }
 
-// NoProxy is the value of NO_PROXY the session gets: loopback by every name, so a
-// local server, a local model endpoint or the runner's own socket-fronting programs are
-// reached directly.
-const NoProxy = "localhost,127.0.0.1,::1"
-
 // Env returns the variables that point a program at the proxy, by the address it
 // listens on.
-func (p *Proxy) Env() []string { return EnvFor(p.URL()) }
-
-// EnvFor returns the variables that point a program at the proxy at u, in both cases,
-// because curl reads http_proxy in lower case only and other programs document the
-// upper case. A wall names the proxy by the address the enclosure reaches it on.
-func EnvFor(u string) []string {
-	return []string{
-		"HTTP_PROXY=" + u, "http_proxy=" + u,
-		"HTTPS_PROXY=" + u, "https_proxy=" + u,
-		"NO_PROXY=" + NoProxy, "no_proxy=" + NoProxy,
-	}
-}
+func (p *Proxy) Env() []string { return link.ProxyEnv(p.URL()) }
 
 // Close stops the listener and every tunnel.
 func (p *Proxy) Close() error {
