@@ -18,12 +18,12 @@ import (
 	"github.com/qoryai/runner/accesskey"
 	"github.com/qoryai/runner/event"
 	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/link"
 	"github.com/qoryai/runner/policy"
 	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/server"
+	"github.com/qoryai/runner/session/internal/socket"
+	"github.com/qoryai/runner/session/runtimes"
 	"github.com/qoryai/runner/sink"
 	"github.com/qoryai/runner/wall"
 )
@@ -861,7 +861,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		output = nil
 	}
 	resized := func(cols, rows int) { write(event.RunResized, map[string]any{"cols": cols, "rows": rows}) }
-	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output, cols: cols, rows: rows, resized: resized}
+	proc := &process{stop: runtimes.StopSignal(spec.StopSignal), grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output, cols: cols, rows: rows, resized: resized}
 	if srv == nil {
 		stopBeat = heartbeat(runCtx, spec.Heartbeat, start, write)
 	}

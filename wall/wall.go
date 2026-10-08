@@ -8,9 +8,9 @@
 // pseudo-terminal or the pipes it already owns, and closes the enclosure at exit.
 //
 // What every wall guarantees is one list, contracts/runner/v1/README.md §The wall, the
-// same for every adapter, and the conformance suite in the walltest package checks it
-// from inside the enclosure. An adapter ships when the suite passes for it. [Docker] is
-// the first.
+// same for every adapter, and the conformance suite in package e2e checks it from
+// inside the enclosure. An adapter ships when the suite passes for it. [Docker] is the
+// first.
 package wall
 
 import "context"

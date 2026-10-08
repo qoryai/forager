@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/program"
 	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/runner/session/internal/socket"
 	"github.com/qoryai/runner/wall"
 )
 

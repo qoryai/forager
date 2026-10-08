@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/session"
+	"github.com/qoryai/runner/session/runtimes"
 	"github.com/qoryai/runner/wall"
 )
 
