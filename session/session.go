@@ -334,7 +334,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		var engine *wall.Engine
 		if e, ok := spec.Wall.(wall.Engined); ok {
-			v := e.Engine()
+			v := e.Engine(ctx)
 			engine = &v
 		}
 		if listed, err = register(runID, append(plan.sources, own...), engine); err != nil {
@@ -548,6 +548,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			// The run's context may be what ended the run; the wall is removed regardless.
 			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
 				spec.Report("removing the wall: " + err.Error())
+				// Its containers may outlive the run: the entry stays, and is the run's
+				// while one of them exists.
+				listed.keep()
 			}
 		}()
 		bind = enclosure.ProxyAddr()

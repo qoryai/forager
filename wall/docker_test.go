@@ -16,9 +16,11 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // recorder is a machine with no Docker: it records every command and answers the two
 // the adapter reads.
 type recorder struct {
-	// containers is what the engine lists of a run's containers, and env the variables
-	// it was asked with.
+	// containers is what the engine lists of a run's containers, engineID its id and
+	// context the context the command shows; env are the variables it was asked with.
 	containers string
+	engineID   string
+	context    string
 	env        []string
 	relayEnv   string
 	t          *testing.T
@@ -62,8 +64,13 @@ func (r *recorder) output(_ context.Context, argv []string) ([]byte, error) {
 func (r *recorder) engine(_ context.Context, argv, env []string) ([]byte, error) {
 	line := words(argv)
 	r.lines, r.env = append(r.lines, line), env
-	if r.fail != "" && strings.Contains(line, r.fail) {
+	switch {
+	case r.fail != "" && strings.Contains(line, r.fail):
 		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon")
+	case strings.Contains(line, " info "):
+		return []byte(r.engineID + "\n"), nil
+	case strings.Contains(line, " context show"):
+		return []byte(r.context + "\n"), nil
 	}
 	return []byte(r.containers), nil
 }
@@ -582,22 +589,95 @@ func TestTheEngineIsAskedForARunsContainersInEveryState(t *testing.T) {
 	}
 }
 
-// TestTheEngineRecordedHoldsNoPassword pins what a run records of its engine: the
-// command and the variables that select it, a password in an address left out.
-func TestTheEngineRecordedHoldsNoPassword(t *testing.T) {
+// unsetEngine leaves no variable that selects an engine in the test's environment.
+func unsetEngine(t *testing.T) {
 	for _, name := range engineVariables {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
+}
+
+// TestTheEngineRecordedHoldsNoPassword pins what a run records of its engine: the
+// command and the variables that select it, a password in an address left out, and an
+// address that cannot be read left out whole; with DOCKER_HOST set, no context is
+// pinned.
+func TestTheEngineRecordedHoldsNoPassword(t *testing.T) {
+	unsetEngine(t)
 	t.Setenv("DOCKER_HOST", "tcp://builder:not-a-real-password@engine.example:2376")
-	t.Setenv("DOCKER_CONTEXT", "remote")
+	t.Setenv("CONTAINER_HOST", "ssh://builder:not-a-real-password@%zz/run/podman.sock")
 	t.Setenv("DOCKER_CONFIG", "conf")
-	e := (&Docker{Command: "/opt/engine/docker"}).Engine()
+	rec := &recorder{t: t, engineID: "4c1f0a2e-engine", context: "other"}
+	e := (&Docker{Command: "/opt/engine/docker", sys: rec}).Engine(context.Background())
 	conf, _ := filepath.Abs("conf")
 	want := []string{"DOCKER_HOST=tcp://builder@engine.example:2376",
-		"DOCKER_CONTEXT=remote", "DOCKER_CONFIG=" + conf}
+		"DOCKER_CONFIG=" + conf}
 	if e.Wall != "docker" || e.Command != "/opt/engine/docker" ||
-		!slices.Equal(e.Env, want) {
+		!slices.Equal(e.Env, want) || e.ID != "4c1f0a2e-engine" {
 		t.Errorf("engine %+v", e)
+	}
+	for _, line := range rec.lines {
+		if strings.Contains(line, "context show") {
+			t.Errorf("a context was pinned beside DOCKER_HOST: %q", rec.lines)
+		}
+	}
+}
+
+// TestTheEngineIsPinnedWhenNothingSelectsIt pins a run with no variable that selects
+// the engine: the context the command shows and the configuration directory are
+// recorded, so a later `context use` does not change the engine asked; the engine's id
+// is asked through them.
+func TestTheEngineIsPinnedWhenNothingSelectsIt(t *testing.T) {
+	unsetEngine(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rec := &recorder{t: t, engineID: "4c1f0a2e-engine", context: "orbstack"}
+	e := (&Docker{Command: "/opt/engine/docker", sys: rec}).Engine(context.Background())
+	want := []string{"DOCKER_CONFIG=" + filepath.Join(home, ".docker"),
+		"DOCKER_CONTEXT=orbstack"}
+	if !slices.Equal(e.Env, want) || e.ID != "4c1f0a2e-engine" ||
+		!slices.Equal(rec.env, want) {
+		t.Errorf("engine %+v, asked with %q", e, rec.env)
+	}
+}
+
+// TestAnEngineReachedElsewhereIsNoAnswer pins the id: an engine that answers with
+// another id, or none, is not the one the run was in, so the question fails and the
+// containers are not listed there.
+func TestAnEngineReachedElsewhereIsNoAnswer(t *testing.T) {
+	e := Engine{Wall: "docker", Command: "/opt/engine/docker", ID: "4c1f0a2e-engine"}
+	for _, other := range []string{"9d7b3e10-other", ""} {
+		rec := &recorder{t: t, engineID: other}
+		exists, err := runContainersExist(context.Background(), rec, e, runID)
+		if err == nil || exists {
+			t.Errorf("engine %q: exists %v, %v", other, exists, err)
+		}
+		for _, line := range rec.lines {
+			if strings.Contains(line, " ps ") {
+				t.Errorf("engine %q was asked for containers: %q", other, rec.lines)
+			}
+		}
+	}
+	rec := &recorder{t: t, engineID: "4c1f0a2e-engine", containers: "3f2a9c1b7d4e\n"}
+	if exists, err := runContainersExist(context.Background(), rec, e, runID); !exists ||
+		err != nil || len(rec.lines) != 2 {
+		t.Errorf("the same engine: exists %v, %v, asked %q", exists, err, rec.lines)
+	}
+}
+
+// TestAnEngineWithoutAnIDIsAskedByItsSelection pins an engine that gives no id when the
+// run starts, podman's say: none is recorded, the run starts, and the question goes by
+// the pinned selection alone. The adapter is docker whichever command it runs.
+func TestAnEngineWithoutAnIDIsAskedByItsSelection(t *testing.T) {
+	unsetEngine(t)
+	rec := &recorder{t: t, fail: " info "}
+	e := (&Docker{Command: "podman", sys: rec}).Engine(context.Background())
+	if e.Wall != "docker" || e.ID != "" {
+		t.Fatalf("engine %+v", e)
+	}
+	rec = &recorder{t: t, containers: "3f2a9c1b7d4e\n"}
+	exists, err := runContainersExist(context.Background(), rec, e, runID)
+	if !exists || err != nil || len(rec.lines) != 1 ||
+		!strings.Contains(rec.lines[0], " ps ") {
+		t.Errorf("exists %v, %v, asked %q", exists, err, rec.lines)
 	}
 }

@@ -79,7 +79,7 @@ type enginedWall struct {
 	engine wall.Engine
 }
 
-func (w *enginedWall) Engine() wall.Engine { return w.engine }
+func (w *enginedWall) Engine(context.Context) wall.Engine { return w.engine }
 
 // TestAnEntryWithAContainerIsLive pins an entry whose runner is gone and whose run
 // still has a container, in whatever state, on the engine the entry records: it is a
@@ -213,4 +213,45 @@ type heldEngined struct {
 	engine wall.Engine
 }
 
-func (w *heldEngined) Engine() wall.Engine { return w.engine }
+func (w *heldEngined) Engine(context.Context) wall.Engine { return w.engine }
+
+// closeFailing is a wall in a container engine whose Close fails, as one whose
+// containers could not be removed.
+type closeFailing struct{ enginedWall }
+
+func (w *closeFailing) Prepare(
+	_ context.Context, req wall.Request,
+) (wall.Enclosure, error) {
+	w.req = req
+	return w, nil
+}
+
+func (w *closeFailing) Close(context.Context) error {
+	return errors.New("wall docker: rm: exit status 1")
+}
+
+// TestAnEntryStaysWhenTheWallIsNotRemoved pins a run whose wall could not be removed:
+// its containers may outlive it, so its entry stays, its lock free, and is a run still
+// going while the engine holds one of them.
+func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
+	root := t.TempDir()
+	w := &closeFailing{enginedWall{engine: leftEngine}}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(registry(t), w.req.RunID)
+	t.Cleanup(func() { os.Remove(file) })
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("the entry of a run whose wall stays is gone: %v", err)
+	}
+	answer(t, true, nil)
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	other := walledSpec(t, &openWall{})
+	other.Mounts, other.Dir = []wall.Mount{{Path: sub}}, sub
+	r := refusalOf(t, "mount_shared_with_run", runErr(other))
+	if !slices.Equal(r.Names, []string{sub, w.req.RunID, root}) {
+		t.Errorf("names %q", r.Names)
+	}
+}

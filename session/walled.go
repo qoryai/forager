@@ -93,9 +93,16 @@ type registration struct {
 	dir, runID string
 	engine     *wall.Engine
 	f          *os.File
-	// release removes the entry; it is safe to call more than once.
+	// kept says the entry stays when the run ends.
+	kept bool
+	// release removes the entry, unless it is kept, and frees its lock; it is safe to
+	// call more than once.
 	release func()
 }
+
+// keep leaves the entry in the registry when the run ends, its lock free: for a run
+// whose containers may outlive it, which another runner then asks the engine about.
+func (r *registration) keep() { r.kept = true }
 
 // register checks a walled run's binds against every other walled run of this user's
 // still going and, when none conflicts, lists the run among them, all under the
@@ -133,7 +140,9 @@ func register(
 	// The file goes before its lock, so no runner takes the lock of a file that is
 	// still there for a run that is over and finds a run that is not.
 	r.release = sync.OnceFunc(func() {
-		os.Remove(file)
+		if !r.kept {
+			os.Remove(file)
+		}
 		f.Close()
 	})
 	if err := r.write(binds); err != nil {
