@@ -27,12 +27,12 @@ type Engine struct {
 	// command reads them, and the selection pinned where the command would read it
 	// from its configuration; a password in an address is left out.
 	Env []string `json:"env,omitempty"`
-	// Pinned says Env selects one engine whatever the command's configuration holds,
-	// by the variables the command reads: for podman, CONTAINER_HOST or
-	// CONTAINER_CONNECTION was set and recorded; for any other command, DOCKER_HOST or
-	// DOCKER_CONTEXT was, or the context the command showed is. A variable of the other
-	// command's never pins. An engine whose selection is not pinned is asked by its ID
-	// alone.
+	// Pinned says Env selects one engine whatever the command's configuration holds.
+	// For the command named podman, CONTAINER_HOST or CONTAINER_CONNECTION was set and
+	// recorded, and such an engine is asked by its selection when it gave no ID. For any
+	// other command, DOCKER_HOST or DOCKER_CONTEXT was, or the context the command
+	// showed is; such an engine is asked by its ID, through this selection, and one that
+	// gave no ID is no answer. A variable of the other kind never pins.
 	Pinned bool `json:"pinned,omitempty"`
 	// ID is the engine's own id, as it answered when the run started, or once the
 	// enclosure was prepared; empty when it gave none.
@@ -69,7 +69,8 @@ var idArgs = []string{"info", "--format", "{{.ID}}"}
 // is not set; for a command other than podman, when neither DOCKER_HOST nor
 // DOCKER_CONTEXT is set, the context the command shows, since the command would read it
 // from its configuration, which can change; whether that selection is pinned, as
-// [Engine.Pinned] says; and the engine's id, when it gives one. A variable left out as
+// [Engine.Pinned] says; and the engine's id, when it gives one, which a command other
+// than podman is asked by later. A variable left out as
 // unreadable leaves the selection unpinned, and then neither the context nor the id is
 // asked, since they would be another engine's.
 //
@@ -111,15 +112,15 @@ func (d *Docker) Engine(ctx context.Context) Engine {
 	}
 	// The selection is pinned by the variables the command itself reads; the others
 	// stay recorded, and the run's commands keep them.
-	podman := filepath.Base(e.Command) == "podman"
-	if podman {
+	byName := podman(e.Command)
+	if byName {
 		e.Pinned = !dropped && (set["CONTAINER_HOST"] || set["CONTAINER_CONNECTION"])
 	} else {
 		e.Pinned = !dropped && (set["DOCKER_HOST"] || set["DOCKER_CONTEXT"])
 	}
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
 	defer cancel()
-	if !dropped && !podman && !e.Pinned {
+	if !dropped && !byName && !e.Pinned {
 		out, err := sys.engine(ctx, []string{e.Command, "context", "show"}, e.Env)
 		if name := oneWord(out); err == nil && name != "" {
 			e.Env, e.Pinned = append(e.Env, "DOCKER_CONTEXT="+name), true
@@ -187,6 +188,10 @@ func withoutPassword(address string) (string, bool) {
 	return u.String(), true
 }
 
+// podman reports whether the command is podman by its name, the one command whose
+// selection pins its engine without an id.
+func podman(command string) bool { return filepath.Base(command) == "podman" }
+
 // RunContainersExist reports whether the engine holds a container labelled with the
 // run's id, in any state: a container that is created, paused or stopped can be started
 // again with its binds.
@@ -214,8 +219,14 @@ func runContainersExist(
 	}
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
 	defer cancel()
-	// The engine reached is the one the run was in, or the answer says nothing of it.
-	if !e.Pinned && e.ID == "" {
+	// The engine reached is the one the run was in, or the answer says nothing of it. A
+	// command other than podman is asked by its id: every Docker engine gives one, and
+	// podman under another name reads none of the DOCKER_ variables that pin it.
+	switch {
+	case e.ID == "" && !podman(e.Command):
+		return false, errors.New("wall docker: the run's engine was recorded without " +
+			"an id, so another engine may answer")
+	case e.ID == "" && !e.Pinned:
 		return false, errors.New("wall docker: the run's engine was recorded with neither " +
 			"a pinned selection nor an id, so another engine may answer")
 	}

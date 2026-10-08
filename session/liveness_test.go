@@ -289,6 +289,31 @@ func TestAnUnpinnedEntryWithoutAnIDIsNoAnswer(t *testing.T) {
 	}
 }
 
+// TestADockerEntryWithoutAnIDIsNoAnswer pins an entry of a command other than podman
+// that recorded no id, its selection pinned by DOCKER_HOST: the command may be podman
+// under another name, which reads no DOCKER_HOST, so a later run gets no answer and
+// does not start, and the entry stays.
+func TestADockerEntryWithoutAnIDIsNoAnswer(t *testing.T) {
+	session.SetRunContainersExist(nil)
+	root := t.TempDir()
+	file := leave(t, root, &wall.Engine{Wall: "docker", Command: "/opt/left/docker",
+		Env: []string{"DOCKER_HOST=unix:///run/docker.sock"}, Pinned: true})
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: t.TempDir()}}, t.TempDir()
+	r := refusalOf(t, "engine_unreachable", runErr(sp))
+	if !slices.Equal(r.Names, []string{leftID}) ||
+		!strings.Contains(r.Detail, "recorded without an id") {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+	if w.req.RunID != "" {
+		t.Error("the wall was prepared")
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("the entry is gone: %v", err)
+	}
+}
+
 // TestTheIDIsRecordedOnceTheEnclosureIsPrepared pins an engine that gave no id when the
 // run started: it is asked again once the enclosure is prepared, and its answer goes in
 // the entry; with no answer, the entry records none. The entry stays here because the

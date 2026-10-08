@@ -591,22 +591,23 @@ func TestDockerListsItsOwnBinds(t *testing.T) {
 // whether any container is listed.
 func TestTheEngineIsAskedForARunsContainersInEveryState(t *testing.T) {
 	e := Engine{Wall: "docker", Command: "/opt/engine/docker", Pinned: true,
-		Env: []string{"DOCKER_HOST=unix:///run/other.sock", "DOCKER_CONTEXT=other"}}
+		Env: []string{"DOCKER_HOST=unix:///run/other.sock", "DOCKER_CONTEXT=other"},
+		ID:  "4c1f0a2e-engine"}
 	for _, c := range []struct {
 		listed string
 		exists bool
 	}{{"", false}, {"\n", false}, {"3f2a9c1b7d4e\n", true}} {
-		rec := &recorder{t: t, containers: c.listed}
+		rec := &recorder{t: t, containers: c.listed, engineID: e.ID}
 		exists, err := runContainersExist(context.Background(), rec, e, runID)
 		if err != nil || exists != c.exists {
 			t.Errorf("listed %q: exists %v, %v", c.listed, exists, err)
 		}
 		want := "/opt/engine/docker ps --all --quiet --filter label=dev.qory.run=" + runID
-		if len(rec.lines) != 1 || rec.lines[0] != want || !slices.Equal(rec.env, e.Env) {
+		if len(rec.lines) != 2 || rec.lines[1] != want || !slices.Equal(rec.env, e.Env) {
 			t.Errorf("asked %q with %q", rec.lines, rec.env)
 		}
 	}
-	rec := &recorder{t: t, fail: " ps "}
+	rec := &recorder{t: t, fail: " ps ", engineID: e.ID}
 	if _, err := runContainersExist(context.Background(), rec, e, runID); err == nil ||
 		!strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
 		t.Errorf("an engine that fails: %v", err)
@@ -773,7 +774,7 @@ func TestTheIDIsAskedAgainThroughTheSelection(t *testing.T) {
 // DOCKER_CONTEXT or the context it shows. A variable of the other command's stays
 // recorded and never pins, so podman with DOCKER_HOST alone, and no id, is no answer
 // later; docker with CONTAINER_HOST alone is pinned by the context it shows, and is
-// unpinned when it shows none.
+// unpinned when it shows none. Only podman, pinned, is asked later without an id.
 func TestOnlyTheCommandsOwnVariablesPin(t *testing.T) {
 	for _, c := range []struct {
 		name, command, variable, value, fail string
@@ -806,11 +807,37 @@ func TestOnlyTheCommandsOwnVariablesPin(t *testing.T) {
 			}
 			rec = &recorder{t: t, containers: "3f2a9c1b7d4e\n"}
 			exists, err := runContainersExist(context.Background(), rec, e, runID)
-			if c.pinned && (!exists || err != nil) || !c.pinned && (err == nil ||
+			answers := c.pinned && c.command == "podman"
+			if answers && (!exists || err != nil) || !answers && (err == nil ||
 				len(rec.lines) != 0) {
 				t.Errorf("exists %v, %v, asked %q", exists, err, rec.lines)
 			}
 		})
+	}
+}
+
+// TestADockerEngineIsAskedByItsID pins a command other than podman, whatever engine
+// it reaches under that name: it is asked by its id, through its pinned selection, and
+// one that gave no id is no answer, though DOCKER_HOST pins its selection, since podman
+// installed as docker reads no DOCKER_HOST.
+func TestADockerEngineIsAskedByItsID(t *testing.T) {
+	unsetEngine(t)
+	t.Setenv("DOCKER_HOST", "unix:///run/docker.sock")
+	rec := &recorder{t: t, fail: " info "}
+	e := (&Docker{Command: "/opt/engine/docker", sys: rec}).Engine(context.Background())
+	if !e.Pinned || e.ID != "" {
+		t.Fatalf("engine %+v", e)
+	}
+	rec = &recorder{t: t, containers: "3f2a9c1b7d4e\n", engineID: "4c1f0a2e-engine"}
+	if _, err := runContainersExist(context.Background(), rec, e, runID); err == nil ||
+		len(rec.lines) != 0 {
+		t.Errorf("an engine with no id was asked: %v, %q", err, rec.lines)
+	}
+	e.ID = "4c1f0a2e-engine"
+	exists, err := runContainersExist(context.Background(), rec, e, runID)
+	if !exists || err != nil || len(rec.lines) != 2 ||
+		!slices.Contains(rec.env, "DOCKER_HOST=unix:///run/docker.sock") {
+		t.Errorf("exists %v, %v, asked %q with %q", exists, err, rec.lines, rec.env)
 	}
 }
 
