@@ -1509,7 +1509,8 @@ is looked up in its parent, so two binds of one root are allowed:
   pinned selection; podman is asked by its pinned selection when it gave no id. A run that
   cannot ask that engine, reaches another, or finds an entry whose engine is a command
   other than podman with no id, or podman with neither a pinned selection nor an id, is no
-  run, `engine_unreachable`, with the earlier run's id as its name.
+  run, `engine_unreachable`, whose names are the earlier run's id and then the absolute
+  path of its entry in the registry.
 
 The names of these refusals are paths as the caller passed them, the first always one
 of the run's mounts or its workspace, the run directory named by its runs directory.

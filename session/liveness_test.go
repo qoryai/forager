@@ -144,7 +144,8 @@ func TestAnEntryWithoutAContainerIsRemoved(t *testing.T) {
 // TestAnEngineThatCannotBeAskedStopsTheRun pins that a run that cannot tell whether an
 // entry whose runner is gone still has containers does not start, and binds nothing:
 // for an engine that fails, an entry that records no engine, and one that cannot be
-// read. The entry stays.
+// read. Its names are the earlier run's id and the entry's absolute path, and the entry
+// stays.
 func TestAnEngineThatCannotBeAskedStopsTheRun(t *testing.T) {
 	answer(t, false, errors.New("wall docker: /opt/left/docker ps: exit status 1: "+
 		"Cannot connect to the Docker daemon"))
@@ -172,7 +173,7 @@ func TestAnEngineThatCannotBeAskedStopsTheRun(t *testing.T) {
 			r := refusalOf(t, "engine_unreachable", runErr(sp))
 			prefix := "Docker could not be asked whether the walled run " + leftID +
 				" is still going, so the run does not start: "
-			if !slices.Equal(r.Names, []string{leftID}) ||
+			if !slices.Equal(r.Names, []string{leftID, file}) || !filepath.IsAbs(r.Names[1]) ||
 				!strings.HasPrefix(r.Detail, prefix) || !strings.Contains(r.Detail, c.cause) {
 				t.Errorf("names %q, detail %q", r.Names, r.Detail)
 			}
@@ -276,7 +277,7 @@ func TestAnUnpinnedEntryWithoutAnIDIsNoAnswer(t *testing.T) {
 		sp := walledSpec(t, w)
 		sp.Mounts, sp.Dir = []wall.Mount{{Path: t.TempDir()}}, t.TempDir()
 		r := refusalOf(t, "engine_unreachable", runErr(sp))
-		if !slices.Equal(r.Names, []string{leftID}) ||
+		if !slices.Equal(r.Names, []string{leftID, file}) || !filepath.IsAbs(r.Names[1]) ||
 			!strings.Contains(r.Detail, "neither a pinned selection nor an id") {
 			t.Errorf("%q: names %q, detail %q", env, r.Names, r.Detail)
 		}
@@ -302,7 +303,7 @@ func TestADockerEntryWithoutAnIDIsNoAnswer(t *testing.T) {
 	sp := walledSpec(t, w)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: t.TempDir()}}, t.TempDir()
 	r := refusalOf(t, "engine_unreachable", runErr(sp))
-	if !slices.Equal(r.Names, []string{leftID}) ||
+	if !slices.Equal(r.Names, []string{leftID, file}) || !filepath.IsAbs(r.Names[1]) ||
 		!strings.Contains(r.Detail, "recorded without an id") {
 		t.Errorf("names %q, detail %q", r.Names, r.Detail)
 	}

@@ -297,14 +297,14 @@ release may change what an existing document does, and says so under Upgrading.
   that engine, whose engine answers with another id than the one recorded, or that reads
   such an entry that records no id for a command other than podman, neither a pinned
   selection nor an id for podman, no engine, or that cannot be read, is refused with
-  `engine_unreachable`; `Names` holds the earlier run's id, and the sentence reads "Docker
-  could not be asked whether the walled run <id> is still going, so the run does not
-  start: <the error>". A bind of another run's, or a directory on the way to it, that is
-  gone is compared by its names, like a part that does not exist yet; any other failure to
-  resolve one stops the run. A run checks its binds and adds its own entry under a lock of
-  the registry's, before it contacts the server, and again, with its wall's own binds,
-  just before the enclosure binds them. `events/run.refused.schema.json` lists the four
-  codes.
+  `engine_unreachable`; `Names` holds the earlier run's id and then the absolute path of
+  its registry entry, and the sentence reads "Docker could not be asked whether the walled
+  run <id> is still going, so the run does not start: <the error>". A bind of another
+  run's, or a directory on the way to it, that is gone is compared by its names, like a
+  part that does not exist yet; any other failure to resolve one stops the run. A run
+  checks its binds and adds its own entry under a lock of the registry's, before it
+  contacts the server, and again, with its wall's own binds, just before the enclosure
+  binds them. `events/run.refused.schema.json` lists the four codes.
 - `wall.Engined` is a wall whose enclosures are containers of an engine; its `Engine` is a
   `wall.Engine`: the adapter, `docker` whichever command it runs, the command, absolute
   when found in PATH, the variables that select the engine, `DOCKER_HOST`,

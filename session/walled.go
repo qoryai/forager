@@ -28,8 +28,9 @@ import (
 // start together are checked one after the other.
 const walledLock = "lock"
 
-// walledDir is the registry's directory: $XDG_STATE_HOME/qory-runner/walled, else
-// ~/.local/state/qory-runner/walled. A test points it elsewhere.
+// walledDir is the registry's directory, absolute: $XDG_STATE_HOME/qory-runner/walled
+// when XDG_STATE_HOME is absolute, else ~/.local/state/qory-runner/walled, a relative
+// HOME taken from the working directory. A test points it elsewhere.
 var walledDir = func() (string, error) {
 	if state := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(state) {
 		return filepath.Join(state, "qory-runner", "walled"), nil
@@ -38,7 +39,7 @@ var walledDir = func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "state", "qory-runner", "walled"), nil
+	return filepath.Abs(filepath.Join(home, ".local", "state", "qory-runner", "walled"))
 }
 
 // runContainersExist reports whether the engine holds a container labelled with the
@@ -319,17 +320,17 @@ func readEntry(file string) (walledEntry, bool, error) {
 		return entry, true, nil
 	}
 	if err != nil {
-		return walledEntry{}, false, engineUnreachable(runID,
+		return walledEntry{}, false, engineUnreachable(runID, file,
 			fmt.Errorf("its entry %s cannot be read: %w", file, err))
 	}
 	if entry.Engine == nil {
-		return walledEntry{}, false, engineUnreachable(runID,
+		return walledEntry{}, false, engineUnreachable(runID, file,
 			fmt.Errorf("its entry %s records no engine", file))
 	}
 	exists, err := runContainersExist(context.Background(), *entry.Engine, runID)
 	switch {
 	case err != nil:
-		return walledEntry{}, false, engineUnreachable(runID, err)
+		return walledEntry{}, false, engineUnreachable(runID, file, err)
 	case exists:
 		return entry, true, nil
 	}
@@ -339,11 +340,13 @@ func readEntry(file string) (walledEntry, bool, error) {
 
 // engineUnreachable is the refusal of a run that cannot ask the container engine
 // whether an earlier walled run, whose runner is gone, still has containers: nothing is
-// bound while one may.
-func engineUnreachable(runID string, err error) *Refusal {
+// bound while one may. Its names are the earlier run's id and file, the path of its
+// entry, which the registry's directory makes absolute, so the entry can be found and
+// looked at.
+func engineUnreachable(runID, file string, err error) *Refusal {
 	return &Refusal{
 		Code:  refusal.EngineUnreachable,
-		Names: []string{runID},
+		Names: []string{runID, file},
 		Detail: fmt.Sprintf("Docker could not be asked whether the walled run %s is still "+
 			"going, so the run does not start: %v", runID, err),
 	}
