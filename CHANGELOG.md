@@ -286,9 +286,9 @@ release may change what an existing document does, and says so under Upgrading.
   process id and its binds, each as passed, as resolved, with the entries its names are
   looked up as, whether writable, and what it is when it is not a place; the file is held
   locked for the run's life and removed when it ends. A file whose lock is free is
-  removed. A bind of another run's that does not resolve any more is passed over, a name
-  on the way to it that is gone is left out, and one that cannot be resolved otherwise
-  stops the run. A run checks its binds and adds its own entry under a lock of the
+  removed. A bind of another run's, or a directory on the way to it, that is gone is
+  compared by its names, like a part that does not exist yet; any other failure to resolve
+  one stops the run. A run checks its binds and adds its own entry under a lock of the
   registry's, before it contacts the server, and again, with its wall's own binds, just
   before the enclosure binds them. `events/run.refused.schema.json` lists both codes.
 - `wall.Binder` is a wall, or an enclosure, that binds files and directories of this

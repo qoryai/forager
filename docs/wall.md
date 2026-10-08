@@ -321,11 +321,11 @@ looked up in its parent, so two binds of one root are allowed.
   side by side, and two read-only binds never conflict. `Names` holds this run's path, the
   other run's id and the other run's path, as each run passed it. A place of this run's
   that lies inside a writable directory another run's wall binds of its own is refused
-  too. A bind of another run's that does not resolve any more is passed over, and a name
-  on the way to it that is gone is left out; any other failure to resolve one stops the
-  run. Its sentence reads: "the mount /work/sub (writable) lies inside the writable bind
-  /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a
-  walled agent of that run can change it".
+  too. A bind of another run's, or a directory on the way to it, that is gone is compared
+  by its names, like a part that does not exist yet; any other failure to resolve one
+  stops the run. Its sentence reads: "the mount /work/sub (writable) lies inside the
+  writable bind /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is
+  still going: a walled agent of that run can change it".
 
   A run whose own helper, or another directory of the runner's it binds, lies inside a
   writable bind of another run's, or is reached through one, fails with a plain error:

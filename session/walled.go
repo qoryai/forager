@@ -198,12 +198,9 @@ func checkShared(dir, runID string, binds []bindSource) error {
 			continue
 		}
 		for _, b := range other.Binds {
-			ob, gone, err := resolveOther(other.RunID, b)
+			ob, err := resolveOther(other.RunID, b)
 			if err != nil {
 				return err
-			}
-			if gone {
-				continue
 			}
 			for _, own := range binds {
 				if err := shared(own, other.RunID, ob); err != nil {
@@ -216,19 +213,17 @@ func checkShared(dir, runID string, binds []bindSource) error {
 }
 
 // resolveOther is a bind of another run's as the filesystem has it now: its resolved
-// path and the directories its names are looked up in. gone says the bind itself does
-// not resolve any more, which nothing of this run's lies in; a directory on the way to
-// it that is gone is left out, and the others are kept. Any other failure to resolve
-// one is an error, since a bind this run cannot see may be one it shares.
-func resolveOther(runID string, b bindSource) (bindSource, bool, error) {
-	fail := func(p string, err error) (bindSource, bool, error) {
-		return bindSource{}, false, fmt.Errorf("the registry of walled runs: cannot "+
+// path and the directories its names are looked up in. A bind, or a directory on the
+// way to it, that is gone resolves as far as it exists, with the missing names below,
+// like a part that does not exist yet, and is compared by them. Any failure to resolve
+// one is an error, a race with a link that changes included, since a bind this run
+// cannot see may be one it shares.
+func resolveOther(runID string, b bindSource) (bindSource, error) {
+	fail := func(p string, err error) (bindSource, error) {
+		return bindSource{}, fmt.Errorf("the registry of walled runs: cannot "+
 			"resolve %s of the walled run %s, which is still going: %w", p, runID, err)
 	}
 	at, err := split(b.Resolved, 0)
-	if errors.Is(err, fs.ErrNotExist) {
-		return bindSource{}, true, nil
-	}
 	if err != nil {
 		return fail(b.Resolved, err)
 	}
@@ -236,16 +231,13 @@ func resolveOther(runID string, b bindSource) (bindSource, bool, error) {
 	for _, entry := range b.Lookups {
 		dir := filepath.Dir(entry)
 		dirAt, err := split(dir, 0)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
 		if err != nil {
 			return fail(dir, err)
 		}
 		b.looks = append(b.looks,
 			lookup{dir: dir, rest: []string{filepath.Base(entry)}, at: dirAt})
 	}
-	return b, false, nil
+	return b, nil
 }
 
 // readEntry reads one entry of the registry. An entry whose lock is free is removed,

@@ -576,8 +576,32 @@ func TestARunWaitsForTheRegistrysLock(t *testing.T) {
 	refusalOf(t, "mount_shared_with_run", second.err)
 }
 
+// TestAnotherRunsBindThatIsGoneIsComparedByItsNames pins a writable bind of another
+// walled run's that is deleted while it goes: it is compared by its names, like a part
+// that does not exist yet, so a mount inside it is refused, before the mount's own
+// directory is made again and after.
+func TestAnotherRunsBindThatIsGoneIsComparedByItsNames(t *testing.T) {
+	x := mkdirs(t, filepath.Join(t.TempDir(), "x"))
+	first, _ := hold(t, []wall.Mount{{Path: x}}, x)
+	if err := os.RemoveAll(x); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(x, "sub")
+	for _, made := range []bool{false, true} {
+		if made {
+			mkdirs(t, sub)
+		}
+		sp := walledSpec(t, &openWall{})
+		sp.Mounts = []wall.Mount{{Path: sub}}
+		r := refusalOf(t, "mount_shared_with_run", runErr(sp))
+		if !slices.Equal(r.Names, []string{sub, first.RunID, x}) {
+			t.Errorf("made %v: names %q, detail %q", made, r.Names, r.Detail)
+		}
+	}
+}
+
 // TestAnotherRunsBindThatCannotBeResolvedFailsTheRun pins that a bind of another
-// walled run's this run cannot resolve stops the run, rather than being passed over.
+// walled run's this run cannot resolve stops the run.
 func TestAnotherRunsBindThatCannotBeResolvedFailsTheRun(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root searches every directory")
