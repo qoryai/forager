@@ -776,8 +776,8 @@ func TestDeniedVariables(t *testing.T) {
 	}
 }
 
-// TestRunRefusedCodes pins the codes of dev.qory.run.refused to the contract's table of
-// refusal codes, the server's, the runner's and qory's.
+// TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's, the
+// runner's and qory's.
 func TestRunRefusedCodes(t *testing.T) {
 	var s struct {
 		Properties struct {
@@ -788,31 +788,16 @@ func TestRunRefusedCodes(t *testing.T) {
 	}
 	load(t, "events/run.refused.schema.json", &s)
 	want := []string{
-		"answer_unsigned", "apiary_public_key_missing", "bad_request", "connection_duplicate",
-		"connection_header_reserved", "connection_host_conflict", "connection_host_invalid",
-		"connection_host_public_suffix", "connection_needs_wall", "connection_secret_unknown",
-		"engine_unreachable", "envelope_signature_invalid", "fetch_failed", "image_invalid",
-		"image_unknown",
-		"instance_limit", "integration_argument_not_allowed", "integration_description_invalid",
-		"integration_failed", "integration_hosts_exceeded", "integration_missing",
-		"integration_name_mismatch", "integration_role_missing", "integration_settings_invalid",
-		"integration_settings_not_allowed", "integration_settings_too_large",
-		"integration_source_mismatch", "integration_version_mismatch", "integration_way_not_allowed",
-		"invalid_request", "key_invalid", "key_limit", "labels_changed",
-		"mount_contains_credential_files", "mount_contains_runner_files", "mount_mode_conflict",
-		"mount_shared_with_run", "mount_through_link", "placeholder_conflict",
-		"rate_limited", "run_closed", "run_configuration_digest_mismatch", "run_configuration_invalid",
-		"run_configuration_superseded", "run_connections_invalid", "run_secrets_conflict",
-		"run_secrets_expired", "runtime_connection_duplicate", "runtime_secret_choice",
-		"runtime_secret_conflict", "runtime_secret_missing", "secret_hosts_exceeded",
-		"secret_sealed_expired", "secret_sealed_invalid", "secret_sealed_mismatch",
-		"secret_unresolved", "secret_value_id_missing", "secret_value_invalid", "secrets_endpoint_missing",
-		"secrets_not_allowed", "server_needs_wall", "start_failed", "tool_host_denied", "tool_invalid",
-		"tool_not_started", "tool_unknown", "unauthorized", "unavailable",
-		"unsupported_contract_version", "variable_reserved",
+		"answer_unsigned", "apiary_public_key_missing", "bad_request", "engine_unreachable",
+		"image_unknown", "instance_limit", "invalid_request", "key_invalid", "key_limit",
+		"labels_changed", "mount_contains_runner_files", "mount_mode_conflict",
+		"mount_shared_with_run", "mount_through_link", "placeholder_conflict", "rate_limited",
+		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
+		"secrets_not_allowed", "server_needs_wall", "tool_unknown", "unauthorized",
+		"unavailable", "unsupported_contract_version", "variable_reserved",
 	}
-	if len(want) != 70 {
-		t.Fatalf("%d codes in the test's list; want 70", len(want))
+	if len(want) != 26 {
+		t.Fatalf("%d codes in the test's list; want 26", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)
