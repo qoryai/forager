@@ -1,6 +1,7 @@
 package walltest_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -106,9 +107,16 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		return m
 	}
 	before := volumes()
+	// The engine is recorded first, as a session records it, so every command of the
+	// adapter's runs with the recorded selection.
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: walltest.RelayArgs,
+		NestArgs: walltest.NestArgs}
+	if e := w.Engine(context.Background()); e.ID != strings.TrimSpace(string(engine)) {
+		t.Fatalf("the engine recorded: %+v", e)
+	}
 	walltest.Run(t, walltest.Options{
 		Origin:    "http://" + strings.TrimSpace(string(ip)) + ":8080/",
-		Wall:      &wall.Docker{Command: command, Helper: helper, RelayArgs: walltest.RelayArgs, NestArgs: walltest.NestArgs},
+		Wall:      w,
 		Image:     image,
 		Runtime:   rt,
 		Docker:    docker,

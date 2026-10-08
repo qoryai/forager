@@ -27,8 +27,13 @@ type Engine struct {
 	// command reads them, and the selection pinned where the command would read it
 	// from its configuration; a password in an address is left out.
 	Env []string `json:"env,omitempty"`
-	// ID is the engine's own id, as it answered when the run started; empty when it
-	// gave none.
+	// Pinned says Env selects one engine whatever the command's configuration holds:
+	// DOCKER_HOST, DOCKER_CONTEXT, CONTAINER_HOST or CONTAINER_CONNECTION was set and
+	// recorded, or the context the command showed is. An engine whose selection is not
+	// pinned is asked by its ID alone.
+	Pinned bool `json:"pinned,omitempty"`
+	// ID is the engine's own id, as it answered when the run started, or once the
+	// enclosure was prepared; empty when it gave none.
 	ID string `json:"id,omitempty"`
 }
 
@@ -37,6 +42,9 @@ type Engine struct {
 type Engined interface {
 	// Engine is the engine the wall's enclosures are in, as the wall reaches it now.
 	Engine(ctx context.Context) Engine
+	// EngineID is the engine's id, asked again through the selection Engine recorded,
+	// for an engine that gave none then; empty when it gives none.
+	EngineID(ctx context.Context) (string, error)
 }
 
 // engineVariables are the variables that select the engine the docker command, podman
@@ -53,12 +61,18 @@ const existsWait = 30 * time.Second
 // idArgs ask the engine for its own id.
 var idArgs = []string{"info", "--format", "{{.ID}}"}
 
-// Engine is the engine the adapter's command reaches, pinned: the command, absolute
-// when it is found in PATH; the variables of this process's environment that select
-// the engine, DOCKER_CONFIG and DOCKER_CERT_PATH made absolute and DOCKER_CONFIG
-// ~/.docker when it is not set; the context the command uses, when neither DOCKER_HOST
-// nor DOCKER_CONTEXT is set, since the command would read it from its configuration,
-// which can change; and the engine's id, when it gives one.
+// Engine is the engine the adapter's command reaches: the command, absolute when it is
+// found in PATH; the variables of this process's environment that select the engine,
+// DOCKER_CONFIG and DOCKER_CERT_PATH made absolute and DOCKER_CONFIG ~/.docker when it
+// is not set; when none of DOCKER_HOST, DOCKER_CONTEXT, CONTAINER_HOST and
+// CONTAINER_CONNECTION is set, the context the command shows, since the command would
+// read it from its configuration, which can change; and the engine's id, when it gives
+// one. A variable left out as unreadable leaves the selection unpinned, and then
+// neither the context nor the id is asked, since they would be another engine's.
+//
+// Every engine command of the adapter's, from then on, runs with this selection in
+// place of the runner's own, so the run's containers are on the engine recorded. With a
+// variable left out, the commands keep the runner's own environment.
 func (d *Docker) Engine(ctx context.Context) Engine {
 	sys := d.sys
 	if sys == nil {
@@ -70,7 +84,7 @@ func (d *Docker) Engine(ctx context.Context) Engine {
 			e.Command = abs
 		}
 	}
-	set := map[string]bool{}
+	set, dropped := map[string]bool{}, false
 	for _, name := range engineVariables {
 		value, ok := os.LookupEnv(name)
 		if !ok {
@@ -83,6 +97,7 @@ func (d *Docker) Engine(ctx context.Context) Engine {
 			}
 		case "DOCKER_HOST", "CONTAINER_HOST":
 			if value, ok = withoutPassword(value); !ok {
+				dropped = true
 				continue
 			}
 		}
@@ -91,19 +106,50 @@ func (d *Docker) Engine(ctx context.Context) Engine {
 	if home, err := os.UserHomeDir(); err == nil && !set["DOCKER_CONFIG"] {
 		e.Env = append(e.Env, "DOCKER_CONFIG="+filepath.Join(home, ".docker"))
 	}
+	e.Pinned = !dropped && (set["DOCKER_HOST"] || set["DOCKER_CONTEXT"] ||
+		set["CONTAINER_HOST"] || set["CONTAINER_CONNECTION"])
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
 	defer cancel()
-	if !set["DOCKER_HOST"] && !set["DOCKER_CONTEXT"] {
+	if !dropped && !e.Pinned {
 		out, err := sys.engine(ctx, []string{e.Command, "context", "show"}, e.Env)
 		if name := oneWord(out); err == nil && name != "" {
-			e.Env = append(e.Env, "DOCKER_CONTEXT="+name)
+			e.Env, e.Pinned = append(e.Env, "DOCKER_CONTEXT="+name), true
 		}
 	}
-	out, err := sys.engine(ctx, append([]string{e.Command}, idArgs...), e.Env)
-	if err == nil {
-		e.ID = oneWord(out)
+	if dropped {
+		return e
 	}
+	e.ID, _ = engineID(ctx, sys, e)
+	d.selectionMu.Lock()
+	d.recorded = &Engine{Command: e.Command, Env: append([]string{}, e.Env...)}
+	d.selectionMu.Unlock()
 	return e
+}
+
+// EngineID is the id the engine gives now, asked through the selection [Docker.Engine]
+// recorded; empty when it gives none, and an error when no selection is recorded.
+func (d *Docker) EngineID(ctx context.Context) (string, error) {
+	d.selectionMu.Lock()
+	recorded := d.recorded
+	d.selectionMu.Unlock()
+	if recorded == nil {
+		return "", errors.New("wall docker: no engine's selection is recorded")
+	}
+	sys := d.sys
+	if sys == nil {
+		sys = hostSystem{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, existsWait)
+	defer cancel()
+	return engineID(ctx, sys, *recorded)
+}
+
+func engineID(ctx context.Context, sys system, e Engine) (string, error) {
+	out, err := sys.engine(ctx, append([]string{e.Command}, idArgs...), e.Env)
+	if err != nil {
+		return "", err
+	}
+	return oneWord(out), nil
 }
 
 // oneWord is a command's answer when it is one word, else empty.
@@ -160,12 +206,16 @@ func runContainersExist(
 	ctx, cancel := context.WithTimeout(ctx, existsWait)
 	defer cancel()
 	// The engine reached is the one the run was in, or the answer says nothing of it.
+	if !e.Pinned && e.ID == "" {
+		return false, errors.New("wall docker: the run's engine was recorded with neither " +
+			"a pinned selection nor an id, so another engine may answer")
+	}
 	if e.ID != "" {
-		out, err := sys.engine(ctx, append([]string{e.Command}, idArgs...), e.Env)
+		id, err := engineID(ctx, sys, e)
 		if err != nil {
 			return false, fmt.Errorf("wall docker: %s info: %w", e.Command, err)
 		}
-		if id := oneWord(out); id != e.ID {
+		if id != e.ID {
 			return false, fmt.Errorf("wall docker: %s reaches the engine %q, not %q, the "+
 				"one the run was in", e.Command, id, e.ID)
 		}
@@ -184,15 +234,21 @@ func runContainersExist(
 // that selects an engine, and then the engine's own.
 func engineCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 	cmd := hostCommand(ctx, argv)
-	kept := cmd.Env[:0]
-	for _, kv := range cmd.Env {
+	cmd.Env = withSelection(cmd.Env, env)
+	return cmd
+}
+
+// withSelection is an environment without any variable that selects an engine, and then
+// the engine's selection.
+func withSelection(environ, selection []string) []string {
+	var kept []string
+	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		if !slices.Contains(engineVariables, name) {
 			kept = append(kept, kv)
 		}
 	}
-	cmd.Env = append(kept, env...)
-	return cmd
+	return append(kept, selection...)
 }
 
 func (hostSystem) engine(ctx context.Context, argv, env []string) ([]byte, error) {

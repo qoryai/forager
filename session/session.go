@@ -645,6 +645,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err != nil {
 			return fail(err)
 		}
+		listed.askID(runCtx, spec.Wall)
 		if err := listed.update(append(again.sources, binds...)); err != nil {
 			return fail(err)
 		}

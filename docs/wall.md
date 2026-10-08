@@ -308,34 +308,43 @@ looked up in its parent, so two binds of one root are allowed.
   names are looked up as, whether it is writable, and what it is when it is not a place,
   the run directory, the helper or a directory of the runner's, and whether it is a
   pattern, and, for a wall in a container engine, the engine: the command, the variables
-  that select it, a password in an address left out, and the engine's id. With neither
-  `DOCKER_HOST` nor `DOCKER_CONTEXT` set, the entry pins the context the command shows and
-  `DOCKER_CONFIG`, else `~/.docker`, so a later `docker context use` does not change the
-  engine asked. An engine that gives no id, podman's for one, is recorded without one, and
-  is asked by the pinned selection alone. The run holds the file locked until it ends, and
-  the file stays when the wall could not be removed. An entry is live while its runner
-  holds it, or while a container labelled `dev.qory.run=<id>` exists, in any state, on the
-  engine the entry records: an agent killed with its runner keeps its binds. The runner
-  asks that engine, with the recorded variables, for its id, when one is recorded, and
-  then `<command> ps --all --quiet --filter label=dev.qory.run=<id>`, and removes an entry
+  that select it, a password in an address left out, whether that selection is pinned, and
+  the engine's id. The selection is pinned when `DOCKER_HOST`, `DOCKER_CONTEXT`,
+  `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded; with none of them set,
+  the entry pins the context the command shows and `DOCKER_CONFIG`, else `~/.docker`, so a
+  later `docker context use` does not change the engine asked. The podman command, with
+  none of them set, is unpinned, as is a command whose `context show` fails. An address
+  that cannot be read is left out whole and leaves the selection unpinned, and then
+  neither the context nor the id is asked. Every engine command of the run's, and the
+  agent's container, runs with the recorded selection in place of the runner's own, so the
+  engine recorded is the one the run uses; with an address left out, they run with the
+  runner's own environment. An engine that gives no id as the run starts is asked again
+  through the recorded selection once the enclosure is prepared, and its answer goes in
+  the entry. The run holds the file locked until it ends, and the file stays when the wall
+  could not be removed. An entry is live while its runner holds it, or while a container
+  labelled `dev.qory.run=<id>` exists, in any state, on the engine the entry records: an
+  agent killed with its runner keeps its binds. The runner asks that engine, with the
+  recorded variables, for its id, when one is recorded, and then
+  `<command> ps --all --quiet --filter label=dev.qory.run=<id>`, and removes an entry
   whose engine holds no such container. For an entry whose lock is free, a run that cannot
-  ask, whose engine fails or answers with another id, or that reads an entry that records
-  no engine or cannot be read, is no run, `engine_unreachable`, with the earlier run's id
-  in `Names`: "Docker could not be asked whether the walled run <id> is still going, so
-  the run does not start: <the error>". Under a lock of the registry's own, a run reads
-  the entries, checks its binds against them and adds its own, so two runs that start
-  together are checked one after the other. A run is no run, `mount_shared_with_run`, when
-  one of its binds lies inside a writable bind of another run's or is reached through one,
-  or when one of its writable binds holds a bind of another run's or a directory a name on
-  the way to one is looked up in. Two runs that bind the same root, both writable, run
-  side by side, and two read-only binds never conflict. `Names` holds this run's path, the
-  other run's id and the other run's path, as each run passed it. A place of this run's
-  that lies inside a writable directory another run's wall binds of its own is refused
-  too. A bind of another run's, or a directory on the way to it, that is gone is compared
-  by its names, like a part that does not exist yet; any other failure to resolve one
-  stops the run. Its sentence reads: "the mount /work/sub (writable) lies inside the
-  writable bind /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is
-  still going: a walled agent of that run can change it".
+  ask, whose engine fails or answers with another id, whose entry records neither a pinned
+  selection nor an id, or that reads an entry that records no engine or cannot be read, is
+  no run, `engine_unreachable`, with the earlier run's id in `Names`: "Docker could not be
+  asked whether the walled run <id> is still going, so the run does not start: <the
+  error>". Under a lock of the registry's own, a run reads the entries, checks its binds
+  against them and adds its own, so two runs that start together are checked one after the
+  other. A run is no run, `mount_shared_with_run`, when one of its binds lies inside a
+  writable bind of another run's or is reached through one, or when one of its writable
+  binds holds a bind of another run's or a directory a name on the way to one is looked up
+  in. Two runs that bind the same root, both writable, run side by side, and two read-only
+  binds never conflict. `Names` holds this run's path, the other run's id and the other
+  run's path, as each run passed it. A place of this run's that lies inside a writable
+  directory another run's wall binds of its own is refused too. A bind of another run's,
+  or a directory on the way to it, that is gone is compared by its names, like a part that
+  does not exist yet; any other failure to resolve one stops the run. Its sentence reads:
+  "the mount /work/sub (writable) lies inside the writable bind /work of the walled run
+  0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that run
+  can change it".
 
   A run whose own helper, or another directory of the runner's it binds, lies inside a
   writable bind of another run's, or is reached through one, fails with a plain error:

@@ -168,6 +168,19 @@ func (r *registration) write(binds []bindSource) error {
 	return nil
 }
 
+// askID asks the run's engine for its id again, when it gave none as the run started,
+// now that the enclosure is prepared on it, and records the answer in the entry at its
+// next write. With no answer, the entry stays as it was.
+func (r *registration) askID(ctx context.Context, w wall.Wall) {
+	e, ok := w.(wall.Engined)
+	if !ok || r.engine == nil || r.engine.ID != "" {
+		return
+	}
+	if id, err := e.EngineID(ctx); err == nil && id != "" {
+		r.engine.ID = id
+	}
+}
+
 // update checks a walled run's binds against every other walled run of this user's
 // still going again, its own entry left out, and puts them in its entry, under the
 // registry's lock.

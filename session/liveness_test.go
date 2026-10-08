@@ -20,7 +20,7 @@ const leftID = "0191f2a4-0000-7000-8000-00000000a11e"
 
 // leftEngine is the engine an entry whose runner is gone records.
 var leftEngine = wall.Engine{Wall: "docker", Command: "/opt/left/docker",
-	Env: []string{"DOCKER_CONTEXT=left"}}
+	Env: []string{"DOCKER_CONTEXT=left"}, Pinned: true}
 
 // leave writes the entry of a walled run whose runner is gone: its lock is free, and it
 // binds dir writable, with the engine when it is not nil.
@@ -77,9 +77,14 @@ func answer(t *testing.T, exists bool, err error) *engineAnswers {
 type enginedWall struct {
 	openWall
 	engine wall.Engine
+	// id and idErr are what the engine answers when it is asked for its id again.
+	id    string
+	idErr error
 }
 
 func (w *enginedWall) Engine(context.Context) wall.Engine { return w.engine }
+
+func (w *enginedWall) EngineID(context.Context) (string, error) { return w.id, w.idErr }
 
 // TestAnEntryWithAContainerIsLive pins an entry whose runner is gone and whose run
 // still has a container, in whatever state, on the engine the entry records: it is a
@@ -215,6 +220,8 @@ type heldEngined struct {
 
 func (w *heldEngined) Engine(context.Context) wall.Engine { return w.engine }
 
+func (w *heldEngined) EngineID(context.Context) (string, error) { return "", nil }
+
 // closeFailing is a wall in a container engine whose Close fails, as one whose
 // containers could not be removed.
 type closeFailing struct{ enginedWall }
@@ -253,5 +260,67 @@ func TestAnEntryStaysWhenTheWallIsNotRemoved(t *testing.T) {
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
 	if !slices.Equal(r.Names, []string{sub, w.req.RunID, root}) {
 		t.Errorf("names %q", r.Names)
+	}
+}
+
+// TestAnUnpinnedEntryWithoutAnIDIsNoAnswer pins an entry whose engine was recorded with
+// neither a pinned selection nor an id, podman's with nothing set say: whatever engine
+// answers now may be another, so a later run gets no answer and does not start, and the
+// entry stays.
+func TestAnUnpinnedEntryWithoutAnIDIsNoAnswer(t *testing.T) {
+	session.SetRunContainersExist(nil)
+	root := t.TempDir()
+	file := leave(t, root, &wall.Engine{Wall: "docker", Command: "podman"})
+	w := &openWall{}
+	sp := walledSpec(t, w)
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: t.TempDir()}}, t.TempDir()
+	r := refusalOf(t, "engine_unreachable", runErr(sp))
+	if !slices.Equal(r.Names, []string{leftID}) ||
+		!strings.Contains(r.Detail, "neither a pinned selection nor an id") {
+		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	}
+	if w.req.RunID != "" {
+		t.Error("the wall was prepared")
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("the entry is gone: %v", err)
+	}
+}
+
+// TestTheIDIsRecordedOnceTheEnclosureIsPrepared pins an engine that gave no id when the
+// run started: it is asked again once the enclosure is prepared, and its answer goes in
+// the entry; with no answer, the entry records none. The entry stays here because the
+// wall is not removed.
+func TestTheIDIsRecordedOnceTheEnclosureIsPrepared(t *testing.T) {
+	for _, c := range []struct {
+		name, id string
+		err      error
+		want     string
+	}{
+		{"an answer", "4c1f0a2e-engine", nil, "4c1f0a2e-engine"},
+		{"no answer", "", errors.New("Cannot connect to the Docker daemon"), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			w := &closeFailing{enginedWall{engine: leftEngine, id: c.id, idErr: c.err}}
+			sp := walledSpec(t, w)
+			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
+			if _, err := session.Run(context.Background(), sp); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(registry(t), w.req.RunID)
+			t.Cleanup(func() { os.Remove(file) })
+			b, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var entry struct {
+				Engine *wall.Engine `json:"engine"`
+			}
+			if err := json.Unmarshal(b, &entry); err != nil || entry.Engine == nil ||
+				entry.Engine.ID != c.want || !entry.Engine.Pinned {
+				t.Errorf("entry %s: %v", b, err)
+			}
+		})
 	}
 }
