@@ -101,9 +101,8 @@ func (k *Key) X25519PrivateKey() []byte {
 	return bytes.Clone(s)
 }
 
-// X25519 returns the X25519 private key of the access key as crypto/ecdh holds it,
-// the key HPKE opens what the server seals to the access key with. Its public key is
-// [PublicKey.X25519] of the key's public key.
+// X25519 returns the X25519 private key of the access key as crypto/ecdh holds it.
+// Its public key is [PublicKey.X25519] of the key's public key.
 func (k *Key) X25519() *ecdh.PrivateKey {
 	priv, err := ecdh.X25519().NewPrivateKey(k.X25519PrivateKey())
 	if err != nil {
@@ -212,8 +211,8 @@ func (p PublicKey) Check() error {
 }
 
 // X25519 returns the X25519 public key of an Ed25519 public key, the Montgomery
-// u-coordinate u = (1 + y) / (1 − y) mod 2^255 − 19: the key the server seals to. It
-// refuses a key [PublicKey.Check] refuses.
+// u-coordinate u = (1 + y) / (1 − y) mod 2^255 − 19. It refuses a key
+// [PublicKey.Check] refuses.
 func (p PublicKey) X25519() ([]byte, error) {
 	if err := p.Check(); err != nil {
 		return nil, err

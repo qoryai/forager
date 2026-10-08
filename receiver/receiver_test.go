@@ -299,7 +299,7 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 		"a delivery under another key": signedPOST(receiver.DefaultEventsPath, other, []byte("[]")),
 		"a delivery signed for another path": func() *http.Request {
 			r := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("[]"))
-			r.Header.Set(server.HeaderSignature, signedPOST("/v1/secrets", fixtureKey, []byte("[]")).Header.Get(server.HeaderSignature))
+			r.Header.Set(server.HeaderSignature, signedPOST("/v1/other", fixtureKey, []byte("[]")).Header.Get(server.HeaderSignature))
 			return r
 		}(),
 		"a delivery with no signature": func() *http.Request {

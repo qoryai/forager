@@ -190,9 +190,9 @@ func decode(name, schemaName string, b []byte, out any) error {
 }
 
 // Configuration is the configuration document the server answers discovery with:
-// the access key's node, where events go and which, where the run configuration and
-// the stored secrets are, when the server offers them, and the server's keys. A
-// section the runner does not know is ignored.
+// the access key's node, where events go and which, where the run configuration is
+// when the server offers one, a secrets section for an access key allowed stored
+// secrets, and the server's keys. A section the runner does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
 	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
@@ -214,8 +214,8 @@ type Events struct {
 	Types []string `json:"types"`
 }
 
-// Endpoint is a section that defines one URL: where the run configuration is fetched
-// from, or where stored secrets are requested.
+// Endpoint is a section that defines one URL: run, where the run configuration is
+// fetched from, or secrets, listed for an access key allowed stored secrets.
 type Endpoint struct {
 	URL string `json:"url"`
 }

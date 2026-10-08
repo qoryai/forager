@@ -226,7 +226,7 @@ type Result struct {
 type Discovery struct {
 	// NodeID is the id of the access key's node, nd_, or node pool, np_.
 	NodeID string
-	// Secrets says the document lists secrets: the access key receives stored secrets.
+	// Secrets is true when the document lists a secrets section.
 	Secrets bool
 }
 

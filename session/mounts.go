@@ -227,8 +227,6 @@ func runnerFiles(spec Spec) []runnerFile {
 	if dir, err := walledDir(); err == nil {
 		out = append(out, runnerFile{dir, "where the runner lists the walled runs still going"})
 	}
-	// Later, the files a run's secrets and variables are read from (the file: paths of
-	// secrets.local and an integration's _file settings) join this list.
 	return out
 }
 

@@ -6,9 +6,9 @@
 // An access key is one Ed25519 key. Its secret is one line, "qak_" and the 32-byte seed
 // in base64url without padding, 47 characters; [Generate] makes one from the system's
 // random source and [ParseSecret] reads one. Everything comes from the seed: the
-// Ed25519 public key, its fingerprint, and the X25519 key that opens what the server
-// seals to the access key. The server assigns the access key its id, "ak_" and 16
-// lower-case Crockford base32 characters, when the key enrols.
+// Ed25519 public key, its fingerprint, and the X25519 key converted from the Ed25519
+// key. The server assigns the access key its id, "ak_" and 16 lower-case Crockford
+// base32 characters, when the key enrols.
 //
 // Every request to the server is signed under the secret: [Request] builds the request
 // string, "qory-request-ed25519-v1" and then the access key id, the instance id and

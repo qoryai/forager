@@ -364,7 +364,7 @@ func Run(t *testing.T, o Options) {
 	}
 	t.Run("the hook reaches the runner", func(t *testing.T) {
 		if !o.Hooks {
-			t.Skip("the adapter carries no hook socket across on this machine; the forwarder's network transport is not in this release")
+			t.Skip("the adapter carries no hook socket across on this machine")
 		}
 		for _, e := range r.events {
 			if e["type"] == "dev.qory.session.ended" {

@@ -47,6 +47,21 @@ among the signed lines. Every answer is signed with the server's key and bound t
 request, and the runner reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
+The spec holds what identifies the run to the server:
+
+- `Spec.AccessKey` is the access key, an `*accesskey.Key` held from its secret, which
+  the caller reads. It signs every request. A `Server` needs it.
+- `Spec.InstanceID` is this instance's id: `qory` reads it from its instance-id file.
+  It is sent in `X-Qory-Instance-Id` and signed into every request. A `Server` needs
+  it, and it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+- `Spec.InstanceName` is this instance's display name, sent in `X-Qory-Instance-Name`
+  on every request, unsigned. It matches the same pattern; empty sends none.
+- `Spec.Discovered`, when not nil, is called once the configuration document is read
+  and verified, before the ping, with a `session.Discovery`: `NodeID`, the id of the
+  access key's node, `nd_`, or node pool, `np_`; and `Secrets`, true when the document
+  lists a `secrets` section, which it does for an access key allowed stored secrets.
+  `qory` prints the node id. An error it returns is no run, and nothing more is sent.
+
 ## When the server refuses or closes a run
 
 A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a key the
@@ -143,8 +158,7 @@ list, as `session.Applied`.
 
 ## A control plane
 
-Reporting to a control plane works today, without the fleet layer of the
-[node runner](node.md). A control plane is the same server every run has:
+A control plane is the same server every run has:
 
 - it creates the run from the first event it sees;
 - it supplies the run's policy, as the server's run configuration.

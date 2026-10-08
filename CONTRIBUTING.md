@@ -14,7 +14,7 @@ Everywhere. Three kinds are the most useful:
   fixtures. A receiver follows the contract and lives in your own repository; nothing in
   this one has to change for it.
 - **The runner** and the receiver: the packages `session` and `receiver` and what they
-  share under `internal/`. The node runner, `node`, is not built yet.
+  share under `internal/`.
 
 ## Contributor Licence Agreement
 
@@ -26,8 +26,7 @@ the Apache License, Version 2.0. You keep your copyright.
 
 Opening a pull request against this repository is your acceptance of the agreement, for that
 contribution and every later one. The pull request is the record of your acceptance. Read
-[CLA.md](CLA.md) before your first pull request. A signing step on the pull request may be
-added later; it will not change the terms.
+[CLA.md](CLA.md) before your first pull request.
 
 The agreement names the owner with successors-and-assigns wording, so that if the
 project moves into a dedicated entity, existing grants travel with it and nobody signs again.
@@ -73,9 +72,8 @@ receiver. Fixtures hold synthetic data only: no real host names of
 anyone's infrastructure, no real secrets, no recorded session of anyone's work. Name a test
 for the behaviour it pins, not for the function it calls.
 
-Two dependency directions are invariants. `qory` imports this module and this module
+One dependency direction is an invariant. `qory` imports this module and this module
 imports nothing of `qory`: the runner knows nothing of stacks, modules, homes or reports.
-Inside the module, `node` will import `session` and `session` never imports `node`.
 
 Dependencies stay few: the standard library, a pseudo-terminal package, a terminal
 package for raw mode, YAML, and JSON schema validation. No CloudEvents SDK: the

@@ -48,8 +48,7 @@ type Descriptor struct {
 type Secrets struct {
 	// Declares is the secrets the runtime reads, each from one variable.
 	Declares []Declaration `yaml:"declares" json:"declares,omitempty"`
-	// OneOf is the groups of declarations of which a runtime connection supplies at
-	// most one each.
+	// OneOf is the groups of declarations of which the runtime needs at most one each.
 	OneOf []Group `yaml:"one_of" json:"one_of,omitempty"`
 	// Reserves is the variables the runtime reads a credential from beside the declared
 	// ones.
@@ -81,8 +80,8 @@ type Auth struct {
 	Username string `yaml:"username" json:"username,omitempty"`
 }
 
-// Group is a set of declarations of which a runtime connection supplies at most one,
-// and exactly one when Required.
+// Group is a set of declarations of which the runtime needs at most one, and exactly
+// one when Required.
 type Group struct {
 	ID       string   `yaml:"id" json:"id"`
 	Required bool     `yaml:"required" json:"required,omitempty"`
