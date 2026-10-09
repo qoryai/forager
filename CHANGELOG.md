@@ -202,8 +202,9 @@ release may change what an existing document does, and says so under Upgrading.
   carry the digest headers of a reload. A coded refusal on the link is
   `link-refusal.schema.json`, `error`, `names`, `from`, required, `gateway` or
   `apiary`, the server's refusal passed on with its code and status, and `message`, the
-  error's text of a `500` `internal`, which holds no secret, run credential or image
-  reference; every `410` on the link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
+  error's text of a `500` `internal`, up to 8192 characters that may span lines, tab
+  and newline its only control characters, which holds no secret, run credential or
+  image reference; every `410` on the link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
   `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
   `placeholders`, `reserved`, `image` and `applied`, never the proxy secret or the certificate
   authority; on the local link the link secret authorises it. A run opens with a `POST`
@@ -294,7 +295,8 @@ release may change what an existing document does, and says so under Upgrading.
   ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
-  `from` or with a control character in its `message`, and a batch with a
+  `from` or with a control character other than tab and newline in its `message`, and
+  a batch with a
   `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
   `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
