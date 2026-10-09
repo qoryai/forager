@@ -1106,6 +1106,10 @@ func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
 		runs, keys, spent, kept := gateway.Held(s.g)
 		return runs == 0 && keys == 0 && spent == 1 && kept == 0
 	})
+	// Of the run secrets, only the last run's is known still.
+	if n := gateway.SecretsIndexed(s.g); n != 1 {
+		t.Errorf("%d run secrets known, want the last run's alone", n)
+	}
 }
 
 // TestARefusedProxyRequestIsAnsweredInFull pins the 407 of a client that sends a body

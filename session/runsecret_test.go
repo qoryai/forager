@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,6 +230,42 @@ func TestTheRunSecretIsKeptWhileTheRecordOwes(t *testing.T) {
 		t.Fatalf("a run: %+v %v", done, err)
 	}
 	noRunSecret(t, "after a run that owes nothing", done.Dir)
+}
+
+// TestAResendCutShortKeepsTheRunSecret pins a resend whose context ends after the
+// discovery, before the gateway takes what is owed: it returns no error, with the events
+// still undelivered, and the run secret is kept for the resend that delivers them, which
+// removes it.
+func TestAResendCutShortKeepsTheRunSecret(t *testing.T) {
+	t.Parallel()
+	// Three heartbeat intervals outlast the session's close and the resends.
+	s := startSeparateBeating(t, 20*time.Second)
+	cred := credentialOf("rk-0001")
+	_, res := spooledRun(t, s, cred)
+	secret := keptRunSecret(t, res.Dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var asked atomic.Int32
+	cutShort := func(context.Context) (string, error) {
+		// The discovery is the first request; the context ends as the first batch is
+		// sent.
+		if asked.Add(1) > 1 {
+			cancel()
+		}
+		return cred, nil
+	}
+	got, err := session.Resend(ctx, resendSpec(s, res.Dir, cutShort))
+	if err != nil || got.Sent != 0 || got.Undelivered == 0 || got.RunClosed {
+		t.Fatalf("the resend cut short: %+v %v", got, err)
+	}
+	if keptRunSecret(t, res.Dir) != secret {
+		t.Error("the resend cut short changed the run secret")
+	}
+	got, err = session.Resend(context.Background(), resendSpec(s, res.Dir, fixedCredential(cred)))
+	if err != nil || got != (session.ResendResult{Sent: res.Undelivered}) {
+		t.Fatalf("the resend %+v %v; the session left %d undelivered", got, err, res.Undelivered)
+	}
+	noRunSecret(t, "after the resend that delivered the rest", res.Dir)
 }
 
 // TestAResendRemovesTheRunSecretAfterTheRunsEnd pins the resend of a run the gateway

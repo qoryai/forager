@@ -380,6 +380,37 @@ func TestAnExpiredRunCredentialFindsItsEndedRunByItsRunSecret(t *testing.T) {
 	}
 }
 
+// TestAnExpiredRunCredentialOfAnotherRunKeyReachesNoSpentRun pins the run key of the
+// expired path, under an issuer with no leeway: with the run secret of a run the gateway
+// let go of, an expired run credential of its run key gets its 410, and one of another
+// run key the 401.
+func TestAnExpiredRunCredentialOfAnotherRunKeyReachesNoSpentRun(t *testing.T) {
+	issuers := realIssuers(t, false)
+	none := runcredential.Duration(0)
+	issuers[0].Leeway = &none
+	s := startVerifying(t, gateway.Config{RunCredentials: issuers, Policy: enforce127}, nil, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	if status, b := r.post(t, cred, exited(r.a.RunID)); status != http.StatusAccepted {
+		t.Fatalf("the run.exited: %d %s", status, b)
+	}
+	eventually(t, "the run let go of", func() bool {
+		runs, _, spent, _ := gateway.Held(s.g)
+		return runs == 0 && spent == 1
+	})
+	expired := func(runKey string) string {
+		c := mint(issuerKey(), runKey, time.Now().Add(-2*time.Second), map[string]any{"iat": time.Now().Add(-time.Minute).Unix()})
+		s.secrets = append(s.secrets, c)
+		return c
+	}
+	for name, g := range ofRun(t, s, expired("rk-0001"), r.a.RunID, []string{r.a.RunSecret}) {
+		if g.status != http.StatusGone || refusalOf(g.body)["from"] != "gateway" {
+			t.Errorf("%s with an expired run credential of the run key: %d %s", name, g.status, g.body)
+		}
+	}
+	refusedAll(t, "an expired run credential of another run key", ofRun(t, s, expired("rk-0002"), r.a.RunID, []string{r.a.RunSecret}))
+}
+
 // TestASpentRunIsFoundByItsRunSecretUntilItLapses pins a run that ended and was let go
 // of: with its run secret and a run credential of its run key, a reload and a batch get
 // its 410 until what it left lapses, and the 401 after; with a wrong secret, the 401
