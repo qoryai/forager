@@ -90,8 +90,8 @@ func localRequest(t *testing.T, h *harness, method, path, body string, secret []
 
 // TestTheLocalLinkTakesARequestOfARunWithItsRunSecretAlone pins the run secret on the
 // local link: a reload or a batch without the run's secret, with an empty one, one of
-// no run, the run's own twice, or for a reload another run's, is a 400
-// invalid_request that ends no run; the run goes on, and its own secret reaches it.
+// no run, the run's own twice, or for a reload another run's, or the run's own with no
+// run id in the path, is a 400 invalid_request that ends no run; the run goes on, and its own secret reaches it.
 func TestTheLocalLinkTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
 	h := start(t, gateway.Config{})
 	a := h.open(server.LinkRunRequest{})
@@ -111,6 +111,9 @@ func TestTheLocalLinkTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
 	}
 	if status, r := localRequest(t, h, http.MethodGet, "/v1/run-configuration/"+a.RunID, "", []string{other.RunSecret}); status != http.StatusBadRequest || r["error"] != "invalid_request" {
 		t.Errorf("a reload with another run's secret: %d %v", status, r)
+	}
+	if status, r := localRequest(t, h, http.MethodGet, "/v1/run-configuration/", "", []string{a.RunSecret}); status != http.StatusBadRequest || r["error"] != "invalid_request" {
+		t.Errorf("a reload of no run id with the run's secret: %d %v", status, r)
 	}
 	if status, _ := localRequest(t, h, http.MethodGet, "/v1/run-configuration/"+a.RunID, "", []string{a.RunSecret}); status != http.StatusOK {
 		t.Errorf("a reload with the run's secret: %d", status)
@@ -166,7 +169,7 @@ func remoteRequest(t *testing.T, s *service, credential, method, path, body stri
 // one address, follow-up 10: a reload or a batch without the run's secret, with an
 // empty one, one of no run, the run's own twice, or the run's own with another run
 // key's run credential or none, and a reload with a sibling run's of the same run key,
-// gets the same 401
+// or with the run's own and no run id in the path, gets the same 401
 // run_credential_refused, body and header alike, so no run can be probed; neither the
 // run nor its sibling is ended, and each goes on with its own secret.
 func TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
@@ -208,6 +211,9 @@ func TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
 	// TestABatchTheLinkRefusesEndsTheRunOfItsSecret.
 	if status, auth, body := remoteRequest(t, s, cred, http.MethodGet, "/v1/run-configuration/"+a.a.RunID, "", []string{sibling.a.RunSecret}); fmt.Sprintf("%d %s %s", status, auth, body) != first {
 		t.Errorf("a reload with a sibling run's secret: %d %s", status, body)
+	}
+	if status, auth, body := remoteRequest(t, s, cred, http.MethodGet, "/v1/run-configuration/", "", []string{a.a.RunSecret}); fmt.Sprintf("%d %s %s", status, auth, body) != first {
+		t.Errorf("a reload of no run id with the run's secret: %d %s", status, body)
 	}
 	for _, r := range []*sessionRun{a, sibling} {
 		if status, body := r.reload(t, cred, r.a.RunID); status != http.StatusOK {

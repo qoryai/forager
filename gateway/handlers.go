@@ -340,10 +340,10 @@ func (g *Gateway) indexSecret(lr *linkRun) {
 
 // secretRun is the run id of the session's run whose run secret the request carries in
 // X-Qory-Run-Secret, live, ended or let go of; empty when it carries none, more than one,
-// or one of no run here, and when pathID is not empty and is not that run's id. The
-// secret's SHA-256 picks the one candidate, which is compared in constant time, in full
-// for a run the gateway still holds. The secret is never logged or reported.
-func (g *Gateway) secretRun(r *http.Request, pathID string) string {
+// or one of no run here. The secret's SHA-256 picks the one candidate, which is compared
+// in constant time, in full for a run the gateway still holds. The secret is never
+// logged or reported.
+func (g *Gateway) secretRun(r *http.Request) string {
 	values := r.Header.Values(server.HeaderRunSecret)
 	if len(values) != 1 {
 		return ""
@@ -362,10 +362,19 @@ func (g *Gateway) secretRun(r *http.Request, pathID string) string {
 	default:
 		ok = subtle.ConstantTimeCompare(sp.secretSum[:], sum[:]) == 1
 	}
-	if !ok || (pathID != "" && pathID != runID) {
+	if !ok {
 		return ""
 	}
 	return runID
+}
+
+// pathRun is the run id of a reload's path, pathID, when the request carries that run's
+// secret; empty otherwise, an empty pathID among them, which is no run's.
+func (g *Gateway) pathRun(r *http.Request, pathID string) string {
+	if runID := g.secretRun(r); runID != "" && runID == pathID {
+		return runID
+	}
+	return ""
 }
 
 // localRun is the run of the local link a request names, nil for none: a run of the
@@ -379,14 +388,13 @@ func (g *Gateway) localRun(runID string) *linkRun {
 	return nil
 }
 
-// credentialRun is the session's run whose run secret the request carries, live or
-// ended, when the run credential a request on the one address carried is of its run
-// key, and, when pathID is not empty, its run id is pathID; nil when there is none to go
-// on with: the 410 answered for a run of the run key that the gateway has let go of, and
+// credentialRun is the session's run of runID, the run whose run secret the request
+// carries, live or ended, when the run credential a request on the one address carried
+// is of its run key; nil when there is none to go on with, an empty runID among them:
+// the 410 answered for a run of the run key that the gateway has let go of, and
 // otherwise the 401 run_credential_refused, so no run is reached but the one of the run
 // credential's run key whose secret the request carries.
-func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, pathID string) (*linkRun, runIdentity) {
-	runID := g.secretRun(r, pathID)
+func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
 	id, ok := identityOf(r.Context())
 	if !ok {
 		if late, ok := expiredOf(r.Context()); ok {
@@ -491,14 +499,14 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 	var lr *linkRun
 	if s.remote {
 		var id runIdentity
-		if lr, id = g.credentialRun(w, r, runID); lr == nil {
+		if lr, id = g.credentialRun(w, r, g.pathRun(r, runID)); lr == nil {
 			return
 		}
 		if !lr.admit(w, r, id) {
 			return
 		}
 	} else {
-		if lr = g.localRun(g.secretRun(r, runID)); lr == nil {
+		if lr = g.localRun(g.pathRun(r, runID)); lr == nil {
 			invalid(w)
 			return
 		}
@@ -533,7 +541,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	var lr *linkRun
 	if s.remote {
 		var id runIdentity
-		if lr, id = g.credentialRun(w, r, ""); lr == nil {
+		if lr, id = g.credentialRun(w, r, g.secretRun(r)); lr == nil {
 			return
 		}
 		lr.batch.Lock()
@@ -542,7 +550,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if lr = g.localRun(g.secretRun(r, "")); lr == nil {
+		if lr = g.localRun(g.secretRun(r)); lr == nil {
 			invalid(w)
 			return
 		}
