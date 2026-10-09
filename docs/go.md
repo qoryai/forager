@@ -117,7 +117,7 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
   address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
-- `RunCredentials`, the issuers whose run credentials open a run there, required with
+- `RunCredentials`, the run starters whose run credentials open a run there, required with
   `Listen` ([run credentials](gateway-run-credentials.md)). A run's labels and
   `about.details` are its run credential's. The gateway tracks run keys and does not
   require them to be unique; each period of activity is a run.
@@ -125,7 +125,7 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
   zero.
 - `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
   `authority/ca.pem`, which the machines of the clients with no session trust, and the
-  run keys it refuses after the issuer's end, `ended-run-keys.json`, so a restart refuses
+  run keys it refuses after the starter's end, `ended-run-keys.json`, so a restart refuses
   them too.
 
 A run of the one address ends as a local run does, and also at its run credential's
@@ -183,7 +183,7 @@ res, err := session.Run(ctx, session.Spec{
   redirect is followed.
 - `Credential` returns the run credential. Every request on the link carries it as
   `Authorization: Bearer <run credential>`, and the session asks for it before each
-  request, so a run credential its issuer refreshes in a file is sent from then on. Its
+  request, so a run credential its starter refreshes in a file is sent from then on. Its
   error is the request's, and must not hold the run credential. A `RemoteGateway`
   without `Credential` is no run. The run credential is never printed, logged,
   recorded or contained in an error: a `session.RemoteGateway` prints as its URL, its
@@ -422,10 +422,10 @@ with `e2e` to check them together.
     It is a worked example of the contract's receiving rules.
   - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
     `program/`.
-  - `runcredential/`: the run credential an issuer gives a run: the configuration of the
-    issuers a gateway accepts and its checks, the verifier of a run credential (its
+  - `runcredential/`: the run credential the run's starter gives a run: the
+    configuration of the starters a gateway accepts and its checks, the verifier of a run credential (its
     serialisation, header, signature, claims and scope), the mapping of its claims to the
-    run's labels and `about.details`, the client of an issuer's introspection endpoint,
+    run's labels and `about.details`, the client of a starter's introspection endpoint,
     and the run keys a gateway refuses, kept in its state directory. See
     [run credentials](gateway-run-credentials.md).
   - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the

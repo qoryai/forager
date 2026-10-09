@@ -1539,7 +1539,7 @@ a run request in this order:
 | Status | Code | When |
 |---|---|---|
 | `400` | `invalid_request` | a body the schema refuses: a `run_id` not in the canonical lower-case form, labels or `about` outside their rules, a member the schema does not define; and a `narrowing` on the local link |
-| `401` | `run_credential_refused` | behind a separate gateway, a run key the gateway refuses after the issuer's end (§Run credentials), and a run credential the issuer's introspection does not hold active. One opaque code, with no names, and `WWW-Authenticate: Bearer`, as for every failure of the run credential |
+| `401` | `run_credential_refused` | behind a separate gateway, a run key the gateway refuses after the starter's end (§Run credentials), and a run credential the starter's introspection endpoint does not hold active. One opaque code, with no names, and `WWW-Authenticate: Bearer`, as for every failure of the run credential |
 | `503` | `credential_check_unreachable` | behind a separate gateway, the run credential could not be checked: the introspection endpoint could not be reached after the gateway's tries (§Run credentials); the message is "the run did not start: its run credential could not be checked; try again" |
 | `502` | `credential_check_invalid` | behind a separate gateway, the run credential could not be checked: the introspection endpoint gave no valid answer (§Run credentials); the message is "the run did not start: its run credential could not be checked" |
 | `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
@@ -1565,7 +1565,7 @@ nothing does.
 **Tries as a run opens.** The gateway tries the server's ping and run configuration up
 to 3 times each, the second try 1 second after the first ends and the third 2 seconds
 after the second, and starts a try again only within 6 seconds of the run request's
-arrival, or of a client's proxy login's start, the time the issuer's introspection took
+arrival, or of a client's proxy login's start, the time the starter's introspection took
 included, so the last answer comes inside the ten seconds the session waits. It asks
 again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
 signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
@@ -1973,19 +1973,19 @@ key's variables, so the agent never holds it.
 ## Run credentials
 
 A gateway that serves other machines opens a run only for a run credential: a JWT (RFC
-7519) signed as a JWS (RFC 7515) with an asymmetric key, which an issuer the operator
-trusts gives a run. Its `sub` is the run key, the `run_key` label of each run it opens;
+7519) signed as a JWS (RFC 7515) with an asymmetric key, which the run's starter (the
+`iss` of its run credentials), a service the operator trusts, gives a run. Its `sub` is the run key, the `run_key` label of each run it opens;
 its `aud` contains the gateway's own audience; and the claims the operator names make
-the run's labels and `about.details`. `run-credentials.schema.json` defines the issuers a gateway
+the run's labels and `about.details`. `run-credentials.schema.json` defines the starters a gateway
 accepts, the list under `gateway.run_credentials` of the operator's `forager.yaml`: per
-issuer, `issuer`, `audience`, `algorithms` among `RS256`, `ES256` and `EdDSA`, the pinned
+starter, `issuer`, `audience`, `algorithms` among `RS256`, `ES256` and `EdDSA`, the pinned
 `keys`, `leeway` (60 s by default, at most 5 minutes), `max_lifetime`, the scope `allow`, the mapping
 `labels` and `details`, and `introspection` (RFC 7662).
 
 The public package `runcredential` holds the rules beyond the schema:
 
-- `Issuers.Check` and `Issuer.Check`: no two issuers are the same; every key's `alg` is
-  among the issuer's algorithms; with more than one key, every key has a `kid`, and no
+- `Issuers.Check` and `Issuer.Check`: no two starters have the same `issuer`; every key's
+  `alg` is among the starter's algorithms; with more than one key, every key has a `kid`, and no
   two the same; each `public_key_file` is one PEM block of type `PUBLIC KEY`, with
   nothing but white space around it, of the key its `alg` needs: RSA of at least 2048
   bits for `RS256`, P-256 for `ES256`, Ed25519 for `EdDSA`, which passes the checks of an
@@ -1999,21 +1999,21 @@ The public package `runcredential` holds the rules beyond the schema:
   under each key selected, over the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5
   with SHA-256, `ES256` exactly 64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by
   Ed25519; then the payload, one JSON object with each member name once, read only after
-  the signature verified, and among the issuers whose key verified it the one whose
-  issuer equals `iss`; then the claims, the scope and the mapping below.
+  the signature verified, and among the starters whose key verified it the one whose
+  `issuer` equals `iss`; then the claims, the scope and the mapping below.
   `Verifier.VerifyExpired`, the same verification of a run credential that `Verify`
   refuses only because its `exp` passed, less than 5 minutes before, the time checks
   made as just before `exp`: the gateway uses it to answer a reload or a batch of a run
   that has ended with its `410`, and for nothing else.
-- `Issuer.SelectKey`, the header: `alg` is among the issuer's algorithms, never `none` or
+- `Issuer.SelectKey`, the header: `alg` is among the starter's algorithms, never `none` or
   an HMAC algorithm, and equals the selected key's; the key is selected by `kid`, and a
   run credential without one is accepted only while one key is pinned; `crit` is
   refused; `typ`, when present, is `JWT`, compared without regard to case.
 - `Issuer.CheckClaims`, the claims of a run credential whose signature is verified:
   `exp` required and after now less the leeway; `iat` and `nbf`, when present, no later
   than now plus the leeway; `exp - iat` at most `max_lifetime` when it is set, which then
-  requires `iat`; `iss` the issuer, which is never empty; `aud`, a string or an array,
-  containing the audience, which is never empty; `sub` present.
+  requires `iat`; `iss` the starter's `issuer`, which is never empty; `aud`, a string or
+  an array, containing the audience, which is never empty; `sub` present.
 - `Issuer.Allowed`, the scope; `Issuer.Labels`, the labels `forge`, `repository` and
   `run_key`, which come from the run credential alone; `Issuer.Details`, the
   `about.details` keys it decides, those whose claims it carries; each claim either
@@ -2021,7 +2021,7 @@ The public package `runcredential` holds the rules beyond the schema:
   that sends `forge` or `repository` with another value with
   `target_differs_from_credential`, and any other key the mapping sets with
   `differs_from_credential`.
-- `NewIntrospector` and `Introspector.Active`, the issuer's RFC 7662 endpoint: a `POST`
+- `NewIntrospector` and `Introspector.Active`, the starter's RFC 7662 endpoint: a `POST`
   over TLS of the form `token` and `token_type_hint=access_token`, with HTTP Basic as the
   client, following no redirect; active only on status 200 with one JSON object, each
   member name once, of at most 65536 bytes, whose `active` is the JSON `true`; any other
@@ -2033,8 +2033,8 @@ The public package `runcredential` holds the rules beyond the schema:
   with each member name once or without a boolean `active`, is tried once and is
   `ErrAnswerInvalid`, its status named. An answer the endpoint gives is kept for `cache`
   by the SHA-256 of the run credential, at most 4096 of them; a failure is not kept.
-- `OpenEnded` and `Ended`, the run keys a gateway refuses after the issuer's end, by
-  issuer, in a file of the gateway's state directory, each kept until the latest `exp`
+- `OpenEnded` and `Ended`, the run keys a gateway refuses after the starter's end, by
+  starter, in a file of the gateway's state directory, each kept until the latest `exp`
   added for it plus 5 minutes, so a restart refuses them too. `OpenEnded` refuses a
   state directory it cannot create a file in, so the gateway does not start on one;
   `Ended.Written` reports whether the file, as last read or written, refuses a run key.
@@ -2051,7 +2051,7 @@ differs, or is left out, `403` `differs_from_credential`, each named with the ru
 credential's value, and the run goes on; to a client's connection it is `407`. A reload or a batch of a session's run that
 has ended is answered with its `410` for a run credential of its run key whose `exp`
 has passed, less than 5 minutes before, its signature and every other claim verified as
-always, so the session learns the run's end, `credential_expired` under an issuer with
+always, so the session learns the run's end, `credential_expired` under a starter with
 no leeway among them; such a run credential is `401` `run_credential_refused` to every
 other request, and serves none. A client with no session presents its run
 credential as the password of its proxy login. While the client's run of its run key is
@@ -2066,7 +2066,7 @@ own run beside them. A run with no session ends with `quiet`, `credential_expire
 `gateway_lost` when `qory run resend` sends its record again, through `gateway.Resend`
 (§The events, How a run ends). A client's run that fails to open for a reason that may
 pass is answered `503 Service Unavailable`, `Content-Type: text/plain; charset=utf-8`,
-with the body "the gateway could not open the run; try again": the issuer's
+with the body "the gateway could not open the run; try again": the starter's
 introspection endpoint could not be reached, Qory Apiary's `5xx`, signed or not, with
 any code or none, or its signed `429` `rate_limited`, once the tries are spent, its
 `410` to the ping or the run configuration, signed or not, with any code or none, at
@@ -2080,11 +2080,11 @@ configuration, `run_configuration_invalid`, `tool_unknown` or `image_unknown`; "
 gateway could not open the run: Qory Apiary refused it, status \<n\>" for a signed
 answer of Qory Apiary's, other than a `5xx` or a `410`, with no code, a `404` with an empty body or
 a `200` without its digest header; and "the run did not start: its run credential could
-not be checked" when the issuer's endpoint gave no valid answer, at its
+not be checked" when the starter's endpoint gave no valid answer, at its
 login or a later connection's. A run refused with a code gets the gateway's
 `dev.qory.run.refused` with that code, after its ping, and its status for a code read
 from Qory Apiary's answer, `unauthorized` among them; `answer_unsigned`, which the
-client reads as Qory Apiary's, carries no status. A connection that would join a run whose issuer's endpoint could not be
+client reads as Qory Apiary's, carries no status. A connection that would join a run whose starter's endpoint could not be
 reached, or gave no valid answer, ends the run, `credential_check_unreachable` or
 `credential_check_invalid`, and gets the `503` or the `403` above.
 
@@ -2162,14 +2162,14 @@ again, and at Close, when the write still fails, how many run keys a restart wou
 refuse.
 
 Neither `credential_check_unreachable` nor `credential_check_invalid` holds the run key: the next
-request opens a run as soon as the issuer answers active. Each comes only after the run
+request opens a run as soon as the starter answers active. Each comes only after the run
 credential's signature and claims verified, so it tells a caller that is not
 authenticated nothing. Every failure of a run credential is one opaque answer,
 `run_credential_refused` to a session and `407` to a client with no session, and names
 no claim value. The run
 credential never appears in an event, a record or a log. The proxy login over TLS, and
-when the gateway asks the endpoint and refuses an ended run, are the gateway's. How an
-issuer integrates: [docs/gateway-run-credentials.md](../../../docs/gateway-run-credentials.md).
+when the gateway asks the endpoint and refuses an ended run, are the gateway's. How a
+run's starter works with the gateway: [docs/gateway-run-credentials.md](../../../docs/gateway-run-credentials.md).
 
 ## The runtime
 
@@ -2650,11 +2650,11 @@ the option experimental.
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state`, a session's `exit_code` too and a gateway-opened run's none |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its `credential` `starter`, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, an outcome answer with the outcome `cancelled` and the reason `no_longer_needed`, one with an outcome alone and one with none, `{}`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, one of a session's `dev.qory.run.exited` with the starter's outcome at the exit, and refusals: `run_closed`, `credential_expired`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and the signed `409` `instance_limit` to the ping from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
-| `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
+| `fixtures/run-credentials/` | run credentials documents that are accepted: one starter with one key without a kid, and one starter during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded` among them, and an outcome answer whose `reason` is one of Forager's reserved codes; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with no outcome answer, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
-| `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture issuer's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture issuer; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the serialisation (padding, a line feed, a space, four parts, two parts), the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's, `crit`, a `typ` other than `JWT`, a member name twice), the signature (over an altered payload, over an altered header, an `ES256` signature of 63 or 65 bytes, with `R` zero or `S` the order), the claims (a member name twice, `aud` and `iss` another's, no `aud`, expired, no `exp`, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string, a `project` with a control character); accepted ones per algorithm, with `typ` `jwt` and without `typ`, and one without `requester`, which leaves that key of `about.details` to the session. The keys are public: Forager refuses each in a configuration, and they are never pinned | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, run `Verifier.Verify` on each, and check each on its own against the serialisation, the header, the claims, the scope and the mapping up to the step that refuses it, and verify the signature of each that reaches the signature step |
+| `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture starter's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture starter; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the serialisation (padding, a line feed, a space, four parts, two parts), the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's, `crit`, a `typ` other than `JWT`, a member name twice), the signature (over an altered payload, over an altered header, an `ES256` signature of 63 or 65 bytes, with `R` zero or `S` the order), the claims (a member name twice, `aud` and `iss` another's, no `aud`, expired, no `exp`, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string, a `project` with a control character); accepted ones per algorithm, with `typ` `jwt` and without `typ`, and one without `requester`, which leaves that key of `about.details` to the session. The keys are public: Forager refuses each in a configuration, and they are never pinned | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, run `Verifier.Verify` on each, and check each on its own against the serialisation, the header, the claims, the scope and the mapping up to the step that refuses it, and verify the signature of each that reaches the signature step |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 After a change to a batch's body, Forager's module signs the batches under

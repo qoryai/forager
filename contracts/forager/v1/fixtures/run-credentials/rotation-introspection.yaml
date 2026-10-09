@@ -1,5 +1,5 @@
-# One issuer during a rotation: two keys, each with its kid, a scope, a descriptive
-# claim that goes into about.details, a bound on the lifetime, and the issuer's
+# One starter during a rotation: two keys, each with its kid, a scope, a descriptive
+# claim that goes into about.details, a bound on the lifetime, and the starter's
 # introspection endpoint (RFC 7662), asked again at most every 30 seconds.
 - issuer: https://issuer.example
   audience: qory-gateway

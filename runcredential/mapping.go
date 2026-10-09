@@ -9,9 +9,9 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// Allowed reports whether a run credential's verified claims are in the issuer's
+// Allowed reports whether a run credential's verified claims are in the starter's
 // scope, step 4 of the verification: the claim allow names is a string, one of the
-// values it lists. An issuer without allow allows every run credential that passed
+// values it lists. A starter without allow allows every run credential that passed
 // the other steps.
 func (i Issuer) Allowed(claims map[string]any) bool {
 	if i.Allow == nil {
@@ -94,7 +94,7 @@ func claimString(claims map[string]any, name string) (string, error) {
 }
 
 // Details makes the keys of about.details the run credential decides from its
-// verified claims: for each key of the issuer's details whose claim the run credential
+// verified claims: for each key of the starter's details whose claim the run credential
 // carries, the value of that claim, a string with no control character. A key whose
 // claim the run credential does not carry is not decided by it, and the session's own
 // value stands. A claim that is present and not such a string is [ErrRefused]. The
@@ -137,7 +137,7 @@ func (i Issuer) Details(claims map[string]any) (map[string]string, error) {
 //
 // A session's label the mapping does not set is ignored: a run's labels come from the
 // run credential alone. A session's key of about.details the mapping does not set is
-// kept: qory's flags fill the rest. That includes a key of the issuer's details whose
+// kept: qory's flags fill the rest. That includes a key of the starter's details whose
 // claim the run credential does not carry, which [Issuer.Details] leaves out of
 // credDetails. A key of about.details the session sends as other than a string differs
 // from the run credential's string.

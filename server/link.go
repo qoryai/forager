@@ -163,7 +163,7 @@ type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
 	// Credential is where the run's credential came from, which run.started reports:
-	// issuer, an issuer gave the run its run credential; none, on the local link.
+	// starter, the run's starter gave the run its run credential; none, on the local link.
 	Credential string `json:"credential"`
 	// Policy is the policy in force for the run, as policy.schema.json defines it, and
 	// Digest the hex SHA-256 of its canonical JSON; each is present with the other, and

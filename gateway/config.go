@@ -59,12 +59,12 @@ type Config struct {
 	// TLS is the certificate and key Listen serves, TLS 1.3 alone; nil serves Listen
 	// without TLS, which a loopback address alone may.
 	TLS *TLS
-	// RunCredentials are the issuers whose run credentials open a run on Listen,
+	// RunCredentials are the run starters whose run credentials open a run on Listen,
 	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
 	// Start checks them as runcredential.Issuers.Check does, reading each key's file
 	// and each introspection client's secret. The gateway tracks run keys and does not
 	// require them to be unique; each period of activity is a run. The run keys it
-	// refuses after the issuer's end are kept in Dir, so a restart refuses them too.
+	// refuses after the starter's end are kept in Dir, so a restart refuses them too.
 	RunCredentials runcredential.Issuers
 	// Runs is how the gateway keeps the runs of clients with no session.
 	Runs RunsConfig

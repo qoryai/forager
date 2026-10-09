@@ -1,23 +1,25 @@
 # How a run's starter works with the Qory gateway
 
 A gateway that serves other machines opens a run only for a **run credential**: a signed
-statement, from an issuer the operator trusts, that names a run key and its target. This
-page is for whoever builds that issuer. It states what the gateway requires, from public
-standards, and what it does with what it receives.
+statement, from a run's starter the operator trusts, that names a run key and its
+target. The run's starter (the `iss` of its run credentials) is the service that asks
+for runs and signs their run credentials. This page is for whoever builds a starter. It
+states what the gateway requires, from public standards, and what it does with what it
+receives.
 
-A separate gateway works only with a run credential issuer: it refuses to serve other
+A separate gateway works only with a run's starter: it refuses to serve other
 machines without `gateway.run_credentials` in the operator's `forager.yaml`.
 
 ## The run key and the run credential
 
-- **The run key** is what the issuer gives run credentials for, and the `run_key` label
+- **The run key** is what the starter gives run credentials for, and the `run_key` label
   of each run they open. It is not a secret and proves nothing on its own. The gateway
   tracks run keys and does not require them to be unique; each period of activity is a
   run, of its own run id.
 - **The run credential** is a JWT ([RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html))
   signed as a JWS ([RFC 7515](https://www.rfc-editor.org/rfc/rfc7515.html)) with an
   asymmetric key, following the best practices of
-  [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html). The issuer gives each run its
+  [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html). The starter gives each run its
   run credential, and may refresh it for the same run key.
 
 The gateway verifies the run credential, not the run key.
@@ -58,7 +60,7 @@ another value.
 
 The examples here use `namespace` and `project` as the claims that name the target and
 `requester` as a descriptive claim. The names are the operator's choice; the gateway holds
-no issuer's format.
+no starter's format.
 
 A run credential at its simplest, decoded:
 
@@ -103,7 +105,7 @@ pinned.
 
 ## The algorithms
 
-The issuer signs with one of three algorithms
+The starter signs with one of three algorithms
 ([RFC 7518](https://www.rfc-editor.org/rfc/rfc7518.html),
 [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.html)):
 
@@ -119,13 +121,13 @@ The issuer signs with one of three algorithms
 
 `none` is refused, and so is every HMAC algorithm: the gateway holds only public keys, so
 no run credential is ever checked as HMAC under one. The header's `alg` must be among the
-issuer's configured algorithms, and equal the algorithm of the key it selects. The
+starter's configured algorithms, and equal the algorithm of the key it selects. The
 operator's configuration accepts no other algorithm, and no RSA key of fewer than 2048
 bits.
 
 ## Publishing and rotating keys
 
-The issuer publishes its public keys, each with a key id, `kid`. The operator pins them in
+The starter publishes its public keys, each with a key id, `kid`. The operator pins them in
 the gateway's configuration, each as a file holding one PEM block of type `PUBLIC KEY`.
 
 - A run credential that carries a `kid` is verified under the pinned key of that `kid`;
@@ -133,20 +135,20 @@ the gateway's configuration, each as a file holding one PEM block of type `PUBLI
   has none.
 - A run credential without a `kid` is accepted only while exactly one key is pinned.
 - With more than one key pinned, every key has a `kid`, each its own.
-- To rotate, the issuer publishes the next key under a new `kid`, the operator pins it
-  beside the current one, the issuer signs with it, and the operator removes the old one
+- To rotate, the starter publishes the next key under a new `kid`, the operator pins it
+  beside the current one, the starter signs with it, and the operator removes the old one
   once no run credential signed under it is still live.
 
 ## The gateway's own audience
 
-The issuer mints a run credential for the gateway alone, with an audience of its own,
-such as `qory-gateway`. `audience` is required in every issuer's configuration, and `aud`
+The starter mints a run credential for the gateway alone, with an audience of its own,
+such as `qory-gateway`. `audience` is required in every starter's configuration, and `aud`
 must contain it. A run credential minted for another service never opens a run here, and
 one minted for the gateway is of no use to another service that checks its own audience.
 
 ## The lifetime
 
-A run credential is valid until `exp`. The operator can bound how long an issuer's run
+A run credential is valid until `exp`. The operator can bound how long a starter's run
 credentials may live with `max_lifetime`: `exp` minus `iat` is then at most that, and a
 run credential without `iat` is refused.
 
@@ -174,7 +176,7 @@ run key. Once the run has ended, its requests get the `410`, not only at `exp`. 
 reload or
 a batch of a run that has ended gets its `410` even with a run credential whose `exp`
 has passed, up to 5 minutes after it, so a session whose run credential expired, under
-an issuer with no leeway too, learns the run's end; such a run credential reaches
+a starter with no leeway too, learns the run's end; such a run credential reaches
 nothing else. A run id
 already in use is refused, `run_id_used`.
 
@@ -193,7 +195,7 @@ would join ends so too. The discovery is answered to a run credential of the run
 to any, and opens nothing. A run credential for a refused run key presented during the
 hold, its signature and claims verified, is refused and extends the hold to its own
 `exp`; a request whose run credential fails verification extends nothing. The gateway
-keeps these run keys, by issuer, in a file of its state directory (mode 0600, in a
+keeps these run keys, by starter, in a file of its state directory (mode 0600, in a
 directory only its user writes), `ended-run-keys.json`, so a restart refuses them too. A
 gateway does not start on a state directory it cannot create a file in, "the ended run
 keys: <directory> cannot be written: <error>". When a write of the file fails, the
@@ -205,7 +207,7 @@ whose write never succeeded is not refused after a restart.
 
 ## The introspection endpoint
 
-An issuer may offer an OAuth 2.0 token introspection endpoint
+A starter may offer an OAuth 2.0 token introspection endpoint
 ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662.html)), so the gateway can ask whether
 a run credential is still active.
 
@@ -280,8 +282,7 @@ logs.
 
 ### How the run's starter says how it ended
 
-When the run's starter, the service that signs its run credentials, is done with a
-run, its endpoint answers `active: false`, and may add two members of its own, both
+When the starter is done with a run, its endpoint answers `active: false`, and may add two members of its own, both
 optional:
 
 ```json
@@ -332,8 +333,8 @@ own exit for up to 30 seconds.
 
 ## The operator's configuration
 
-The operator sets the issuer, the audience, the keys and the mapping of claims to labels
-in `forager.yaml`. Its schema is
+The operator sets the starter's `issuer`, the audience, the keys and the mapping of
+claims to labels in `forager.yaml`. Its schema is
 [`run-credentials.schema.json`](../contracts/forager/v1/run-credentials.schema.json).
 
 ```yaml
@@ -382,12 +383,12 @@ before the signature verifies, it reads the header alone, and never the payload.
 order:
 
 1. **Serialisation:** the one compact form above.
-2. **Header and keys:** for each issuer, `alg` is among its algorithms and equals the
+2. **Header and keys:** for each starter, `alg` is among its algorithms and equals the
    selected key's; the key is selected by `kid`, or is the one key pinned; `typ` and
    `crit` as above.
 3. **Signature,** under each key the header selected, over the exact bytes received: the
    header and the payload as they arrived, with the dot between them.
-4. **Claims:** the issuer is the one whose key verified the signature and whose `issuer`
+4. **Claims:** the starter is the one whose key verified the signature and whose `issuer`
    equals `iss`; then `exp`, `iat`, `nbf`, `max_lifetime`, `aud` and `sub`, as above.
 5. **Scope:** `allow`, from the signed claims, never from the request.
 6. **Mapping:** the labels and `about.details`, from the signed claims.
@@ -456,7 +457,7 @@ The run ends, and the gateway writes its `dev.qory.run.exited`, with a `state` a
 When the gateway stops with the run live, the run ends without its
 `dev.qory.run.exited`, and resending its record with `qory run resend`, through
 `gateway.Resend`, completes it as `gateway_lost`. After
-the issuer's end, the gateway holds the run key (The lifetime, above); after any
+the starter's end, the gateway holds the run key (The lifetime, above); after any
 other end, the next connection opens a new run.
 
 For a host the policy holds to paths, the gateway reads inside HTTPS with a
@@ -467,7 +468,7 @@ operator installs on the clients' machines.
 
 A session reads the run credential from a file, a file descriptor, or the variable
 `QORY_RUN_CREDENTIAL_SECRET`; a flag never carries it. It sends it on every request to the
-gateway, and reads the file again before each, so an issuer that refreshes the file keeps
+gateway, and reads the file again before each, so a starter that refreshes the file keeps
 the run going. The session also sends the labels it takes from the checkout. When its
 `forge` or `repository` differs from the run credential's, the gateway refuses the run
 with `target_differs_from_credential`; when it sends any other key the mapping sets, a
@@ -508,7 +509,7 @@ stay in that directory, and the gateway's own resend completes the run `gateway_
 
 qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
 leaves it out too, whatever brought it, a variable of the run's among them. Any other
-variable an issuer itself sets for the run is the operator's to deny through the node's
+variable a starter itself sets for the run is the operator's to deny through the node's
 variables policy.
 
 ## One opaque refusal
@@ -531,7 +532,7 @@ gateway issued for this run when it verified the run credential.
 The contract publishes known answers under
 [`fixtures/known-answers/run-credentials/`](../contracts/forager/v1/fixtures/known-answers/run-credentials/):
 fixture keys of each algorithm derived from a published seed, two configurations of the
-fixture issuer, and run credentials signed under the keys, each with the outcome it gets
+fixture starter, and run credentials signed under the keys, each with the outcome it gets
 at a fixed time and, for a refused one, the step that refuses it: the serialisation, the
 header, the signature, the claims, the scope or the mapping. These keys are public:
 anyone can derive their private keys from the seed. Forager refuses them in a

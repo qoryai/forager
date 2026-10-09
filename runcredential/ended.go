@@ -19,11 +19,11 @@ import (
 // ended run keys.
 const EndedFile = "ended-run-keys.json"
 
-// Ended is the set of run keys a gateway refuses, by issuer, those whose run the run's
+// Ended is the set of run keys a gateway refuses, by starter, those whose run the run's
 // starter ended, each with how the starter said the run ended, kept in a file of the
 // gateway's state directory so a restart refuses them too, and ends their runs the same
 // way. Each is kept until its run credential's exp plus [MaxLeeway], the latest a run
-// credential of that exp is accepted under any issuer's leeway, and dropped after. It is
+// credential of that exp is accepted under any starter's leeway, and dropped after. It is
 // safe for concurrent use; one gateway alone uses a state directory.
 type Ended struct {
 	path  string
@@ -68,8 +68,8 @@ type endedEntry struct {
 // that only this user writes, and one this process cannot create a file in. It reads
 // [EndedFile] when it exists, a regular file that others can neither read nor write,
 // holding the array ended, and refuses one it cannot read, so a gateway never starts
-// having forgotten a run key it refuses, or how its run ended: an entry without an
-// issuer or a run key, or whose outcome or reason the run's starter could not have given
+// having forgotten a run key it refuses, or how its run ended: an entry without a
+// starter or a run key, or whose outcome or reason the run's starter could not have given
 // ([StarterOutcome]), a reason without an outcome among them. The entries past their
 // time are dropped, and the file is written again without them.
 func OpenEnded(dir string) (*Ended, error) {
@@ -150,13 +150,13 @@ func openEnded(dir string, clock func() time.Time) (*Ended, error) {
 	return e, nil
 }
 
-// Has reports whether the gateway refuses the run key of the issuer, still kept at now.
+// Has reports whether the gateway refuses the starter's run key, still kept at now.
 func (e *Ended) Has(issuer, runKey string, now time.Time) bool {
 	_, _, ok := e.Outcome(issuer, runKey, now)
 	return ok
 }
 
-// Outcome is how the run's starter said the run of the issuer's run key ended, as the
+// Outcome is how the run's starter said the run of its run key ended, as the
 // first [Ended.AddOutcome] of it kept it: its outcome and its reason, each empty for
 // none; ok says the run key is still kept at now.
 func (e *Ended) Outcome(issuer, runKey string, now time.Time) (outcome, reason string, ok bool) {
@@ -170,7 +170,7 @@ func (e *Ended) Outcome(issuer, runKey string, now time.Time) (outcome, reason s
 }
 
 // Written reports whether the file, as it was last read or written, refuses the run
-// key of the issuer at now: whether a gateway started on it would, though a later
+// key of the starter at now: whether a gateway started on it would, though a later
 // [Ended.Add] failed to write.
 func (e *Ended) Written(issuer, runKey string, now time.Time) bool {
 	e.mu.Lock()
@@ -179,13 +179,13 @@ func (e *Ended) Written(issuer, runKey string, now time.Time) bool {
 	return ok && now.Before(kept.until)
 }
 
-// Add records that the run of the issuer's run key has ended, its run credential's exp
+// Add records that the run of the starter's run key has ended, its run credential's exp
 // being exp, and writes the file before it returns: [Ended.AddOutcome] with no outcome.
 func (e *Ended) Add(issuer, runKey string, exp time.Time) error {
 	return e.AddOutcome(issuer, runKey, exp, "", "")
 }
 
-// AddOutcome records that the run of the issuer's run key has ended, its run
+// AddOutcome records that the run of the starter's run key has ended, its run
 // credential's exp being exp, with the outcome and the reason the run's starter gave,
 // each empty for none, by the rules of [StarterOutcome], and writes the file before it
 // returns. The run key is kept until exp plus [MaxLeeway]; a run key already kept stays

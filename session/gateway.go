@@ -80,7 +80,7 @@ type RemoteGateway struct {
 	// empty means no pin.
 	CertificateSHA256 string
 	// Credential returns the run's current run credential. It is asked again before
-	// every request, so a run credential its issuer refreshes, in a file say, is sent
+	// every request, so a run credential its starter refreshes, in a file say, is sent
 	// from then on. Its error is returned as the request's, and must not hold the run
 	// credential. A RemoteGateway without one is no run.
 	Credential func(ctx context.Context) (string, error)

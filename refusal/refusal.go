@@ -73,7 +73,7 @@ func Decides(code string) bool {
 	return false
 }
 
-// The codes a gateway that verifies a run credential, the one an issuer gives a run,
+// The codes a gateway that verifies a run credential, the one the run's starter gives it,
 // decides.
 const (
 	// RunCredentialRefused is a run credential the gateway refuses, for any reason, and

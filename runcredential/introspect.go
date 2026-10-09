@@ -72,7 +72,7 @@ func errIntrospectionStatus(status int) error {
 	return invalidAnswer(fmt.Sprintf("the introspection endpoint answered status %d", status))
 }
 
-// Introspector asks an issuer's OAuth 2.0 token introspection endpoint (RFC 7662)
+// Introspector asks a starter's OAuth 2.0 token introspection endpoint (RFC 7662)
 // whether a run credential is still active, and keeps each answer it gives for the
 // cache. It is safe for concurrent use.
 type Introspector struct {
@@ -146,7 +146,7 @@ type introspectionCall struct {
 	err    error
 }
 
-// NewIntrospector makes the client of an issuer's introspection endpoint. It reads the
+// NewIntrospector makes the client of a starter's introspection endpoint. It reads the
 // client's secret from in.ClientSecretFile with read, once: the file's bytes, less one
 // line ending at their end, and not empty. An answer holds for in.Cache, or for
 // heartbeat, the run's heartbeat interval, when it sets none.

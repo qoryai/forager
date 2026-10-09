@@ -22,7 +22,7 @@ import (
 // short enough that no request makes the gateway decode much.
 const MaxCredentialBytes = 16384
 
-// Verifier verifies run credentials under the issuers a gateway accepts, their keys
+// Verifier verifies run credentials under the starters a gateway accepts, their keys
 // read and parsed once. It is safe for concurrent use.
 type Verifier struct {
 	issuers []verifierIssuer
@@ -38,12 +38,12 @@ type verifierIssuer struct {
 // Verified is a run credential [Verifier.Verify] accepted: what its signed claims
 // say, and what the mapping made of them.
 type Verified struct {
-	// Issuer is the issuer whose pinned key verified the signature, the claim iss.
+	// Issuer is the starter whose pinned key verified the signature, the claim iss.
 	Issuer string
 	// RunKey is the run key, the claim sub.
 	RunKey string
 	// Expires is the claim exp. The run credential is refused from Expires plus the
-	// issuer's leeway on.
+	// starter's leeway on.
 	Expires time.Time
 	// Claims are the signed claims, decoded with every number a float64. They hold every
 	// claim value the run credential carries, personal data among them: never log or
@@ -57,9 +57,9 @@ type Verified struct {
 	Details map[string]string
 }
 
-// NewVerifier checks the issuers as [Issuers.Check] does, reading each key's
+// NewVerifier checks the starters as [Issuers.Check] does, reading each key's
 // public_key_file with read, and returns a verifier under their keys. It keeps its own
-// copy of the issuers, so a change to them afterwards changes nothing it verifies.
+// copy of the starters, so a change to them afterwards changes nothing it verifies.
 func NewVerifier(issuers Issuers, read ReadFile) (*Verifier, error) {
 	return newVerifier(issuers, read, false)
 }
@@ -113,13 +113,13 @@ var steps = []string{"serialisation", "header", "signature", "claims", "scope", 
 //     outside its alphabet, and with no bits set beyond its last byte; the header and
 //     the payload are not empty.
 //  2. The header: one JSON object in UTF-8 with no member name twice, then
-//     [Issuer.SelectKey] for each issuer, which selects a pinned key by alg and kid
+//     [Issuer.SelectKey] for each starter, which selects a pinned key by alg and kid
 //     and refuses crit and a typ other than JWT. No claim is read yet.
 //  3. The signature, under each key selected, over the exact bytes received before the
 //     last dot: RS256 by RSASSA-PKCS1-v1_5 with SHA-256; ES256, exactly 64 bytes, R and
 //     S each in [1, n-1], by ECDSA with SHA-256 on P-256; EdDSA by Ed25519.
 //  4. The claims: the payload is one JSON object in UTF-8 with no member name twice;
-//     among the issuers whose key verified the signature, the one whose issuer equals
+//     among the starters whose key verified the signature, the one whose "issuer" equals
 //     iss is the run credential's, and [Issuer.CheckClaims] checks the claims under it.
 //  5. The scope, [Issuer.Allowed].
 //  6. The mapping, [Issuer.Labels] and [Issuer.Details].
