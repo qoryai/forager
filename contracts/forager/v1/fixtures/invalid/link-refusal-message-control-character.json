@@ -1,0 +1,5 @@
+{
+  "error": "internal",
+  "message": "the gateway could not start the tool files:\nexit status 1",
+  "from": "gateway"
+}
