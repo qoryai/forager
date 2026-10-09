@@ -266,8 +266,8 @@ gateway:
 - `labels` makes the run's three labels: `forge`, a constant or a claim; `repository`, the
   claims that name the target joined with `join`, one claim, or a constant; and
   `run_key`, always `sub`. A run's labels come from the run credential alone; nothing else
-  the client sends sets a label. The control plane picks the run's target by these
-  labels, and a run credential whose labels match no target opens no run.
+  the client sends sets a label. Qory Apiary picks the run's target by these labels,
+  and a run credential whose labels match no target opens no run.
 - `details` names the `about.details` keys the run credential decides, each from one
   claim. A key holds no `=`: a refusal names a key as `about.details.<key>=<value>`, and
   a key with `=` would make that name ambiguous.
@@ -315,10 +315,10 @@ its `run_key` label; a run that ended is never opened again. A client has at mos
 open run per run key. A client never joins a session's run: a session's run is reached
 only by its proxy secret, and decided under that session's wall and narrowing, so a
 client of a run key whose sessions' runs are open opens or joins its own run beside
-them. The gateway reports the run itself, in this order: its ping; then, once it has fetched the run's policy from the control plane and
-decided the run, its `dev.qory.run.started`, with `opened_by` `gateway` and the run
-credential's labels and `about.details`, and its policy; then every connection and its
-heartbeats. A run refused with a code, say the control plane refuses the run's
+them. The gateway reports the run itself, in this order: its ping; then, once it has
+fetched the run's policy from Qory Apiary and decided the run, its
+`dev.qory.run.started`, with `opened_by` `gateway` and the run credential's labels and
+`about.details`, and its policy; then every connection and its heartbeats. A run refused with a code, say Qory Apiary refuses the run's
 configuration or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
 no event, and its connection gets `503 Service Unavailable` with, as `text/plain`, "the
@@ -367,7 +367,7 @@ Every failure of a run credential gets the same answer, whatever check refused i
 ## Where the run credential never goes
 
 The run credential never appears in an event, a record or a log, on the session or the
-gateway, and it is never sent to the control plane. Inside a wall the agent never sees
+gateway, and it is never sent to Qory Apiary. Inside a wall the agent never sees
 it: the relay adds the run's own proxy secret to every connection instead, which the
 gateway issued for this run when it verified the run credential.
 
