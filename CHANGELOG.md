@@ -658,15 +658,16 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Resend` reads on past a line of `events.jsonl` that holds no whole event, a
   write the gateway did not finish, on a full disk: it skips those bytes, and keeps and
   sends every event the gateway wrote after them, one the next write put on the same
-  line too, the object that ends the line, never one inside the bytes before it. A
-  whole event numbered at or below the one before it is skipped. Before, it cut the
-  file at that line, and every event after it was lost. A last line without its
-  newline that is a whole event is kept, and gets its newline before `gateway_lost`
-  follows it; any other is cut off, as before. The resend reports "<n> lines of <file>
-  are not whole events and are not sent". `gateway_lost` is numbered after the highest
-  sequence of the whole events or of `delivered.log`, since an event whose line was not
-  finished may have reached the server whole, and the file is changed only when
-  `gateway_lost` is added.
+  line too, the object that ends the line, never one inside the bytes before it. When
+  those bytes are themselves exactly one whole event, a write that lost its newline
+  alone, it is kept too. A whole event numbered at or below the one before it is
+  skipped. Before, it cut the file at that line, and every event after it was lost. A
+  last line without its newline that is a whole event is kept, and gets its newline
+  before `gateway_lost` follows it; any other is cut off, as before. The resend
+  reports "<n> lines of <file> are not whole events and are not sent". `gateway_lost`
+  is numbered after the highest sequence of the whole events or of `delivered.log`,
+  since an event whose line was not finished may have reached the server whole, and the
+  file is changed only when `gateway_lost` is added.
 - `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
   that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
   its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend

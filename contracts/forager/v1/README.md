@@ -1259,9 +1259,12 @@ no whole event, a write Forager did not finish, on a full disk, is skipped, and 
 event the gateway wrote after it is read and sent, one the next write put on the same
 line included: the object that ends that line, when it is one whole event from where it
 starts and numbered at least two after the event before it, never an object inside the
-bytes before it. A whole event numbered at or below the one before it is skipped too,
-and Forager reports on its standard error how many lines it skipped. A
-last line without its newline is made a line before `dev.qory.run.exited` follows it:
+bytes before it. When those bytes, from the line's first, are themselves exactly one
+whole event, numbered between the one before and the object, a write lost its newline
+alone: both are kept, and the line is not counted as skipped. A whole event numbered at
+or below the one before it is skipped too, and Forager reports on its standard error how
+many lines it skipped. A last line without its newline is made a line before
+`dev.qory.run.exited` follows it:
 one that is a whole event, its newline alone lost, gets its newline, and any other is
 cut off. Nothing else of the file is changed. `delivered.log` is
 made once the server accepts the ping, its first line the ping's: a record that holds a

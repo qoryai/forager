@@ -618,3 +618,91 @@ func TestResendSendsARunWhosePingLineIsTorn(t *testing.T) {
 	}
 	exitedAfter(t, dir, torn, "0000000006")
 }
+
+// TestResendKeepsAnEventThatLostItsNewline pins a write cut just before its newline:
+// run.started, whole, and the next event share a line. Both are kept and sent, the line
+// lost no event, so it is not torn, and gateway_lost follows the run.
+func TestResendKeepsAnEventThatLostItsNewline(t *testing.T) {
+	srv, store := station(t, nil)
+	dir, lines := tornRun(t)
+	rec := slices.Concat(lines[0], bytes.TrimSuffix(lines[1], []byte("\n")), lines[2], lines[3], lines[4])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), rec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var reports []string
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 0 || res.Sent != 5 || len(reports) != 0 {
+		t.Errorf("result %+v, reports %q", res, reports)
+	}
+	if store.Count() != 5 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+	exitedAfter(t, dir, rec, "0000000006")
+}
+
+// TestResendFindsTheEventThatEndsATornLineByItsStrings pins the reading back to the
+// start of the event that ends a torn line: its strings hold braces with no pair,
+// escaped quotes and runs of backslashes, one ending a string, and it is still kept
+// whole.
+func TestResendFindsTheEventThatEndsATornLineByItsStrings(t *testing.T) {
+	dir, lines := tornRun(t)
+	var glued event.Event
+	if err := json.Unmarshal(lines[3], &glued); err != nil {
+		t.Fatal(err)
+	}
+	// A brace with no pair, a string that ends with a backslash, and an escaped quote
+	// before a brace, each in a string: read as anything but strings, they move where
+	// the event seems to start.
+	glued.Data = map[string]any{"stream": "stdout", "bytes": "aGkK", "a": `{`, "b": `x\`, "c": `"{`, "d": `}\\`}
+	line, err := glued.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := slices.Concat(lines[0], lines[1], lines[2][:len(lines[2])/2], line, []byte("\n"), lines[4])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), rec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 1 {
+		t.Errorf("result %+v", res)
+	}
+	exitedAfter(t, dir, rec, "0000000006")
+	got, err := record(filepath.Join(dir, sink.EventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.lines) != 5 || string(got.lines[2].line) != string(line) {
+		t.Errorf("the events kept: %d, the glued one %s", len(got.lines), got.lines[2].line)
+	}
+}
+
+// TestResendNeedsASequenceForTheTornBytes pins that the bytes of an event the gateway
+// did not finish took a sequence: the event that ends their line, numbered right after
+// the event before them, is no event of that place, and is neither kept nor sent.
+func TestResendNeedsASequenceForTheTornBytes(t *testing.T) {
+	srv, store := station(t, nil)
+	dir, lines := tornRun(t)
+	var skipped event.Event
+	json.Unmarshal(lines[2], &skipped)
+	rec := slices.Concat(lines[0], lines[1], lines[3][:len(lines[3])/2], lines[2], lines[3], lines[4])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), rec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 1 || res.Sent != 4 {
+		t.Errorf("result %+v", res)
+	}
+	if store.Seen(skipped.ID) {
+		t.Error("the event numbered right after the one before the torn bytes was sent")
+	}
+	exitedAfter(t, dir, rec, "0000000006")
+}

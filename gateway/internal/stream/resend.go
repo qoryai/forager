@@ -207,14 +207,19 @@ type recordFile struct {
 // when a write before it left nothing at all. A write the gateway did not finish, on a
 // full disk, leaves part of a line, which is no event and holds the next sequence; the
 // next write the gateway finished goes on in the same line and ends it. So a line that
-// is not one whole event holds at most one, the object that ends the line, which the
-// gateway wrote whole: never an object inside the bytes before it, which may hold
-// anything a session sent. It is kept when it decodes as one whole event from where it
-// starts to the end of the line, and its sequence is at least two above the one before
-// it, the bytes before it having taken one. A last line with no newline is kept only
-// when the whole of it is one whole event, its newline alone lost. A blank line is
-// skipped; every other line that is not kept, or holds bytes before what is, counts as
-// torn.
+// is not one whole event holds at most two: the object that ends the line, which the
+// gateway wrote whole, and, when the write before lost its newline alone, the whole of
+// what comes before that object. Never an object inside bytes that are not a whole
+// event, which may hold anything a session sent: part of an event is never a whole
+// JSON object. The object that ends the line is kept when it decodes as one whole event
+// from where it starts to the end of the line. What comes before it is kept when, from
+// the line's first byte, it decodes as exactly one whole event, numbered above the one
+// before it and below the object that ends the line; the line then lost no event, and
+// does not count as torn. Otherwise the bytes before the object are part of an event,
+// which took a sequence, so the object is kept only when its sequence is at least two
+// above the one before it. A last line with no newline is kept only when the whole of
+// it is one whole event, its newline alone lost. A blank line is skipped; every other
+// line that is not kept, or holds bytes that are no whole event, counts as torn.
 func record(file string) (*recordFile, error) {
 	b, err := os.ReadFile(file)
 	if err != nil {
@@ -231,16 +236,16 @@ func record(file string) (*recordFile, error) {
 		} else {
 			end += off
 		}
-		l, kept, torn := readLine(b[off:end], last, prev)
-		if kept {
-			rec.lines = append(rec.lines, l)
-			prev = l.seq
+		kept, torn := readLine(b[off:end], last, prev)
+		if len(kept) > 0 {
+			rec.lines = append(rec.lines, kept...)
+			prev = kept[len(kept)-1].seq
 		}
 		if torn {
 			rec.torn++
 		}
 		if last {
-			rec.tailKept = kept
+			rec.tailKept = len(kept) > 0
 		}
 		off = end + 1
 	}
@@ -251,30 +256,37 @@ func record(file string) (*recordFile, error) {
 }
 
 // readLine reads one line of the record, after the whole event of the sequence prev, as
-// [record] says: the whole event it holds, if any, and whether it holds bytes that are
-// none. final says the line has no newline.
-func readLine(line []byte, final bool, prev uint64) (l recorded, kept, torn bool) {
+// [record] says: the whole events it holds, one or two, and whether it holds bytes that
+// are none. final says the line has no newline.
+func readLine(line []byte, final bool, prev uint64) (kept []recorded, torn bool) {
 	if len(bytes.TrimSpace(line)) == 0 {
-		return recorded{}, false, false
+		return nil, false
 	}
 	if l, ok := whole(line); ok {
 		if l.seq <= prev {
-			return recorded{}, false, true
+			return nil, true
 		}
-		return l, true, false
+		return []recorded{l}, false
 	}
 	if final {
-		return recorded{}, false, true
+		return nil, true
 	}
 	start := lastObject(line)
 	if start <= 0 {
-		return recorded{}, false, true
+		return nil, true
 	}
-	l, ok := whole(line[start:])
-	if !ok || l.seq < prev+2 {
-		return recorded{}, false, true
+	last, ok := whole(line[start:])
+	if !ok {
+		return nil, true
 	}
-	return l, true, true
+	// A write that lost its newline alone: the whole event before, then the next.
+	if first, ok := whole(bytes.TrimSpace(line[:start])); ok && first.seq > prev && first.seq < last.seq {
+		return []recorded{first, last}, false
+	}
+	if last.seq < prev+2 {
+		return nil, true
+	}
+	return []recorded{last}, true
 }
 
 // lastObject is where the JSON object that ends the line starts, or -1: it reads back
