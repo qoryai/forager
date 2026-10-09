@@ -3,15 +3,14 @@ package session
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
-	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
@@ -67,28 +66,30 @@ func checkHarnessHome(home string) error {
 	return nil
 }
 
-// passes reports whether the run passes a value for the variable from the node: in
-// what it inherits, what the harness sets, or the run's or the machine's variables.
-func passes(spec Spec, name string) bool {
-	return slices.ContainsFunc(slices.Concat(spec.Env, spec.LaunchFixed, spec.LaunchDefaults, spec.Variables.Run, spec.Variables.Machine), func(kv string) bool {
-		return strings.HasPrefix(kv, name+"=")
-	})
-}
-
-// nodePaths is how many hosts the node's path rules list beside a server's policy.
-func nodePaths(pol *policy.Loaded) int {
-	if pol.Node == nil {
-		return 0
+// passes are the names of the variables the run passes a value for from the node: in
+// what it inherits, what the harness sets, or the run's or the machine's variables,
+// sorted, each once. A name outside the grammar of a variable's name is left out: it
+// can match no placeholder. The run request carries them, names alone, so the gateway
+// refuses a placeholder the run passes a value for, as the session did.
+func passes(spec Spec) []string {
+	seen := map[string]bool{}
+	for _, kv := range slices.Concat(spec.Env, spec.LaunchFixed, spec.LaunchDefaults, spec.Variables.Run, spec.Variables.Machine) {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && variableShape.MatchString(name) {
+			seen[name] = true
+		}
 	}
-	return len(pol.Node.Paths)
+	return slices.Sorted(maps.Keys(seen))
 }
 
 // resolve resolves the run's variables, from the fixed names to what the run
-// inherits, after refusing what the run passes into the enclosure. It returns the
+// inherits, after refusing what the run passes into the enclosure: placeholders are the
+// variables the agent sees in place of what the gateway holds, and reserved the names
+// the gateway sets for the run, what a value of the machine's is read from. It returns the
 // resolution and, for a walled run, the runtime's declared and reserved variables that
 // neither a placeholder, the run nor the runtime's preparation sets, each as an empty
 // value.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, held *gateway.HeldCredentials, chosen []gateway.ChosenTool) (variables.Resolved, []string, error) {
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -98,14 +99,8 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		runtimeNames = append(runtimeNames, d.Name)
 	}
 	runtimeNames = append(runtimeNames, decl.Reserves...)
-	placeholderNames := slices.Concat(held.Placeholders, gateway.ToolPlaceholders(chosen))
-	// What a value of the machine's is read from: a credential's variable.
-	var readFrom []string
-	for _, c := range spec.Credentials {
-		if c.Env != "" {
-			readFrom = append(readFrom, c.Env)
-		}
-	}
+	// What a value of the machine's is read from: the gateway's own names.
+	readFrom := reserved
 	// Forager's own names, the proxy's, the wall's and the preparation's: with the
 	// placeholders and the harness's computed values, the run's fixed names.
 	own := []string{EnvRunID, EnvSocket}

@@ -9,8 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/forager/gateway"
-	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session/internal/socket"
 	"github.com/qoryai/forager/wall"
@@ -177,31 +176,20 @@ type foragerFile struct {
 	path, what string
 }
 
-// foragerFiles are the paths a walled run's mounts leave out: the caller's, and every one
-// Forager knows itself. The programs are every one the machine defines, not only the
-// ones the run's policy selects, because a server's policy selects after the check, and
-// a reload may select another credential.
+// foragerFiles are the paths a walled run's mounts leave out: the caller's, the
+// gateway's, and every one Forager knows itself. The gateway's programs are every one
+// the machine defines, not only the ones the run's policy selects, because a server's
+// policy selects after the check, and a reload may select another credential.
 func foragerFiles(spec Spec) []foragerFile {
 	var out []foragerFile
 	for _, p := range spec.ForagerFiles {
 		out = append(out, foragerFile{p, "one of Forager's files"})
 	}
-	for _, c := range spec.Credentials {
-		if len(c.Adapter) > 0 {
-			for _, d := range program.Dirs(c.Adapter[0]) {
-				out = append(out, foragerFile{d, "the directory of the credential " + c.Name + "'s program"})
-			}
-		}
-		if c.File != "" {
-			out = append(out, foragerFile{c.File, "the file the credential " + c.Name + " is read from"})
-		}
-	}
-	for _, t := range spec.Tools {
-		if len(t.Command) > 0 {
-			for _, d := range program.Dirs(t.Command[0]) {
-				out = append(out, foragerFile{d, "the directory of the tool " + t.Name + "'s program"})
-			}
-		}
+	// The gateway's own files: its credential files, the directories of its adapter
+	// and tool programs, its state directory and the patterns of its private
+	// directories, which it hands the session with its link.
+	for _, p := range spec.Gateway.files() {
+		out = append(out, foragerFile{p, "one of the gateway's files"})
 	}
 	// The private directory of a tool's socket is made when the tool starts, in the
 	// system's temporary directory; a mount that contains its pattern would contain it.
@@ -210,7 +198,7 @@ func foragerFiles(spec Spec) []foragerFile {
 	// sockets and of the Docker wall's environment files, which hold the proxy's
 	// secret: this run's are made after the check, and other runs' exist.
 	out = append(out,
-		foragerFile{gateway.ToolSocketDirs(), "where the tools' sockets are made"},
+		foragerFile{filepath.Join(os.TempDir(), link.ToolDirPrefix+"*"), "where the tools' sockets are made"},
 		foragerFile{socket.Dirs(), "where the runs' record sockets are made"},
 		foragerFile{wall.TempDirs(), "where the Docker wall's environment files are made"})
 	if f, ok := spec.Wall.(wall.Filer); ok {
