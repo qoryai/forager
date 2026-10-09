@@ -106,7 +106,11 @@ type Run struct {
 	mu sync.Mutex
 	// pol is the policy in force, held its credentials, and runDigest the server's
 	// digest of the run configuration in force, empty when none was fetched.
-	pol       *policy.Loaded
+	pol *policy.Loaded
+	// guard are the names the guard opens under pol ([Run.GuardNames]), and read those
+	// of each policy Read made that a reload has not decided yet.
+	guard     []string
+	read      map[*policy.Loaded][]string
 	held      *credential.Held
 	runDigest string
 }
@@ -142,6 +146,7 @@ func Decide(cfg Config) (*Run, error) {
 		r.node, pol = node, node
 	}
 	if cfg.Fetched == nil {
+		r.guard = GuardNames(pol, cfg.Narrowing)
 		pol = Narrow(pol, cfg.Narrowing)
 	} else {
 		fetched, err := r.Read(*cfg.Fetched)
@@ -149,6 +154,7 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		pol = fetched
+		r.guard = r.takeGuard(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
@@ -394,7 +400,52 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
 	}
-	return Narrow(pol, r.cfg.Narrowing), nil
+	out := Narrow(pol, r.cfg.Narrowing)
+	r.mu.Lock()
+	if r.read == nil {
+		r.read = map[*policy.Loaded][]string{}
+	}
+	r.read[out] = GuardNames(pol, r.cfg.Narrowing)
+	r.mu.Unlock()
+	return out, nil
+}
+
+// takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken; the
+// policy's own allow list for one it did not make.
+func (r *Run) takeGuard(p *policy.Loaded) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names, ok := r.read[p]
+	if !ok {
+		return p.Policy.Egress.Allow
+	}
+	delete(r.read, p)
+	return names
+}
+
+// GuardNames are the names a guarded proxy opens, this machine's own addresses
+// reached for them, under pol narrowed by n: the entries of pol's own allow list, as
+// its owner wrote them, never a narrowing's. A session's narrowing only narrows, so it
+// opens nothing pol does not: under a pol that enforces, pol's names, which the
+// narrowed allow list must allow as well; under one that observes, or none, no name
+// at all, since every name its allow list holds is the narrowing's to choose. A nil n
+// is pol's allow list, as without a narrowing.
+func GuardNames(pol *policy.Loaded, n *Narrowing) []string {
+	if n == nil {
+		return pol.Policy.Egress.Allow
+	}
+	if pol.Policy.Egress.Mode != policy.Enforce {
+		return nil
+	}
+	return slices.Clone(pol.Policy.Egress.Allow)
+}
+
+// GuardNames are the names a guarded proxy opens under the policy in force:
+// [GuardNames] of the policy before the session's narrowing.
+func (r *Run) GuardNames() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.guard
 }
 
 // Narrowing is a session's narrowing of the policy the gateway holds for its run,
@@ -461,6 +512,9 @@ type Decision struct {
 	Policy *policy.Loaded
 	// Uses are its credentials as the proxy sets them.
 	Uses []proxy.Credential
+	// Guard are the names a guarded proxy opens under it ([GuardNames]): those of the
+	// policy before the session's narrowing.
+	Guard []string
 	// Image is the image the policy resolves to, the one the run started in: a reload
 	// that resolves to another is refused. Zero without a wall.
 	Image Image
@@ -489,10 +543,14 @@ func (d *Decision) Discard() {
 // allow list instead, so they are not reached on every path, and the caller's user is
 // told.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
+	guard := r.takeGuard(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	d, err := r.decide(ctx, next)
+	if d != nil {
+		d.Guard = guard
+	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w; the policy in force stays", next.URL, err)
 	}
@@ -548,7 +606,7 @@ func (r *Run) Commit(d *Decision) {
 	}
 	r.mu.Lock()
 	old := r.held
-	r.pol, r.held, r.runDigest = d.Policy, d.held, d.Policy.RunConfiguration
+	r.pol, r.held, r.runDigest, r.guard = d.Policy, d.held, d.Policy.RunConfiguration, d.Guard
 	r.mu.Unlock()
 	if old != nil {
 		old.Close()
