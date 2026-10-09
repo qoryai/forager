@@ -153,6 +153,10 @@ func SetIntrospection(c *Config, answer func(issuer, credential string) (bool, e
 // seconds.
 func SetExitWindow(c *Config, d time.Duration) { c.exitWindow = d }
 
+// SetWindowEndLate makes the timer of a run's window end the run d after the window
+// closes, so a test looks between the two.
+func SetWindowEndLate(c *Config, d time.Duration) { c.windowEndLate = d }
+
 // SetKeepSpent sets how long past its exp the gateway keeps what an ended run of the
 // one address left, in place of runcredential.MaxLeeway.
 func SetKeepSpent(c *Config, d time.Duration) { c.keepSpent = d }

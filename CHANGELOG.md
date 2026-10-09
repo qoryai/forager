@@ -673,9 +673,10 @@ release may change what an existing document does, and says so under Upgrading.
   `Start` with `Listen` empty serves the local link alone, as before, and refuses a
   `TLS` without a `Listen`.
 - `ended-run-keys.json` keeps the outcome and the reason a run's starter gave with each
-  run key it holds, and a gateway from before this change refuses a file that holds one,
-  and does not start: run the newer gateway until those run keys lapse, `exp` plus 5
-  minutes, before going back.
+  run key it holds. A gateway from before this change refuses the file only when an
+  entry holds an outcome, and then does not start; a file without one still loads. Run
+  the newer gateway until the run keys with an outcome lapse, `exp` plus 5 minutes,
+  before going back.
 
 #### Added
 
@@ -788,8 +789,12 @@ release may change what an existing document does, and says so under Upgrading.
 - `GET <run path>/<run id>/outcome` on the one address answers the session's ask at
   its runtime's exit, decided as a reload: the starter is asked once per run, past the
   answer kept, asks in flight sharing that call and a later ask getting the answer
-  stored, within about 6 seconds; the answer is `{}`, or the starter's `state` and
-  `reason` when it answers `active: false` with an outcome. The local link answers it
+  stored, within about 6 seconds; a later ask is decided as a reload, so once the
+  starter has ended the run key it is the `410`, and only the first keeps the run from
+  being lost; the answer is `{}`, or the starter's `state` and `reason` when it answers
+  `active: false` with an outcome. After the answer, the batch with the session's
+  `dev.qory.run.exited` is not refused for a run credential that could not be checked;
+  every other request is checked as before. The local link answers it
   `400` `invalid_request`. An answer of `active: false` holds the run key and ends the
   run key's other live runs at their next request, and the run that asked may end with
   its own `dev.qory.run.exited` of that answer, or after `{}` one its runtime's exit

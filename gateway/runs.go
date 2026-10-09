@@ -618,9 +618,12 @@ func (lr *linkRun) expire() {
 		return
 	}
 	lr.mu.Unlock()
-	if lr.ending() {
+	if x, open := lr.closing(); x != nil {
 		// The starter's answer at the runtime's exit wins: the run ends as it says, when
-		// its window closes, if not before.
+		// its window closes, if not before; once it has closed, now.
+		if !open {
+			lr.endAsAnswered(x)
+		}
 		return
 	}
 	lr.g.report(fmt.Sprintf("run %s: its run credential expired with no fresh one; the run ends: %s", lr.id, credentialExpired.state))
@@ -683,8 +686,17 @@ func (lr *linkRun) renew(id runIdentity) {
 // cancelled and stopped. An answer that the run credential is no longer active holds
 // the run key whatever else ended the run meanwhile. A request that went, or a run that
 // ended, while the starter was asked is the context's error, and the run is left as it
-// is. An issuer without introspection is never asked.
-func (lr *linkRun) stillActive(ctx context.Context) error {
+// is. An answer that it is no longer active while the session's ask at its exit is
+// made, or after that ask's answer said so, is the exit's to decide: stillActive waits
+// for that answer and returns [errAnsweredAtExit], and the run's window decides the
+// request. An issuer without introspection is never asked.
+func (lr *linkRun) stillActive(ctx context.Context) error { return lr.checkActive(ctx, false) }
+
+// checkActive is [linkRun.stillActive], but with spare a run credential that could not
+// be checked, its endpoint unreachable or its answer not valid, does not end the run:
+// checkActive returns that error as a [*checkFailed], and the caller ends the run with
+// it, [linkRun.failCheck], or does not.
+func (lr *linkRun) checkActive(ctx context.Context, spare bool) error {
 	lr.mu.Lock()
 	active := lr.cred.active
 	lr.asked = time.Now()
@@ -698,6 +710,21 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	}
 	var in *inactive
 	if errors.As(err, &in) {
+		lr.mu.Lock()
+		x := lr.exit
+		lr.mu.Unlock()
+		if x != nil {
+			// The ask at the exit may have cached this answer before its window opens:
+			// wait for that ask, whose answer decides.
+			select {
+			case <-x.done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if x.inactive {
+				return errAnsweredAtExit
+			}
+		}
 		// The starter's end holds the run key even when the run ended otherwise while it
 		// was asked, credential_check_unreachable at another request's say, which holds
 		// nothing.
@@ -715,12 +742,11 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 		return lr.ctx.Err()
 	}
 	switch {
-	case errors.Is(err, runcredential.ErrIssuerUnreachable):
-		lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: the introspection endpoint could not be reached; the run ends: %s", lr.id, checkUnreachable.state))
-		lr.end(checkUnreachable)
-	case errors.Is(err, runcredential.ErrAnswerInvalid):
-		lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: %v; the run ends: %s", lr.id, err, checkInvalid.state))
-		lr.end(checkInvalid)
+	case errors.Is(err, runcredential.ErrIssuerUnreachable), errors.Is(err, runcredential.ErrAnswerInvalid):
+		if spare {
+			return &checkFailed{err}
+		}
+		lr.failCheck(err)
 	default:
 		e := stopped
 		if in != nil {
@@ -729,6 +755,27 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 		lr.endAsStarterSaid(e)
 	}
 	return err
+}
+
+// checkFailed is a run credential that could not be checked, err, which
+// [linkRun.checkActive] spared the run.
+type checkFailed struct{ err error }
+
+func (c *checkFailed) Error() string { return c.err.Error() }
+
+func (c *checkFailed) Unwrap() error { return c.err }
+
+// failCheck ends the run whose run credential could not be checked, err:
+// credential_check_unreachable for [runcredential.ErrIssuerUnreachable],
+// credential_check_invalid otherwise, and tells the operator.
+func (lr *linkRun) failCheck(err error) {
+	if errors.Is(err, runcredential.ErrIssuerUnreachable) {
+		lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: the introspection endpoint could not be reached; the run ends: %s", lr.id, checkUnreachable.state))
+		lr.end(checkUnreachable)
+		return
+	}
+	lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: %v; the run ends: %s", lr.id, err, checkInvalid.state))
+	lr.end(checkInvalid)
 }
 
 // endAsStarterSaid ends the run as its starter said, e, and tells the operator.
@@ -746,6 +793,35 @@ type exitAsk struct {
 	done          chan struct{}
 	inactive      bool
 	state, reason string
+}
+
+// errAnsweredAtExit is [linkRun.stillActive]'s answer for a run whose starter answered
+// at its runtime's exit that the run credential is no longer active: the run's window
+// decides the request.
+var errAnsweredAtExit = errors.New("the starter answered at the runtime's exit")
+
+// askedAtExit reports whether the session asked at its runtime's exit.
+func (lr *linkRun) askedAtExit() bool {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return lr.exit != nil
+}
+
+// answeredAtExit reports whether the session's ask at its runtime's exit has stored its
+// answer.
+func (lr *linkRun) answeredAtExit() bool {
+	lr.mu.Lock()
+	x := lr.exit
+	lr.mu.Unlock()
+	if x == nil {
+		return false
+	}
+	select {
+	case <-x.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // exitWindow is how long after the starter's answer at its runtime's exit that the run
@@ -770,13 +846,6 @@ func (lr *linkRun) closing() (*exitAsk, bool) {
 	return x, !lr.ended && time.Now().Before(lr.window)
 }
 
-// ending reports whether the run is ending after its starter's answer at its exit, its
-// window open: no other end but the starter's comes to it meanwhile.
-func (lr *linkRun) ending() bool {
-	_, open := lr.closing()
-	return open
-}
-
 // outcomeAnswer is the answer the run's ask at its exit stored, once it is answered:
 // the outcome and the reason the starter gave, the state empty for none; ok is false
 // before the ask is answered, and when no one asked.
@@ -798,21 +867,23 @@ func (lr *linkRun) outcomeAnswer() (state, reason string, ok bool) {
 // askAtExit is the session's ask at its runtime's exit of how the run's starter says
 // the run ended: the starter is asked once per run, now and not from the answer kept,
 // and every ask of the run waits for that one, and gets the answer it stored. Nil when
-// ctx ends first.
-func (lr *linkRun) askAtExit(ctx context.Context) *exitAsk {
+// ctx ends first; first says this ask is the one that asked the starter, which is the
+// session's request until it is answered.
+func (lr *linkRun) askAtExit(ctx context.Context) (x *exitAsk, first bool) {
 	lr.mu.Lock()
-	x := lr.exit
+	x = lr.exit
 	if x == nil {
-		x = &exitAsk{done: make(chan struct{})}
+		x, first = &exitAsk{done: make(chan struct{})}, true
 		lr.exit = x
+		lr.last = time.Now()
 		go lr.answerAtExit(x, lr.cred.active)
 	}
 	lr.mu.Unlock()
 	select {
 	case <-x.done:
-		return x
+		return x, first
 	case <-ctx.Done():
-		return nil
+		return nil, first
 	}
 }
 
@@ -842,7 +913,7 @@ func (lr *linkRun) answerAtExit(x *exitAsk, active func(context.Context, bool) e
 	x.inactive, x.state, x.reason = true, in.outcome, in.reason
 	if !lr.ended {
 		lr.window = time.Now().Add(window)
-		lr.windowEnd = time.AfterFunc(window, func() { lr.endAsAnswered(x) })
+		lr.windowEnd = time.AfterFunc(window+lr.g.cfg.windowEndLate, func() { lr.endAsAnswered(x) })
 	}
 	key, expires := lr.cred.key, lr.cred.expires
 	lr.mu.Unlock()
@@ -913,8 +984,12 @@ func (lr *linkRun) watch() {
 		return
 	}
 	lr.mu.Unlock()
-	if lr.ending() {
-		// The run ends as its starter said when its window closes, never session_lost.
+	if x, open := lr.closing(); x != nil {
+		// The run ends as its starter said when its window closes, never session_lost;
+		// once it has closed, now.
+		if !open {
+			lr.endAsAnswered(x)
+		}
 		return
 	}
 	lr.g.report(fmt.Sprintf("run %s: its session sent nothing for %s; the run ends: %s", lr.id, lr.g.quiet, sessionLost.state))

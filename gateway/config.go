@@ -111,6 +111,9 @@ type Config struct {
 	// its ask at its exit that the run credential is no longer active may still end
 	// with its own exit. Tests set it.
 	exitWindow time.Duration
+	// windowEndLate is how long after the window closes its timer ends the run, none
+	// but in the tests that look between the two.
+	windowEndLate time.Duration
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
@@ -203,8 +206,9 @@ type Delivery struct {
 	// the gateway's 410 its session's later requests get: session_lost when it heard
 	// nothing from the session for 3 heartbeat intervals, batch_refused when it refused a
 	// batch, and behind a separate gateway credential_expired,
-	// credential_check_unreachable, credential_check_invalid, and stopped when the run's
-	// starter ended it.
+	// credential_check_unreachable, credential_check_invalid, stopped when the run's
+	// starter ended it, and quiet when a client's run had no connection for the quiet
+	// time.
 	RunClosed    bool
 	ClosedReason string
 	// State and Reason are how the run ended, where the gateway knows it: the state and
@@ -213,8 +217,8 @@ type Delivery struct {
 	// failed with batch_refused, cancelled with credential_expired, failed with
 	// credential_check_unreachable or credential_check_invalid, and, ended by its
 	// starter, the outcome and the reason the starter gave, or cancelled with stopped
-	// when it gave no outcome. For a resend, failed with gateway_lost, with Completed.
-	// Empty otherwise.
+	// when it gave no outcome, and cancelled with quiet for a client's run. For a
+	// resend, failed with gateway_lost, with Completed. Empty otherwise.
 	State  string
 	Reason string
 	// Sent is how many events a resend delivered now, and Completed says a resend

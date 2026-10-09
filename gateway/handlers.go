@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -503,15 +504,21 @@ const (
 // as it says, as does an introspection endpoint that could not be reached,
 // credential_check_unreachable, or gave no valid answer, credential_check_invalid: each
 // is the 410. A run that is ending after its starter's answer at its exit takes its
-// batches and its asks of the outcome while its window is open, and ends at any other
-// request, a reload, as the starter said, which is the 410. An ask of the outcome is
-// not decided by the starter's answer kept: the ask itself asks it. It reports whether
-// the request goes on.
-func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity, what request) bool {
+// batches and its asks of the outcome while its window is open, a run credential
+// presented then extending the hold of its run key to its exp, and ends at any other
+// request, a reload, as the starter said, which is the 410. The ask of the outcome that
+// asks the starter is not decided by the starter's answer kept: the ask itself asks it.
+// Every later ask is decided as a reload is, so a run key the starter ended since is
+// its 410. It reports whether the request goes on. A batch after the ask at the exit
+// has stored its answer is spared a run credential that could not be checked: admit
+// returns that as a [*checkFailed], and the batch ends the run with it unless it
+// carries the session's dev.qory.run.exited, which the exit rule decides against the
+// answer stored.
+func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity, what request) (bool, error) {
 	if end, ended := lr.gone(); ended {
 		lr.g.presented(id)
 		gone(w, end)
-		return false
+		return false, nil
 	}
 	if x, open := lr.closing(); x != nil {
 		if !open || what == reloadRequest {
@@ -519,14 +526,18 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity,
 			lr.g.presented(id)
 			end, _ := lr.gone()
 			gone(w, end)
-			return false
+			return false, nil
 		}
 		if ref := lr.differs(id); ref != nil {
 			refuse(w, http.StatusForbidden, ref.Code, ref.Names, accesskey.FromGateway, gatewayText(ref.Code))
-			return false
+			return false, nil
 		}
 		lr.renew(id)
-		return true
+		// The run key is held, or is about to be, with the starter's answer: a fresher
+		// run credential extends the hold to its exp, even when the run then ends with
+		// its own dev.qory.run.exited.
+		lr.g.endKey(keyOf(id), id.Expires, x.state, x.reason)
+		return true, nil
 	}
 	if k := keyOf(id); lr.g.blocked(k) {
 		// The starter ended a run of the run key: every request of a run of it is
@@ -537,27 +548,36 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity,
 		lr.g.presented(id)
 		end, _ := lr.gone()
 		gone(w, end)
-		return false
+		return false, nil
 	}
 	if ref := lr.differs(id); ref != nil {
 		// A refreshed run credential is of the run's own target and details.
 		refuse(w, http.StatusForbidden, ref.Code, ref.Names, accesskey.FromGateway, gatewayText(ref.Code))
-		return false
+		return false, nil
 	}
 	lr.renew(id)
-	if what == outcomeRequest {
-		return true
+	if what == outcomeRequest && !lr.askedAtExit() {
+		// The ask that asks the starter itself.
+		return true, nil
 	}
-	if lr.stillActive(r.Context()) != nil {
+	if err := lr.checkActive(r.Context(), what == batchRequest && lr.answeredAtExit()); err != nil {
+		var spared *checkFailed
+		if errors.As(err, &spared) {
+			return true, spared
+		}
+		if errors.Is(err, errAnsweredAtExit) {
+			// The starter's answer at the exit came meanwhile: its window decides.
+			return lr.admit(w, r, id, what)
+		}
 		if end, ended := lr.gone(); ended {
 			gone(w, end)
 		} else {
 			// The request went before the starter answered.
 			refuseCredential(w)
 		}
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // reload answers a GET of a run's configuration by its run id, with the run's secret:
@@ -572,7 +592,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 		if lr, id = g.credentialRun(w, r, g.pathRun(r, runID)); lr == nil {
 			return
 		}
-		if !lr.admit(w, r, id, reloadRequest) {
+		if ok, _ := lr.admit(w, r, id, reloadRequest); !ok {
 			return
 		}
 	} else {
@@ -612,6 +632,9 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var lr *linkRun
+	// unchecked is the run credential that could not be checked, which a batch after the
+	// ask at the exit is spared only when it carries the session's run.exited.
+	var unchecked error
 	if s.remote {
 		var id runIdentity
 		if lr, id = g.credentialRun(w, r, g.secretRun(r)); lr == nil {
@@ -619,7 +642,8 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		}
 		lr.batch.Lock()
 		defer lr.batch.Unlock()
-		if !lr.admit(w, r, id, batchRequest) {
+		var ok bool
+		if ok, unchecked = lr.admit(w, r, id, batchRequest); !ok {
 			return
 		}
 	} else {
@@ -634,8 +658,22 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// failed ends the run with a run credential that could not be checked, when the
+	// batch is not spared it, and reports whether it did.
+	failed := func() bool {
+		if unchecked == nil {
+			return false
+		}
+		lr.failCheck(unchecked)
+		end, _ := lr.gone()
+		gone(w, end)
+		return true
+	}
 	lr.touch()
 	refused := func(why string) {
+		if failed() {
+			return
+		}
 		if x, _ := lr.closing(); x != nil {
 			// The run is ending as its starter answered at its exit: a batch that does
 			// not end it so ends it as the starter said.
@@ -651,8 +689,10 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBatch+1))
 	if err != nil {
 		// The body did not arrive whole, its session gone say: no batch came, and no run
-		// ends.
-		invalid(w)
+		// ends but at a run credential that could not be checked.
+		if !failed() {
+			invalid(w)
+		}
 		return
 	}
 	if len(body) > maxBatch {
@@ -662,6 +702,13 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	evs, err := stream.DecodeBatch(body)
 	if err != nil || len(evs) == 0 {
 		refused("one link-batch.schema.json refuses")
+		return
+	}
+	if slices.ContainsFunc(evs, func(ev event.Event) bool { return ev.Type == event.RunExited }) {
+		// The batch that ends the run: the exit rule decides it against the answer at
+		// the exit, as though the run credential were checked.
+		unchecked = nil
+	} else if failed() {
 		return
 	}
 	if why := lr.check(body, evs); why != "" {
@@ -705,16 +752,19 @@ func (g *Gateway) outcome(s *side, w http.ResponseWriter, r *http.Request, runID
 	if lr == nil {
 		return
 	}
-	if !lr.admit(w, r, id, outcomeRequest) {
+	if ok, _ := lr.admit(w, r, id, outcomeRequest); !ok {
 		return
 	}
-	lr.touch()
-	x := lr.askAtExit(r.Context())
+	x, first := lr.askAtExit(r.Context())
 	if x == nil {
 		// The session gave up before the starter answered.
 		return
 	}
-	lr.touch()
+	if first {
+		// The ask that asked the starter: the session's quiet time runs from its answer.
+		// A later ask renews nothing.
+		lr.touch()
+	}
 	if end, ended := lr.gone(); ended {
 		gone(w, end)
 		return

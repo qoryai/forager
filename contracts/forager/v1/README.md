@@ -1781,7 +1781,8 @@ like any other event of the session's, and they are its sign that the session li
 judged by their arrival, not by the server's rule (§The server).
 The gateway writes `dev.qory.run.heartbeat` only for a run with no session. When the
 session sends nothing for 3 × `interval_seconds`, counted from the run answer and again
-from each request of the session's, the gateway ends the run with
+from each request of the session's but a later ask of its outcome (The outcome at the
+exit, below), the gateway ends the run with
 `dev.qory.run.exited`, `reason: session_lost`, and answers the session's later requests
 with a `410` `session_lost` (The end of a run at the gateway, below). When the gateway
 stops, the server receives no events from it; when `qory run resend` sends the run's
@@ -1898,7 +1899,11 @@ decided as a reload is (Reload, above): a `run_id` that is not a run of the run
 credential's run key is `401` `run_credential_refused`, and a run that has ended at the
 gateway is its `410`. The gateway asks the starter's introspection endpoint at most once
 per run for it, not from its cache: asks of the same run while that call is in flight
-share it, and a later ask of the same run gets the answer it stored. It answers within
+share it, and a later ask of the same run gets the answer it stored. A later ask is
+decided as a reload is, from the starter's answer kept: once the starter has ended the
+run key since, it is that `410`, unless the answer stored said the run credential is no
+longer active, whose window takes it. Only the ask that asked the starter keeps the run
+from being lost (Heartbeats and liveness, above). It answers within
 about 6 seconds, the 4 seconds in which its tries of the endpoint start and one more try
 of 2 seconds: a `200`, `application/json`, whose body is a
 `link-outcome-answer.schema.json` document. It holds the outcome and the reason the
@@ -1916,7 +1921,10 @@ non-empty answer's `state` and `reason` into its `dev.qory.run.exited`, beside t
 runtime's own `exit_code`; with `{}`, a refusal or no answer, the runtime's exit decides
 the state, as without the ask, and nothing is added to the record (Events, above, holds
 the session to both). Once the session has written its `dev.qory.run.exited`, no later
-word of the starter's changes it.
+word of the starter's changes it. After the ask's answer, the batch that carries the
+session's `dev.qory.run.exited` is not refused because the run credential could not be
+checked, the endpoint unreachable or its answer not valid: Events, above, decides it
+against the answer. Every other request of the run is checked as before.
 
 An answer of the endpoint that the run credential is no longer active holds the run key,
 as on any request of the run's (§Run credentials), and ends the run key's other live
@@ -1928,10 +1936,13 @@ that run's events, until one ends with a `dev.qory.run.exited` whose `state` and
 decides (Events, above). The run then ends with that state and reason. A batch whose
 `dev.qory.run.exited` is otherwise, a reload, and any request of the run after the 30
 seconds get the run's `410`, with the answer's state and reason, `cancelled` and
-`stopped` after an answer of `{}`, and the run ends so. When the 30 seconds pass with no such
+`stopped` after an answer of `{}`, and the run ends so; so does any batch the gateway
+refuses within the 30 seconds, never with `batch_refused`. When the 30 seconds pass with no such
 `dev.qory.run.exited`, the gateway ends the run itself with the answer's state and
 reason, never with `session_lost`. Within the 30 seconds the answer wins over the run
-credential's `exp`: the run does not end with `credential_expired`. While the gateway
+credential's `exp`: the run does not end with `credential_expired`, and a request whose
+run credential's `exp` has passed ends the run with the answer's state and reason, and
+gets that `410`. While the gateway
 asks the starter, the ask is the session's request, however long it takes: the run does
 not end with `session_lost` for it.
 
@@ -2064,8 +2075,8 @@ the gateway refused it, \<code\>" for a code the gateway decides of the run
 configuration, `run_configuration_invalid`, `tool_unknown` or `image_unknown`; "the
 gateway could not open the run: Qory Apiary refused it, status \<n\>" for a signed
 answer of Qory Apiary's, other than a `5xx` or a `410`, with no code, a `404` with an empty body or
-a `200` without its digest header; and "the gateway could not open the run: the issuer's introspection
-endpoint gave no valid answer" when the issuer's endpoint gave no valid answer, at its
+a `200` without its digest header; and "the run did not start: its run credential could
+not be checked" when the issuer's endpoint gave no valid answer, at its
 login or a later connection's. A run refused with a code gets the gateway's
 `dev.qory.run.refused` with that code, after its ping, and its status for a code read
 from Qory Apiary's answer, `unauthorized` among them; `answer_unsigned`, which the

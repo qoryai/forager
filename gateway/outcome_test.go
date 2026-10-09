@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -164,20 +165,24 @@ func exitedWith(runID string, data map[string]any) map[string]any {
 // that the run credential is no longer active with an outcome, and {} when it answers
 // active, inactive with no outcome, with no answer, or with one that is not valid. The
 // starter is asked past the answer it keeps, once per run: a later ask of the run is
-// the answer stored, whatever the starter says by then.
+// the answer stored. A later ask is decided as a reload is, though: after an answer
+// that the run credential is still active, or none, a starter that has ended the run
+// key since makes it the 410 as the starter said; after an answer that it is no longer
+// active, the run's window takes it.
 func TestTheAskAtTheExit(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		answer runcredential.Answer
-		err    error
-		body   string
+		name     string
+		answer   runcredential.Answer
+		err      error
+		body     string
+		inactive bool
 	}{
-		{"active", runcredential.Answer{Active: true}, nil, `{}`},
-		{"no outcome", runcredential.Answer{}, nil, `{}`},
-		{"an outcome and a reason", runcredential.Answer{Outcome: "failed", Reason: "checks_failed"}, nil, `{"state":"failed","reason":"checks_failed"}`},
-		{"an outcome with no reason", runcredential.Answer{Outcome: "succeeded"}, nil, `{"state":"succeeded"}`},
-		{"no answer", runcredential.Answer{}, runcredential.ErrIssuerUnreachable, `{}`},
-		{"no valid answer", runcredential.Answer{}, answerInvalid("the introspection endpoint answered status 500"), `{}`},
+		{"active", runcredential.Answer{Active: true}, nil, `{}`, false},
+		{"no outcome", runcredential.Answer{}, nil, `{}`, true},
+		{"an outcome and a reason", runcredential.Answer{Outcome: "failed", Reason: "checks_failed"}, nil, `{"state":"failed","reason":"checks_failed"}`, true},
+		{"an outcome with no reason", runcredential.Answer{Outcome: "succeeded"}, nil, `{"state":"succeeded"}`, true},
+		{"no answer", runcredential.Answer{}, runcredential.ErrIssuerUnreachable, `{}`, false},
+		{"no valid answer", runcredential.Answer{}, answerInvalid("the introspection endpoint answered status 500"), `{}`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newStarter()
@@ -197,13 +202,24 @@ func TestTheAskAtTheExit(t *testing.T) {
 			if n := st.atExit(cred); n != 1 {
 				t.Errorf("the starter was asked %d times at the exit; want 1, past the answer it keeps", n)
 			}
-			// The starter's answer changes: a later ask is the answer stored.
-			st.ends(cred, "cancelled", "no_longer_needed")
+			// The starter answers active again: a later ask is the answer stored.
+			st.set(cred, runcredential.Answer{Active: true}, nil)
 			if status, again, _ := r.outcome(t, cred); status != http.StatusOK || string(again) != c.body {
 				t.Errorf("a later ask: %d %q; want %q", status, again, c.body)
 			}
+			// The starter ends the run key: a later ask is the 410 as it said, unless the
+			// window of the answer at the exit takes it.
+			st.ends(cred, "cancelled", "no_longer_needed")
+			status, again, _ := r.outcome(t, cred)
+			if c.inactive {
+				if status != http.StatusOK || string(again) != c.body {
+					t.Errorf("a later ask inside the window: %d %q; want %q", status, again, c.body)
+				}
+			} else {
+				endedAs(t, "a later ask after the starter's end", status, again, "cancelled", "no_longer_needed", "no longer needed")
+			}
 			if n := st.atExit(cred); n != 1 {
-				t.Errorf("the starter was asked %d times at the exit after a later ask", n)
+				t.Errorf("the starter was asked %d times at the exit after later asks", n)
 			}
 		})
 	}
@@ -406,6 +422,9 @@ func TestARunEndingAsItsStarterSaid(t *testing.T) {
 		{name: "a reload, no outcome",
 			steps: []step{{reload: true}},
 			state: "cancelled", endReason: "stopped", words: "no outcome given"},
+		{name: "a reload, an outcome with no reason", outcome: "succeeded",
+			steps: []step{{reload: true}},
+			state: "succeeded"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newStarter()
@@ -432,7 +451,10 @@ func TestARunEndingAsItsStarterSaid(t *testing.T) {
 				endedAs(t, "the request", status, b, c.state, c.endReason, c.words)
 				status, b = r.post(t, cred, heartbeat(r.a.RunID))
 				endedAs(t, "a later batch", status, b, c.state, c.endReason, c.words)
-				line := "run " + r.a.RunID + ": its run credential is no longer valid; the run ends: " + c.state + ", " + c.words
+				line := "run " + r.a.RunID + ": its run credential is no longer valid; the run ends: " + c.state
+				if c.words != "" {
+					line += ", " + c.words
+				}
 				if got := s.reportsWith("its run credential is no longer valid"); !slices.Equal(got, []string{line}) {
 					t.Errorf("reports %q; want %q", got, line)
 				}
@@ -665,41 +687,184 @@ func TestAClientsRunEndsAsItsStarterSaid(t *testing.T) {
 // TestTheHoldOfAnOutcomeRunsToTheLatestExp pins the hold of a run key whose run ended
 // with its starter's outcome: like the starter's end with none, it lasts to the latest
 // exp of the run key's run credentials, one the run presented after the starter's answer
-// at its exit among them, not to the exp held when the starter answered.
+// at its exit among them, not to the exp held when the starter answered, whether the
+// window ends the run or the session's own run.exited does.
 func TestTheHoldOfAnOutcomeRunsToTheLatestExp(t *testing.T) {
-	var ahead atomic.Int64
-	cfg := gateway.Config{}
-	gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
-	gateway.SetExitWindow(&cfg, time.Second)
-	st := newStarter()
-	s := startStarting(t, cfg, st, 0)
-	now := time.Now()
-	first := mint(issuerKey(), "rk-0001", now.Add(time.Hour), nil)
-	later := mint(issuerKey(), "rk-0001", now.Add(3*time.Hour), nil)
-	probe := mint(issuerKey(), "rk-0001", now.Add(time.Hour+time.Minute), nil)
-	s.secrets = append(s.secrets, first, later, probe)
-	r := s.openSession(t, first, server.LinkRunRequest{})
-	st.ends(first, "failed", "checks_failed")
-	if status, b, _ := r.outcome(t, first); status != http.StatusOK {
-		t.Fatalf("the ask: %d %s", status, b)
+	for _, ownExit := range []bool{false, true} {
+		name := "the window closes"
+		if ownExit {
+			name = "its own run.exited"
+		}
+		t.Run(name, func(t *testing.T) {
+			var ahead atomic.Int64
+			cfg := gateway.Config{}
+			gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
+			gateway.SetExitWindow(&cfg, time.Second)
+			st := newStarter()
+			s := startStarting(t, cfg, st, 0)
+			now := time.Now()
+			first := mint(issuerKey(), "rk-0001", now.Add(time.Hour), nil)
+			later := mint(issuerKey(), "rk-0001", now.Add(3*time.Hour), nil)
+			probe := mint(issuerKey(), "rk-0001", now.Add(time.Hour+time.Minute), nil)
+			s.secrets = append(s.secrets, first, later, probe)
+			r := s.openSession(t, first, server.LinkRunRequest{})
+			st.ends(first, "failed", "checks_failed")
+			if status, b, _ := r.outcome(t, first); status != http.StatusOK {
+				t.Fatalf("the ask: %d %s", status, b)
+			}
+			// Inside the window, a batch with a run credential of a later exp.
+			if status, b := r.post(t, later, heartbeat(r.a.RunID)); status != http.StatusAccepted {
+				t.Fatalf("a batch inside the window: %d %s", status, b)
+			}
+			if ownExit {
+				if status, b := r.post(t, first, exitedWith(r.a.RunID, map[string]any{"state": "failed", "exit_code": 0, "reason": "checks_failed"})); status != http.StatusAccepted {
+					t.Fatalf("the run.exited inside the window: %d %s", status, b)
+				}
+			}
+			eventually(t, "the run's end", func() bool {
+				rec := s.record(r.a.RunID)
+				return rec[len(rec)-1].Type == event.RunExited
+			})
+			// Past the first exp and its leeway, the later one holds the run key.
+			ahead.Store(int64(time.Hour + 10*time.Minute))
+			if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+				t.Errorf("past the first exp: %d %s", status, b)
+			}
+			ahead.Store(int64(3*time.Hour + 10*time.Minute))
+			if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
+				t.Errorf("past the latest exp: %d %s", status, b)
+			}
+		})
 	}
-	// Inside the window, a batch with a run credential of a later exp.
-	if status, b := r.post(t, later, heartbeat(r.a.RunID)); status != http.StatusAccepted {
-		t.Fatalf("a batch inside the window: %d %s", status, b)
+}
+
+// TestLaterAsksAtTheExitAreDecidedAsReloads pins the asks at a runtime's exit after the
+// one that asked the starter, outside a window: each is decided as a reload is, so a
+// run key the starter ended since is the 410 as it said; and none renews the run, so a
+// session that asks only that is lost after the gateway's quiet time.
+func TestLaterAsksAtTheExitAreDecidedAsReloads(t *testing.T) {
+	start := func(t *testing.T) (*starter, *service, *sessionRun, string) {
+		t.Helper()
+		cfg := gateway.Config{}
+		gateway.SetQuiet(&cfg, 300*time.Millisecond)
+		st := newStarter()
+		s := startStarting(t, cfg, st, 0)
+		cred := credentialFor("rk-0001")
+		r := s.openSession(t, cred, server.LinkRunRequest{})
+		if status, b, _ := r.outcome(t, cred); status != http.StatusOK || string(b) != `{}` {
+			t.Fatalf("the ask: %d %s", status, b)
+		}
+		return st, s, r, cred
 	}
-	eventually(t, "the window's end", func() bool {
-		rec := s.record(r.a.RunID)
-		return rec[len(rec)-1].Type == event.RunExited
+	t.Run("the starter ends the run key", func(t *testing.T) {
+		st, s, r, cred := start(t)
+		st.ends(cred, "", "")
+		status, b, _ := r.outcome(t, cred)
+		endedAs(t, "the next ask", status, b, "cancelled", "stopped", "no outcome given")
+		s.close()
+		recordEnds(t, s, r.a.RunID, "cancelled", "stopped", float64(-1))
 	})
-	// Past the first exp and its leeway, the later one holds the run key.
-	ahead.Store(int64(time.Hour + 10*time.Minute))
-	if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
-		t.Errorf("past the first exp: %d %s", status, b)
+	t.Run("asks renew nothing", func(t *testing.T) {
+		_, _, r, cred := start(t)
+		for i := range 20 {
+			time.Sleep(100 * time.Millisecond)
+			status, b, _ := r.outcome(t, cred)
+			if status == http.StatusGone {
+				gone(t, "an ask", status, b, "session_lost")
+				return
+			}
+			if i == 19 {
+				t.Errorf("20 asks 100 ms apart kept the run past a quiet time of 300 ms: %d %s", status, b)
+			}
+		}
+	})
+}
+
+// TestTheWindowClosesBeforeItsTimer pins a run whose window has closed before its timer
+// ends it: the gateway's quiet time or the run credential's exp that comes then ends the
+// run as its starter said, never session_lost nor credential_expired.
+func TestTheWindowClosesBeforeItsTimer(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		quiet time.Duration
+		exp   time.Duration
+	}{
+		{"the quiet time", 1500 * time.Millisecond, time.Hour},
+		{"the run credential's exp", time.Hour, 3 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			issuers := realIssuers(t, true)
+			none := runcredential.Duration(0)
+			issuers[0].Leeway = &none
+			cfg := gateway.Config{RunCredentials: issuers}
+			// The window closes well before the quiet time or the exp, which is whole
+			// seconds; its timer comes 5 seconds after.
+			gateway.SetExitWindow(&cfg, 500*time.Millisecond)
+			gateway.SetWindowEndLate(&cfg, 5*time.Second)
+			gateway.SetQuiet(&cfg, c.quiet)
+			st := newStarter()
+			s := startStarting(t, cfg, st, time.Hour)
+			cred := mint(issuerKey(), "rk-0001", time.Now().Add(c.exp), nil)
+			r := s.openSession(t, cred, server.LinkRunRequest{})
+			st.ends(cred, "failed", "checks_failed")
+			asked := time.Now()
+			if status, b, _ := r.outcome(t, cred); status != http.StatusOK {
+				t.Fatalf("the ask: %d %s", status, b)
+			}
+			eventually(t, "the run's end", func() bool {
+				rec := s.record(r.a.RunID)
+				return rec[len(rec)-1].Type == event.RunExited
+			})
+			if took := time.Since(asked); took > 4*time.Second {
+				t.Errorf("the run ended %s after the answer, at its window's timer", took)
+			}
+			line := "run " + r.a.RunID + ": its run credential is no longer valid; the run ends: failed, checks failed"
+			if got := s.reportsWith("the run ends"); !slices.Equal(got, []string{line}) {
+				t.Errorf("reports %q; want %q", got, line)
+			}
+			s.close()
+			recordEnds(t, s, r.a.RunID, "failed", "checks_failed", float64(-1))
+		})
 	}
-	ahead.Store(int64(3*time.Hour + 10*time.Minute))
-	if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
-		t.Errorf("past the latest exp: %d %s", status, b)
+}
+
+// TestABatchWhileTheStarterIsAskedAtTheExit pins a batch of the session's while its ask
+// at the runtime's exit is being answered, the starter answering the batch's check that
+// the run credential is no longer active: the ask's answer decides, so the batch is
+// taken in the run's window, and the session's run.exited of its runtime's exit ends
+// the run, not the starter's end with no outcome.
+func TestABatchWhileTheStarterIsAskedAtTheExit(t *testing.T) {
+	st := newStarter()
+	s := startStarting(t, gateway.Config{}, st, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	st.ends(cred, "", "")
+	asked, release := st.hold()
+	answered := make(chan string, 1)
+	go func() {
+		_, b, _ := r.outcome(t, cred)
+		answered <- string(b)
+	}()
+	<-asked
+	posted := make(chan string, 1)
+	go func() {
+		status, b := r.post(t, cred, heartbeat(r.a.RunID))
+		posted <- fmt.Sprintf("%d %s", status, b)
+	}()
+	// The batch reaches the gateway while the starter is asked at the exit.
+	time.Sleep(300 * time.Millisecond)
+	close(release)
+	if b := <-answered; b != `{}` {
+		t.Errorf("the ask: %s", b)
 	}
+	if got := <-posted; !strings.HasPrefix(got, "202 ") {
+		t.Errorf("the batch while the starter is asked: %s", got)
+	}
+	if status, b := r.post(t, cred, exitedWith(r.a.RunID, map[string]any{"state": "succeeded", "exit_code": 0})); status != http.StatusAccepted {
+		t.Errorf("the run.exited: %d %s", status, b)
+	}
+	s.close()
+	recordEnds(t, s, r.a.RunID, "succeeded", "", float64(0))
 }
 
 // TestTheLinkRefusesARunExitedBeyondItsSchema pins the rules of a session's
@@ -841,4 +1006,93 @@ func TestTheWordsOfARunsEnd(t *testing.T) {
 			t.Errorf("%s %s: %q, want %q", c.state, c.reason, got, c.want)
 		}
 	}
+}
+
+// TestTheRunExitedAfterTheAskIsSparedAFailedCheck pins the batch of a session's that
+// carries its run.exited after its ask at the exit stored its answer: a run credential
+// that could not be checked then, its endpoint unreachable or its answer not valid, does
+// not end the run, and the exit rule decides the batch against the answer stored. Every
+// other request keeps the check: a batch without a run.exited, and one before the ask,
+// end the run so; and an answer that the run credential is no longer active ends it as
+// the starter said. The starter's answers are not kept, so each request asks it.
+func TestTheRunExitedAfterTheAskIsSparedAFailedCheck(t *testing.T) {
+	unreachable := runcredential.ErrIssuerUnreachable
+	invalid := answerInvalid("the introspection endpoint answered status 500")
+	exited := func(id string) map[string]any {
+		return exitedWith(id, map[string]any{"state": "succeeded", "exit_code": 0})
+	}
+	for _, c := range []struct {
+		name string
+		ask  bool
+		// answer is the starter's after the ask, err its error.
+		answer runcredential.Answer
+		err    error
+		evs    func(id string) map[string]any
+		// code is the 410's, empty for a 202.
+		code string
+	}{
+		{"its run.exited, no answer", true, runcredential.Answer{}, unreachable, exited, ""},
+		{"its run.exited, no valid answer", true, runcredential.Answer{}, invalid, exited, ""},
+		{"a heartbeat, no answer", true, runcredential.Answer{}, unreachable, heartbeat, "credential_check_unreachable"},
+		{"a heartbeat, no valid answer", true, runcredential.Answer{}, invalid, heartbeat, "credential_check_invalid"},
+		{"its run.exited before the ask", false, runcredential.Answer{}, unreachable, exited, "credential_check_unreachable"},
+		{"its run.exited, the run credential no longer active", true, runcredential.Answer{}, nil, exited, "stopped"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newStarter()
+			s := startStarting(t, gateway.Config{}, st, 0)
+			cred := credentialFor("rk-0001")
+			r := s.openSession(t, cred, server.LinkRunRequest{})
+			if c.ask {
+				if status, b, _ := r.outcome(t, cred); status != http.StatusOK || string(b) != `{}` {
+					t.Fatalf("the ask: %d %s", status, b)
+				}
+			}
+			st.set(cred, c.answer, c.err)
+			status, b := r.post(t, cred, c.evs(r.a.RunID))
+			if c.code == "" {
+				if status != http.StatusAccepted {
+					t.Fatalf("the batch: %d %s", status, b)
+				}
+				if got := s.reportsWith("the run ends"); len(got) != 0 {
+					t.Errorf("reports %q", got)
+				}
+				s.close()
+				recordEnds(t, s, r.a.RunID, "succeeded", "", float64(0))
+				return
+			}
+			gone(t, "the batch", status, b, c.code)
+			s.close()
+			rec := s.record(r.a.RunID)
+			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != c.code {
+				t.Errorf("the record ends %+v", last)
+			}
+		})
+	}
+}
+
+// TestAnExpiredRunCredentialInsideTheWindow pins a request inside a run's window whose
+// run credential's exp has passed: the run ends then as its starter answered at its
+// exit, and the request gets that 410, never credential_expired.
+func TestAnExpiredRunCredentialInsideTheWindow(t *testing.T) {
+	issuers := realIssuers(t, true)
+	none := runcredential.Duration(0)
+	issuers[0].Leeway = &none
+	st := newStarter()
+	s := startStarting(t, gateway.Config{RunCredentials: issuers}, st, time.Hour)
+	cred := mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+	expired := mint(issuerKey(), "rk-0001", time.Now().Add(-2*time.Second), map[string]any{"iat": time.Now().Add(-time.Minute).Unix()})
+	s.secrets = append(s.secrets, cred, expired)
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	st.ends(cred, "failed", "checks_failed")
+	if status, b, _ := r.outcome(t, cred); status != http.StatusOK {
+		t.Fatalf("the ask: %d %s", status, b)
+	}
+	status, b := r.post(t, expired, heartbeat(r.a.RunID))
+	endedAs(t, "a batch with an expired run credential", status, b, "failed", "checks_failed", "checks failed")
+	if got := s.reportsWith("expired"); len(got) != 0 {
+		t.Errorf("reports %q", got)
+	}
+	s.close()
+	recordEnds(t, s, r.a.RunID, "failed", "checks_failed", float64(-1))
 }
