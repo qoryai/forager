@@ -50,9 +50,11 @@ type ResendResult struct {
 	// run.
 	Sent        int
 	Undelivered int
-	// NotOpened says the record holds a ping the server never accepted: the run never
-	// opened, so nothing of it is sent, and the record is left as it is.
+	// NotOpened says the run never opened at the server, so nothing of it is sent, and
+	// the record is left as it is: the record holds a ping the server never accepted,
+	// or, NoServer, it holds no ping, the run having had no server, and is sent to one.
 	NotOpened bool
+	NoServer  bool
 	// Torn is how many lines of the record hold bytes that are no whole event: a write
 	// the gateway did not finish. They are skipped and stay in the file, but for a last
 	// line that holds no whole event, which is cut off when run.exited follows it.
@@ -67,6 +69,10 @@ var reportTorn func(n int, file string) string
 // Empty reports nothing: its wording waits for approval.
 var reportNotOpened = ""
 
+// reportNoServer is the report line of a record with no ping, of a run that had no
+// server, sent to one. Empty reports nothing: its wording waits for approval.
+var reportNoServer = ""
+
 // Resend completes and delivers the record of one run whose gateway is gone, as the
 // session's resend does today. A record still held, by an open run or by the run's
 // session, is [ErrRunning], and is left as it is. A record with run.started and no
@@ -78,7 +84,9 @@ var reportNotOpened = ""
 // line of the record that holds bytes that are no whole event, a write the gateway did
 // not finish, is skipped, and every event after it is read on (see [record]). A record
 // that holds a ping and no delivered.log is of a run whose ping the server never
-// accepted, which never opened: it is NotOpened, left as it is, and sent nothing.
+// accepted, which never opened: it is NotOpened, left as it is, and sent nothing. So is
+// a record with no ping, of a run that had no server, when it is sent to one; with no
+// Sink it is completed, as any other.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -112,11 +120,18 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if res.Torn = rec.torn; res.Torn > 0 && reportTorn != nil {
 		cfg.Report(reportTorn(res.Torn, file))
 	}
-	if res.NotOpened, err = notOpened(cfg.Dir, rec); err != nil {
+	if res.NotOpened, res.NoServer, err = notOpened(cfg.Dir, rec); err != nil {
 		return nil, err
 	}
+	if res.NoServer && cfg.Sink == nil {
+		// Nothing is sent, and a run with no server is completed as any other.
+		res.NotOpened, res.NoServer = false, false
+	}
 	if res.NotOpened {
-		if reportNotOpened != "" {
+		switch {
+		case res.NoServer && reportNoServer != "":
+			cfg.Report(reportNoServer)
+		case !res.NoServer && reportNotOpened != "":
 			cfg.Report(reportNotOpened)
 		}
 		return res, nil
@@ -275,21 +290,22 @@ func whole(b []byte) (recorded, bool) {
 	return l, true
 }
 
-// notOpened reports whether the record is of a run whose ping the server never
-// accepted. The gateway writes the ping to the record before it posts it, and creates
-// delivered.log, with the ping's delivery its first line, only once the server accepted
-// it: a record with a ping and no delivered.log is of a run that never opened. A
-// delivered.log without the ping's line is of a ping the server accepted, the gateway
-// stopping before it wrote the line. A record with no ping is of a run with no server.
-func notOpened(dir string, rec *recordFile) (bool, error) {
+// notOpened reports whether the record is of a run that never opened at a server, and
+// whether that is since it had none. The gateway writes the ping to the record before
+// it posts it, and creates delivered.log, with the ping's delivery its first line, only
+// once the server accepted it: a record with a ping and no delivered.log is of a run
+// that never opened. A delivered.log without the ping's line is of a ping the server
+// accepted, the gateway stopping before it wrote the line. A record with no ping is of
+// a run with no server.
+func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
 	if !slices.ContainsFunc(rec.lines, func(l recorded) bool { return l.Type == event.Ping }) {
-		return false, nil
+		return true, true, nil
 	}
-	_, err := os.Stat(filepath.Join(dir, sink.DeliveredFile))
+	_, err = os.Stat(filepath.Join(dir, sink.DeliveredFile))
 	if os.IsNotExist(err) {
-		return true, nil
+		return true, false, nil
 	}
-	return false, err
+	return false, false, err
 }
 
 // closeRecord appends run.exited to the record of a started run that has none, numbered

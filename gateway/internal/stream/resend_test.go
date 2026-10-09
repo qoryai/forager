@@ -399,8 +399,9 @@ func TestResendEndsATornLastLine(t *testing.T) {
 
 // TestResendSendsNothingOfARunThatNeverOpened pins a record whose ping the server never
 // accepted, so the gateway made no delivered.log: the run never opened, so nothing of
-// it is posted, the record is left as it is, and no delivered.log is made. A record
-// with no ping, of a run with no server, is sent as before.
+// it is posted, the record is left as it is, and no delivered.log is made. So with a
+// record with no ping, of a run that had no server, sent to one; without a server it
+// is completed, as any other.
 func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	srv, store := station(t, nil)
 	s := New(Config{Dir: t.TempDir()})
@@ -433,8 +434,23 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	r, _ = s.Open(event.NewRunID())
 	r.Accept([]event.Event{sessionEvent(r.ID(), event.RunStarted, map[string]any{})})
 	r.Close(context.Background())
-	res, err = Resend(context.Background(), ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
-	if err != nil || res.NotOpened || !res.Closed || res.Sent != 2 {
+	file = filepath.Join(r.Dir(), sink.EventsFile)
+	before, _ = os.ReadFile(file)
+	res, err = Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
+	if err != nil || !res.NotOpened || !res.NoServer || res.Closed || res.Sent != 0 || res.Undelivered != 0 {
 		t.Errorf("a run with no server: %+v, %v", res, err)
+	}
+	if store.Count() != 0 {
+		t.Errorf("a run with no server: the receiver stored %d events", store.Count())
+	}
+	if after, _ := os.ReadFile(file); string(after) != string(before) {
+		t.Errorf("a run with no server: the record was changed:\n%s", after)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir(), sink.DeliveredFile)); !os.IsNotExist(err) {
+		t.Errorf("a run with no server: delivered.log: %v", err)
+	}
+	res, err = Resend(ctx, ResendConfig{Dir: r.Dir()})
+	if err != nil || res.NotOpened || !res.Closed {
+		t.Errorf("a run with no server, with none: %+v, %v", res, err)
 	}
 }

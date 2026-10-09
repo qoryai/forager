@@ -1261,7 +1261,9 @@ included. A last line without its newline is made a line before
 that holds none is cut off. Nothing else of the file is changed. `delivered.log` is
 made once the server accepts the ping, its first line the ping's: a record that holds a
 ping and no `delivered.log` is of a run whose ping was never accepted, which never
-opened, and nothing of it is sent or added to it. The resend fetches the
+opened, and nothing of it is sent or added to it. Neither is anything of a record with
+no ping, of a run that had no server, which never opened at the server it is sent to.
+The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
 `undelivered/` again. A receiver sees some events twice when Forager dies between an

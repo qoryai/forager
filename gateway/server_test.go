@@ -509,8 +509,9 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 }
 
 // TestResendSendsNothingOfARunThatNeverOpened pins a resend of the record of a run whose
-// ping the server refused: the run never opened, so nothing of it is posted, the
-// record is left as it is, and the delivery says the run never opened.
+// ping the server refused, and of a run that had no server: neither opened at the
+// server, so nothing of it is posted, the record is left as it is, and the delivery
+// says the run never opened.
 func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	c := newControl(t)
 	h := start(t, gateway.Config{Server: c.server()})
@@ -541,5 +542,28 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(filepath.Join(dir, "events.jsonl")); string(after) != string(before) {
 		t.Errorf("the record was changed:\n%s", after)
+	}
+
+	// A run of a gateway with no server: no ping, so it never opened at the server it
+	// is sent to.
+	local := start(t, gateway.Config{})
+	a := local.open(server.LinkRunRequest{})
+	local.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
+	if _, err := local.g.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	dir = filepath.Join(local.dir, "runs", a.RunID)
+	before, _ = os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir}); err != nil || r != (gateway.Delivery{NotOpened: true}) {
+		t.Errorf("resend of a run with no server %+v, %v", r, err)
+	}
+	if n := c.store.Count(); n != stored {
+		t.Errorf("a run with no server: the server stored %d events, before %d", n, stored)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "events.jsonl")); string(after) != string(before) {
+		t.Errorf("a run with no server: the record was changed:\n%s", after)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "delivered.log")); !os.IsNotExist(err) {
+		t.Errorf("a run with no server: delivered.log: %v", err)
 	}
 }

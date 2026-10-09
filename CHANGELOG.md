@@ -638,7 +638,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
   30 minutes when zero.
 - `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
-  is, since the run never opened at the server.
+  is, since the run never opened at the server: its ping was never accepted, or it had
+  no server.
 
 #### Changed
 
@@ -665,8 +666,9 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
   that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
   its `events.jsonl`, and the `Delivery` says `NotOpened`, nothing sent. Before, its
-  ping and events were posted, which reported a run that never opened. A record with
-  no ping, of a run with no server, is sent as before.
+  ping and events were posted, which reported a run that never opened. The same holds
+  of a record with no ping, of a run that had no server, sent to a server: it never
+  opened there. Before, its events were posted without a ping.
 
 ### Wall
 
