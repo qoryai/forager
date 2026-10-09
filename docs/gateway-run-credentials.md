@@ -1,7 +1,7 @@
 # How an issuer integrates with the Qory gateway
 
 A gateway that serves other machines opens a run only for a **run credential**: a signed
-statement, from an issuer the operator trusts, that names one run and its target. This
+statement, from an issuer the operator trusts, that names a run key and its target. This
 page is for whoever builds that issuer. It states what the gateway requires, from public
 standards, and what it does with what it receives.
 

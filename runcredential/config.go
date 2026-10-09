@@ -4,7 +4,7 @@
 // of an issuer's introspection endpoint, and the run keys a gateway refuses.
 //
 // A run credential is a JWT (RFC 7519) signed as a JWS (RFC 7515) with an asymmetric
-// key, which an issuer gives one run. [Verifier.Verify] verifies it: the serialisation
+// key, which an issuer gives a run. [Verifier.Verify] verifies it: the serialisation
 // is the strict compact form, the header selects a pinned key ([Issuer.SelectKey]), the
 // signature is verified under it over the exact bytes received, and only then are the
 // claims read and checked ([Issuer.CheckClaims]), the scope checked ([Issuer.Allowed]),
