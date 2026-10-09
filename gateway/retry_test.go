@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -382,7 +383,7 @@ const (
 // the 503 issuer_unreachable or the 502 issuer_answer_invalid with its message, the
 // client's login the 503 that says to try again or the 403 that says the answer was not
 // valid, with a report line; no run opens, nothing is recorded, no run key is held, and
-// the same run credential opens a run once the issuer answers.
+// the same run credential opens a run once the issuer answers active.
 func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -427,10 +428,10 @@ func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 	noHold(t, s.dir)
 	issuer.set(true, nil)
 	if status, b := s.tryOpenWith(t, cred, server.LinkRunRequest{}); status != http.StatusOK {
-		t.Errorf("once the issuer answers: %d %s", status, b)
+		t.Errorf("once the issuer answers active: %d %s", status, b)
 	}
 	if code, _, text, conn := connectWith(t, s, loginHead(host, cred)); code != http.StatusOK {
-		t.Errorf("the client once the issuer answers: %d %q", code, text)
+		t.Errorf("the client once the issuer answers active: %d %q", code, text)
 	} else {
 		conn.Close()
 	}
@@ -441,7 +442,7 @@ func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 // issuer_unreachable or issuer_answer_invalid, its record's run.exited with that reason,
 // failed and -1, and a report line; the request and every later one get the 410 with
 // its code from the gateway; no run key is held, and the same run credential opens a
-// new run once the issuer answers.
+// new run once the issuer answers active.
 func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 	for _, c := range []struct {
 		err    error
@@ -473,7 +474,7 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 			noHold(t, s.dir)
 			issuer.set(true, nil)
 			if status, b := s.tryOpenWith(t, cred, server.LinkRunRequest{}); status != http.StatusOK {
-				t.Errorf("once the issuer answers: %d %s", status, b)
+				t.Errorf("once the issuer answers active: %d %s", status, b)
 			}
 			s.close()
 			rec := s.record(r.a.RunID)
@@ -493,7 +494,7 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 // and gets the 503 that says to try again or the 403 that says the answer was not
 // valid; asked again while the run has a connection, the run ends the same way; its
 // record's run.exited has that reason and neither state nor exit_code; no run key is
-// held, and the next connection opens a new run once the issuer answers.
+// held, and the next connection opens a new run once the issuer answers active.
 func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -550,7 +551,7 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 				issuer.set(true, nil)
 				code, _, text, next := connectWith(t, s, loginHead(host, cred))
 				if code != http.StatusOK {
-					t.Fatalf("once the issuer answers: %d %q", code, text)
+					t.Fatalf("once the issuer answers active: %d %q", code, text)
 				}
 				next.Close()
 				if got := runsIn(t, s.dir); len(got) != 2 {
@@ -697,4 +698,93 @@ func equalData(a, b map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// TestAReloadFirstLearnsTheIssuerGivesNoAnswer pins a session's live run whose reload is
+// the first request after its issuer's introspection endpoint stops answering, or
+// answers no valid answer: the reload ends the run with the 410 of that code from the
+// gateway, and a later batch gets the same.
+func TestAReloadFirstLearnsTheIssuerGivesNoAnswer(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		code string
+	}{
+		{runcredential.ErrIssuerUnreachable, "issuer_unreachable"},
+		{answerInvalid("the introspection endpoint answered status 401"), "issuer_answer_invalid"},
+	} {
+		t.Run(c.code, func(t *testing.T) {
+			issuer := &issuerAnswers{}
+			issuer.set(true, nil)
+			cfg := gateway.Config{RunCredentials: realIssuers(t, true)}
+			gateway.SetIntrospection(&cfg, issuer.answer, time.Hour)
+			s := startVerifying(t, cfg, nil, 0)
+			cred := credentialFor("rk-0001")
+			r := s.openSession(t, cred, server.LinkRunRequest{})
+			issuer.set(false, c.err)
+			status, b := r.reload(t, cred, r.a.RunID)
+			gone(t, "the reload", status, b, c.code)
+			if msg := refusalOf(b)["message"]; msg != "the gateway refused the run: "+c.code {
+				t.Errorf("the 410's message %q", msg)
+			}
+			status, b = r.post(t, cred, heartbeat(r.a.RunID))
+			gone(t, "a later batch", status, b, c.code)
+			s.close()
+			rec := s.record(r.a.RunID)
+			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != c.code {
+				t.Errorf("the record ends %+v", last)
+			}
+			noHold(t, s.dir)
+		})
+	}
+}
+
+// TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise pins the hold after the issuer's
+// end when another request ended the run first: a batch's ask of the issuer, for a
+// refreshed run credential, is in flight while a reload, for the first run credential,
+// ends the run issuer_unreachable, which holds nothing; the batch's answer, active
+// false, then holds the run key all the same, so a new run request of it is refused.
+func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
+	first := credentialFor("rk-0001")
+	refreshed := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	asked, release := make(chan struct{}), make(chan struct{})
+	var unreachable, gate atomic.Bool
+	cfg := gateway.Config{RunCredentials: realIssuers(t, true)}
+	gateway.SetIntrospection(&cfg, func(_, credential string) (bool, error) {
+		switch {
+		case credential == first && unreachable.Load():
+			return false, runcredential.ErrIssuerUnreachable
+		case credential == refreshed && gate.Load():
+			close(asked)
+			<-release
+			return false, nil
+		}
+		return true, nil
+	}, time.Hour)
+	s := startVerifying(t, cfg, nil, 0)
+	s.secrets = append(s.secrets, refreshed)
+	r := s.openSession(t, first, server.LinkRunRequest{})
+	gate.Store(true)
+	batch := make(chan []byte, 1)
+	go func() {
+		status, b := r.post(t, refreshed, heartbeat(r.a.RunID))
+		batch <- append([]byte(fmt.Sprint(status)+" "), b...)
+	}()
+	<-asked
+	unreachable.Store(true)
+	status, b := r.reload(t, first, r.a.RunID)
+	gone(t, "the reload", status, b, "issuer_unreachable")
+	close(release)
+	if got := <-batch; !strings.HasPrefix(string(got), "410 ") {
+		t.Errorf("the batch: %s", got)
+	}
+	unreachable.Store(false)
+	other := mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), map[string]any{"iat": time.Now().Unix()})
+	s.secrets = append(s.secrets, other)
+	if status, b := s.tryOpenWith(t, other, server.LinkRunRequest{}); status != http.StatusUnauthorized || refusalOf(b)["error"] != "run_credential_refused" {
+		t.Errorf("a new run request of the run key: %d %s; want it refused, the run key held", status, b)
+	}
+	s.close()
+	if b, err := os.ReadFile(filepath.Join(s.dir, runcredential.EndedFile)); err != nil || !strings.Contains(string(b), "rk-0001") {
+		t.Errorf("the gateway's directory holds no refused run key: %s %v", b, err)
+	}
 }

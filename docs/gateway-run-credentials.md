@@ -239,7 +239,7 @@ The answer, RFC 7662 §2.2, means active only when all of these hold:
 key. When every try got no answer, the gateway refuses or ends the run
 `issuer_unreachable`; any other answer, a status other than `200` or a `200` that is not
 one of the above, ends or refuses the run `issuer_answer_invalid`, after one try. Neither
-holds the run key: the next request opens a run as soon as the issuer answers. The check
+holds the run key: the next request opens a run as soon as the issuer answers active. The check
 fails closed. The gateway reads nothing else of the answer.
 
 | When the gateway asks | `issuer_unreachable` | `issuer_answer_invalid` |

@@ -160,7 +160,7 @@ var (
 // issuerUnreachable ends a run on the one address whose issuer's introspection endpoint
 // could not be reached after the tries, and issuerAnswerInvalid one whose endpoint gave
 // no valid answer. Neither holds the run key: the next request opens a run as soon as
-// the issuer answers.
+// the issuer answers active.
 var (
 	issuerUnreachable   = ending{reason: event.ReasonIssuerUnreachable, code: event.ReasonIssuerUnreachable, from: accesskey.FromGateway, closed: true}
 	issuerAnswerInvalid = ending{reason: event.ReasonIssuerAnswerInvalid, code: event.ReasonIssuerAnswerInvalid, from: accesskey.FromGateway, closed: true}
@@ -577,9 +577,10 @@ func (lr *linkRun) renew(id runIdentity) {
 // is still active, and returns nil when the run goes on. It ends the run otherwise and
 // returns why: issuer_unreachable for [runcredential.ErrIssuerUnreachable],
 // issuer_answer_invalid for [runcredential.ErrAnswerInvalid], and
-// run_ended_at_issuer for any other answer but active. A request that went, or a run
-// that ended, while the issuer was asked is the context's error, and the run is left as
-// it is. An issuer without introspection is never asked.
+// run_ended_at_issuer for any other answer but active. An answer that the run credential
+// is no longer active holds the run key whatever else ended the run meanwhile. A
+// request that went, or a run that ended, while the issuer was asked is the context's
+// error, and the run is left as it is. An issuer without introspection is never asked.
 func (lr *linkRun) stillActive(ctx context.Context) error {
 	lr.mu.Lock()
 	active := lr.cred.active
@@ -591,6 +592,14 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	err := active(ctx)
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, errInactive) {
+		// The issuer's end holds the run key even when the run ended otherwise while it
+		// was asked, issuer_unreachable at another request's say, which holds nothing.
+		lr.mu.Lock()
+		key, expires := lr.cred.key, lr.cred.expires
+		lr.mu.Unlock()
+		lr.g.endKey(key, lr.g.heldTo(key, expires))
 	}
 	if ctx.Err() != nil || lr.ctx.Err() != nil {
 		// The request went, or the run ended, while the issuer was asked: no answer,

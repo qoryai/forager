@@ -1978,7 +1978,7 @@ again, and at Close, when the write still fails, how many run keys a restart wou
 refuse.
 
 Neither `issuer_unreachable` nor `issuer_answer_invalid` holds the run key: the next
-request opens a run as soon as the issuer answers. Each comes only after the run
+request opens a run as soon as the issuer answers active. Each comes only after the run
 credential's signature and claims verified, so it tells a caller that is not
 authenticated nothing. Every failure of a run credential is one opaque answer,
 `run_credential_refused` to a session and `407` to a client with no session, and names
