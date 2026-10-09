@@ -11,15 +11,12 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Every job skips a pull request whose head is this repository's own next: the push to next
-# has run CI on the same commit. A pull request from a fork's next still runs.
 jobs:
   part:
     # One job for each part of the module: the core (the packages at the root and under
     # internal/), the gateway, the wall, the session, and e2e's static checks. Without
     # Docker, e2e's suite skips here; the two conformance jobs below run it.
     name: Go tests, ${{ matrix.part }}
-    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +113,7 @@ jobs:
     # The one check that stands for every part's job above.
     name: Go tests
     needs: part
-    if: always() && (github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository))
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Every part passed
@@ -126,7 +123,6 @@ jobs:
 
   e2e:
     name: Wall conformance
-    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     # On the machine itself, not in a container: the suite needs the docker command and
     # an engine it reaches, and a Linux host is where the hook socket crosses a mount, so
     # this is where an adapter is proven.
@@ -170,7 +166,6 @@ jobs:
 
   e2e-docker:
     name: Wall conformance, a Docker of the agent's own
-    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
     # container root is a user of the machine's that is not root. Sysbox is installed on
     # the machine, as a node's owner installs it.
