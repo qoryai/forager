@@ -247,10 +247,11 @@ func TestAResendCutShortKeepsTheRunSecret(t *testing.T) {
 	defer cancel()
 	var asked atomic.Int32
 	cutShort := func(context.Context) (string, error) {
-		// The discovery is the first request; the context ends as the first batch is
-		// sent.
+		// The discovery is the first request; the context ends before the first batch
+		// is sent, and no batch goes out.
 		if asked.Add(1) > 1 {
 			cancel()
+			return "", context.Canceled
 		}
 		return cred, nil
 	}
