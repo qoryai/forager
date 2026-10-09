@@ -890,7 +890,7 @@ compose keeps it out of git:
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
 
-`fixtures/run/<id>/` are such directories, recorded. The control plane's CI replays them.
+`fixtures/run/<id>/` are such directories, recorded. Qory Apiary's CI replays them.
 
 ## The server
 

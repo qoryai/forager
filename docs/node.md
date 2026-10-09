@@ -28,7 +28,7 @@ your own. The node needs Docker.
 
 Reporting to a control plane uses the same server every run has:
 
-- the control plane creates the run from the first event it sees;
+- Qory Apiary creates the run from the first event it sees;
 - it supplies the run's policy.
 
 See [the server](server.md).
