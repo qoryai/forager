@@ -154,7 +154,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // of a separate gateway, a run request without a wall and one with a wall and a
 // narrowing, a run answer with a wall, without one and without a policy, a reload
 // answer with and without a policy, a batch of a session's events without sequence, and a
-// batch of a run.refused with a session's own code.
+// batch of a run.refused with a session's own code, and a batch of a run.exited with
+// timeout.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	seen := map[string]bool{}
@@ -240,15 +241,15 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, a link run answer without its proxy secret, a link reload answer with the
 // proxy secret or the certificate authority, a link batch whose event carries a sequence,
-// that holds a ping or a run.egress, a run.started a gateway opened, a run.exited with
-// gateway_lost, session_lost or quiet, or a run.refused with a gateway's code,
-// run_closed, another code of the server's or a name of the form <member>=<value>, a link
-// discovery that lists a node or has no heartbeat interval, and run credentials with alg
-// none or HS256, without an audience, with a label of claims and no join, a key without
-// its file, a plain http issuer, a run_key from a claim other than sub, or a member the
-// schema does not define. The longest schema name the file name starts with is the
-// schema, so run-configuration-variable-value-not-string is held to the run configuration
-// and not to a schema named run.
+// that holds a ping or a run.egress, a run.started a gateway opened, a run.exited with a
+// reason other than timeout, or a run.refused with a gateway's code, run_closed, another
+// code of the server's or a name of the form <member>=<value>, a link discovery that
+// lists a node or has no heartbeat interval, and run credentials with alg none or HS256,
+// without an audience, with a label of claims and no join, a key without its file, a
+// plain http issuer, a run_key from a claim other than sub, or a member the schema does
+// not define. The longest schema name the file name starts with is the schema, so
+// run-configuration-variable-value-not-string is held to the run configuration and not to
+// a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",

@@ -52,11 +52,14 @@ names no runtime, command or host, and its `dev.qory.run.exited` contains no exi
 and no state.
 
 When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
-`reason`. The session writes `timeout` and `run_closed`, and sending a record again
-writes `gateway_lost`. The gateway writes `session_lost` and `quiet`, and
-`credential_expired` and `run_ended_at_issuer` for a run with no session; on a session's
-run the gateway's link ends the run with that code, and the session writes it. The
-contract describes each.
+`reason`. The session writes `timeout`, and `run_closed` when the server it reports to
+closes the run, and sending a record again writes `gateway_lost`. The gateway writes
+the others: `session_lost`, the session was silent, or the gateway refused a batch of
+the session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
+`run_ended_at_issuer`; and `run_closed` when the server closes a run on the gateway's
+link. When the gateway ends a session's run, it writes the run's `dev.qory.run.exited`,
+and the session records the same reason in its own record alone. The contract describes
+each.
 
 ## The session's events
 
