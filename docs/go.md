@@ -134,7 +134,7 @@ longer holds the run credential active, `run_ended_at_issuer`. The gateway write
 `dev.qory.run.exited`; a session's later requests get the `410` with that code in
 `Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
 connection, `quiet`. After `run_ended_at_issuer`, the gateway refuses the run key until
-the latest `exp` presented for it.
+the latest `exp` presented for it plus `runcredential.MaxLeeway`, 5 minutes.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot

@@ -1850,10 +1850,10 @@ run ends). A client's run that fails to open without a refusal's code is answere
 gateway's `dev.qory.run.refused` with that code, after its ping.
 
 After the issuer's end, `run_ended_at_issuer`, the gateway refuses the run key until its
-`exp`: a session's run request is `401` `run_credential_refused`, and a client's
-connection `407`. A run credential for a refused run key presented during the hold is
-refused and extends the hold to its own `exp`; the hold lapses after the latest `exp`
-presented.
+`exp` plus 5 minutes, the longest leeway: a session's run request is `401`
+`run_credential_refused`, and a client's connection `407`. A run credential for a
+refused run key presented during the hold is refused and extends the hold to its own
+`exp`; the hold lapses after the latest `exp` presented, plus 5 minutes.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run

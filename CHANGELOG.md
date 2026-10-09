@@ -570,10 +570,11 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`, and every later request gets the `410` with that code, a
   reload or a batch even with a run credential whose `exp` passed less than 5 minutes
   before, which reaches nothing else. After
-  the issuer's end, the gateway refuses the run key until its `exp`, a session's run
-  request `401` `run_credential_refused` and a client's connection `407`; a run
-  credential for a refused run key presented during the hold is refused and extends
-  the hold to its own `exp`, and the hold lapses after the latest `exp` presented. The
+  the issuer's end, the gateway refuses the run key until its `exp` plus
+  `runcredential.MaxLeeway`, 5 minutes, a session's run request `401`
+  `run_credential_refused` and a client's connection `407`; a run credential for a
+  refused run key presented during the hold is refused and extends the hold to its own
+  `exp`, and the hold lapses after the latest `exp` presented, plus 5 minutes. The
   gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart
   refuses them too. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
