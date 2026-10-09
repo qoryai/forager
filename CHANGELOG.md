@@ -662,17 +662,20 @@ release may change what an existing document does, and says so under Upgrading.
   whole event numbered at or below the one before it is skipped. Before, it cut the
   file at that line, and every event after it was lost. A last line without its
   newline that is a whole event is kept, and gets its newline before `gateway_lost`
-  follows it; any other is cut off, as before. `gateway_lost`
-  is numbered after the highest sequence of the whole events or of `delivered.log`,
-  since an event whose line was not finished may have reached the server whole, and the
-  file is changed only when `gateway_lost` is added.
+  follows it; any other is cut off, as before. The resend reports "<n> lines of <file>
+  are not whole events and are not sent". `gateway_lost` is numbered after the highest
+  sequence of the whole events or of `delivered.log`, since an event whose line was not
+  finished may have reached the server whole, and the file is changed only when
+  `gateway_lost` is added.
 - `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
   that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
-  its `events.jsonl`, and the `Delivery` says `NotOpened`, nothing sent. Before, its
+  its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend
+  reports "the server never accepted the run's ping; nothing is sent". Before, its
   ping and events were posted, which reported a run that never opened. The same holds
   of a record with no ping and no `delivered.log`, of a run that had no server, sent to
-  a server: it never opened there. Before, its events were posted without a ping. A
-  record with a `delivered.log` is sent, its ping's line torn or not.
+  a server: it never opened there, and the resend reports "the run had no server;
+  nothing is sent". Before, its events were posted without a ping. A record with a
+  `delivered.log` is sent, its ping's line torn or not.
 
 ### Wall
 

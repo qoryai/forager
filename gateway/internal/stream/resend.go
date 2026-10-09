@@ -63,18 +63,6 @@ type ResendResult struct {
 	Torn int
 }
 
-// reportTorn is the report line of the lines of a record that hold bytes that are no
-// whole event. Nil reports nothing: its wording waits for approval.
-var reportTorn func(n int, file string) string
-
-// reportNotOpened is the report line of a record whose ping the server never accepted.
-// Empty reports nothing: its wording waits for approval.
-var reportNotOpened = ""
-
-// reportNoServer is the report line of a record with no ping, of a run that had no
-// server, sent to one. Empty reports nothing: its wording waits for approval.
-var reportNoServer = ""
-
 // Resend completes and delivers the record of one run whose gateway is gone, as the
 // session's resend does today. A record still held, by an open run or by the run's
 // session, is [ErrRunning], and is left as it is. A record with run.started and no
@@ -120,8 +108,8 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.Torn = rec.torn; res.Torn > 0 && reportTorn != nil {
-		cfg.Report(reportTorn(res.Torn, file))
+	if res.Torn = rec.torn; res.Torn > 0 {
+		cfg.Report(fmt.Sprintf("%d lines of %s are not whole events and are not sent", res.Torn, file))
 	}
 	if res.NotOpened, res.NoServer, err = notOpened(cfg.Dir, rec); err != nil {
 		return nil, err
@@ -131,11 +119,10 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		res.NotOpened, res.NoServer = false, false
 	}
 	if res.NotOpened {
-		switch {
-		case res.NoServer && reportNoServer != "":
-			cfg.Report(reportNoServer)
-		case !res.NoServer && reportNotOpened != "":
-			cfg.Report(reportNotOpened)
+		if res.NoServer {
+			cfg.Report("the run had no server; nothing is sent")
+		} else {
+			cfg.Report("the server never accepted the run's ping; nothing is sent")
 		}
 		return res, nil
 	}

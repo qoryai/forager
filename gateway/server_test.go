@@ -487,9 +487,13 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 	if err := os.WriteFile(file, []byte(torn), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Dir(file)})
+	var reports []string
+	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Dir(file), Report: func(l string) { reports = append(reports, l) }})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := "1 lines of " + file + " are not whole events and are not sent"; !slices.Equal(reports, []string{want}) {
+		t.Errorf("reports %q, want %q", reports, want)
 	}
 	if !r.Completed || r.Sent != 4 || r.Undelivered != 0 {
 		t.Errorf("resend %+v", r)
@@ -530,9 +534,14 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 		t.Fatalf("the record %v", got)
 	}
 	stored := c.store.Count()
-	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
+	var reports []string
+	report := func(l string) { reports = append(reports, l) }
+	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir, Report: report})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{"the server never accepted the run's ping; nothing is sent"}; !slices.Equal(reports, want) {
+		t.Errorf("reports %q", reports)
 	}
 	if r != (gateway.Delivery{NotOpened: true}) {
 		t.Errorf("resend %+v", r)
@@ -554,8 +563,12 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	}
 	dir = filepath.Join(local.dir, "runs", a.RunID)
 	before, _ = os.ReadFile(filepath.Join(dir, "events.jsonl"))
-	if r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir}); err != nil || r != (gateway.Delivery{NotOpened: true}) {
+	reports = nil
+	if r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir, Report: report}); err != nil || r != (gateway.Delivery{NotOpened: true}) {
 		t.Errorf("resend of a run with no server %+v, %v", r, err)
+	}
+	if want := []string{"the run had no server; nothing is sent"}; !slices.Equal(reports, want) {
+		t.Errorf("a run with no server: reports %q", reports)
 	}
 	if n := c.store.Count(); n != stored {
 		t.Errorf("a run with no server: the server stored %d events, before %d", n, stored)

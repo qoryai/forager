@@ -1259,7 +1259,8 @@ no whole event, a write Forager did not finish, on a full disk, is skipped, and 
 event the gateway wrote after it is read and sent, one the next write put on the same
 line included: the object that ends that line, when it is one whole event from where it
 starts and numbered at least two after the event before it, never an object inside the
-bytes before it. A whole event numbered at or below the one before it is skipped too. A
+bytes before it. A whole event numbered at or below the one before it is skipped too,
+and Forager reports on its standard error how many lines it skipped. A
 last line without its newline is made a line before `dev.qory.run.exited` follows it:
 one that is a whole event, its newline alone lost, gets its newline, and any other is
 cut off. Nothing else of the file is changed. `delivered.log` is
@@ -1267,8 +1268,8 @@ made once the server accepts the ping, its first line the ping's: a record that 
 ping and no `delivered.log` is of a run whose ping was never accepted, which never
 opened, and nothing of it is sent or added to it. Neither is anything of a record with
 no ping and no `delivered.log`, of a run that had no server, which never opened at the
-server it is sent to. A `delivered.log` says the run opened, even when its ping's line
-was not finished.
+server it is sent to. Forager says on its standard error which of the two it is. A
+`delivered.log` says the run opened, even when its ping's line was not finished.
 The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under

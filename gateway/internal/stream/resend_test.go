@@ -333,9 +333,6 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), torn, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var told []int
-	reportTorn = func(n int, _ string) string { told = append(told, n); return "torn" }
-	defer func() { reportTorn = nil }()
 	var reports []string
 	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
 	if err != nil {
@@ -344,8 +341,8 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 	if !res.Closed || res.Torn != 3 || res.Sent != 4 || res.Undelivered != 0 {
 		t.Errorf("result %+v", res)
 	}
-	if !slices.Equal(told, []int{3}) || !slices.Contains(reports, "torn") {
-		t.Errorf("told %v, reports %q", told, reports)
+	if want := "3 lines of " + filepath.Join(dir, sink.EventsFile) + " are not whole events and are not sent"; !slices.Equal(reports, []string{want}) {
+		t.Errorf("reports %q, want %q", reports, want)
 	}
 	exited := exitedAfter(t, dir, torn, "0000000006")
 	for _, want := range []string{id(lines[1]), id(lines[3]), id(lines[4]), exited.ID} {
@@ -414,9 +411,14 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	// Bounded, since a server that does not take what is sent is tried until the end.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
+	var reports []string
+	report := func(l string) { reports = append(reports, l) }
+	res, err := Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv), Report: report})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{"the server never accepted the run's ping; nothing is sent"}; !slices.Equal(reports, want) {
+		t.Errorf("reports %q", reports)
 	}
 	if !res.NotOpened || res.Sent != 0 || res.Undelivered != 0 || res.Closed || res.Stopped || res.RunClosed {
 		t.Errorf("result %+v", res)
@@ -436,7 +438,11 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	r.Close(context.Background())
 	file = filepath.Join(r.Dir(), sink.EventsFile)
 	before, _ = os.ReadFile(file)
-	res, err = Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
+	reports = nil
+	res, err = Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv), Report: report})
+	if want := []string{"the run had no server; nothing is sent"}; !slices.Equal(reports, want) {
+		t.Errorf("a run with no server: reports %q", reports)
+	}
 	if err != nil || !res.NotOpened || !res.NoServer || res.Closed || res.Sent != 0 || res.Undelivered != 0 {
 		t.Errorf("a run with no server: %+v, %v", res, err)
 	}
