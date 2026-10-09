@@ -73,6 +73,28 @@ func TestSequenceIsPaddedAndContiguous(t *testing.T) {
 	}
 }
 
+// TestNumberSharesTheSequenceWithMake pins that an event made unnumbered, or made
+// elsewhere, takes the next sequence of the run when it is numbered, in the order of
+// the calls, and keeps its own id and time.
+func TestNumberSharesTheSequenceWithMake(t *testing.T) {
+	e := event.NewEmitter(event.NewRunID(), nil)
+	held := e.Unnumbered(event.RunEgress, map[string]any{"host": "example.com"})
+	if held.Sequence != "" || held.ID == "" || held.Time == "" {
+		t.Fatalf("unnumbered %+v", held)
+	}
+	first := e.Make(event.RunStarted, nil)
+	id := held.ID
+	e.Number(held)
+	other := &event.Event{ID: "x", Type: "dev.qory.session.started"}
+	e.Number(other)
+	if first.Sequence != "0000000001" || held.Sequence != "0000000002" || other.Sequence != "0000000003" || held.ID != id {
+		t.Errorf("sequences %s %s %s", first.Sequence, held.Sequence, other.Sequence)
+	}
+	if e.Sequence() != 3 {
+		t.Errorf("sequence %d, want 3", e.Sequence())
+	}
+}
+
 // TestIDsHaveTheirVersions pins that a run id is a version 7 UUID and an event id a
 // version 4, and that both sort and compare as strings.
 func TestIDsHaveTheirVersions(t *testing.T) {

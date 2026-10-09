@@ -117,10 +117,15 @@ func (e *Emitter) RunID() string { return e.runID }
 // clock's time in UTC with millisecond precision, and the next sequence, zero-padded to
 // ten digits from 0000000001.
 func (e *Emitter) Make(typ string, data any) *Event {
-	e.mu.Lock()
-	e.seq++
-	seq := e.seq
-	e.mu.Unlock()
+	ev := e.Unnumbered(typ, data)
+	e.Number(ev)
+	return ev
+}
+
+// Unnumbered returns an event of the run with the given type and data, a fresh id and
+// the clock's time, as [Emitter.Make] does, but no sequence yet: an event that waits for
+// its place in the run, which [Emitter.Number] gives it.
+func (e *Emitter) Unnumbered(typ string, data any) *Event {
 	return &Event{
 		SpecVersion: "1.0",
 		ID:          NewID(),
@@ -128,10 +133,20 @@ func (e *Emitter) Make(typ string, data any) *Event {
 		Type:        typ,
 		Subject:     e.runID,
 		Time:        e.now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-		Sequence:    fmt.Sprintf("%010d", seq),
 		DataSchema:  DataSchema(typ),
 		Data:        data,
 	}
+}
+
+// Number gives the event the run's next sequence, in the order Number and Make are
+// called: an event made elsewhere, a session's that a gateway numbers into the run's
+// stream, or one made by [Emitter.Unnumbered].
+func (e *Emitter) Number(ev *Event) {
+	e.mu.Lock()
+	e.seq++
+	seq := e.seq
+	e.mu.Unlock()
+	ev.Sequence = fmt.Sprintf("%010d", seq)
 }
 
 // Sequence is the number of events made so far.
