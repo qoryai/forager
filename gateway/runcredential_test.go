@@ -132,13 +132,41 @@ type introspection struct {
 	mu       sync.Mutex
 	inactive map[string]bool
 	asked    map[string]int
+	held     map[string]*heldAsk
+}
+
+// heldAsk is an ask of the issuer held open: asked is closed once it is asked, and the
+// ask answers once release is closed.
+type heldAsk struct {
+	asked, release chan struct{}
+	once           sync.Once
 }
 
 func (in *introspection) active(_, credential string) bool {
 	in.mu.Lock()
-	defer in.mu.Unlock()
 	in.asked[credential]++
+	h := in.held[credential]
+	in.mu.Unlock()
+	if h != nil {
+		h.once.Do(func() { close(h.asked) })
+		<-h.release
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	return !in.inactive[credential]
+}
+
+// hold holds every ask of the issuer for the credential open until the release is
+// closed.
+func (in *introspection) hold(credential string) *heldAsk {
+	h := &heldAsk{asked: make(chan struct{}), release: make(chan struct{})}
+	in.mu.Lock()
+	if in.held == nil {
+		in.held = map[string]*heldAsk{}
+	}
+	in.held[credential] = h
+	in.mu.Unlock()
+	return h
 }
 
 func (in *introspection) end(credential string) {
@@ -1259,5 +1287,78 @@ func TestAClientsRunOfARunKey(t *testing.T) {
 		if l.Type == event.RunEgress {
 			t.Error("a client's connection in the session's run")
 		}
+	}
+}
+
+// TestTheIssuersEndRefusesTheRunKeyInFlight pins the issuer's end against what is in
+// flight for its run key: a session's run request and a client's first connection
+// whose run credential the issuer is still being asked about when it ends another run
+// of the run key are refused, 401 and 407, and open no run; and a later connection of
+// a client's run that was open before the end is refused, 407, as it would join.
+func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
+	o := origin(t)
+	in := &introspection{}
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, in, 0)
+	endOf := func(k string) (string, *sessionRun) {
+		t.Helper()
+		first := mint(issuerKey(), k, time.Now().Add(time.Hour), nil)
+		return first, s.openSession(t, first, server.LinkRunRequest{})
+	}
+	issuerEnds := func(first string, r *sessionRun) {
+		t.Helper()
+		in.end(first)
+		status, body := r.reload(t, first, r.a.RunID)
+		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	}
+
+	// A session's run request.
+	first, r := endOf("rk-0001")
+	second := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, second)
+	h := in.hold(second)
+	session := make(chan int, 1)
+	go func() {
+		status, _ := s.tryOpenWith(t, second, server.LinkRunRequest{})
+		session <- status
+	}()
+	<-h.asked
+	issuerEnds(first, r)
+	close(h.release)
+	if status := <-session; status != http.StatusUnauthorized {
+		t.Errorf("a session's run request in flight: %d", status)
+	}
+
+	// A client's first connection.
+	first, r = endOf("rk-0002")
+	second = mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, second)
+	h = in.hold(second)
+	client := make(chan int, 1)
+	go func() {
+		status, _, _ := get(s.clientWith(second), o.URL)
+		client <- status
+	}()
+	<-h.asked
+	issuerEnds(first, r)
+	close(h.release)
+	if status := <-client; status != http.StatusProxyAuthRequired {
+		t.Errorf("a client's connection in flight: %d", status)
+	}
+
+	// A client's run open before the end: its next connection would join.
+	joined := mint(issuerKey(), "rk-0003", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, joined)
+	if status, _, err := get(s.clientWith(joined), o.URL); err != nil || status != http.StatusOK {
+		t.Fatalf("the client's run: %d %v", status, err)
+	}
+	first, r = endOf("rk-0003")
+	issuerEnds(first, r)
+	if status, _, err := get(s.clientWith(joined), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+		t.Errorf("a connection joining after the end: %d %v", status, err)
+	}
+
+	// Three sessions' runs and one client's: nothing opened in flight.
+	if got := runsIn(t, s.dir); len(got) != 4 {
+		t.Errorf("runs %v", got)
 	}
 }

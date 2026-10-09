@@ -76,27 +76,18 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 				return nil, nil, errUnserved
 			}
 		}
-		g.mu.Unlock()
 		if g.blocked(k) {
+			g.mu.Unlock()
 			g.presented(id)
 			return nil, nil, runcredential.ErrRefused
-		}
-		g.mu.Lock()
-		if g.opening[k] != nil || g.clientRuns[k] != nil || g.closing {
-			g.mu.Unlock()
-			continue
 		}
 		opened = make(chan struct{})
 		g.opening[k] = opened
 		g.opens.Add(1)
 		g.mu.Unlock()
 	}
-	var lr *linkRun
 	defer func() {
 		g.mu.Lock()
-		if lr != nil {
-			g.clientRuns[k] = lr
-		}
 		delete(g.opening, k)
 		g.mu.Unlock()
 		close(opened)
@@ -105,7 +96,19 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 	if !id.isActive(ctx) {
 		return nil, nil, runcredential.ErrRefused
 	}
-	lr, err = g.openClient(id)
+	// The issuer may have ended a run of the run key while it was asked.
+	g.mu.Lock()
+	blocked := g.blocked(k)
+	g.mu.Unlock()
+	if blocked {
+		g.presented(id)
+		return nil, nil, runcredential.ErrRefused
+	}
+	lr, err := g.openClient(id)
+	if errors.Is(err, errKeyRefused) {
+		g.presented(id)
+		return nil, nil, runcredential.ErrRefused
+	}
 	if err != nil {
 		g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))
 		if ref := (*accesskey.Refusal)(nil); errors.As(err, &ref) && ref.Code != "" {
@@ -119,7 +122,9 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 // openClient opens the run of a client with no session: the gateway's own run id, the
 // run credential's labels and details, and no wall but the guard of the one address,
 // its proxy reading inside HTTPS with the gateway's own authority for the credentials,
-// the tools and the path rules its policy selects.
+// the tools and the path rules its policy selects. The run is its run key's client's
+// run from then on; a run key the issuer ended while the run opened ends it,
+// run_ended_at_issuer, and is [errKeyRefused].
 func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 	req := &server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true}
 	g.mu.Lock()
@@ -129,18 +134,33 @@ func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 	if err != nil {
 		return nil, err
 	}
+	k := keyOf(id)
 	g.mu.Lock()
+	if g.blocked(k) {
+		g.mu.Unlock()
+		lr.end(endedAtIssuer)
+		return nil, errKeyRefused
+	}
 	g.runs[lr.id] = lr
+	g.clientRuns[k] = lr
 	g.mu.Unlock()
 	lr.arm()
 	return lr, nil
 }
 
+// errKeyRefused is a run that opened for a run key the gateway refuses since: ended at
+// once, run_ended_at_issuer.
+var errKeyRefused = errors.New("the gateway refuses the run key")
+
 // join is a later connection of the run's run key: the run takes it, once its run
 // credential extends the run and the issuer, when asked, holds it active; an issuer
-// that does not ends the run, and the connection is refused, 407. A run that has ended
-// takes none, [errRunEnded].
+// that does not ends the run, and the connection is refused, 407, as is one of a run key
+// the gateway refuses. A run that has ended takes none, [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
+	if lr.g.blocked(keyOf(id)) {
+		lr.g.presented(id)
+		return nil, nil, runcredential.ErrRefused
+	}
 	if _, _, ended := lr.gone(); ended {
 		return nil, nil, errRunEnded
 	}

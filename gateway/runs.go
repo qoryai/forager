@@ -513,6 +513,23 @@ func (lr *linkRun) gone() (code, from string, ended bool) {
 // flushed and closed. It never blocks, but to keep the run key the gateway refuses
 // after the issuer's end.
 func (lr *linkRun) end(e ending) {
+	if e.blocks() {
+		// After the issuer's end, the gateway refuses the run key until the latest exp
+		// presented for it, kept in its directory so a restart refuses it too: kept
+		// before the run is seen to end, so no request that sees the end opens a run of
+		// it. Outside the run's lock, which is taken under the gateway's.
+		lr.mu.Lock()
+		live := !lr.ended && lr.opened && lr.cred != nil
+		var key runKeyID
+		var expires time.Time
+		if live {
+			key, expires = lr.cred.key, lr.cred.expires
+		}
+		lr.mu.Unlock()
+		if live {
+			lr.g.endKey(key, expires)
+		}
+	}
 	lr.mu.Lock()
 	if lr.ended || !lr.opened {
 		lr.mu.Unlock()
@@ -535,9 +552,7 @@ func (lr *linkRun) end(e ending) {
 	startedAt := lr.startedAt
 	lr.mu.Unlock()
 	if lr.cred != nil && e.blocks() {
-		// After the issuer's end, the gateway refuses the run key until the latest exp
-		// presented for it, before any later request can open a run of it, and kept in
-		// its directory so a restart refuses it too.
+		// A run credential with a later exp presented since: the refusal lasts to it.
 		lr.g.endKey(key, expires)
 	}
 	go func() {

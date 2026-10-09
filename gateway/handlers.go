@@ -118,11 +118,20 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// keyRefused reports, under the gateway's lock, whether the issuer ended a run of
+	// the run key since it was asked.
+	keyRefused := func() bool { return id != nil && g.blocked(keyOf(*id)) }
 	var differs *accesskey.Refusal
 	if id != nil {
 		differs = runcredential.Compare(req.Labels, aboutDetails(req.About), id.Labels, id.Details)
 	}
 	g.mu.Lock()
+	if keyRefused() {
+		g.mu.Unlock()
+		g.presented(*id)
+		refuseCredential(w)
+		return
+	}
 	if g.used[req.RunID] {
 		g.mu.Unlock()
 		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
@@ -152,6 +161,14 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.mu.Lock()
+	if keyRefused() {
+		// The issuer ended a run of the run key while this one opened: it ends at once.
+		g.mu.Unlock()
+		lr.end(endedAtIssuer)
+		g.presented(*id)
+		refuseCredential(w)
+		return
+	}
 	g.runs[lr.id] = lr
 	g.mu.Unlock()
 	lr.mu.Lock()

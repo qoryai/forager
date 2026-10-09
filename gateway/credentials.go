@@ -3,10 +3,10 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"github.com/qoryai/forager/event"
 	"os"
 	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/runcredential"
 )
 
@@ -140,7 +140,7 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) error {
 // the run credential. The gateway refuses the run key in this process either way.
 func (g *Gateway) endKey(k runKeyID, exp time.Time) {
 	if err := g.holdKey(k, exp); err != nil {
-		g.report(fmt.Sprintf("keeping the refused run key of a run of the issuer %s: %v", k.issuer, err))
+		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
 	}
 }
 
