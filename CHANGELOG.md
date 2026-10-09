@@ -232,11 +232,12 @@ release may change what an existing document does, and says so under Upgrading.
   refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
   0600, written atomically, in a directory of mode 0700 that only its user writes. Each
   is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
-  dropped on open and on `Ended.Add`; `Ended.Has` asks. A file that cannot be read, that others can read or
-  write, or that holds no array `ended` is refused, so a gateway never starts having
-  forgotten a run key it refuses, and so is a directory it cannot create a file in,
-  "the ended run keys: <directory> cannot be written: <error>", so a gateway never
-  starts unable to keep one.
+  dropped on open and on `Ended.Add`; `Ended.Has` asks, and `Ended.Written` whether the
+  file, as last read or written, refuses a run key, which a failed write leaves out. A
+  file that cannot be read, that others can read or write, or that holds no array
+  `ended` is refused, so a gateway never starts having forgotten a run key it refuses,
+  and so is a directory it cannot create a file in, "the ended run keys: <directory>
+  cannot be written: <error>", so a gateway never starts unable to keep one.
 - The known answers of the run credential gain the step `serialisation` and run
   credentials refused at it (padding, a line feed, a space, four parts, two parts), at
   the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature

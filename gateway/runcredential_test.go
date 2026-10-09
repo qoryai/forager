@@ -1794,6 +1794,67 @@ func TestAStateDirectoryThatCannotBeWritten(t *testing.T) {
 	}
 }
 
+// TestCloseCountsTheRunKeysARestartWouldNotRefuse pins the count of Close's report
+// when the refused run keys still cannot be written: a run key the file never held
+// counts; one the file holds, whose later extension alone failed to write, a restart
+// still refuses, and does not count. With only such a run key, Close reports nothing.
+func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
+	for _, neverWritten := range []bool{true, false} {
+		in := &introspection{}
+		cfg := gateway.Config{Policy: enforce127}
+		gateway.SetKeepRetry(&cfg, time.Hour)
+		s := startVerifying(t, cfg, in, 0)
+		end := func(k string) {
+			t.Helper()
+			first := mint(issuerKey(), k, time.Now().Add(time.Hour), nil)
+			r := s.openSession(t, first, server.LinkRunRequest{})
+			in.end(first)
+			status, body := r.reload(t, first, r.a.RunID)
+			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		}
+		// Written once, while the directory takes new files.
+		end("rk-0002")
+		var never string
+		var neverRun *sessionRun
+		if neverWritten {
+			never = mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+			s.secrets = append(s.secrets, never)
+			neverRun = s.openSession(t, never, server.LinkRunRequest{})
+		}
+		if err := os.Chmod(s.dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		// Its extension to a later exp fails to write.
+		later := mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, later)
+		if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a run request of the run key written once: %d %s", status, body)
+		}
+		if neverWritten {
+			// The issuer ends a run of a run key the file never holds.
+			in.end(never)
+			status, body := neverRun.reload(t, never, neverRun.a.RunID)
+			gone(t, "the issuer's end of the run key never written", status, body, "run_ended_at_issuer")
+		}
+		if !s.reported("keeping the run key of a run of the issuer") {
+			t.Fatal("no write failed")
+		}
+		s.close()
+		got := s.reportsWith("closing with")
+		if !neverWritten {
+			if len(got) != 0 {
+				t.Errorf("Close reported %q with only an extension unwritten", got)
+			}
+			continue
+		}
+		want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("Close reported %q, want %q", got, want)
+		}
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

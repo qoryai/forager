@@ -232,8 +232,9 @@ func (g *Gateway) keepAgainFor(k runKeyID) {
 
 // keepOnClose stops the retries and writes the refused run keys once more, for a
 // gateway that is closing, when a write of them has failed. It returns how many run
-// keys refused in memory are still not written: those a restart would no longer
-// refuse.
+// keys refused in memory a restart would not refuse: those the file does not hold, or
+// no longer at now. A run key the file holds, whose later extension alone failed to
+// write, a restart still refuses, until the exp written last, and is not counted.
 func (g *Gateway) keepOnClose() int {
 	g.mu.Lock()
 	if g.keepTimer != nil {
@@ -248,7 +249,13 @@ func (g *Gateway) keepOnClose() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.unkeptKey()
-	return len(g.unkept)
+	n := 0
+	for k := range g.unkept {
+		if !g.ended.Written(k.issuer, k.runKey, g.now()) {
+			n++
+		}
+	}
+	return n
 }
 
 // heldTo is the latest of exp and the exps of the run credentials of the run key the

@@ -1860,7 +1860,8 @@ The public package `runcredential` holds the rules beyond the schema:
 - `OpenEnded` and `Ended`, the run keys a gateway refuses after the issuer's end, by
   issuer, in a file of the gateway's state directory, each kept until the latest `exp`
   added for it plus 5 minutes, so a restart refuses them too. `OpenEnded` refuses a
-  state directory it cannot create a file in, so the gateway does not start on one.
+  state directory it cannot create a file in, so the gateway does not start on one;
+  `Ended.Written` reports whether the file, as last read or written, refuses a run key.
 
 **The runs of a run key.** The gateway tracks run keys and does not require them to be
 unique; each period of activity is a run, of its own run id, with the run key as its
