@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"go/format"
 	"math/big"
+	"strings"
 )
 
 // Now is the clock every outcome holds at, in seconds since the epoch: the clock the
@@ -241,12 +242,15 @@ func claims(changes map[string]any) map[string]any {
 var b64 = base64.RawURLEncoding
 
 // segment is the base64url of a JSON object, its members sorted by name.
-func segment(v any) string {
+func segment(v any) string { return b64.EncodeToString(mustJSON(v)) }
+
+// mustJSON is the JSON text of v, an object's members sorted by name.
+func mustJSON(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)
 	}
-	return b64.EncodeToString(b)
+	return b
 }
 
 // signer signs the signing input of a JWS.
@@ -255,7 +259,12 @@ type signer func(input []byte) ([]byte, error)
 // sign is the JWS compact serialisation of the header and claims under s; a nil s
 // leaves the signature empty.
 func sign(header, payload map[string]any, s signer) (string, error) {
-	input := segment(header) + "." + segment(payload)
+	return signRaw(segment(header), segment(payload), s)
+}
+
+// signRaw is the JWS compact serialisation of the encoded header and payload under s.
+func signRaw(header, payload string, s signer) (string, error) {
+	input := header + "." + payload
 	if s == nil {
 		return input + ".", nil
 	}
@@ -264,6 +273,31 @@ func sign(header, payload map[string]any, s signer) (string, error) {
 		return "", err
 	}
 	return input + "." + b64.EncodeToString(sig), nil
+}
+
+// signatureChanged is s with its signature changed by change.
+func signatureChanged(s signer, change func([]byte) []byte) signer {
+	return func(input []byte) ([]byte, error) {
+		sig, err := s(input)
+		if err != nil {
+			return nil, err
+		}
+		return change(sig), nil
+	}
+}
+
+// p256Order is the order n of P-256's base point, 32 bytes, big endian.
+func p256Order() []byte {
+	return elliptic.P256().Params().N.FillBytes(make([]byte, 32))
+}
+
+// partChanged is a change to one part of a JWS compact serialisation.
+func partChanged(n int, change func(string) string) func(string) string {
+	return func(cred string) string {
+		parts := strings.Split(cred, ".")
+		parts[n] = change(parts[n])
+		return strings.Join(parts, ".")
+	}
 }
 
 // Files returns the known answers by file name.
@@ -312,6 +346,15 @@ func Files() (map[string][]byte, error) {
 		sign         signer
 		refusedAt    string
 		note         string
+		// rawHeader and rawPayload, when set, are the JSON text of the header and the
+		// payload in place of header and payload, for a member name twice.
+		rawHeader, rawPayload string
+		// change, when set, changes the run credential after it is signed.
+		change func(string) string
+	}
+	// p is a spec of the fields every run credential has.
+	p := func(name, config string, header, payload map[string]any, sign signer, refusedAt, note string) spec {
+		return spec{name: name, config: config, header: header, payload: payload, sign: sign, refusedAt: refusedAt, note: note}
 	}
 	one := "one-key.json"
 	two := "two-keys.json"
@@ -319,36 +362,81 @@ func Files() (map[string][]byte, error) {
 	hES := map[string]any{"alg": "ES256", "typ": "JWT", "kid": "k-es256"}
 	hEd := map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "k-eddsa"}
 	specs := []spec{
-		{"rs256", one, hRS, claims(nil), rs256, "", "RS256 under the one key, which has no kid; the credential carries none"},
-		{"rs256-aud-array", one, hRS, claims(map[string]any{"aud": []string{"another-service", Audience}}), rs256, "", "aud is an array that contains the audience"},
-		{"rs256-expired-within-leeway", one, hRS, claims(map[string]any{"iat": Now - 630, "exp": Now - 30}), rs256, "", "exp passed 30 seconds ago, within the leeway of 60 seconds"},
-		{"rs256-no-requester", one, hRS, claims(map[string]any{"requester": nil}), rs256, "", "no requester: the run credential does not decide about.details.requester, and the session's value stands"},
-		{"requester-not-string", one, hRS, claims(map[string]any{"requester": 7}), rs256, "mapping", "requester is a number, not the string details needs"},
-		{"project-control-character", one, hRS, claims(map[string]any{"project": "project\nother"}), rs256, "mapping", "project, a claim of the label repository, holds a line feed, a control character"},
-		{"es256", two, hES, claims(nil), es256, "", "ES256 under the key k-es256, the signature R and S, 32 bytes each"},
-		{"eddsa", two, hEd, claims(nil), eddsa, "", "EdDSA under the Ed25519 key k-eddsa"},
-		{"alg-none", one, map[string]any{"alg": "none", "typ": "JWT"}, claims(nil), nil, "header", "alg none, with an empty signature"},
-		{"hs256-public-key-as-secret", one, map[string]any{"alg": "HS256", "typ": "JWT"}, claims(nil), hs256, "header", "HS256 with the PEM bytes of the RSA public key, rs256.pem, as the HMAC secret: the confusion of algorithms"},
-		{"kid-not-pinned", one, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-rs256"}, claims(nil), rs256, "header", "a kid, and the one key pinned has none"},
-		{"kid-unknown", two, map[string]any{"alg": "ES256", "typ": "JWT", "kid": "k-unknown"}, claims(nil), es256, "header", "a kid no pinned key has"},
-		{"no-kid-two-keys", two, map[string]any{"alg": "ES256", "typ": "JWT"}, claims(nil), es256, "header", "no kid, and the issuer pins two keys"},
-		{"alg-differs-from-key", two, map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "k-es256"}, claims(nil), eddsa, "header", "alg EdDSA, signed with the Ed25519 key, and a kid that selects the ES256 key"},
-		{"alg-not-allowed", two, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-es256"}, claims(nil), rs256, "header", "RS256, which is not among the algorithms of this configuration"},
-		{"crit", one, map[string]any{"alg": "RS256", "typ": "JWT", "crit": []string{"exp"}}, claims(nil), rs256, "header", "crit names an extension the gateway does not understand"},
-		{"aud-other", one, hRS, claims(map[string]any{"aud": "another-service"}), rs256, "claims", "aud is another service's"},
-		{"iss-other", one, hRS, claims(map[string]any{"iss": "https://other-issuer.example"}), rs256, "claims", "iss is not the issuer"},
-		{"expired", one, hRS, claims(map[string]any{"iat": Now - 720, "exp": Now - 120}), rs256, "claims", "exp passed 120 seconds ago, beyond the leeway"},
-		{"iat-future", one, hRS, claims(map[string]any{"iat": Now + 120, "exp": Now + 720}), rs256, "claims", "iat is 120 seconds ahead, beyond the leeway"},
-		{"lifetime-above-max", one, hRS, claims(map[string]any{"iat": Now - 60, "exp": Now - 60 + 7200}), rs256, "claims", "exp minus iat is two hours, above max_lifetime of one hour"},
-		{"no-iat", one, hRS, claims(map[string]any{"iat": nil}), rs256, "claims", "no iat, and max_lifetime is set"},
-		{"no-sub", one, hRS, claims(map[string]any{"sub": nil}), rs256, "claims", "no sub, the run key"},
-		{"namespace-not-allowed", one, hRS, claims(map[string]any{"namespace": "other-namespace"}), rs256, "scope", "namespace holds a value allow does not list"},
+		p("rs256", one, hRS, claims(nil), rs256, "", "RS256 under the one key, which has no kid; the credential carries none"),
+		p("rs256-aud-array", one, hRS, claims(map[string]any{"aud": []string{"another-service", Audience}}), rs256, "", "aud is an array that contains the audience"),
+		p("rs256-expired-within-leeway", one, hRS, claims(map[string]any{"iat": Now - 630, "exp": Now - 30}), rs256, "", "exp passed 30 seconds ago, within the leeway of 60 seconds"),
+		p("rs256-no-requester", one, hRS, claims(map[string]any{"requester": nil}), rs256, "", "no requester: the run credential does not decide about.details.requester, and the session's value stands"),
+		p("requester-not-string", one, hRS, claims(map[string]any{"requester": 7}), rs256, "mapping", "requester is a number, not the string details needs"),
+		p("project-control-character", one, hRS, claims(map[string]any{"project": "project\nother"}), rs256, "mapping", "project, a claim of the label repository, holds a line feed, a control character"),
+		p("es256", two, hES, claims(nil), es256, "", "ES256 under the key k-es256, the signature R and S, 32 bytes each"),
+		p("eddsa", two, hEd, claims(nil), eddsa, "", "EdDSA under the Ed25519 key k-eddsa"),
+		p("alg-none", one, map[string]any{"alg": "none", "typ": "JWT"}, claims(nil), nil, "header", "alg none, with an empty signature"),
+		p("hs256-public-key-as-secret", one, map[string]any{"alg": "HS256", "typ": "JWT"}, claims(nil), hs256, "header", "HS256 with the PEM bytes of the RSA public key, rs256.pem, as the HMAC secret: the confusion of algorithms"),
+		p("kid-not-pinned", one, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-rs256"}, claims(nil), rs256, "header", "a kid, and the one key pinned has none"),
+		p("kid-unknown", two, map[string]any{"alg": "ES256", "typ": "JWT", "kid": "k-unknown"}, claims(nil), es256, "header", "a kid no pinned key has"),
+		p("no-kid-two-keys", two, map[string]any{"alg": "ES256", "typ": "JWT"}, claims(nil), es256, "header", "no kid, and the issuer pins two keys"),
+		p("alg-differs-from-key", two, map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "k-es256"}, claims(nil), eddsa, "header", "alg EdDSA, signed with the Ed25519 key, and a kid that selects the ES256 key"),
+		p("alg-not-allowed", two, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-es256"}, claims(nil), rs256, "header", "RS256, which is not among the algorithms of this configuration"),
+		p("crit", one, map[string]any{"alg": "RS256", "typ": "JWT", "crit": []string{"exp"}}, claims(nil), rs256, "header", "crit names an extension the gateway does not understand"),
+		p("aud-other", one, hRS, claims(map[string]any{"aud": "another-service"}), rs256, "claims", "aud is another service's"),
+		p("iss-other", one, hRS, claims(map[string]any{"iss": "https://other-issuer.example"}), rs256, "claims", "iss is not the issuer"),
+		p("expired", one, hRS, claims(map[string]any{"iat": Now - 720, "exp": Now - 120}), rs256, "claims", "exp passed 120 seconds ago, beyond the leeway"),
+		p("iat-future", one, hRS, claims(map[string]any{"iat": Now + 120, "exp": Now + 720}), rs256, "claims", "iat is 120 seconds ahead, beyond the leeway"),
+		p("lifetime-above-max", one, hRS, claims(map[string]any{"iat": Now - 60, "exp": Now - 60 + 7200}), rs256, "claims", "exp minus iat is two hours, above max_lifetime of one hour"),
+		p("no-iat", one, hRS, claims(map[string]any{"iat": nil}), rs256, "claims", "no iat, and max_lifetime is set"),
+		p("no-sub", one, hRS, claims(map[string]any{"sub": nil}), rs256, "claims", "no sub, the run key"),
+		p("namespace-not-allowed", one, hRS, claims(map[string]any{"namespace": "other-namespace"}), rs256, "scope", "namespace holds a value allow does not list"),
+		{name: "rs256-typ-lower-case", config: one, header: map[string]any{"alg": "RS256", "typ": "jwt"}, payload: claims(nil), sign: rs256,
+			note: "typ jwt: typ is compared without regard to case"},
+		{name: "rs256-no-typ", config: one, header: map[string]any{"alg": "RS256"}, payload: claims(nil), sign: rs256,
+			note: "no typ, which is optional"},
+		{name: "typ-other", config: one, header: map[string]any{"alg": "RS256", "typ": "at+jwt"}, payload: claims(nil), sign: rs256, refusedAt: "header",
+			note: "typ is at+jwt, not JWT"},
+		{name: "header-member-twice", config: one, rawHeader: `{"alg":"RS256","alg":"RS256","typ":"JWT"}`, payload: claims(nil), sign: rs256, refusedAt: "header",
+			note: "the header names alg twice, with the same value, and is signed: a header with a member name twice is refused"},
+		{name: "es256-signature-63-bytes", config: two, header: hES, payload: claims(nil), refusedAt: "signature",
+			sign: signatureChanged(es256, func(b []byte) []byte { return b[:63] }), note: "the ES256 signature of es256 less its last byte: 63 bytes, not 64"},
+		{name: "es256-signature-65-bytes", config: two, header: hES, payload: claims(nil), refusedAt: "signature",
+			sign: signatureChanged(es256, func(b []byte) []byte { return append(b, 0) }), note: "the ES256 signature of es256 and a zero byte: 65 bytes, not 64"},
+		{name: "es256-r-zero", config: two, header: hES, payload: claims(nil), refusedAt: "signature",
+			sign: signatureChanged(es256, func(b []byte) []byte { return append(make([]byte, 32), b[32:]...) }), note: "the ES256 signature of es256 with R zero, outside [1, n-1]"},
+		{name: "es256-s-order", config: two, header: hES, payload: claims(nil), refusedAt: "signature",
+			sign: signatureChanged(es256, func(b []byte) []byte { return append(b[:32:32], p256Order()...) }), note: "the ES256 signature of es256 with S the order n of P-256, outside [1, n-1]"},
+		{name: "header-altered", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "signature",
+			change: partChanged(0, func(string) string { return segment(map[string]any{"alg": "RS256", "typ": "jwt"}) }),
+			note:   "signed with the header of rs256, sent with typ jwt: every step but the signature accepts it"},
+		{name: "padding", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "serialisation",
+			change: partChanged(2, func(p string) string { return p + "==" }), note: "rs256 with its signature's base64url padded with ==, which base64url without padding refuses"},
+		{name: "line-feed", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "serialisation",
+			change: partChanged(1, func(p string) string { return p[:10] + "\n" + p[10:] }), note: "rs256 with a line feed inside its payload's base64url, which a lenient decoder skips"},
+		{name: "space", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "serialisation",
+			change: func(c string) string { return c + " " }, note: "rs256 followed by a space"},
+		{name: "four-parts", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "serialisation",
+			change: func(c string) string { return c + "." + strings.Split(c, ".")[2] }, note: "rs256 and its signature again after another dot: four parts"},
+		{name: "two-parts", config: one, header: hRS, payload: claims(nil), sign: rs256, refusedAt: "serialisation",
+			change: func(c string) string { return c[:strings.LastIndex(c, ".")] }, note: "the header and payload of rs256 alone: two parts"},
+		{name: "no-exp", config: one, header: hRS, payload: claims(map[string]any{"exp": nil}), sign: rs256, refusedAt: "claims",
+			note: "no exp, which is required"},
+		{name: "no-aud", config: one, header: hRS, payload: claims(map[string]any{"aud": nil}), sign: rs256, refusedAt: "claims",
+			note: "no aud, which is required"},
+		{name: "payload-member-twice", config: one, header: hRS, rawPayload: `{"sub":"rk-0002",` + strings.TrimPrefix(string(mustJSON(claims(nil))), "{"), sign: rs256, refusedAt: "claims",
+			note: "the payload names sub twice, and is signed: a payload with a member name twice is refused"},
 	}
 	var cases []Case
 	for _, s := range specs {
-		cred, err := sign(s.header, s.payload, s.sign)
+		header, payload := s.rawHeader, s.rawPayload
+		if header == "" {
+			header = string(mustJSON(s.header))
+		}
+		if payload == "" {
+			payload = string(mustJSON(s.payload))
+		}
+		cred, err := signRaw(b64.EncodeToString([]byte(header)), b64.EncodeToString([]byte(payload)), s.sign)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.name, err)
+		}
+		if s.change != nil {
+			cred = s.change(cred)
 		}
 		c := Case{Name: s.name, Configuration: s.config, Credential: cred, Outcome: "accepted", Note: s.note}
 		if s.refusedAt != "" {
@@ -387,7 +475,7 @@ func Files() (map[string][]byte, error) {
 	}
 	index := map[string]any{
 		"note": "Run credentials of the fixture issuer, each with its outcome at now, under the configuration named, a file beside this one. " +
-			"refused_at is the step that refuses one: header, the alg and the key the header selects; signature, over the exact bytes received; claims, the time, iss, aud and sub; scope, allow; mapping, a claim the labels or details name that is present and not a string, or that holds a control character. " +
+			"refused_at is the step that refuses one: serialisation, anything but exactly three parts of base64url without padding, white space or a byte outside its alphabet; header, a header that is not one JSON object with each member name once, a crit, a typ other than JWT, compared without regard to case, and the alg and the key the header selects; signature, over the exact bytes received, an ES256 signature exactly 64 bytes with R and S each in [1, n-1]; claims, a payload that is not one JSON object with each member name once, the time, iss, aud and sub; scope, allow; mapping, a claim the labels or details name that is present and not a string, or that holds a control character. " +
 			"A details claim the credential does not carry leaves that key undecided, and the session's value stands; a label claim it does not carry refuses it. " +
 			"A credential refused at a later step passes every earlier one, and an accepted one passes every step, the signature included, with the labels and details listed. " +
 			"Every refusal is the same opaque answer: run_credential_refused to a session, 407 to a client with no session.",
