@@ -192,26 +192,27 @@ type Result struct {
 	TimedOut bool
 	// Undelivered is how many of the session's events the gateway did not accept.
 	Undelivered int
-	// RunClosed says the run was closed from outside, a 410 on the gateway's link, or
-	// the gateway's 400 to a batch, which ends the run there: the runtime was stopped as
-	// at its time limit, and the session's record has run.exited with ClosedReason as
-	// its reason.
+	// RunClosed says the gateway closed the run, a 410 on the gateway's link, or the
+	// gateway's 400 to a batch, which ends the run there: the runtime was stopped as at
+	// its time limit, and the session's record has run.exited with ClosedReason as its
+	// reason. A server's 410 never closes a run: the gateway only stops sending it
+	// events.
 	RunClosed bool
-	// ClosedBy is who closed the run when RunClosed: "apiary", the server, or
-	// "gateway", the gateway itself.
+	// ClosedBy is who closed the run when RunClosed: always "gateway", the gateway
+	// itself.
 	ClosedBy string
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
 	// as the gateway answered it: run_closed, credential_expired or
-	// run_ended_at_issuer; from the gateway, session_lost when it heard nothing from
-	// the session for three heartbeat intervals, and batch_refused when it refused a
-	// batch of the session's.
+	// run_ended_at_issuer, session_lost when it heard nothing from the session for
+	// three heartbeat intervals, and batch_refused when it refused a batch of the
+	// session's.
 	ClosedReason string
 }
 
 // Refusal is a run that did not start, and why: its refusal code, the status of the
 // answer when the code came from one, and who refused, From. A refusal the gateway
 // passes on from the server, From apiary, keeps the server's code and status, such as
-// run_closed when the server closes the run before it starts; the gateway's own, From
+// instance_limit when the server admits no further instance; the gateway's own, From
 // gateway, are run_id_used and the codes Forager decides, run_configuration_invalid,
 // placeholder_conflict, tool_unknown and image_unknown among them. The session's own
 // refusals have no From: variable_reserved, mount_contains_forager_files,
@@ -233,8 +234,8 @@ const MaxLabels = server.MaxLabels
 // errTimeout is the cause of the runtime's context ending at the spec's Timeout.
 var errTimeout = errors.New("the run's time limit")
 
-// errRunClosed is the cause of the run's context ending when the run is closed from
-// outside: a 410 on the link, or the gateway's 400 to a batch.
+// errRunClosed is the cause of the run's context ending when the gateway closes the
+// run: a 410 on the link, or the gateway's 400 to a batch.
 var errRunClosed = errors.New("the run was closed")
 
 var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -493,7 +494,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		closeSinks(closeCtx)
 		return nil, err
 	}
-	// fail is quit with the record of why. A run closed from outside before it started
+	// fail is quit with the record of why. A run the gateway closed before it started
 	// records dev.qory.run.refused with its code in the session's record alone. A
 	// refusal of the session's own, with a code it decides, is posted on the link too
 	// once the run is open at the gateway, which ends it there.
@@ -503,7 +504,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		case errors.Is(context.Cause(runCtx), errRunClosed):
 			code, from := closedBy.get()
 			own(event.RunRefused, map[string]any{"code": code, "status": http.StatusGone})
-			err = &Refusal{Code: code, Status: http.StatusGone, From: from, Detail: closedDetail(from)}
+			err = &Refusal{Code: code, Status: http.StatusGone, From: from, Detail: closedDetail}
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
@@ -849,14 +850,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	return res, nil
 }
 
-// closedDetail is what a refusal of a run closed before it started says, by who closed
-// it.
-func closedDetail(from string) string {
-	if from == accesskey.FromGateway {
-		return "the gateway closed the run before it started"
-	}
-	return "the server closed the run before it started"
-}
+// closedDetail is what a refusal of a run the gateway closed before it started says.
+const closedDetail = "the gateway closed the run before it started"
 
 // refused ends a run the gateway did not open, with fail when it records why and quit
 // when it records nothing. A 410 is the run closed before it started. wall_required is the error the session gave for it before there was a

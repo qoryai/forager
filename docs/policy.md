@@ -118,8 +118,8 @@ The session goes on. A denial never ends a session.
 Of what the session does itself, only a time limit ends a session: `Timeout` in the
 spec. At the limit, the runtime is stopped, and `dev.qory.run.exited` records the
 reason. The session stops the runtime the same way when the caller's context ends, and
-when the gateway or the server closes the run. See
-[the server](server.md#when-the-server-refuses-or-closes-a-run).
+when the gateway closes the run. See
+[the server](server.md#when-the-server-refuses-a-run-or-wants-nothing-more).
 
 ## Hosts the harness declares
 

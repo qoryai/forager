@@ -25,7 +25,7 @@ type fakeSink struct {
 	closed      bool
 	deadline    time.Duration
 	undelivered int
-	runClosed   bool
+	stopped     bool
 }
 
 func (f *fakeSink) Write(ev *event.Event) error {
@@ -54,7 +54,7 @@ func (f *fakeSink) Close(ctx context.Context) error {
 }
 
 func (f *fakeSink) Undelivered() int { return f.undelivered }
-func (f *fakeSink) RunClosed() bool  { return f.runClosed }
+func (f *fakeSink) Stopped() bool    { return f.stopped }
 
 // syncBuffer is an io.Writer safe for the runs' goroutines.
 type syncBuffer struct {
@@ -504,7 +504,7 @@ func TestCloseFlushesWithinTheWaitAndReleases(t *testing.T) {
 	s := New(Config{Dir: t.TempDir(), CloseWait: 2 * time.Second})
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
-	srv := &fakeSink{undelivered: 3, runClosed: true}
+	srv := &fakeSink{undelivered: 3, stopped: true}
 	r.Ping(map[string]any{})
 	r.Deliver(srv, "d")
 	if s.Run(runID) != r {
@@ -519,7 +519,7 @@ func TestCloseFlushesWithinTheWaitAndReleases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res != (Result{Undelivered: 3, RunClosed: true}) {
+	if res != (Result{Undelivered: 3}) {
 		t.Errorf("result %+v", res)
 	}
 	if !srv.closed || srv.deadline <= 0 || srv.deadline > 2*time.Second {

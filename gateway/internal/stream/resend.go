@@ -51,12 +51,10 @@ type ResendResult struct {
 	// Closed says the record had run.started and no run.exited and got one, with the
 	// reason gateway_lost: the gateway was lost before the run's exit was recorded.
 	Closed bool
-	// Stopped says the server said stop during the run, a signed 410, so nothing was
-	// sent.
+	// Stopped says the server said stop, a signed 410: during the run, so nothing was
+	// sent, or during this resend, which sent nothing more and marked the record
+	// stopped. The events stay in the record directory.
 	Stopped bool
-	// RunClosed says the server closed the run now, a signed 410 run_closed: the
-	// events stay in the record directory.
-	RunClosed bool
 	// Sent is how many events the server accepted now, and Undelivered how many it
 	// still has not; those are under the record directory's undelivered/, as after a
 	// run.
@@ -172,7 +170,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		}
 	}
 	posts.Close(ctx)
-	res.RunClosed = posts.RunClosed()
+	res.Stopped = posts.Stopped()
 	res.Undelivered = len(owed)
 	if after, _, err := sink.Delivered(cfg.Dir); err == nil {
 		for _, l := range owed {
