@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -173,10 +174,11 @@ type internalRefusal struct {
 const maxMessage = 8192
 
 // messageOf is an error's text as a refusal's message holds it: tab and newline kept,
-// every other control character and DEL a space, at most maxMessage characters.
+// every other control character, C0, DEL and C1, a space, at most maxMessage
+// characters.
 func messageOf(err error) string {
 	out := []rune(strings.Map(func(r rune) rune {
-		if (r < 0x20 && r != '\t' && r != '\n') || r == 0x7f {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' {
 			return ' '
 		}
 		return r

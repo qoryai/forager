@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
@@ -585,7 +586,7 @@ func TestRefuseOpen(t *testing.T) {
 			t.Errorf("%v: %d %s", c.err, w.Code, w.Body)
 		}
 	}
-	if got := gateway.MessageOf(errors.New("one\ttwo\nthree\rfour\x00five\x1bsix\x7fseven")); got != "one\ttwo\nthree four five six seven" {
+	if got := gateway.MessageOf(errors.New("one\ttwo\nthree\rfour\x00five\x1bsix\x7fseven\u009beight\u0080nine\u009fend")); got != "one\ttwo\nthree four five six seven eight nine end" {
 		t.Errorf("%q", got)
 	}
 	long := gateway.MessageOf(errors.New(strings.Repeat("é", 9000)))
@@ -596,5 +597,18 @@ func TestRefuseOpen(t *testing.T) {
 	gateway.RefuseOpen(w, errors.New("a\rb"))
 	if w.Code != http.StatusInternalServerError || w.Body.String() != `{"error":"internal","message":"a b","from":"gateway"}` {
 		t.Errorf("%d %s", w.Code, w.Body)
+	}
+	schema, err := contracts.Compile("link-refusal.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	gateway.RefuseOpen(w, errors.New("a\u009bb\x01c\nd\t"+strings.Repeat("x", 9000)))
+	doc, err := contracts.Decode("link-refusal.json", w.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("link-refusal.schema.json refuses %s: %v", w.Body, err)
 	}
 }
