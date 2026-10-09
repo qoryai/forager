@@ -22,15 +22,11 @@ const (
 	maxSecret = 256
 )
 
-// The listener's reports of a connection it refused. Neither names what the
+// RefusedRelay is the listener's report of a connection it refused: one that did not
+// open with the preamble in time, opened with one longer than any secret, or named a
+// secret no live run holds. It is today's session's text, and names nothing the
 // connection sent.
-const (
-	// RefusedPreamble says a connection did not open with the preamble in time, or
-	// opened with one longer than any secret.
-	RefusedPreamble = "a connection to the proxy that did not open with the relay's preamble was refused"
-	// RefusedSecret says a connection opened with a secret no live run holds.
-	RefusedSecret = "a connection to the proxy that did not name a live run's secret was refused"
-)
+const RefusedRelay = "a connection to the proxy that was not the run's relay was refused"
 
 // errSecret refuses a secret [Listener.Register] cannot serve a run by. It never names
 // the secret.
@@ -198,18 +194,18 @@ func (l *Listener) open(c net.Conn) (*Proxy, *bufio.Reader, string) {
 	for {
 		b, err := r.ReadByte()
 		if err != nil {
-			return nil, nil, RefusedPreamble
+			return nil, nil, RefusedRelay
 		}
 		if b == '\n' {
 			break
 		}
 		if len(line) == cap(line)-1 {
-			return nil, nil, RefusedPreamble
+			return nil, nil, RefusedRelay
 		}
 		line = append(line, b)
 	}
 	if len(line) < len(want) || string(line[:len(want)]) != want {
-		return nil, nil, RefusedPreamble
+		return nil, nil, RefusedRelay
 	}
 	secret := line[len(want):]
 	key := sha256.Sum256(secret)
@@ -217,7 +213,7 @@ func (l *Listener) open(c net.Conn) (*Proxy, *bufio.Reader, string) {
 	reg, ok := l.runs[key]
 	l.mu.RUnlock()
 	if !ok || subtle.ConstantTimeCompare(reg.secret, secret) != 1 {
-		return nil, nil, RefusedSecret
+		return nil, nil, RefusedRelay
 	}
 	return reg.p, r, ""
 }

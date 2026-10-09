@@ -382,7 +382,7 @@ func TestWaitingEgressFollowsItsPolicyApplied(t *testing.T) {
 
 // TestWaitingEgressPrecedesTheGatewaysEnd pins the other ends: the gateway's own
 // run.exited follows what still waits, and Close numbers what waits in a run that has
-// no final event, a run.egress before run.started held for it as ever.
+// no final event, one that never started too.
 func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	runID := event.NewRunID()
@@ -408,37 +408,43 @@ func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
 		t.Errorf("the record of a run with no final event: %s", got)
 	}
 
-	var reports []string
-	s = New(Config{Dir: t.TempDir(), Report: func(l string) { reports = append(reports, l) }})
 	runID = event.NewRunID()
 	r, _ = s.Open(runID)
 	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
 	r.Close(context.Background())
-	if _, err := os.Stat(filepath.Join(r.Dir(), sink.EventsFile)); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile)); len(b) != 0 {
-		t.Errorf("the record of a run that never started: %s", b)
-	}
-	if len(reports) != 1 || !strings.Contains(reports[0], "1 connections before the run started") {
-		t.Errorf("reports %q", reports)
+	if got := hostsAndTypes(readRecord(t, r.Dir())); got != "run.egress:one.example" {
+		t.Errorf("the record of a run that never started: %s", got)
 	}
 }
 
-// TestEgressOfARunThatNeverStartedIsReported pins that held egress of a run closed
-// before run.started is not numbered, and is reported.
-func TestEgressOfARunThatNeverStartedIsReported(t *testing.T) {
+// TestEgressOfARunThatNeverStartedIsRecorded pins today's session's record of a run
+// that never starts: each connection is in it, before the run's final event when one
+// comes, else at the close, and nothing is reported.
+func TestEgressOfARunThatNeverStartedIsRecorded(t *testing.T) {
 	var reports []string
 	s := New(Config{Dir: t.TempDir(), Report: func(l string) { reports = append(reports, l) }})
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
 	r.Ping(map[string]any{})
 	r.Emit(event.RunEgress, map[string]any{"host": "one.example"})
+	r.Emit(event.RunEgress, map[string]any{"host": "two.example"})
 	r.Close(context.Background())
-	if rec := readRecord(t, r.Dir()); len(rec) != 1 {
-		t.Errorf("the record: %v", types(rec))
+	rec := readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if got := hostsAndTypes(rec); got != "ping run.egress:one.example run.egress:two.example" {
+		t.Errorf("the record: %s", got)
 	}
-	if len(reports) != 1 || !strings.Contains(reports[0], "1 connections before the run started") {
+	runID = event.NewRunID()
+	r, _ = s.Open(runID)
+	r.Emit(event.RunEgress, map[string]any{"host": "one.example"})
+	r.Accept([]event.Event{sessionEvent(runID, event.RunRefused, map[string]any{"code": "image_unknown"})})
+	r.Close(context.Background())
+	rec = readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if got := hostsAndTypes(rec); got != "run.egress:one.example run.refused" {
+		t.Errorf("the record of a refused run: %s", got)
+	}
+	if len(reports) != 0 {
 		t.Errorf("reports %q", reports)
 	}
 }

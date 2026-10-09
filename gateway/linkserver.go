@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,8 +34,9 @@ type linkListener struct {
 	wg      sync.WaitGroup
 }
 
-func newLinkListener(ln net.Listener, secret string) *linkListener {
-	l := &linkListener{ln: ln, secret: secret, uid: os.Getuid(), conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+// newLinkListener serves the connections of uid's processes on ln.
+func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
+	l := &linkListener{ln: ln, secret: secret, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	l.wg.Add(1)
 	go l.accept()
 	return l

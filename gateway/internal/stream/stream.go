@@ -6,7 +6,9 @@
 // first event. The session's events arrive on the link with their ids and without a
 // sequence, and are numbered in the order they arrive, each id once: a batch the session
 // sends again is not numbered twice. The gateway's own run.egress waits until
-// run.started is numbered, and the run.egress of the tunnels a reload closed waits for
+// run.started is numbered; in a run that never starts it comes before the run's final
+// event, or at its close, since today's session records each connection when it is
+// made and tells nothing of it. The run.egress of the tunnels a reload closed waits for
 // the session's run.policy_applied of the new policy, as today's session records them
 // after it ([Run.EmitAfter]). Every numbered event goes, in sequence order, to the run's
 // record, events.jsonl in the run's record directory as the session's file sink writes
@@ -268,8 +270,10 @@ func (r *Run) Ended() bool {
 // Accept numbers the session's events in the order given, those of one link batch: an
 // id numbered before is dropped, so a batch sent again is numbered once. Every event
 // must be of this run, have an id and not be a ping; otherwise nothing of the batch is
-// numbered. An event new after the run's final event is [ErrEnded], and nothing of the
-// batch is numbered. It returns how many events it numbered.
+// numbered. When the run's final event is numbered already, a batch with an event not
+// numbered before is [ErrEnded], and nothing of it is numbered; within one batch, the
+// events after its final event are not numbered, and the count of them is reported. It
+// returns how many events it numbered.
 func (r *Run) Accept(evs []event.Event) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -317,7 +321,8 @@ func (r *Run) Accept(evs []event.Event) (int, error) {
 
 // Emit numbers one of the gateway's own events: run.egress, or for a run with no
 // session its run.started, run.policy_applied, heartbeats; and run.exited when the run
-// ends at the gateway. A run.egress before run.started waits for it, and follows it.
+// ends at the gateway. A run.egress before run.started waits for it, and follows it;
+// in a run that never starts it comes before the run's end.
 func (r *Run) Emit(typ string, data any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -396,8 +401,9 @@ func (r *Run) make(typ string, data any) *event.Event {
 
 // number gives the event its sequence and writes it everywhere, with the held egress
 // in its place: after run.started and the run.policy_applied right after it; and the
-// waiting events after the event they wait for, or before the final event. Called with
-// the lock held.
+// waiting events after the event they wait for, or before the final event, and in a
+// run that never started what was held before its final event. Called with the lock
+// held.
 func (r *Run) number(ev *event.Event) {
 	if r.release && ev.Type != event.PolicyApplied {
 		r.flushHeld()
@@ -405,6 +411,10 @@ func (r *Run) number(ev *event.Event) {
 	final := ev.Type == event.RunExited || ev.Type == event.RunRefused
 	if final && len(r.waiting) > 0 {
 		r.releaseWaiting(len(r.waiting))
+	}
+	if final {
+		// A run that never started: what was held comes before its end.
+		r.numberHeld()
 	}
 	r.emit.Number(ev)
 	r.write(ev)
@@ -434,6 +444,12 @@ func (r *Run) flushHeld() {
 	if !r.release {
 		return
 	}
+	r.numberHeld()
+}
+
+// numberHeld numbers the held egress, in order, whether or not run.started is. Called
+// with the lock held.
+func (r *Run) numberHeld() {
 	r.release = false
 	held := r.held
 	r.held = nil
@@ -469,8 +485,8 @@ func (r *Run) write(ev *event.Event) {
 // is queued, what it has not taken is spooled under undelivered/, the record is synced
 // and closed and the lock released. The context's values pass to the flush, its
 // cancellation does not, as the session's flush after its runtime exits. The events
-// still waiting for an event of the session's are numbered first. A run.egress still
-// held, of a run that never started, has no place in the stream and is reported.
+// still waiting for an event of the session's are numbered first, and then a
+// run.egress still held, of a run that never started and has no final event.
 // The run is closed to new events at once, while it flushes; Close again waits for the
 // first and returns its result.
 func (r *Run) Close(ctx context.Context) (Result, error) {
@@ -484,11 +500,10 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 		r.releaseWaiting(len(r.waiting))
 	}
 	r.waiting = nil
-	r.flushHeld()
-	if n := len(r.held); n > 0 {
-		r.s.cfg.Report(fmt.Sprintf("run %s: %d connections before the run started are not in its record", r.id, n))
-		r.held = nil
+	if !r.ended {
+		r.numberHeld()
 	}
+	r.held = nil
 	r.closed = true
 	srv, rec := r.server, r.record
 	r.mu.Unlock()

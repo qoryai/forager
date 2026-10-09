@@ -200,9 +200,11 @@ release may change what an existing document does, and says so under Upgrading.
   public key in base64, and every request carries `Authorization: Bearer` and a run
   credential whose `sub` is the run's run key. Answers on the link are unsigned, and
   carry the digest headers of a reload. A coded refusal on the link is
-  `link-refusal.schema.json`, `error`, `names` and `from`, required, `gateway` or
-  `apiary`, the server's refusal passed on with its code and status; every `410` on the
-  link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
+  `link-refusal.schema.json`, `error`, `names`, `from`, required, `gateway` or
+  `apiary`, the server's refusal passed on with its code and status, and `message`, the
+  error's text of a `500` `internal`, up to 8192 characters that may span lines, tab
+  and newline its only control characters, which holds no secret, run credential or
+  image reference; every `410` on the link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
   `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
   `placeholders`, `reserved`, `image` and `applied`, never the proxy secret or the certificate
   authority; on the local link the link secret authorises it. A run opens with a `POST`
@@ -218,16 +220,18 @@ release may change what an existing document does, and says so under Upgrading.
   and `images` the gateway decides the run, and each reload, as the session decides it
   today and in the same order, before it sets anything: the policy in force, what needs
   a wall, the image, `image_unknown`, the credentials and the tools, and
-  `placeholder_conflict` for a placeholder the run passes a value for, each refused
-  with a `403`, the session's code of `refusal.Decides` and `from: gateway`, while the
-  server's refusals pass through with their own status and `from: apiary`; a refused
-  reload leaves the policy in force. A start without a wall whose policy selects what
+  `placeholder_conflict` for a placeholder the run passes a value for. A refused start
+  is a `403` with the session's code of `refusal.Decides` and `from: gateway`, while the
+  server's refusals pass through with their own status and `from: apiary`; a start that
+  fails without a code is a `500` `internal` from `gateway` whose `message`, the
+  error's text, the session returns as its error. A refused reload leaves the policy in
+  force: behind a separate gateway it is answered as a refused start is, and on the
+  local link it stays off the link. A start without a wall whose policy selects what
   needs one is `wall_required`, a `403` from `gateway` and a code of the link alone,
   named `credentials`, `tools`, `paths` or `image=<name>`: the session turns it back into
   today's error and writes no event for it, so it is not in `refusal.Decides` or in
-  `dev.qory.run.refused`'s codes. On one machine the gateway applies a reload itself and
-  reports a failed one with today's text; a failure without a code, other tools, another
-  image, or an image or credentials that need a wall, never reaches the link, whose
+  `dev.qory.run.refused`'s codes. On the local link the gateway applies a reload itself
+  and reports every failed one, with a code or without, with today's text, and the
   reload answers the policy in force with its digest unchanged. The session still checks
   its own image table and runtime before it sends the request, and leaves out of
   `passes` a name outside the variable-name grammar.
@@ -291,7 +295,9 @@ release may change what an existing document does, and says so under Upgrading.
   ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
-  `from`, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
+  `from` or with a control character other than tab and newline in its `message`, and
+  a batch with a
+  `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
   `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
   `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,

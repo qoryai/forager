@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +39,15 @@ func TestLocalNeverPrintsItsSecret(t *testing.T) {
 		outs = append(outs, fmt.Sprint(v), fmt.Sprintln(v))
 	}
 	outs = append(outs, l.String(), l.GoString())
+	for _, v := range []any{l, &l, map[string]any{"local": l}} {
+		for _, marshal := range []func(any) ([]byte, error){json.Marshal, func(v any) ([]byte, error) { return jsonv2.Marshal(v) }} {
+			b, err := marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outs = append(outs, string(b))
+		}
+	}
 	for _, h := range []func(io.Writer) slog.Handler{
 		func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) },
 		func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) },
@@ -56,6 +67,9 @@ func TestLocalNeverPrintsItsSecret(t *testing.T) {
 	}
 	if got, want := fmt.Sprintf("%#v", l), `link.Local{Socket:"/tmp/qory-link-1/sock", Secret:"[redacted]", Proxy:"127.0.0.1:41000", Files:[]string{"/home/user/.config/qory", "/tmp/qory-tool-*"}, Reserved:[]string{"QORY_RUN_SOCKET"}}`; got != want {
 		t.Errorf("%%#v:\n got %s\nwant %s", got, want)
+	}
+	if b, _ := json.Marshal(l); !strings.Contains(string(b), `"Secret":"[redacted]"`) || !strings.Contains(string(b), `"Socket":"/tmp/qory-link-1/sock"`) {
+		t.Errorf("JSON: %s", b)
 	}
 	if got := fmt.Sprintf("%+v", link.Local{}); strings.Contains(got, "redacted") {
 		t.Errorf("an empty secret is shown as redacted: %s", got)
