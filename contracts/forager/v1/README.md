@@ -890,6 +890,23 @@ compose keeps it out of git:
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
 
+The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
+server, After Forager stops unexpectedly); the session writes `session.jsonl`, its own
+record, numbered by its own sequence (§The gateway's link), and `output.log`. On one
+machine they share a run directory when the gateway writes its record in the session's
+runs directory. Behind a separate gateway each machine has a run directory of its own. The gateway's machine holds `events.jsonl`, `delivered.log`
+and `undelivered/` toward the server. The session's machine holds `session.jsonl`,
+`output.log` and `settings.json`, and its delivery state toward the gateway:
+
+- `delivered.log`: what the gateway accepted of `session.jsonl`, a line per batch as the
+  gateway's answer comes, the delivery id and the session's sequence of each event in
+  it, and the one word `stopped` when an answer of the gateway's ended the run. The
+  session creates it once the gateway opened the run.
+- `undelivered/`: the session's batches the gateway has not accepted, when there are
+  any.
+
+Neither holds the run credential.
+
 `fixtures/run/<id>/` are such directories, recorded. The control plane's CI replays them.
 
 ## The server

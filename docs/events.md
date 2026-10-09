@@ -26,9 +26,9 @@ The run is written to its run directory, `<id>/` in the runs directory the calle
 passes. `qory` keeps them under its state directory and prints the path:
 
 - `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
-  writes it, with the run's delivery state beside it, `delivered.log` and
-  `undelivered/`: every event the session posts on the gateway's link, and the
-  gateway's own.
+  writes it, with the run's delivery state toward the server beside it,
+  `delivered.log` and `undelivered/`: every event the session posts on the gateway's
+  link, and the gateway's own.
 - `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
   session's own sequence, which is not the stream's: every event the session posts,
   and the few it records alone (below).
@@ -37,6 +37,18 @@ passes. `qory` keeps them under its state directory and prints the path:
 The gateway's record and the session's are in the same directory when the caller
 points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
 Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>/`.
+
+Behind a separate gateway the two records are on two machines. The gateway's machine
+holds `events.jsonl`, with its `delivered.log` and `undelivered/` toward the server. The
+session's machine holds `session.jsonl` and `output.log`, and the session's delivery
+state toward the gateway beside them:
+
+- `delivered.log`: what the gateway accepted of `session.jsonl`, a line per batch, by
+  the session's sequence, and `stopped` when the gateway ended the run.
+- `undelivered/`: the session's batches the gateway did not accept, when there are any.
+
+Neither holds the run credential. `session.Resend` sends the gateway what they say it
+still lacks ([sending the session's record again](go.md#sending-the-sessions-record-again)).
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
 

@@ -364,6 +364,16 @@ the run normally ends with its runtime's own exit; the gateway can also end it, 
 `credential_expired`, `run_ended_at_issuer`, or `batch_refused` after it refused a batch
 of the session's, and the session then records that code.
 
+Behind a separate gateway the session's machine keeps, beside the session's record,
+what the gateway accepted of it, `delivered.log`, and the batches it did not,
+`undelivered/`; neither holds the run credential. Sending the session's record again,
+`session.Resend`, presents the run credential as the run did and posts what the gateway
+did not accept. A run the gateway has ended answers with its `410`, and nothing more is
+sent. An expired or refused run credential gets `401` `run_credential_refused`, and one
+that differs from the run's the `403` of its code; the events stay in the session's run
+directory. After a gateway restart the session's undelivered events get the `401` and
+stay in that directory, and the gateway's own resend completes the run `gateway_lost`.
+
 qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
 leaves it out too, whatever brought it, a variable of the run's among them. Any other
 variable an issuer itself sets for the run is the operator's to deny through the node's

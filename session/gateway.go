@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"slices"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/server"
 )
 
 // Gateway is the gateway a run speaks to: the one that holds the run's proxy, its
@@ -85,6 +87,15 @@ type RemoteGateway struct {
 }
 
 func (RemoteGateway) gateway() {}
+
+// link is the client of the gateway's link a run and a resend speak to it through:
+// TLS 1.3 to its one address, verified as the gateway says, and the run credential on
+// every request, set by the link alone. version is Forager's, in the User-Agent; digests
+// is as [server.NewRemoteLink] takes it.
+func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*server.Link, error) {
+	return server.NewRemoteLink(g.URL, server.RemoteTLS{CAFile: g.CAFile, CertificateSHA256: g.CertificateSHA256},
+		g.Credential, accesskey.UserAgent(version), digests)
+}
 
 // String names the gateway by its URL's origin, without user information, a path, a
 // query or a fragment, its CAFile and its pin; never the run credential.

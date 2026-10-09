@@ -185,6 +185,11 @@ res, err := session.Run(ctx, session.Spec{
 - No access key is involved, and the gateway holds no files on the session's machine, so
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.
+- The run directory on the session's machine holds the session's record,
+  `session.jsonl` and `output.log`, and what the gateway accepted of it, `delivered.log`,
+  and the batches it did not, `undelivered/`. The gateway's record, `events.jsonl`, with
+  its own delivery state toward the server, is on the gateway's machine
+  ([where the record is](events.md#where-the-record-is)).
 - The discovery must list URLs of the gateway's origin alone, and name the gateway's one
   address, the URL's host and port, as its proxy; the loopback check of the local link
   does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
@@ -204,6 +209,44 @@ res, err := session.Run(ctx, session.Spec{
   and print it into the run's output. It is the run's alone, refused once the run ends,
   and never the run credential. Behind a wall, the proxy secret stays in the session's
   memory: see [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway).
+
+### Sending the session's record again
+
+`session.Resend` sends a separate gateway what the session's run directory says it did
+not accept: after a session that died, or a gateway that was out of reach. It reaches
+the gateway as the run did, with the same `session.RemoteGateway`:
+
+```go
+res, err := session.Resend(ctx, session.ResendSpec{
+	Gateway:        gw, // the RemoteGateway the run's Spec had
+	Dir:            filepath.Join(runsDir, runID),
+	ForagerVersion: version,
+	Report:         func(line string) { fmt.Fprintln(os.Stderr, line) },
+})
+```
+
+- A record its session still holds is `session.ErrRunning`; a directory with no
+  `session.jsonl` is `fs.ErrNotExist`; a directory with the run's stream, `events.jsonl`,
+  is a gateway's record, which `gateway.Resend` sends.
+- Every event of `session.jsonl` the link takes that `delivered.log` does not name is
+  posted to the discovery's events URL, in order, in the link's batches, until the
+  gateway accepts it or `ctx` ends; what it still has not accepted is under
+  `undelivered/` again, unless the gateway ended the run. The events the session records in its own record alone are not
+  sent. A record that owes nothing, and one of a run that never opened at the gateway,
+  which has no `delivered.log`, are sent nothing, with no request.
+- `ResendResult` has `Sent`, the events the gateway accepted now, and `Undelivered`,
+  those it still has not. `RunClosed` says the gateway had ended the run: its `410`,
+  with `ClosedBy` and `Reason` as `Result` has them; nothing more is sent, and the
+  events stay in the run directory.
+- The refusals of the run credential are a `*session.Refusal` from `gateway`, with the
+  events left under `undelivered/`: `run_credential_refused`, the `401`, which an
+  expired run credential gets at the discovery; `target_differs_from_credential` and
+  `differs_from_credential`, the `403` of a run credential that differs from the run's.
+- `session.jsonl` is never completed: the gateway writes the end of a run whose session
+  was lost.
+- After a gateway restarts, it holds no run of the run credential: the session's
+  undelivered events get the `401`, and stay in the run directory, and the gateway's own
+  resend, `gateway.Resend`, completes the run `gateway_lost`.
 
 ## The runtime
 
@@ -284,7 +327,8 @@ A program that needs code of its own implements the interface.
   [the record](events.md#where-the-record-is).
 - `ExitCode`, `Signal` and `State`, the runtime's; `TimedOut` when it was stopped at
   `Timeout`.
-- `Undelivered`, how many of the session's events the gateway did not accept.
+- `Undelivered`, how many of the session's events the gateway did not accept; behind a
+  separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
   server, or `gateway`, and `ClosedReason` the code of the gateway's `410`, unchanged:
   `run_closed`, `credential_expired` or `run_ended_at_issuer`; from `gateway`,
@@ -332,6 +376,7 @@ with `e2e` to check them together.
 - `session/`: the session.
   - `session.Run` takes a launch spec, with the gateway and the wall as values, and
     returns the exit status. It speaks to the gateway over its local link alone.
+  - `session.Resend` sends a separate gateway what a run's session did not deliver.
   - `session.Forward` is the hook forwarder behind it.
   - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
     session and the program it runs: how a launch is prepared, what the program's records

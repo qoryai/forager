@@ -402,6 +402,10 @@ release may change what an existing document does, and says so under Upgrading.
   must list the gateway's origin alone and name its one address as the proxy.
   `Link.DialProxy` opens a connection to that address over TLS with the same trust, and
   `Link.ProxyAddress` names it.
+- `server.Delivery` has `Refusal`: on the link, a coded answer other than a `2xx` as the
+  `*accesskey.Refusal` it is, with its code, status, names, who refused and its
+  message. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
+  and posts it without its sequence.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -753,13 +757,24 @@ release may change what an existing document does, and says so under Upgrading.
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
   `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
-  `(*Policy).Under`, `Resend`, `ResendSpec` and `ResendResult`: the policy, the credentials, the tools and the server are
+  `(*Policy).Under`: the policy, the credentials, the tools and the server are
   `gateway.Config`'s, the stream that follows every event is `gateway.Config.Events`,
   the heartbeat interval is `gateway.Config.Heartbeat`, which the link's discovery
-  announces, and a resend is the gateway's. What the entries below say of these
-  members holds of the gateway's.
+  announces, and the resend of the run's stream is the gateway's, `gateway.Resend`. What
+  the entries below say of these members holds of the gateway's.
+- `session.Resend` sends a run's record again to the separate gateway the run spoke to
+  (Added, below). `ResendSpec` has `Gateway`, the run's `session.RemoteGateway`, `Dir`,
+  `ForagerVersion` and `Report`, and no `Server`, `Wall` or `RunnerVersion`: a record on
+  one machine is `gateway.Resend`'s, and what a wall left is the caller's to remove,
+  `(*wall.Docker).Reap`. `Resend` returns a `ResendResult` value with `Sent`,
+  `Undelivered`, `RunClosed`, `ClosedBy` and `Reason`, and no `RunID`, `Closed` or
+  `Reaped`: the session completes no record.
 - The session's own record is `session.jsonl` and `output.log` in the run directory;
-  the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state.
+  the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
+  toward the server. Behind a separate gateway, the session's run directory on its own
+  machine also holds `delivered.log`, what the gateway accepted of `session.jsonl` by the
+  session's sequence, and `stopped` when the gateway ended the run, and `undelivered/`,
+  the session's batches the gateway did not accept; neither holds the run credential.
   `Result.Undelivered` counts the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
   `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's
@@ -815,6 +830,22 @@ release may change what an existing document does, and says so under Upgrading.
   behind a wall, the relay opens every connection with a token of the run's forwarder
   alone, `wall.Launch.ProxyToken`, which the forwarder checks and replaces with the
   run's proxy secret inside TLS, so the proxy secret is in no file of the wall's.
+- `session.Resend(ctx, session.ResendSpec)` sends a separate gateway what a run's session
+  did not deliver to it, from the run directory on the session's machine, through the
+  run's `RemoteGateway` with its run credential. Every event of `session.jsonl` the link
+  takes that `delivered.log` does not name is posted in order, in the link's batches,
+  until the gateway accepts it or the context ends, and what it does not accept is under
+  `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
+  sent. A record that owes nothing, and one of a run that never opened at the gateway,
+  are sent nothing, with no request. A run the gateway has ended answers with its `410`:
+  `RunClosed`, with `ClosedBy` and `Reason`, and nothing more is sent. The gateway's
+  `401` `run_credential_refused`, which an expired run credential gets at the discovery,
+  and its `403` `target_differs_from_credential` and `differs_from_credential` are a
+  `*session.Refusal` from `gateway`, the events left under `undelivered/`. A record its
+  session holds is `session.ErrRunning`, and a directory with `events.jsonl` is a
+  gateway's record. After a gateway restart, the session's undelivered events get the
+  `401` and stay in the run directory, and the gateway's own resend completes the run
+  `gateway_lost`.
 - `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
   the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
   `gateway`, and with what code, `run_closed`, `credential_expired` or

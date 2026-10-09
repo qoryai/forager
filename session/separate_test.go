@@ -126,6 +126,13 @@ type separate struct {
 // that allows api.example alone.
 func startSeparate(t *testing.T, issuers ...func(*runcredential.Issuer)) *separate {
 	t.Helper()
+	return startSeparateBeating(t, time.Second, issuers...)
+}
+
+// startSeparateBeating is startSeparate with the heartbeat interval its discovery
+// announces: the gateway ends a run whose session sends nothing for three.
+func startSeparateBeating(t *testing.T, heartbeat time.Duration, issuers ...func(*runcredential.Issuer)) *separate {
+	t.Helper()
 	certDir := t.TempDir()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "separate test authority"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
@@ -163,7 +170,7 @@ func startSeparate(t *testing.T, issuers ...func(*runcredential.Issuer)) *separa
 		f(&runCredentials[0])
 	}
 	g, err := gateway.Start(context.Background(), gateway.Config{
-		Version: "test", Heartbeat: time.Second, Dir: s.dir,
+		Version: "test", Heartbeat: heartbeat, Dir: s.dir,
 		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, RunCredentials: runCredentials,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}},
 		Report: func(l string) {

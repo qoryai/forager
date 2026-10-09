@@ -411,8 +411,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if remote != nil {
 		// A separate gateway: TLS 1.3 to its one address, and the run credential on every
 		// request.
-		k, err = server.NewRemoteLink(remote.URL, server.RemoteTLS{CAFile: remote.CAFile, CertificateSHA256: remote.CertificateSHA256},
-			remote.Credential, accesskey.UserAgent(spec.ForagerVersion), digests)
+		k, err = remote.link(spec.ForagerVersion, digests)
 	} else {
 		k, err = server.NewLocalLink(local.local, accesskey.UserAgent(spec.ForagerVersion), digests)
 	}
@@ -524,8 +523,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	reload := newReloader(runCtx, k, disc.Run.URL, runID, lastAnswered(), lastAnswered, spec.Report)
 	defer reload.stop()
+	// Behind a separate gateway the run directory keeps what the gateway accepted and
+	// what it did not, delivered.log and undelivered/, so a resend knows what it still
+	// owes; on one machine the gateway keeps the run's delivery state itself.
+	spool := ""
+	if remote != nil {
+		spool = dir
+	}
 	posts := sink.New(sink.Config{
-		To: k, Target: sink.Target{URL: disc.Events.URL, Types: disc.Events.Types},
+		To: k, Target: sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}, Spool: spool,
 		Report: spec.Report, OnDigests: reload.digests, OnEnded: end,
 		Wait: sink.LinkBatchWait, Link: true,
 	})
