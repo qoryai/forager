@@ -413,7 +413,8 @@ holds the imports to these rules:
 - The core imports no part.
 - `gateway` and `wall` import the core.
 - `session` imports the core and `wall` for the interface, and no gateway package: it
-  speaks to the gateway over its local link alone. Its tests import
+  speaks to the gateway over the gateway's link alone, the local link on one machine or
+  a separate gateway's one address over TLS. Its tests import
   `internal/linktest`, a fake gateway's link, and package `gateway`, to run a session
   against a real one, using only its surface.
 - Package `gateway` exports its surface alone. A new export fails the test until its
