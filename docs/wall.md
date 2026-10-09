@@ -226,6 +226,9 @@ itself, are the run's own, and lie in Forager's files. Forager's files are:
   machine makes its record socket, `qory-run-*`, and where the Docker wall writes a
   run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
   them.
+- The private directories in the system's temporary directory where every gateway on the
+  machine makes its link's socket, `qory-link-*`
+  (see [the gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
 - A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.

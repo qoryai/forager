@@ -6,7 +6,9 @@
 // names alone: a variable's name, a tool's, an image's, never a value.
 //
 // It also holds the codes a gateway that verifies a run credential decides, which
-// Forager does not: a session reads them from the gateway's signed answer.
+// Forager does not: a session reads them from the gateway's answer on the link,
+// unsigned and authenticated by the transport, as it reads the server's refusal from
+// the server's signed answer.
 package refusal
 
 import (

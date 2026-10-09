@@ -30,7 +30,6 @@ release may change what an existing document does, and says so under Upgrading.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
-
 - `dev.qory.run.policy_applied` reports `variables`, one entry per name, sorted: `name`,
   `from`, the source whose value the run applies, `fixed`, `apiary`, `run`, `machine`,
   `harness` or `shell`, and `lost`, each value left out with its source and why,
@@ -128,7 +127,9 @@ release may change what an existing document does, and says so under Upgrading.
   names. The names of `target_differs_from_credential` and `differs_from_credential` are
   each member and the run credential's value, `labels.<key>=<value>` or
   `about.details.<key>=<value>`, the one value a refusal's names carry.
-  `events/run.refused.schema.json` lists the four codes and says so of `names`;
+  `events/run.refused.schema.json` lists the four codes and says so of `names`, and
+  that the session records a gateway's refusal it received, in its record and on the
+  link, and the gateway delivers the session's events;
   `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
   `refusal.GatewayDecides` reports a gateway's code. `fixtures/batch/` has
@@ -202,7 +203,21 @@ release may change what an existing document does, and says so under Upgrading.
   `certificate_authority`. Discovery on the link is `link-discovery.schema.json`, with
   `events.interval_seconds`, the gateway's heartbeat interval, and no `node_id`,
   `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`, events without
-  `sequence` and never a ping, which the gateway numbers and sends itself. A session's
+  `sequence`, which the gateway numbers. A session writes no event the gateway or the
+  run credential decides: the gateway refuses a batch, `400` `invalid_request`, nothing
+  of it numbered, with an event of another run, a `dev.qory.ping` or a
+  `dev.qory.run.egress`, which the gateway writes, a `dev.qory.run.started` not opened
+  by the session or whose `labels` or `about.details` differ from what the gateway
+  holds or the run credential decides, a `dev.qory.run.exited` whose `reason` is
+  `gateway_lost`, `session_lost` or `quiet`, or one the gateway did not end the run
+  with, or a `dev.qory.run.policy_applied` whose `digest` is not that of the policy in
+  force the gateway gave; the schema states the types, `opened_by` and the three
+  reasons. `dev.qory.run.policy_applied` is the session's, from the run answer and a
+  reload answer whose digest changed; the gateway merges only its own
+  `dev.qory.run.egress` into a session's run, and writes `dev.qory.run.policy_applied`
+  for a run with no session. A walled agent never reaches the local link's socket, and
+  an unwalled one never holds the link secret, which `qory` hands the session in
+  memory. A session's
   heartbeats are its run's, and a session silent for 3 × the interval ends the run,
   `session_lost`. A run that ends at the gateway is a `410` to the session's next
   request, its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the
@@ -210,8 +225,10 @@ release may change what an existing document does, and says so under Upgrading.
   and the run's proxy secret, over TLS 1.3 with the link's trust between two machines,
   and without a wall the agent's proxy URL carries the secret as its password.
   `fixtures/link/` holds the valid documents and `fixtures/invalid/link-*` the refused
-  ones. Package `link` has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`,
-  `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
+  ones, a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened
+  and a `dev.qory.run.exited` with each of the three reasons among them. Package `link`
+  has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`, `LinkDirMode`, `LinkSocketMode`
+  and `BearerScheme`.
 
 #### Changed
 
@@ -301,17 +318,21 @@ release may change what an existing document does, and says so under Upgrading.
   `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
   version of what opened the run, and `host` is the agent's machine's. A gateway-opened
   run's `labels`, `run_key` among them, and `about.details` come from the run
-  credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, `quiet`,
-  `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
-  `timeout`, `run_closed` and `gateway_lost`; `quiet_seconds`, the quiet period the
-  gateway applied, is present with `quiet` alone. `state` and `exit_code` are optional:
-  a session's run contains both, `failed` and `-1` with `gateway_lost` and
-  `session_lost`, and a run a gateway opened neither. The contract no longer says the
+  credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost` and `quiet`,
+  which the gateway writes, and `credential_expired` and `run_ended_at_issuer`, the
+  gateway's for a run with no session and the session's after the link ends its run
+  with that code, beside `timeout`, `run_closed` and `gateway_lost`; `quiet_seconds`,
+  the quiet period the gateway applied, is present with `quiet` alone. `state` and
+  `exit_code` are optional: a session's run contains both, `failed` and `-1` with
+  `gateway_lost` and `session_lost`, and a run a gateway opened neither, `gateway_lost`
+  included; the schema fixes them to `failed` and `-1` with those two reasons when they
+  are present, and requires neither. The contract no longer says the
   state is `failed` with each reason; a receiver maps each reason to a state of its own.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
   the fixtures contains `opened_by` `session`, and the four batches under
   `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
-  gateway opened, which ends `quiet`, `fixtures/batch/` its first and last batch, and
+  gateway opened, which ends `quiet`, `fixtures/batch/` its first and last batch and
+  the `dev.qory.run.exited` of such a run that ends `gateway_lost`, and
   `fixtures/invalid/` seven refused `run.started` and `run.exited` events.
 
 ### Gateway
