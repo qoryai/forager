@@ -278,7 +278,11 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 			code: "credential_expired", from: "gateway"},
 		"a 410 to a reload": {reload: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},
 			code: "run_ended_at_issuer", from: "gateway"},
-		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "run_closed", from: "gateway"},
+		"the gateway's 410 to a lost session": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
+			code: "session_lost", from: "gateway"},
+		"the gateway's 410 after a refused batch": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
+			code: "batch_refused", from: "gateway"},
+		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "batch_refused", from: "gateway"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g := specGateway(t)

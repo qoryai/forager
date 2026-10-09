@@ -349,8 +349,8 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 }
 
 // TestA410OnTheLinkEndsTheRun pins the end of a run at the gateway: a 410 on any
-// request carries its code, run_closed, credential_expired or run_ended_at_issuer, and
-// run_closed for another code or none, and who ended it, apiary when the body says so
+// request carries its code, run_closed, credential_expired, run_ended_at_issuer,
+// session_lost or batch_refused, and run_closed for another code or none, and who ended it, apiary when the body says so
 // and the gateway otherwise; it hands on no digests; and a batch's 410 ends the run
 // with the code.
 func TestA410OnTheLinkEndsTheRun(t *testing.T) {
@@ -359,6 +359,8 @@ func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 		`{"error":"run_closed","from":"gateway"}`:          {"run_closed", accesskey.FromGateway},
 		`{"error":"credential_expired","from":"gateway"}`:  {"credential_expired", accesskey.FromGateway},
 		`{"error":"run_ended_at_issuer","from":"gateway"}`: {"run_ended_at_issuer", accesskey.FromGateway},
+		`{"error":"session_lost","from":"gateway"}`:        {"session_lost", accesskey.FromGateway},
+		`{"error":"batch_refused","from":"gateway"}`:       {"batch_refused", accesskey.FromGateway},
 		`{"error":"something_else"}`:                       {"run_closed", accesskey.FromGateway},
 		``:                                                 {"run_closed", accesskey.FromGateway},
 	} {
@@ -388,7 +390,7 @@ func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 }
 
 // TestABatchTheGatewayRefusesEndsTheRun pins a 400 invalid_request to a batch: the
-// gateway ended the run, so the batch's answer ends it with run_closed, from the
+// gateway ended the run, so the batch's answer ends it with batch_refused, from the
 // gateway; another refusal of a batch, or a status with no code, is retried.
 func TestABatchTheGatewayRefusesEndsTheRun(t *testing.T) {
 	for _, c := range []struct {
@@ -396,7 +398,7 @@ func TestABatchTheGatewayRefusesEndsTheRun(t *testing.T) {
 		body   string
 		end    string
 	}{
-		{400, `{"error":"invalid_request","names":["subject"]}`, "run_closed"},
+		{400, `{"error":"invalid_request","names":["subject"]}`, "batch_refused"},
 		{400, `{"error":"something_else"}`, ""},
 		{400, ``, ""},
 		{503, `{"error":"invalid_request"}`, ""},

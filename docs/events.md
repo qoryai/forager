@@ -72,9 +72,9 @@ record again writes `gateway_lost`. When the gateway or the server ends a sessio
 run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
 request with a `410` and a code. The session records its own `dev.qory.run.exited` in
 `session.jsonl` alone, with the 410's code as its reason, and posts nothing more:
-`credential_expired`, `run_ended_at_issuer` or `run_closed` as the gateway ended the
-run, and `run_closed` after `session_lost`, the session silent or a batch of its
-refused. A refusal of the run request with a code other than `wall_required` is
+`credential_expired`, `run_ended_at_issuer`, `run_closed` or `session_lost` as the
+gateway ended the run, and `batch_refused` when the gateway refused a batch of its,
+which the gateway's record says as `session_lost`. A refusal of the run request with a code other than `wall_required` is
 recorded the same way: the session records `dev.qory.run.refused` in its own record
 alone, since the gateway opened no run. A run the gateway could not open for a reason
 without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the

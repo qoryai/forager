@@ -450,18 +450,18 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		if d := h.post(started(a.RunID, labels), applied(a.RunID, a.Applied)); !d.Accepted() {
 			t.Fatalf("%s: the first batch: %+v", name, d)
 		}
-		if d := h.post(batch(a.RunID, a)...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(batch(a.RunID, a)...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: %+v", name, d)
 		}
-		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.Code != "batch_refused" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: after the refusal: %+v", name, d)
 		}
 		b, _ := json.Marshal([]map[string]any{heartbeat(a.RunID)})
-		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["message"] != "the gateway refused the run: run_closed" {
+		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "batch_refused" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: batch_refused" {
 			t.Errorf("%s: the 410's message: %d %v", name, status, got)
 		}
 		var r *accesskey.Refusal
-		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "run_closed" || r.From != "gateway" {
+		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "batch_refused" || r.From != "gateway" {
 			t.Errorf("%s: a reload after the refusal: %v", name, err)
 		}
 	}
@@ -507,10 +507,10 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+		if d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: %+v", name, d)
 		}
-		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.Code != "batch_refused" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: after the refusal: %+v", name, d)
 		}
 		if !first {
@@ -522,10 +522,10 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 	maps.Copy(runs, rawRuns)
 	// A run.started whose labels are not the run's, before any.
 	a := h.open(server.LinkRunRequest{Labels: labels})
-	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "run_closed" {
+	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("other labels: %+v", d)
 	}
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "run_closed" {
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "batch_refused" {
 		t.Errorf("delivery %+v", d)
 	}
 	for name, runID := range runs {
@@ -560,11 +560,15 @@ func TestASessionThatSendsNothingIsLost(t *testing.T) {
 			t.Fatalf("a run that keeps asking: %+v", d)
 		}
 	}
-	if d := h.post(heartbeat(lost.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+	if d := h.post(heartbeat(lost.RunID)); d.Status != http.StatusGone || d.Code != "session_lost" || d.End != "session_lost" || d.From != "gateway" {
 		t.Errorf("a lost run: %+v", d)
 	}
+	b, _ := json.Marshal([]map[string]any{heartbeat(lost.RunID)})
+	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: session_lost" {
+		t.Errorf("a lost run's 410: %d %v", status, got)
+	}
 	h.post(exited(kept.RunID))
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" {
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "session_lost" {
 		t.Errorf("delivery %+v", d)
 	}
 	lines := h.record(lost.RunID)

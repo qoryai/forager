@@ -142,7 +142,9 @@ type Delivery struct {
 	Undelivered int
 	// RunClosed says the run ended at the gateway before its session ended it: ClosedBy
 	// says who, "apiary" when the server closed it with a signed 410, "gateway" when the
-	// gateway ended it, and Reason the code, run_closed.
+	// gateway ended it, and Reason the code of the 410 the session's later requests get:
+	// run_closed from apiary; from the gateway, session_lost when it heard nothing from
+	// the session for 3 heartbeat intervals and batch_refused when it refused a batch.
 	RunClosed bool
 	ClosedBy  string
 	Reason    string

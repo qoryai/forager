@@ -49,7 +49,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	}{
 		{"events/run.exited.schema.json", "reason", []string{event.ReasonTimeout, event.ReasonRunClosed,
 			event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet,
-			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer}},
+			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonBatchRefused}},
 		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
 	} {
 		doc, err := contracts.Document(c.schema)

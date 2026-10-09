@@ -90,9 +90,14 @@ type ending struct {
 	closed bool
 }
 
-// sessionLost ends a run whose session the gateway no longer hears or no longer
-// accepts.
-var sessionLost = ending{reason: event.ReasonSessionLost, code: accesskey.CodeRunClosed, from: accesskey.FromGateway, closed: true}
+// sessionLost ends a run whose session the gateway no longer hears: its later requests
+// are a 410 session_lost.
+var sessionLost = ending{reason: event.ReasonSessionLost, code: event.ReasonSessionLost, from: accesskey.FromGateway, closed: true}
+
+// batchRefused ends a run whose session's batch the gateway refused: its record says
+// session_lost, as for a session it no longer hears, and its later requests are a 410
+// batch_refused.
+var batchRefused = ending{reason: event.ReasonSessionLost, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
 
 // serverClosed ends a run the server closed.
 var serverClosedRun = ending{reason: event.ReasonRunClosed, code: accesskey.CodeRunClosed, from: accesskey.FromApiary, closed: true}
