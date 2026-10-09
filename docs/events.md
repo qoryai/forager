@@ -29,8 +29,9 @@ passes. `qory` keeps them under its state directory and prints the path:
   writes it, with the run's delivery state beside it, `delivered.log` and
   `undelivered/`: every event the session posts on the gateway's link, and the
   gateway's own.
-- `session.jsonl`: the session's own record, one CloudEvent per line, unnumbered: every
-  event the session posts, and the few it records alone (below).
+- `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
+  session's own sequence, which is not the stream's: every event the session posts,
+  and the few it records alone (below).
 - `output.log`: the session's bytes.
 
 The gateway's record and the session's are in the same directory when the caller
@@ -68,10 +69,16 @@ When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says
 session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
 `run_ended_at_issuer`; `run_closed` when the server closes the run; and sending a
 record again writes `gateway_lost`. When the gateway or the server ends a session's
-run, the gateway writes the run's `dev.qory.run.exited`, and the session records its
-own with the same reason in `session.jsonl` alone, and posts nothing more. So does a
-refusal of the run request with a code other than `wall_required`: the session records `dev.qory.run.refused` in
-its own record alone, since the gateway opened no run. The contract describes each.
+run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
+request with a `410` and a code. The session records its own `dev.qory.run.exited` in
+`session.jsonl` alone, with the 410's code as its reason, and posts nothing more:
+`credential_expired`, `run_ended_at_issuer` or `run_closed` as the gateway ended the
+run, and `run_closed` after `session_lost`, the session silent or a batch of its
+refused. A refusal of the run request with a code other than `wall_required` is
+recorded the same way: the session records `dev.qory.run.refused` in its own record
+alone, since the gateway opened no run. A run the gateway could not open for a reason
+without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the
+gateway's message says. The contract describes each.
 
 ## The session's events
 

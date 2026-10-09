@@ -186,11 +186,17 @@ func foragerFiles(spec Spec) []foragerFile {
 		out = append(out, foragerFile{p, "one of Forager's files"})
 	}
 	// The gateway's own files, which it hands the session with its link, each with what
-	// it is: the directories of its credentials' and tools' programs, its credentials'
-	// files, the pattern of its tools' socket directories, its own directories and where
-	// the runs' records are. They come in the order they were checked in before the
-	// gateway was apart from the session, so a mount refused today says what it said.
+	// it is: first the directories of its credentials' and tools' programs, its
+	// credentials' files and the pattern of its tools' socket directories, in the order
+	// they were checked in before the gateway was apart from the session; the
+	// directories it keeps come with the run directories, below. So a mount refused
+	// before says what it said.
+	var kept []foragerFile
 	for _, f := range spec.Gateway.files() {
+		if f.Kept {
+			kept = append(kept, foragerFile{f.Path, f.What})
+			continue
+		}
 		out = append(out, foragerFile{f.Path, f.What})
 	}
 	// The private directory of a tool's socket is made when the tool starts, in the
@@ -213,6 +219,7 @@ func foragerFiles(spec Spec) []foragerFile {
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
+	out = append(out, kept...)
 	out = append(out, foragerFile{spec.RunsDir, "where the run directories are kept"})
 	if dir, err := walledDir(); err == nil {
 		out = append(out, foragerFile{dir, "where Forager lists the walled runs still going"})

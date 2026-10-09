@@ -561,8 +561,8 @@ release may change what an existing document does, and says so under Upgrading.
   one is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
-  `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`, `Under` and
-  `Resend`: the policy, the credentials, the tools and the server are
+  `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
+  `(*Policy).Under`, `Resend`, `ResendSpec` and `ResendResult`: the policy, the credentials, the tools and the server are
   `gateway.Config`'s, the stream that follows every event is `gateway.Config.Events`,
   the heartbeat interval is `gateway.Config.Heartbeat`, which the link's discovery
   announces, and a resend is the gateway's. What the entries below say of these

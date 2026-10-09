@@ -45,6 +45,11 @@ type Local struct {
 type File struct {
 	Path string
 	What string
+	// Kept says the file is one of the gateway's own directories, where it keeps its link
+	// or the runs' records, and not a file of the machine's credentials or tools: a
+	// session checks it with the run directories, after its own files and the wall's, so
+	// a mount that holds one of those as well is refused for that one, as it always was.
+	Kept bool
 }
 
 // redacted is what Local's Secret is shown as when it is set.

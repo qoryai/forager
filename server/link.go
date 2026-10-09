@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -393,7 +394,7 @@ func (k *Link) onLink(what, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" || u.User != nil || u.Scheme+"://"+u.Host != k.origin ||
 		!strings.HasPrefix(u.Path, "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return fmt.Errorf("%s is not %s and a path, which every URL of the link is", what, k.origin)
+		return fmt.Errorf("%s is not a path on the gateway's link, which every URL of the link is", what)
 	}
 	return nil
 }
@@ -425,6 +426,12 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, max int,
 	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
 	resp, err := k.http.Do(req)
 	if err != nil {
+		// The transport's error names the request by its URL, which on the local link is
+		// no place a user knows: the error alone, the caller names the request.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, ue.Err
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -473,6 +480,7 @@ func (a *linkAnswer) from() string {
 func (a *linkAnswer) refusal(what string) error {
 	var doc LinkRefusal
 	jsonv2.Unmarshal(a.body, &doc)
+	doc.Message = cleanMessage(doc.Message)
 	if a.status == http.StatusGone {
 		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from(), Text: doc.Message}
 	}
@@ -484,6 +492,26 @@ func (a *linkAnswer) refusal(what string) error {
 		return r
 	}
 	return &StatusError{What: what, Status: a.status, Message: doc.Message}
+}
+
+// MaxMessage is the most characters of a refusal's message the client keeps.
+const MaxMessage = 8192
+
+// cleanMessage is a refusal's message as the client hands it on: every control
+// character, C0, DEL and C1, but a tab and a newline, a space, and at most
+// [MaxMessage] characters, so a message prints as the line its user is told and
+// nothing more.
+func cleanMessage(text string) string {
+	out := []rune(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' {
+			return ' '
+		}
+		return r
+	}, text))
+	if len(out) > MaxMessage {
+		out = out[:MaxMessage]
+	}
+	return string(out)
 }
 
 // CodeInternal is the code of a gateway's 500 to a run it could not open for a reason
@@ -527,16 +555,25 @@ func (k *Link) hand(a *linkAnswer) {
 func (k *Link) fetch(ctx context.Context, what, method, u string, body []byte, set func(http.Header), schemaName string, out any) error {
 	a, err := k.send(ctx, method, u, body, MaxDocument, set)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", what, u, err)
+		return fmt.Errorf("%s %s: %w", what, k.at(u), err)
 	}
 	k.hand(a)
 	if a.status != http.StatusOK {
-		return a.refusal(what + " " + u)
+		return a.refusal(what + " " + k.at(u))
 	}
 	if err := readLinkDocument(schemaName, a.body, out); err != nil {
-		return &DocumentError{what, u, err}
+		return &DocumentError{what, k.at(u), err}
 	}
 	return nil
+}
+
+// at is where a request of the link goes, as a user is told it: on the local link "at
+// the gateway", never its URL, which names no place the user knows; else the URL.
+func (k *Link) at(u string) string {
+	if k.origin == LocalOrigin {
+		return "at the gateway"
+	}
+	return u
 }
 
 // variableName is a name placeholders and reserved list.
@@ -612,14 +649,14 @@ func (k *Link) Discover(ctx context.Context) (*LinkDiscovery, error) {
 		return nil, err
 	}
 	if err := k.onLink("events.url", d.Events.URL); err != nil {
-		return nil, &DocumentError{"the link's discovery", u, err}
+		return nil, &DocumentError{"the link's discovery", k.at(u), err}
 	}
 	if err := k.onLink("run.url", d.Run.URL); err != nil {
-		return nil, &DocumentError{"the link's discovery", u, err}
+		return nil, &DocumentError{"the link's discovery", k.at(u), err}
 	}
 	if d.Proxy != nil {
 		if _, port, err := net.SplitHostPort(d.Proxy.Address); err != nil || port == "" {
-			return nil, &DocumentError{"the link's discovery", u, errors.New("proxy.address is not host:port")}
+			return nil, &DocumentError{"the link's discovery", k.at(u), errors.New("proxy.address is not host:port")}
 		}
 	}
 	return &d, nil
@@ -654,17 +691,17 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 		return nil, err
 	}
 	if a.RunID != req.RunID {
-		return nil, &DocumentError{"the run answer", runURL, errors.New("its run_id is not the request's")}
+		return nil, &DocumentError{"the run answer", k.at(runURL), errors.New("its run_id is not the request's")}
 	}
 	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
-		return nil, &DocumentError{"the run answer", runURL, err}
+		return nil, &DocumentError{"the run answer", k.at(runURL), err}
 	}
 	if err := CheckLabels(a.Labels); err != nil {
-		return nil, &DocumentError{"the run answer", runURL, fmt.Errorf("/labels: %w", err)}
+		return nil, &DocumentError{"the run answer", k.at(runURL), fmt.Errorf("/labels: %w", err)}
 	}
 	if a.Details != nil {
 		if why := checkDetails(a.Details); why != "" {
-			return nil, &DocumentError{"the run answer", runURL, errors.New("/details " + why)}
+			return nil, &DocumentError{"the run answer", k.at(runURL), errors.New("/details " + why)}
 		}
 	}
 	return &a, nil
@@ -686,7 +723,7 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 		return nil, err
 	}
 	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
-		return nil, &DocumentError{"the reload answer", u, err}
+		return nil, &DocumentError{"the reload answer", k.at(u), err}
 	}
 	return &a, nil
 }

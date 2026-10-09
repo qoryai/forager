@@ -379,3 +379,18 @@ func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
 		t.Errorf("%q, want %q", err, want)
 	}
 }
+
+// TestARunIDWithARecordIsNoRun pins a run id used again on this machine: the run is
+// refused with the error it always had, that the run's stream exists.
+func TestARunIDWithARecordIsNoRun(t *testing.T) {
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	startGateway(t, &sp, gateway.Config{})
+	if _, err := runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	_, err := session.Run(context.Background(), sp)
+	if want := "open " + filepath.Join(sp.RunsDir, sp.RunID, "events.jsonl") + ": file exists"; err == nil || err.Error() != want {
+		t.Errorf("%v, want %q", err, want)
+	}
+}

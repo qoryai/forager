@@ -297,6 +297,29 @@ func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
 	}
 }
 
+// TestTheGatewaysDirectoriesComeAfterTheWalls pins the order Forager's files are
+// checked in, which decides what a mount that holds several is refused for: the
+// directories the gateway keeps come with the run directories, after the wall's
+// files, so a Docker run that mounts a home holding both the gateway's directory and
+// ~/.docker is refused for ~/.docker, as it always was.
+func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DOCKER_CONFIG", "")
+	sp := spec(t, "FAKE_EXIT=0")
+	docker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sp.Wall, sp.Image = &wall.Docker{Command: docker, Helper: os.Args[0]}, "example.com/agent:1"
+	startGateway(t, &sp, gateway.Config{Dir: filepath.Join(home, ".local", "state", "qory")})
+	sp.Mounts = []wall.Mount{{Path: home}}
+	want := "the mount " + home + " contains " + filepath.Join(home, ".docker") + ", one of the docker wall's files"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != home || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
+	}
+}
+
 // TestForagerFilesAreAbsolutePaths pins that a Forager file that is no absolute path is
 // a plain error, not a refusal, walled or not.
 func TestForagerFilesAreAbsolutePaths(t *testing.T) {

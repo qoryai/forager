@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -343,4 +344,63 @@ func TestAFailureAfterTheAnswerIsPosted(t *testing.T) {
 func jsonString(v any) (string, error) {
 	b, err := json.Marshal(v)
 	return string(b), err
+}
+
+// TestTheGatewaysProxyIsOnLoopback pins that a discovery naming a proxy off loopback is
+// no run, before a run directory is made: the local link's proxy is on this machine.
+func TestTheGatewaysProxyIsOnLoopback(t *testing.T) {
+	for _, addr := range []string{"192.0.2.10:3128", "proxy.example:3128"} {
+		sp, g := specGateway(t)
+		g.SetDiscoveryProxy(addr)
+		_, err := session.Run(context.Background(), sp)
+		if err == nil || !strings.Contains(err.Error(), "no address on loopback") {
+			t.Errorf("%s: %v", addr, err)
+		}
+		if len(g.Requests()) != 0 {
+			t.Errorf("%s: a run request was sent", addr)
+		}
+	}
+}
+
+// TestNoTextNamesTheLinksURL pins that what a user is told of the gateway's link names
+// the gateway, never the link's URLs, which name no place the user knows: a refusal
+// without a message, an answer the session refuses, and a reload that fails.
+func TestNoTextNamesTheLinksURL(t *testing.T) {
+	sp, g := specGateway(t)
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["run_id"] = "0191f2a4-3c5e-7b8d-9e0f-000000000000"
+		return linktest.Reply{Status: 200, Body: a}
+	})
+	_, err := session.Run(context.Background(), sp)
+	if err == nil || strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), "the run answer at the gateway") {
+		t.Errorf("an answer for another run: %v", err)
+	}
+
+	var mu sync.Mutex
+	var reports []string
+	sp, g = specGateway(t)
+	sleeps(&sp, 2*time.Second)
+	sp.Report = func(l string) { mu.Lock(); reports = append(reports, l); mu.Unlock() }
+	g.SetRunDigest("sha256=" + strings.Repeat("1", 64))
+	g.OnBatch(func([]map[string]any) linktest.Reply {
+		g.SetRunDigest("sha256=" + strings.Repeat("2", 64))
+		return linktest.Reply{Status: 200}
+	})
+	g.OnReload(func(string) linktest.Reply { return linktest.Reply{Status: 200, Body: []byte("not json")} })
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, l := range reports {
+		if strings.Contains(l, "localhost") {
+			t.Errorf("reported %q", l)
+		}
+		found = found || strings.HasPrefix(l, "the reload failed: the reload at the gateway: ")
+	}
+	if !found {
+		t.Errorf("no failed reload in %q", reports)
+	}
 }

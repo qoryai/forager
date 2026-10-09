@@ -34,6 +34,11 @@ func checkSecret(secret string) error {
 	return nil
 }
 
+// CheckSecret reports whether a preamble may carry the secret, as every preamble the
+// link writes or reads checks it: 1 to [MaxSecret] printable ASCII characters other
+// than a space.
+func CheckSecret(secret string) error { return checkSecret(secret) }
+
 // Preamble is the line that opens a connection with the word, [LinkPreamble] or
 // [RelayPreamble], and the secret: the word, a space, the secret and a newline.
 func Preamble(word, secret string) string { return word + " " + secret + "\n" }
