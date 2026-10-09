@@ -786,15 +786,17 @@ release may change what an existing document does, and says so under Upgrading.
   `ended-run-keys.json` so a later request and a restart get the same end; with no
   outcome the run ends `cancelled` with `stopped`. The gateway's `dev.qory.run.exited`
   and its `410` carry that `state` and `reason`, a client's run's too, and the `410`'s
-  message reads "the run has ended: \<state\>[, \<reason words\>]", "the run has
-  ended: cancelled, no outcome given" say. A refused batch is `failed` with
+  message reads "the run has ended: \<state\>[, \<reason words\>]", such as "the run
+  has ended: cancelled, no outcome given". A refused batch is `failed` with
   `batch_refused` in the gateway's own record, as in the session's.
 - `GET <run path>/<run id>/outcome` on the one address answers the session's ask at
   its runtime's exit, decided as a reload: the starter is asked once per run, past the
   answer kept, asks in flight sharing that call and a later ask getting the answer
   stored, within about 6 seconds; a later ask is decided as a reload, so once the
   starter has ended the run key it is the `410`, and only the first keeps the run from
-  being lost; the answer is `{}`, or the starter's `state` and `reason` when it answers
+  being lost while it is made, though a later ask still counts as the session's while
+  its run credential is being checked, as any request does; the answer is `{}`, or the
+  starter's `state` and `reason` when it answers
   `active: false` with an outcome. From the start of the ask, while it is made and for
   30 seconds after its answer, a run credential of that run that could not be checked
   does not end it: its heartbeats, reloads and batches go on, and its

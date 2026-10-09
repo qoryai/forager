@@ -694,13 +694,14 @@ func (lr *linkRun) renew(id runIdentity) {
 // made, or after that ask's answer said so, is the exit's to decide: stillActive waits
 // for that answer and returns [errAnsweredAtExit], and the run's window decides the
 // request. An issuer without introspection is never asked.
-func (lr *linkRun) stillActive(ctx context.Context) error { return lr.checkActive(ctx, false) }
+func (lr *linkRun) stillActive(ctx context.Context) error { return lr.checkActive(ctx, false, false) }
 
 // checkActive is [linkRun.stillActive], but with spare a run credential that could not
 // be checked, its endpoint unreachable or its answer not valid, does not end the run:
 // checkActive returns that error as a [*checkFailed], and the caller's request goes on
-// as if the run credential were checked.
-func (lr *linkRun) checkActive(ctx context.Context, spare bool) error {
+// as if the run credential were checked. With renews, the check is of a request that
+// renews the run's quiet time, [linkRun.ask].
+func (lr *linkRun) checkActive(ctx context.Context, spare, renews bool) error {
 	lr.mu.Lock()
 	active := lr.cred.active
 	lr.asked = time.Now()
@@ -711,10 +712,7 @@ func (lr *linkRun) checkActive(ctx context.Context, spare bool) error {
 	if active == nil {
 		return nil
 	}
-	err := active(ctx, false)
-	lr.mu.Lock()
-	lr.checks--
-	lr.mu.Unlock()
+	err := lr.ask(ctx, active, renews)
 	if err == nil {
 		return nil
 	}
@@ -765,6 +763,23 @@ func (lr *linkRun) checkActive(ctx context.Context, spare bool) error {
 		lr.endAsStarterSaid(e)
 	}
 	return err
+}
+
+// ask asks the starter with active, as one of the run's checks: once it answers, or
+// fails in any way, a panic among them, the check is over. With renews, the request it
+// is of counts as the session's at that moment, so the run is not lost between the
+// answer and the request's [linkRun.touch]; a request that renews nothing, a later ask
+// at the runtime's exit, counts only while it is checked.
+func (lr *linkRun) ask(ctx context.Context, active func(context.Context, bool) error, renews bool) error {
+	defer func() {
+		lr.mu.Lock()
+		lr.checks--
+		if renews {
+			lr.last = time.Now()
+		}
+		lr.mu.Unlock()
+	}()
+	return active(ctx, false)
 }
 
 // checkFailed is a run credential that could not be checked, err, which
