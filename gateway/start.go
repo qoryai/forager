@@ -246,7 +246,8 @@ func (g *Gateway) LocalLink() link.Local {
 // session checked them in before the gateway was apart from it; then, Kept, the
 // directories the gateway keeps: the link's directory and the pattern of every
 // gateway's, the gateway's directory, and where the runs' records are, which a session
-// checks with its run directories, after its own files and the wall's.
+// checks last, after every file of Forager's it checked before the gateway was apart
+// from it.
 func (g *Gateway) files() []link.File {
 	var out []link.File
 	for _, c := range g.cfg.Credentials {

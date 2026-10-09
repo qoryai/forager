@@ -47,8 +47,9 @@ type File struct {
 	What string
 	// Kept says the file is one of the gateway's own directories, where it keeps its link
 	// or the runs' records, and not a file of the machine's credentials or tools: a
-	// session checks it with the run directories, after its own files and the wall's, so
-	// a mount that holds one of those as well is refused for that one, as it always was.
+	// session checks it last, after every other file of Forager's, its own, the wall's,
+	// the run directories and the registry of walled runs, so a mount that holds one of
+	// those as well is refused for that one, as it always was.
 	Kept bool
 }
 

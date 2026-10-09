@@ -189,8 +189,8 @@ func foragerFiles(spec Spec) []foragerFile {
 	// it is: first the directories of its credentials' and tools' programs, its
 	// credentials' files and the pattern of its tools' socket directories, in the order
 	// they were checked in before the gateway was apart from the session; the
-	// directories it keeps come with the run directories, below. So a mount refused
-	// before says what it said.
+	// directories it keeps come last, below. So a mount refused before says what it
+	// said.
 	var kept []foragerFile
 	for _, f := range spec.Gateway.files() {
 		if f.Kept {
@@ -219,12 +219,13 @@ func foragerFiles(spec Spec) []foragerFile {
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
-	out = append(out, kept...)
 	out = append(out, foragerFile{spec.RunsDir, "where the run directories are kept"})
 	if dir, err := walledDir(); err == nil {
 		out = append(out, foragerFile{dir, "where Forager lists the walled runs still going"})
 	}
-	return out
+	// The directories the gateway keeps come last, after every file a session checked
+	// before the gateway was apart from it.
+	return append(out, kept...)
 }
 
 // lookup is one name looked up on the way to a path: the directory it is looked up in,

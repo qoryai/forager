@@ -299,9 +299,11 @@ func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
 
 // TestTheGatewaysDirectoriesComeAfterTheWalls pins the order Forager's files are
 // checked in, which decides what a mount that holds several is refused for: the
-// directories the gateway keeps come with the run directories, after the wall's
-// files, so a Docker run that mounts a home holding both the gateway's directory and
-// ~/.docker is refused for ~/.docker, as it always was.
+// directories the gateway keeps come last, after the wall's
+// files and the run directories, so a Docker run that mounts a home holding both the
+// gateway's directory and ~/.docker is refused for ~/.docker, and a mount of the state
+// directory that holds the gateway's directory and the run directories for the run
+// directories, as it always was.
 func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -316,6 +318,19 @@ func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
 	sp.Mounts = []wall.Mount{{Path: home}}
 	want := "the mount " + home + " contains " + filepath.Join(home, ".docker") + ", one of the docker wall's files"
 	if r := mountRefusal(t, runErr(sp)); r.Names[0] != home || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
+	}
+
+	// A mount of the state directory that holds the gateway's directory and the run
+	// directories is refused for the run directories.
+	state := filepath.Join(home, ".local", "state")
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.RunsDir = filepath.Join(state, "qory", "runs", "x")
+	startGateway(t, &sp, gateway.Config{Dir: filepath.Join(state, "qory")})
+	sp.Mounts = []wall.Mount{{Path: state}}
+	want = "the mount " + state + " contains " + sp.RunsDir + ", where the run directories are kept"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != state || r.Detail != want {
 		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
 	}
 }
