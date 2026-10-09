@@ -344,9 +344,12 @@ release may change what an existing document does, and says so under Upgrading.
   is not refused; or a `dev.qory.run.refused` whose code is not one of
   `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
   `opened_by`, `timeout` as the one reason and the codes and names of
-  `dev.qory.run.refused`. A
-  `400` `invalid_request` to a batch ends the run at the gateway: the gateway writes
-  `dev.qory.run.exited` with `session_lost`, refuses the run's proxy secret and answers
+  `dev.qory.run.refused`. A batch without the run's `run_secret`, or with one of no
+  such run, is `400` `invalid_request` on the local link, and ends no run; a batch whose
+  body does not arrive whole, its client gone before the end, is `400`
+  `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch
+  ends its run at the gateway: the gateway writes `dev.qory.run.exited` with
+  `session_lost`, refuses the run's proxy secret and answers
   the session's further requests with a `410` `batch_refused`; the session stops the
   runtime and records `dev.qory.run.exited` with `batch_refused` in its own record alone.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
