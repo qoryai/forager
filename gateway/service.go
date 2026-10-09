@@ -377,16 +377,16 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 	px, track, err := s.login(first, deadline)
 	if px == nil {
 		if errors.Is(err, errUnserved) {
-			io.WriteString(c, proxyUnserved)
+			answerAndLinger(c, proxyUnserved)
 		} else {
-			io.WriteString(c, proxyRefused)
+			answerAndLinger(c, proxyRefused)
 		}
 		return false
 	}
 	if !px.Guarded() {
 		// Never a connection from another machine to a proxy that may dial this one.
 		s.g.report("a connection to the gateway's address was refused: the proxy of the run its login names is not guarded")
-		io.WriteString(c, proxyUnserved)
+		answerAndLinger(c, proxyUnserved)
 		return false
 	}
 	c.SetDeadline(time.Time{})
@@ -396,6 +396,34 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 	}
 	px.ServeConn(served)
 	return true
+}
+
+// lingerWait bounds how long a refused proxy request's connection is read after its
+// answer, and lingerBytes how much of it.
+const (
+	lingerWait  = 500 * time.Millisecond
+	lingerBytes = 64 << 10
+)
+
+// answerAndLinger writes a proxy request's refusal and closes the connection's writing
+// side, TLS's close_notify then TCP's, then reads what the client still sends, at most
+// lingerBytes for at most lingerWait, before the caller closes it: a connection closed
+// with bytes unread is reset, and a reset can reach the client before the answer does.
+func answerAndLinger(c net.Conn, answer string) {
+	c.SetWriteDeadline(time.Now().Add(lingerWait))
+	if _, err := io.WriteString(c, answer); err != nil {
+		return
+	}
+	var raw net.Conn = c
+	if tc, ok := c.(*tls.Conn); ok {
+		tc.CloseWrite()
+		raw = tc.NetConn()
+	}
+	if cw, ok := raw.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
+	}
+	c.SetReadDeadline(time.Now().Add(lingerWait))
+	io.Copy(io.Discard, io.LimitReader(c, lingerBytes))
 }
 
 // login is the proxy of the run a proxy request's login names, and what tracks the

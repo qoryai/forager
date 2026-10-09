@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1237,4 +1238,30 @@ func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
 		runs, keys, spent, kept := gateway.Held(s.g)
 		return runs == 0 && keys == 0 && spent == 1 && kept == 1
 	})
+}
+
+// TestARefusedProxyRequestIsAnsweredInFull pins the 407 of a client that sends a body
+// before it reads: the gateway answers, closes its writing side and reads what the
+// client still sends before it closes, so the client reads the whole answer, never a
+// reset in its place.
+func TestARefusedProxyRequestIsAnsweredInFull(t *testing.T) {
+	s := startVerifying(t, gateway.Config{}, nil, 0)
+	body := strings.Repeat("x", 32<<10)
+	for i := range 20 {
+		c := s.dial(t)
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		head := "POST http://api.example/upload HTTP/1.1\r\nHost: api.example\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":not-a-run-credential")) + "\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n"
+		if _, err := io.WriteString(c, head+body); err != nil {
+			t.Fatalf("%d: sending: %v", i, err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err != nil {
+			t.Fatalf("%d: reading the answer: %v", i, err)
+		}
+		b, err := io.ReadAll(resp.Body)
+		c.Close()
+		if err != nil || resp.StatusCode != http.StatusProxyAuthRequired || string(b) != "a valid run credential is required as the proxy password" {
+			t.Fatalf("%d: %d %q %v", i, resp.StatusCode, b, err)
+		}
+	}
 }
