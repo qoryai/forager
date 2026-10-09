@@ -1,0 +1,12 @@
+# One issuer with one pinned key, which has no kid: a run credential without a kid is
+# accepted only while exactly one key is pinned. The run's labels come from the signed
+# claims alone; forge is a constant.
+- issuer: https://issuer.example
+  audience: qory-gateway
+  algorithms: [RS256]
+  keys:
+    - {alg: RS256, public_key_file: /etc/qory/issuer-k1.pem}
+  labels:
+    forge: {value: example-forge}
+    repository: {claims: [namespace, project], join: "/"}
+    run_key: {claim: sub}

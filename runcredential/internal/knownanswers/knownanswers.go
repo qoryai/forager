@@ -1,0 +1,388 @@
+// Package knownanswers writes the known answers of the run credential, the files of
+// contracts/forager/v1/fixtures/known-answers/run-credentials: the fixture issuer's
+// keys, derived from a published seed, two configurations of the fixture issuer, and
+// run credentials signed under the keys, each with its outcome at a fixed now.
+//
+// Everything is derived with Go's standard library from the seed alone, and every
+// signature is deterministic (RSASSA-PKCS1-v1_5, ECDSA by RFC 6979, Ed25519), so the
+// files are the same on every run. go generate ./runcredential writes them, and the
+// package's tests fail while the files differ from what Files returns.
+package knownanswers
+
+import (
+	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/hmac"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/asn1"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+)
+
+// Now is the clock every outcome holds at, in seconds since the epoch: the clock the
+// signed fixtures of the contract are replayed at.
+const Now = 1700000000
+
+// Seed is the fixture issuer's seed, bytes 193 to 224.
+func Seed() []byte {
+	s := make([]byte, 32)
+	for n := range s {
+		s[n] = byte(193 + n)
+	}
+	return s
+}
+
+// derive is SHA-256 of the seed followed by the label's bytes and the counter, one
+// byte.
+func derive(seed []byte, label string, counter byte) []byte {
+	h := sha256.New()
+	h.Write(seed)
+	h.Write([]byte(label))
+	h.Write([]byte{counter})
+	return h.Sum(nil)
+}
+
+// prime is the first prime p at or above a candidate of 1024 bits, the candidate being
+// SHA-256 of the seed, the label and the counters 0 to 3 concatenated, with its two
+// highest bits and its lowest bit set, searched upward in steps of two, such that
+// p - 1 is not a multiple of 65537.
+func prime(seed []byte, label string) *big.Int {
+	var b []byte
+	for c := range byte(4) {
+		b = append(b, derive(seed, label, c)...)
+	}
+	b[0] |= 0xc0
+	b[len(b)-1] |= 1
+	p := new(big.Int).SetBytes(b)
+	e := big.NewInt(65537)
+	two := big.NewInt(2)
+	one := big.NewInt(1)
+	for {
+		if p.ProbablyPrime(32) {
+			pm1 := new(big.Int).Sub(p, one)
+			if new(big.Int).Mod(pm1, e).Sign() != 0 {
+				return p
+			}
+		}
+		p.Add(p, two)
+	}
+}
+
+// Keys are the fixture issuer's private keys.
+type Keys struct {
+	RSA     *rsa.PrivateKey
+	ECDSA   *ecdsa.PrivateKey
+	Ed25519 ed25519.PrivateKey
+}
+
+// DeriveKeys derives the fixture issuer's keys from the seed:
+//
+//   - RSA: p is prime(seed, "rs256-p"), q is prime(seed, "rs256-q"), e is 65537, d is
+//     the inverse of e modulo lcm(p-1, q-1), so the modulus has 2048 bits;
+//   - ECDSA on P-256: the private scalar is SHA-256(seed || "es256" || 0x00), big
+//     endian;
+//   - Ed25519: the seed of the key is SHA-256(seed || "eddsa" || 0x00).
+func DeriveKeys(seed []byte) (*Keys, error) {
+	p, q := prime(seed, "rs256-p"), prime(seed, "rs256-q")
+	if p.Cmp(q) == 0 {
+		return nil, fmt.Errorf("p equals q")
+	}
+	one := big.NewInt(1)
+	pm1, qm1 := new(big.Int).Sub(p, one), new(big.Int).Sub(q, one)
+	g := new(big.Int).GCD(nil, nil, pm1, qm1)
+	lambda := new(big.Int).Div(new(big.Int).Mul(pm1, qm1), g)
+	e := big.NewInt(65537)
+	d := new(big.Int).ModInverse(e, lambda)
+	if d == nil {
+		return nil, fmt.Errorf("e has no inverse")
+	}
+	rk := &rsa.PrivateKey{
+		PublicKey: rsa.PublicKey{N: new(big.Int).Mul(p, q), E: 65537},
+		D:         d,
+		Primes:    []*big.Int{p, q},
+	}
+	if rk.N.BitLen() != 2048 {
+		return nil, fmt.Errorf("the modulus has %d bits", rk.N.BitLen())
+	}
+	rk.Precompute()
+	if err := rk.Validate(); err != nil {
+		return nil, err
+	}
+	ek, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), derive(seed, "es256", 0))
+	if err != nil {
+		return nil, err
+	}
+	return &Keys{RSA: rk, ECDSA: ek, Ed25519: ed25519.NewKeyFromSeed(derive(seed, "eddsa", 0))}, nil
+}
+
+// PEM is a public key as one PEM block of type PUBLIC KEY.
+func PEM(pub crypto.PublicKey) ([]byte, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
+}
+
+// The fixture issuer.
+const (
+	Issuer   = "https://issuer.example"
+	Audience = "qory-gateway"
+)
+
+// configuration is a run credentials document of the fixture issuer with the keys
+// given, its public_key_file names relative to the directory of the known answers.
+func configuration(algorithms []string, keys []map[string]string) []map[string]any {
+	return []map[string]any{{
+		"issuer":       Issuer,
+		"audience":     Audience,
+		"algorithms":   algorithms,
+		"keys":         keys,
+		"leeway":       "60s",
+		"max_lifetime": "1h",
+		"allow":        map[string]any{"claim": "namespace", "values": []string{"example-namespace"}},
+		"labels": map[string]any{
+			"forge":      map[string]string{"value": "example-forge"},
+			"repository": map[string]any{"claims": []string{"namespace", "project"}, "join": "/"},
+			"run_key":    map[string]string{"claim": "sub"},
+		},
+		"details": map[string]any{"requester": map[string]string{"claim": "requester"}},
+	}}
+}
+
+// Case is one run credential and its outcome.
+type Case struct {
+	Name          string `json:"name"`
+	Configuration string `json:"configuration"`
+	Credential    string `json:"credential"`
+	// Outcome is accepted or refused.
+	Outcome string `json:"outcome"`
+	// RefusedAt is the step that refuses a refused run credential: header, signature,
+	// claims, scope or mapping.
+	RefusedAt string            `json:"refused_at,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Details   map[string]string `json:"details,omitempty"`
+	Note      string            `json:"note"`
+}
+
+// claims are the claims of a valid run credential at [Now], with changes: a nil value
+// removes the claim.
+func claims(changes map[string]any) map[string]any {
+	c := map[string]any{
+		"iss":       Issuer,
+		"aud":       Audience,
+		"sub":       "rk-0001",
+		"iat":       Now - 60,
+		"exp":       Now + 600,
+		"namespace": "example-namespace",
+		"project":   "project",
+		"requester": "example-requester",
+	}
+	for k, v := range changes {
+		if v == nil {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+	}
+	return c
+}
+
+var b64 = base64.RawURLEncoding
+
+// segment is the base64url of a JSON object, its members sorted by name.
+func segment(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b64.EncodeToString(b)
+}
+
+// signer signs the signing input of a JWS.
+type signer func(input []byte) ([]byte, error)
+
+// sign is the JWS compact serialisation of the header and claims under s; a nil s
+// leaves the signature empty.
+func sign(header, payload map[string]any, s signer) (string, error) {
+	input := segment(header) + "." + segment(payload)
+	if s == nil {
+		return input + ".", nil
+	}
+	sig, err := s([]byte(input))
+	if err != nil {
+		return "", err
+	}
+	return input + "." + b64.EncodeToString(sig), nil
+}
+
+// Files returns the known answers by file name.
+func Files() (map[string][]byte, error) {
+	k, err := DeriveKeys(Seed())
+	if err != nil {
+		return nil, err
+	}
+	rsaPEM, err := PEM(&k.RSA.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	ecPEM, err := PEM(&k.ECDSA.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	edPEM, err := PEM(k.Ed25519.Public())
+	if err != nil {
+		return nil, err
+	}
+	rs256 := func(input []byte) ([]byte, error) {
+		h := sha256.Sum256(input)
+		return rsa.SignPKCS1v15(nil, k.RSA, crypto.SHA256, h[:])
+	}
+	es256 := func(input []byte) ([]byte, error) {
+		h := sha256.Sum256(input)
+		der, err := k.ECDSA.Sign(nil, h[:], crypto.SHA256)
+		if err != nil {
+			return nil, err
+		}
+		return rawECDSA(der)
+	}
+	eddsa := func(input []byte) ([]byte, error) { return ed25519.Sign(k.Ed25519, input), nil }
+	hs256 := func(input []byte) ([]byte, error) {
+		m := hmac.New(sha256.New, rsaPEM)
+		m.Write(input)
+		return m.Sum(nil), nil
+	}
+
+	accepted := map[string]string{"forge": "example-forge", "repository": "example-namespace/project", "run_key": "rk-0001"}
+	details := map[string]string{"requester": "example-requester"}
+	type spec struct {
+		name, config string
+		header       map[string]any
+		payload      map[string]any
+		sign         signer
+		refusedAt    string
+		note         string
+	}
+	one := "one-key.json"
+	two := "two-keys.json"
+	hRS := map[string]any{"alg": "RS256", "typ": "JWT"}
+	hES := map[string]any{"alg": "ES256", "typ": "JWT", "kid": "k-es256"}
+	hEd := map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "k-eddsa"}
+	specs := []spec{
+		{"rs256", one, hRS, claims(nil), rs256, "", "RS256 under the one key, which has no kid; the credential carries none"},
+		{"rs256-aud-array", one, hRS, claims(map[string]any{"aud": []string{"another-service", Audience}}), rs256, "", "aud is an array that contains the audience"},
+		{"rs256-expired-within-leeway", one, hRS, claims(map[string]any{"iat": Now - 630, "exp": Now - 30}), rs256, "", "exp passed 30 seconds ago, within the leeway of 60 seconds"},
+		{"rs256-no-requester", one, hRS, claims(map[string]any{"requester": nil}), rs256, "", "no requester: the run credential does not decide about.details.requester, and the session's value stands"},
+		{"requester-not-string", one, hRS, claims(map[string]any{"requester": 7}), rs256, "mapping", "requester is a number, not the string details needs"},
+		{"es256", two, hES, claims(nil), es256, "", "ES256 under the key k-es256, the signature R and S, 32 bytes each"},
+		{"eddsa", two, hEd, claims(nil), eddsa, "", "EdDSA under the Ed25519 key k-eddsa"},
+		{"alg-none", one, map[string]any{"alg": "none", "typ": "JWT"}, claims(nil), nil, "header", "alg none, with an empty signature"},
+		{"hs256-public-key-as-secret", one, map[string]any{"alg": "HS256", "typ": "JWT"}, claims(nil), hs256, "header", "HS256 with the PEM bytes of the RSA public key, rs256.pem, as the HMAC secret: the confusion of algorithms"},
+		{"kid-not-pinned", one, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-rs256"}, claims(nil), rs256, "header", "a kid, and the one key pinned has none"},
+		{"kid-unknown", two, map[string]any{"alg": "ES256", "typ": "JWT", "kid": "k-unknown"}, claims(nil), es256, "header", "a kid no pinned key has"},
+		{"no-kid-two-keys", two, map[string]any{"alg": "ES256", "typ": "JWT"}, claims(nil), es256, "header", "no kid, and the issuer pins two keys"},
+		{"alg-differs-from-key", two, map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "k-es256"}, claims(nil), eddsa, "header", "alg EdDSA, signed with the Ed25519 key, and a kid that selects the ES256 key"},
+		{"alg-not-allowed", two, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k-es256"}, claims(nil), rs256, "header", "RS256, which is not among the algorithms of this configuration"},
+		{"crit", one, map[string]any{"alg": "RS256", "typ": "JWT", "crit": []string{"exp"}}, claims(nil), rs256, "header", "crit names an extension the gateway does not understand"},
+		{"aud-other", one, hRS, claims(map[string]any{"aud": "another-service"}), rs256, "claims", "aud is another service's"},
+		{"iss-other", one, hRS, claims(map[string]any{"iss": "https://other-issuer.example"}), rs256, "claims", "iss is not the issuer"},
+		{"expired", one, hRS, claims(map[string]any{"iat": Now - 720, "exp": Now - 120}), rs256, "claims", "exp passed 120 seconds ago, beyond the leeway"},
+		{"iat-future", one, hRS, claims(map[string]any{"iat": Now + 120, "exp": Now + 720}), rs256, "claims", "iat is 120 seconds ahead, beyond the leeway"},
+		{"lifetime-above-max", one, hRS, claims(map[string]any{"iat": Now - 60, "exp": Now - 60 + 7200}), rs256, "claims", "exp minus iat is two hours, above max_lifetime of one hour"},
+		{"no-iat", one, hRS, claims(map[string]any{"iat": nil}), rs256, "claims", "no iat, and max_lifetime is set"},
+		{"no-sub", one, hRS, claims(map[string]any{"sub": nil}), rs256, "claims", "no sub, the run key"},
+		{"namespace-not-allowed", one, hRS, claims(map[string]any{"namespace": "other-namespace"}), rs256, "scope", "namespace holds a value allow does not list"},
+	}
+	var cases []Case
+	for _, s := range specs {
+		cred, err := sign(s.header, s.payload, s.sign)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", s.name, err)
+		}
+		c := Case{Name: s.name, Configuration: s.config, Credential: cred, Outcome: "accepted", Note: s.note}
+		if s.refusedAt != "" {
+			c.Outcome, c.RefusedAt = "refused", s.refusedAt
+		} else {
+			c.Labels, c.Details = accepted, details
+			if _, ok := s.payload["requester"]; !ok {
+				c.Details = nil
+			}
+		}
+		cases = append(cases, c)
+	}
+	// The signature over an altered payload: signed over the valid claims, then sent
+	// with a project changed, which every step but the signature accepts.
+	orig, err := sign(hRS, claims(nil), rs256)
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split([]byte(orig), []byte("."))
+	altered := string(parts[0]) + "." + segment(claims(map[string]any{"project": "other-project"})) + "." + string(parts[2])
+	cases = append(cases, Case{Name: "payload-altered", Configuration: one, Credential: altered, Outcome: "refused", RefusedAt: "signature",
+		Note: "signed over the claims of rs256, sent with project other-project: every step but the signature accepts it"})
+
+	keysDoc := map[string]any{
+		"note": "The fixture issuer, " + Issuer + ", and its keys, derived from the seed, bytes 193 to 224, in base64url. " +
+			"RSA: p is the first prime at or above the 1024-bit number SHA-256(seed || \"rs256-p\" || 0x00) || ... || SHA-256(seed || \"rs256-p\" || 0x03) with its two highest bits and its lowest bit set, searched upward in steps of two, with p - 1 not a multiple of 65537; q the same with \"rs256-q\"; e is 65537. " +
+			"ECDSA on P-256: the private scalar is SHA-256(seed || \"es256\" || 0x00), big endian. " +
+			"Ed25519: the key's seed is SHA-256(seed || \"eddsa\" || 0x00). " +
+			"Each public key is the PEM file named, a PKIX SubjectPublicKeyInfo. No gateway accepts these keys outside a test.",
+		"seed": b64.EncodeToString(Seed()),
+		"keys": []map[string]string{
+			{"kid": "k-rs256", "alg": "RS256", "public_key_file": "rs256.pem", "note": "pinned without a kid in one-key.json"},
+			{"kid": "k-es256", "alg": "ES256", "public_key_file": "es256.pem"},
+			{"kid": "k-eddsa", "alg": "EdDSA", "public_key_file": "eddsa.pem"},
+		},
+	}
+	index := map[string]any{
+		"note": "Run credentials of the fixture issuer, each with its outcome at now, under the configuration named, a file beside this one. " +
+			"refused_at is the step that refuses one: header, the alg and the key the header selects; signature, over the exact bytes received; claims, the time, iss, aud and sub; scope, allow; mapping, a claim the labels or details name that is present and not a string. " +
+			"A details claim the credential does not carry leaves that key undecided, and the session's value stands; a label claim it does not carry refuses it. " +
+			"A credential refused at a later step passes every earlier one, and an accepted one passes every step, the signature included, with the labels and details listed. " +
+			"Every refusal is the same opaque answer: run_credential_refused to a session, 407 to a client with no session.",
+		"now":         Now,
+		"credentials": cases,
+	}
+	files := map[string][]byte{
+		"rs256.pem": rsaPEM,
+		"es256.pem": ecPEM,
+		"eddsa.pem": edPEM,
+	}
+	for name, v := range map[string]any{
+		"keys.json":        keysDoc,
+		"credentials.json": index,
+		one:                configuration([]string{"RS256"}, []map[string]string{{"alg": "RS256", "public_key_file": "rs256.pem"}}),
+		two: configuration([]string{"ES256", "EdDSA"}, []map[string]string{
+			{"kid": "k-es256", "alg": "ES256", "public_key_file": "es256.pem"},
+			{"kid": "k-eddsa", "alg": "EdDSA", "public_key_file": "eddsa.pem"},
+		}),
+	} {
+		b, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		files[name] = append(b, '\n')
+	}
+	return files, nil
+}
+
+// rawECDSA turns an ASN.1 ECDSA signature into R and S, 32 bytes each, big endian, as
+// RFC 7518 §3.4 writes ES256.
+func rawECDSA(der []byte) ([]byte, error) {
+	var sig struct{ R, S *big.Int }
+	if _, err := asn1.Unmarshal(der, &sig); err != nil {
+		return nil, err
+	}
+	out := make([]byte, 64)
+	sig.R.FillBytes(out[:32])
+	sig.S.FillBytes(out[32:])
+	return out, nil
+}

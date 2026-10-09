@@ -136,7 +136,8 @@ Every event goes to files. With a server, the events it selects go there too:
 A server is your control plane, or a receiver of your own. The package `receiver` is a
 worked example.
 
-More: [docs/server.md](docs/server.md).
+More: [docs/server.md](docs/server.md). How an issuer of run credentials integrates with
+a gateway that serves other machines: [docs/gateway-run-credentials.md](docs/gateway-run-credentials.md).
 
 ## Embed it in Go
 

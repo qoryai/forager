@@ -1,0 +1,23 @@
+# One issuer during a rotation: two keys, each with its kid, a scope, a descriptive
+# claim that goes into about.details, a bound on the lifetime, and the issuer's
+# introspection endpoint (RFC 7662), asked again at most every 30 seconds.
+- issuer: https://issuer.example
+  audience: qory-gateway
+  algorithms: [RS256, ES256]
+  keys:
+    - {kid: k1, alg: RS256, public_key_file: /etc/qory/issuer-k1.pem}
+    - {kid: k2, alg: ES256, public_key_file: /etc/qory/issuer-k2.pem}
+  leeway: 60s
+  max_lifetime: 1h
+  allow: {claim: namespace, values: ["example-namespace"]}
+  labels:
+    forge: {value: example-forge}
+    repository: {claims: [namespace, project], join: "/"}
+    run_key: {claim: sub}
+  details:
+    requester: {claim: requester}
+  introspection:
+    url: https://issuer.example/introspect
+    client_id: example-gateway
+    client_secret_file: /etc/qory/issuer-introspection-secret
+    cache: 30s
