@@ -979,7 +979,7 @@ display name, the host name by default, is sent unsigned and serves display alon
 ping from a new instance id beyond its node's limit
 is a signed `409` `instance_limit`, and that run does not start; an instance counts
 while one of its runs is live. A run is live from its accepted ping until its final
-event, `dev.qory.run.exited`, or until no accepted event of
+event, `dev.qory.run.exited`, until the server closes it, or until no accepted event of
 the run has arrived for 3 × the `interval_seconds` its ping announced.
 
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
