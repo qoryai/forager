@@ -125,22 +125,25 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	batch, err := contracts.Document("link-batch.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := json.Marshal(batch)
-	m := regexp.MustCompile(`\{"not":\{"enum":\[([^\]]*)\]\}\}`).FindSubmatch(b)
-	if m == nil {
-		t.Fatal("link-batch.schema.json refuses no list of reasons")
-	}
-	var refused []string
-	json.Unmarshal([]byte("["+string(m[1])+"]"), &refused)
-	refused = append(refused, event.ReasonTimeout)
-	slices.Sort(refused)
-	sorted := slices.Sorted(slices.Values(want))
-	if !slices.Equal(refused, sorted) {
-		t.Errorf("link-batch.schema.json refuses %v beside timeout; the reserved codes are %v", refused, sorted)
+	// A session's batch may carry timeout, its own; the starter's outcome answer none.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout}, "link-outcome-answer.schema.json": nil} {
+		doc, err := contracts.Document(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(doc)
+		m := regexp.MustCompile(`\{"not":\{"enum":\[([^\]]*)\]\}\}`).FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("%s refuses no list of reasons", name)
+		}
+		var refused []string
+		json.Unmarshal([]byte("["+string(m[1])+"]"), &refused)
+		refused = append(refused, allowed...)
+		slices.Sort(refused)
+		sorted := slices.Sorted(slices.Values(want))
+		if !slices.Equal(refused, sorted) {
+			t.Errorf("%s refuses %v beside %v; the reserved codes are %v", name, refused, allowed, sorted)
+		}
 	}
 }
 

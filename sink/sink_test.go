@@ -285,7 +285,7 @@ func TestRunClosedIsAStop(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if want := "the server answered 410; no further batch is sent for this run, which goes on"; len(notes) != 1 || notes[0] != want {
+	if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
 		t.Errorf("reports %q, want one: %q", notes, want)
 	}
 }

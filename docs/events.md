@@ -83,10 +83,10 @@ Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `fai
 `succeeded` on 0 and `failed` otherwise, unless the run's starter gives an outcome. When
 a run ends other than by the runtime's own exit, or its starter gives a reason,
 `dev.qory.run.exited` says why in `reason`: an open code, Forager's own or the starter's,
-carried as given. The session writes `timeout`, `cancelled`, and posts it, and
-`batch_refused`, in its own record alone (below). The gateway writes the others:
-`session_lost`, `failed`, the session was silent, or the gateway refused a batch of the
-session's (see the contract's §The gateway's link); `quiet`, `cancelled`;
+carried as given. The session writes `timeout`, `cancelled`, and posts it. The gateway
+writes the others: `session_lost`, `failed`, the session was silent; `batch_refused`,
+`failed`, the gateway refused a batch of the session's (see the contract's §The
+gateway's link); `quiet`, `cancelled`;
 `credential_expired`, `cancelled`; `stopped`, `cancelled`, the starter ended the run
 and gave no outcome, or the starter's own outcome and reason when it gave one;
 `credential_check_unreachable`, `failed`, the run credential could not be checked since
@@ -98,9 +98,8 @@ the run's `dev.qory.run.exited`, and answers the session's next request with a `
 code, and the state and the reason of that end. The session records its own
 `dev.qory.run.exited` in `session.jsonl` alone, with them, and posts nothing more:
 `credential_expired`, `stopped`, `credential_check_unreachable`,
-`credential_check_invalid`, `run_closed` or `session_lost` as the gateway ended the run,
-and `batch_refused` when the gateway refused a batch of its, which the gateway's record
-says as `session_lost`. A refusal of the run request with a
+`credential_check_invalid`, `run_closed`, `session_lost` or `batch_refused` as the
+gateway ended the run. A refusal of the run request with a
 code other than `wall_required` is recorded the same way: the session records
 `dev.qory.run.refused` in its own record alone, since the gateway opened no run;
 `credential_check_unreachable`, the gateway's `503`, and `credential_check_invalid`, its `502`, among

@@ -369,7 +369,7 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 			}
 			rg.mu.Lock()
 			defer rg.mu.Unlock()
-			if want := "the server answered 410; no further batch is sent for this run, which goes on"; len(rg.reports) != 1 || rg.reports[0] != want {
+			if want := "the server wants no more events of this run; the run goes on"; len(rg.reports) != 1 || rg.reports[0] != want {
 				t.Errorf("reports %q, want one: %q", rg.reports, want)
 			}
 		})

@@ -74,13 +74,13 @@ func newVerifier(issuers Issuers, read ReadFile, fixtures bool) (*Verifier, erro
 	for n, i := range issuers {
 		c, err := cloneIssuer(i)
 		if err != nil {
-			return nil, fmt.Errorf("run credentials[%d]: %w", n, err)
+			return nil, fmt.Errorf("run_credentials[%d]: %w", n, err)
 		}
 		vi := verifierIssuer{issuer: c}
 		for k, key := range c.Keys {
 			pub, err := key.publicKey(read, fixtures)
 			if err != nil {
-				return nil, fmt.Errorf("run credentials[%d]: issuer %s: keys[%d]: %w", n, c.Issuer, k, err)
+				return nil, fmt.Errorf("run_credentials[%d]: the starter %s: keys[%d]: %w", n, c.Issuer, k, err)
 			}
 			vi.keys = append(vi.keys, pub)
 		}

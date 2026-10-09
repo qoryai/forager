@@ -55,7 +55,7 @@ func (k Key) publicKey(read ReadFile, fixtures bool) (crypto.PublicKey, error) {
 		return nil, fmt.Errorf("the public key %s: %w", k.PublicKeyFile, err)
 	}
 	if !fixtures && fixtureKey(pub) {
-		return nil, fmt.Errorf("the public key %s: it is a published fixture key, whose private key anyone can derive; pin the issuer's own key", k.PublicKeyFile)
+		return nil, fmt.Errorf("the public key %s: it is a published fixture key, whose private key anyone can derive; pin the starter's own key", k.PublicKeyFile)
 	}
 	return pub, nil
 }

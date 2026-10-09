@@ -94,7 +94,7 @@ func TestARunWithAServer(t *testing.T) {
 
 // stopLine is the gateway's report of a server's signed 410: the one line a stop
 // gets, whatever its code.
-const stopLine = "the server answered 410; no further batch is sent for this run, which goes on"
+const stopLine = "the server wants no more events of this run; the run goes on"
 
 // TestAServersStopEndsNoRun pins a server's signed 410 during a run, run_closed among
 // them: the gateway sends the server nothing more and reports it once, but the run goes

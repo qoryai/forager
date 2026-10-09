@@ -50,7 +50,7 @@ func newCredentialVerifier(cfg *Config, heartbeat time.Duration) (*credentialVer
 		}
 		in, err := runcredential.NewIntrospector(*i.Introspection, os.ReadFile, heartbeat)
 		if err != nil {
-			return nil, fmt.Errorf("run credentials: issuer %s: %w", i.Issuer, err)
+			return nil, fmt.Errorf("run_credentials: the starter %s: %w", i.Issuer, err)
 		}
 		cv.intro[i.Issuer] = in
 	}

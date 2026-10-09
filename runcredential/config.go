@@ -237,16 +237,16 @@ func (l Issuers) Check(read ReadFile) error { return l.check(read, false) }
 // known-answer tests alone do.
 func (l Issuers) check(read ReadFile, fixtures bool) error {
 	if len(l) == 0 {
-		return fmt.Errorf("run credentials: no issuer")
+		return fmt.Errorf("run_credentials: no starter")
 	}
 	seen := map[string]bool{}
 	for n, i := range l {
 		if seen[i.Issuer] {
-			return fmt.Errorf("run credentials: the issuer %s appears twice", i.Issuer)
+			return fmt.Errorf("run_credentials: the starter %s appears twice", i.Issuer)
 		}
 		seen[i.Issuer] = true
 		if err := i.check(read, fixtures); err != nil {
-			return fmt.Errorf("run credentials[%d]: %w", n, err)
+			return fmt.Errorf("run_credentials[%d]: %w", n, err)
 		}
 	}
 	return nil
@@ -274,91 +274,94 @@ func (l Issuers) check(read ReadFile, fixtures bool) error {
 //   - the introspection endpoint is https, with a client id and a secret's file. The
 //     secret is not read here.
 //
-// The error names the issuer, the member and a file's name, never what a file holds.
+// The error names the starter, the member and a file's name, never what a file holds.
 func (i Issuer) Check(read ReadFile) error { return i.check(read, false) }
 
 // check is [Issuer.Check]; fixtures accepts the published fixture keys, which the
 // known-answer tests alone do.
 func (i Issuer) check(read ReadFile, fixtures bool) error {
+	if i.Issuer == "" {
+		return fmt.Errorf(`an entry has no "issuer" key`)
+	}
 	if err := checkHTTPS(i.Issuer); err != nil {
-		return fmt.Errorf("issuer: %w", err)
+		return fmt.Errorf(`the "issuer" key: %w`, err)
 	}
 	if i.Audience == "" {
-		return fmt.Errorf("issuer %s: no audience", i.Issuer)
+		return fmt.Errorf("the starter %s: no audience", i.Issuer)
 	}
 	if len(i.Algorithms) == 0 {
-		return fmt.Errorf("issuer %s: no algorithm", i.Issuer)
+		return fmt.Errorf("the starter %s: no algorithm", i.Issuer)
 	}
 	algs := map[string]bool{}
 	for _, a := range i.Algorithms {
 		if !supported(a) {
-			return fmt.Errorf("issuer %s: the algorithm %q is not RS256, ES256 or EdDSA", i.Issuer, a)
+			return fmt.Errorf("the starter %s: the algorithm %q is not RS256, ES256 or EdDSA", i.Issuer, a)
 		}
 		if algs[a] {
-			return fmt.Errorf("issuer %s: the algorithm %s appears twice", i.Issuer, a)
+			return fmt.Errorf("the starter %s: the algorithm %s appears twice", i.Issuer, a)
 		}
 		algs[a] = true
 	}
 	if len(i.Keys) == 0 {
-		return fmt.Errorf("issuer %s: no key", i.Issuer)
+		return fmt.Errorf("the starter %s: no key", i.Issuer)
 	}
 	kids := map[string]bool{}
 	for n, k := range i.Keys {
 		if !algs[k.Alg] {
-			return fmt.Errorf("issuer %s: keys[%d]: the alg %q is not among the issuer's algorithms", i.Issuer, n, k.Alg)
+			return fmt.Errorf("the starter %s: keys[%d]: the alg %q is not among the starter's algorithms", i.Issuer, n, k.Alg)
 		}
 		if len(i.Keys) > 1 && k.KID == "" {
-			return fmt.Errorf("issuer %s: keys[%d]: no kid, and the issuer pins more than one key", i.Issuer, n)
+			return fmt.Errorf("the starter %s: keys[%d]: no kid, and the starter pins more than one key", i.Issuer, n)
 		}
 		if k.KID != "" {
 			if kids[k.KID] {
-				return fmt.Errorf("issuer %s: keys[%d]: the kid %q appears twice", i.Issuer, n, k.KID)
+				return fmt.Errorf("the starter %s: keys[%d]: the kid %q appears twice", i.Issuer, n, k.KID)
 			}
 			kids[k.KID] = true
 		}
 		if _, err := k.publicKey(read, fixtures); err != nil {
-			return fmt.Errorf("issuer %s: keys[%d]: %w", i.Issuer, n, err)
+			return fmt.Errorf("the starter %s: keys[%d]: %w", i.Issuer, n, err)
 		}
 	}
 	if i.Leeway != nil && *i.Leeway < 0 {
-		return fmt.Errorf("issuer %s: the leeway is negative", i.Issuer)
+		return fmt.Errorf("the starter %s: the leeway is negative", i.Issuer)
 	}
 	if i.Leeway != nil && time.Duration(*i.Leeway) > MaxLeeway {
-		return fmt.Errorf("issuer %s: the leeway %s is above %s", i.Issuer, time.Duration(*i.Leeway), MaxLeeway)
+		return fmt.Errorf("the starter %s: the leeway %s is above %s", i.Issuer, time.Duration(*i.Leeway), MaxLeeway)
 	}
 	if i.MaxLifetime != nil && *i.MaxLifetime <= 0 {
-		return fmt.Errorf("issuer %s: max_lifetime is not positive", i.Issuer)
+		return fmt.Errorf("the starter %s: max_lifetime is not positive", i.Issuer)
 	}
 	if a := i.Allow; a != nil {
 		if a.Claim == "" || len(a.Values) == 0 {
-			return fmt.Errorf("issuer %s: allow names no claim or no value", i.Issuer)
+			return fmt.Errorf("the starter %s: allow names no claim or no value", i.Issuer)
 		}
 		for _, v := range a.Values {
 			if v == "" {
-				return fmt.Errorf("issuer %s: allow lists an empty value", i.Issuer)
+				return fmt.Errorf("the starter %s: allow lists an empty value", i.Issuer)
 			}
 		}
 	}
 	if err := i.LabelMapping.check(); err != nil {
-		return fmt.Errorf("issuer %s: labels: %w", i.Issuer, err)
+		return fmt.Errorf("the starter %s: labels: %w", i.Issuer, err)
 	}
 	for key, c := range i.DetailMapping {
 		if !detailsKey(key) {
-			return fmt.Errorf("issuer %s: the details key %q is not 1 to 64 bytes without a control character or =", i.Issuer, key)
+			return fmt.Errorf("the starter %s: the details key %q is not 1 to 64 bytes without a control character or =", i.Issuer, key)
 		}
 		if c.Claim == "" {
-			return fmt.Errorf("issuer %s: details.%s names no claim", i.Issuer, key)
+			return fmt.Errorf("the starter %s: details.%s names no claim", i.Issuer, key)
 		}
 	}
 	if in := i.Introspection; in != nil {
 		if err := checkHTTPS(in.URL); err != nil {
-			return fmt.Errorf("issuer %s: introspection: %w", i.Issuer, err)
+			return fmt.Errorf("the starter %s: introspection: %w", i.Issuer, err)
 		}
 		if in.ClientID == "" || in.ClientSecretFile == "" {
-			return fmt.Errorf("issuer %s: introspection: no client id or no client secret file", i.Issuer)
+			return fmt.Errorf("the starter %s: introspection: no client id or no client secret file", i.Issuer)
 		}
 		if in.Cache != nil && *in.Cache <= 0 {
-			return fmt.Errorf("issuer %s: introspection: the cache is not positive", i.Issuer)
+			return fmt.Errorf("the starter %s: introspection: the cache is not positive", i.Issuer)
 		}
 	}
 	return nil
