@@ -237,22 +237,14 @@ func validSecret(s string) bool {
 }
 
 // relayed is a connection past its preamble: what the listener read beyond the line
-// is read first.
+// is read first. It hides CloseWrite, as today's gate does: a tunnel through it is
+// never half-closed.
 type relayed struct {
 	net.Conn
 	r *bufio.Reader
 }
 
 func (c *relayed) Read(b []byte) (int, error) { return c.r.Read(b) }
-
-// CloseWrite half-closes the connection underneath, for a tunnel whose session side
-// is done sending.
-func (c *relayed) CloseWrite() error {
-	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return cw.CloseWrite()
-	}
-	return nil
-}
 
 // inbox is the listener of a proxy [New] made: the connections a [Listener] hands it.
 type inbox struct {
