@@ -963,15 +963,18 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 
 // TestARunWithNoSessionThatDoesNotOpen pins a run with no session the gateway cannot
 // open. Refused with a code, its record, and what the server receives, hold the ping
-// and then dev.qory.run.refused with that code, and the connection gets today's 500;
-// failing without a code, the connection gets the 503 that says to try again. Either
-// way the next connection of the run key opens a run.
+// and then dev.qory.run.refused with that code, and the connection gets the 403 that
+// says who refused it and the code; failing without a code, after its tries, the
+// connection gets the 503 that says to try again. Either way the next connection of
+// the run key opens a run.
 func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]},"image":"example-image"}`, 'a')
-	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetOpenTries(&cfg, []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, time.Second)
+	s := startVerifying(t, cfg, nil, 0)
 	cred := credentialFor("rk-0001")
 	s.secrets = append(s.secrets, cred)
 	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+cred)) + "\r\n\r\n"
@@ -985,8 +988,8 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return resp, b
 	}
-	if resp, _ := connect(); resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("a refusal with a code: %d", resp.StatusCode)
+	if resp, b := connect(); resp.StatusCode != http.StatusForbidden || string(b) != "the gateway could not open the run: the gateway refused it, image_unknown" {
+		t.Errorf("a refusal with a code: %d %q", resp.StatusCode, b)
 	}
 	ids := runsIn(t, s.dir)
 	if len(ids) != 1 {

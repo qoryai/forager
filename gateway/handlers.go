@@ -66,12 +66,15 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
 // during its hold, or whose run credential the issuer no longer holds
-// active; 409 run_id_used for a run id
+// active, 503 issuer_unreachable when the issuer's introspection endpoint could not be
+// reached, and 502 issuer_answer_invalid when it gave no valid answer; 409 run_id_used
+// for a run id
 // that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
 // that are not the run credential's; the run's refusal when it does not open; else the
 // run answer.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
+	deadline := g.openDeadline()
 	if !mediaType(r, server.LinkContentType) {
 		invalid(w)
 		return
@@ -113,8 +116,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			refuseCredential(w)
 			return
 		}
-		if !id.isActive(r.Context()) {
-			refuseCredential(w)
+		if err := id.checkActive(r.Context()); err != nil {
+			switch {
+			case errors.Is(err, runcredential.ErrIssuerUnreachable):
+				refuse(w, http.StatusServiceUnavailable, event.ReasonIssuerUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
+			case errors.Is(err, runcredential.ErrAnswerInvalid):
+				refuse(w, http.StatusBadGateway, event.ReasonIssuerAnswerInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
+			default:
+				refuseCredential(w)
+			}
 			return
 		}
 	}
@@ -148,7 +158,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context()})
+	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context(), deadline: deadline})
 	if err != nil {
 		if r.Context().Err() != nil {
 			// The session gave up waiting for its answer: the run did not open, and its
@@ -415,7 +425,9 @@ func (g *Gateway) hasSessionRun(k runKeyID) bool {
 // refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
 // is the 410, the run credential noted; a run credential with a later exp keeps the run
 // going until then; and an issuer that no longer holds it active ends the run,
-// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+// run_ended_at_issuer, as does one whose introspection endpoint could not be reached,
+// issuer_unreachable, or gave no valid answer, issuer_answer_invalid: each is the 410.
+// It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
@@ -439,7 +451,7 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		return false
 	}
 	lr.renew(id)
-	if !lr.stillActive(r.Context()) {
+	if lr.stillActive(r.Context()) != nil {
 		if code, from, ended := lr.gone(); ended {
 			gone(w, code, from, lr.st.Started())
 		} else {

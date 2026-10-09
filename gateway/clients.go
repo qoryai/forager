@@ -34,10 +34,14 @@ type clientLogin struct{ g *Gateway }
 // run, which only its proxy secret reaches: a run key with sessions' runs open opens or
 // joins its client's run beside them. Every failure of the run credential is refused,
 // 407, and so is a run key the gateway refuses after the issuer's end, during its hold.
-// A run refused with a code is [errUnserved], and one that fails to open
-// without a code [errNotOpened].
+// An issuer whose introspection endpoint could not be reached is [errNotOpened], and
+// one that gave no valid answer an [*openRefused]. A run that does not open is
+// [errNotOpened] for a failure that may pass, Qory Apiary's that are asked again among
+// it, and for one with neither a code nor a status of Qory Apiary's; an [*openRefused]
+// for any other ([refusedText]).
 func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	g := c.g
+	deadline := g.openDeadline()
 	password, ok := basicPassword(authorization)
 	if !ok || password == "" {
 		return nil, nil, runcredential.ErrRefused
@@ -93,7 +97,15 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 		close(opened)
 		g.opens.Done()
 	}()
-	if !id.isActive(ctx) {
+	if err := id.checkActive(ctx); err != nil {
+		switch {
+		case errors.Is(err, runcredential.ErrIssuerUnreachable):
+			g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))
+			return nil, nil, errNotOpened
+		case errors.Is(err, runcredential.ErrAnswerInvalid):
+			g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))
+			return nil, nil, &openRefused{issuerAnswerInvalidText}
+		}
 		return nil, nil, runcredential.ErrRefused
 	}
 	// The issuer may have ended a run of the run key while it was asked.
@@ -104,19 +116,47 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 		g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
-	lr, err := g.openClient(id)
+	lr, err := g.openClient(id, deadline)
 	if errors.Is(err, errKeyRefused) {
 		g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
 	if err != nil {
 		g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))
-		if ref := (*accesskey.Refusal)(nil); errors.As(err, &ref) && ref.Code != "" {
-			return nil, nil, errUnserved
+		if text, ok := refusedText(err); ok {
+			return nil, nil, &openRefused{text}
 		}
 		return nil, nil, errNotOpened
 	}
 	return lr.px, lr.track, nil
+}
+
+// refusedText is what a client with no session reads of a run that did not open for a
+// reason that does not pass: who refused and the code, Qory Apiary for a code of its
+// answer, answer_unsigned among them, and the gateway for one it decides; and for a
+// signed answer of Qory Apiary's with no code, its status. False for a failure that may
+// pass, and for one with neither a code nor a status of Qory Apiary's: the client is to
+// try again.
+func refusedText(err error) (string, bool) {
+	var ref *accesskey.Refusal
+	var uncoded *server.AnswerError
+	var document *server.DocumentError
+	switch {
+	case passing(err):
+		return "", false
+	case errors.As(err, &ref) && ref.Code != "":
+		who := "the gateway"
+		if ref.From == accesskey.FromApiary || ref.Code == accesskey.CodeAnswerUnsigned {
+			who = "Qory Apiary"
+		}
+		return "the gateway could not open the run: " + who + " refused it, " + ref.Code, true
+	case errors.As(err, &uncoded):
+		return fmt.Sprintf("the gateway could not open the run: Qory Apiary refused it, status %d", uncoded.Status), true
+	case errors.As(err, &document):
+		// A signed 200 whose digest header is missing or misshapen.
+		return fmt.Sprintf("the gateway could not open the run: Qory Apiary refused it, status %d", http.StatusOK), true
+	}
+	return "", false
 }
 
 // openClient opens the run of a client with no session: the gateway's own run id, the
@@ -124,13 +164,14 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 // its proxy reading inside HTTPS with the gateway's own authority for the credentials,
 // the tools and the path rules its policy selects. The run is its run key's client's
 // run from then on; a run key the issuer ended while the run opened ends it,
-// run_ended_at_issuer, and is [errKeyRefused].
-func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
+// run_ended_at_issuer, and is [errKeyRefused]. Qory Apiary is tried again until
+// deadline.
+func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, error) {
 	req := &server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true}
 	g.mu.Lock()
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, _, err := g.open(req, opening{remote: true, id: &id, client: true})
+	lr, _, err := g.open(req, opening{remote: true, id: &id, client: true, deadline: deadline})
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +199,9 @@ var errKeyRefused = errors.New("the gateway refuses the run key")
 
 // join is a later connection of the run's run key: the run takes it, once its run
 // credential extends the run and the issuer, when asked, holds it active; an issuer
-// that does not ends the run, and the connection is refused, 407. A run key the gateway
+// that does not ends the run, and the connection is refused, 407, as is one whose
+// introspection endpoint gave no valid answer, with the 403 of an [*openRefused], or
+// could not be reached, with the 503 of [errNotOpened]. A run key the gateway
 // refuses after the issuer's end of another of its runs ends the run too,
 // run_ended_at_issuer, and the connection is refused, 407. A run that has ended takes
 // none, [errRunEnded].
@@ -176,8 +219,14 @@ func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func
 		return nil, nil, runcredential.ErrRefused
 	}
 	lr.renew(id)
-	if !lr.stillActive(ctx) {
+	if err := lr.stillActive(ctx); err != nil {
 		lr.g.presented(id)
+		switch {
+		case errors.Is(err, runcredential.ErrIssuerUnreachable):
+			return nil, nil, errNotOpened
+		case errors.Is(err, runcredential.ErrAnswerInvalid):
+			return nil, nil, &openRefused{issuerAnswerInvalidText}
+		}
 		return nil, nil, runcredential.ErrRefused
 	}
 	return lr.px, lr.track, nil
@@ -266,7 +315,7 @@ func (lr *linkRun) keep() {
 			lr.mu.Lock()
 			busy := lr.conns > 0 || lr.lastConn.After(lr.asked)
 			lr.mu.Unlock()
-			if busy && !lr.stillActive(lr.ctx) {
+			if busy && lr.stillActive(lr.ctx) != nil {
 				return
 			}
 		}

@@ -106,6 +106,10 @@ type Config struct {
 	// introspector, when not nil, is the introspection endpoint of an issuer that has
 	// one, in place of runcredential's client of it: tests set it.
 	introspector func(runcredential.Issuer) activeChecker
+	// openWaits and openWindow, when set, replace openWaits and openWindow, the tries
+	// of Qory Apiary as a run opens. Tests set them.
+	openWaits  []time.Duration
+	openWindow time.Duration
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
