@@ -201,14 +201,18 @@ release may change what an existing document does, and says so under Upgrading.
   credential whose `sub` is the run's run key. Answers on the link are unsigned, and
   carry the digest headers of a reload. A coded refusal on the link is
   `link-refusal.schema.json`, `error`, `names`, `from`, required, `gateway` or
-  `apiary`, the server's refusal passed on with its code and status, and `message`, the
-  error's text of a `500` `internal`, up to 8192 characters that may span lines, tab
+  `apiary`, the server's refusal passed on with its code and status, and `message`,
+  on every refusal of the link, the `500` `internal` of a run that fails to open
+  without a code among them: the text the session gives the user as the run's error,
+  today's word for word, Qory Apiary's URL in it for the server's, optional, a session
+  that reads none using the code, up to 8192 characters that may span lines, tab
   and newline its only control characters, with no other C0 control character, no DEL
   and no C1 control character, which holds no secret, run credential or image
   reference; every `410` on the link is one. A reload is a `GET` of
   `<run.url>/<run_id>`, answered with `link-reload-answer.schema.json`, the policy in
   force, its `digest`, `variables`, `placeholders`, `reserved`, `image` and `applied`,
-  never the proxy secret or the certificate authority; on the local link the link secret authorises it. A run opens with a `POST`
+  never the proxy secret or the certificate authority; on the local link the link
+  secret authorises it. A run opens with a `POST`
   of `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
   `labels`, `about`, `passes`, the names of the variables the run passes a value for,
   never a value, `images`, the session's `default` and `definitions`, each with `name`,
@@ -293,7 +297,8 @@ release may change what an existing document does, and says so under Upgrading.
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
-  `gateway` and from `apiary` among them, and `fixtures/invalid/link-*` the refused
+  `gateway` and from `apiary` among them, most with today's text as their `message`
+  and an `instance_limit` from `apiary` with Qory Apiary's URL in it, and `fixtures/invalid/link-*` the refused
   ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
