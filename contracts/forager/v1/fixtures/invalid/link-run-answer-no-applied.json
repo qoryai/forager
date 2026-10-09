@@ -23,5 +23,6 @@
   "reserved": [
     "EXAMPLE_SOURCE_KEY"
   ],
-  "proxy_secret": "fixture-proxy-secret-0000000000000000000001"
+  "proxy_secret": "fixture-proxy-secret-0000000000000000000001",
+  "run_secret": "fixture-run-secret-000000000000000000000001"
 }

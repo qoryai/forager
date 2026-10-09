@@ -908,7 +908,8 @@ and `undelivered/` toward the server. The session's machine holds `session.jsonl
 - `undelivered/`: the session's batches the gateway has not accepted, when there are
   any.
 
-Neither holds the run credential.
+Neither holds the run credential. `run-secret`: behind a separate gateway, the run's
+`run_secret`, mode 0600, written when the run opens; it is removed once nothing is owed.
 
 `fixtures/run/<id>/` are such directories, recorded. Qory Apiary's CI replays them.
 
@@ -1353,7 +1354,7 @@ the protocol is the same on both.
 | Where | one machine; `qory` starts the session and the gateway | the gateway `session.gateway.url` names, on a machine of its own |
 | Transport | a Unix socket, `sock`, in a private directory of the gateway's, `qory-link-*` in the system's temporary directory, mode `0700`, the socket mode `0600`; the directory is one of Forager's files (§The wall) | TLS 1.3 alone, on the gateway's one address |
 | The session knows the gateway | the socket's peer is the session's own user, by its uid | the certificate chain, for the host name of `session.gateway.url`, and the pin when one is set |
-| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection | `Authorization: Bearer <run credential>` on every request |
+| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch | `Authorization: Bearer <run credential>` on every request; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch |
 | The run's labels | the session's | the run credential's |
 | `narrowing` | refused | accepted |
 
@@ -1604,6 +1605,7 @@ document:
              "source": "fetched", "url": "https://apiary.example/v1/run-configuration",
              "digest": "<hex sha256 of the policy as canonical JSON>", "run_configuration": "sha256=<hex>"},
  "proxy_secret": "<the run's proxy secret>",
+ "run_secret": "<the run's secret>",
  "certificate_authority": "-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n"}
 ```
 
@@ -1642,6 +1644,10 @@ document:
 - `proxy_secret`, required: the run's proxy secret (Agent traffic, below), 22 to 256
   characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, which a URL's password and the relay's
   preamble carry as they are.
+- `run_secret`, required: the run's secret: at least 128 bits from the system's random
+  source, made by the gateway for this run and given once, 22 to 256 characters of
+  `A-Z`, `a-z`, `0-9`, `_` and `-`. The session sends it in `X-Qory-Run-Secret` on every
+  reload and batch. Compared in constant time, never logged.
 - `certificate_authority`: the certificate of the run's own certificate authority, PEM,
   present when the request's `wall` is true and the gateway reads inside HTTPS for the
   run: for a credential it holds, a tool it starts or a path rule, the policy's or the
@@ -1677,13 +1683,14 @@ keeps its own file record of its own events, numbered as today (§The record fil
 record is the session's, not the run's stream. The gateway keeps the record of what it
 sent, which `qory run resend` sends again through `gateway.Resend` (§The server, After
 Forager stops unexpectedly). The
-gateway answers a batch as the server does, unsigned: a `2xx` is accepted. Behind a
-separate gateway, a batch is of the run its first event's `subject` names, which must be
-a run of the run credential's run key: any other, or none, is `401`
-`run_credential_refused`, so no run id can be probed. A batch whose run the gateway
-cannot tell, one over the size limit, one that does not decode, and on the local link
-one whose first event names no run it holds, is a `400` `invalid_request` that ends no
-run. Any other `400` `invalid_request` to a batch ends its run at the gateway: the
+gateway answers a batch as the server does, unsigned: a `2xx` is accepted. A batch is of
+the run whose `run_secret` it carries, checked before its body is read; behind a
+separate gateway that run must be of the run credential's run key. A batch without it,
+or with one of no such run, is `401` `run_credential_refused` behind a separate gateway
+and `400` `invalid_request` on the local link, and ends no run, so no run can be probed.
+A batch whose body does not arrive whole, its client gone before the end, is `400`
+`invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
+not decode among them, ends its run at the gateway: the
 gateway writes `dev.qory.run.exited` with `reason: session_lost`, since it no longer
 accepts the session's stream, refuses the run's proxy secret, and answers the session's
 further requests with a `410` `batch_refused` (The end of a run at the gateway, below).
@@ -1695,7 +1702,7 @@ A session writes no event the gateway or the run credential decides. The gateway
 refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
 its events:
 
-- has a `subject` that is not the batch's run, the one its first event names;
+- has a `subject` that is not the batch's run, the one whose `run_secret` it carries;
 - has a type the gateway writes, `dev.qory.ping` or `dev.qory.run.egress`;
 - is a `dev.qory.run.started` whose `opened_by` is not `session`, whose `credential` is
   not the run's, `issuer` behind a separate gateway and `none` on the local link, whose
@@ -1832,18 +1839,19 @@ digest unchanged. Behind a separate gateway, to a refusal with a code of
 ```
 
 Behind a separate gateway, the reload carries a run credential whose `sub` is the run's
-run key, and any other is `401` `run_credential_refused`; the credential is checked
-first, so a `run_id` that is not a run of its run key, unknown or another run key's, is
-`run_credential_refused` too, and no run id can be probed. On the local link the link
-secret authorises it: `qory` hands the secret to the session alone, of the same user, and
-the reload re-sends no secret of the run. A walled agent never reaches the socket, and an
+run key, and the run's `run_secret`, whose run the `run_id` must be, and any other is
+`401` `run_credential_refused`; the credential is checked first, so a `run_id` that is
+not a run of its run key, unknown or another run key's, is `run_credential_refused` too,
+and no run id can be probed. On the local link the link secret and the run's
+`run_secret` authorise it: `qory` hands the secret to the session alone, of the same
+user, and the reload re-sends no secret of the run but its `run_secret`. A walled agent never reaches the socket, and an
 unwalled one is never given the link secret: `qory` hands the session the secret in
 memory, never in an environment or a file, so a program the agent starts does not inherit
 it. Without a wall, enforcement is cooperative ([the wall](../../../docs/wall.md)). A
 `run_id` of a run that has ended is a `410`, with the code and the `from` of its end at
 the gateway (above) when it ended there, else `run_closed` from `gateway`; on the local
-link an unknown `run_id` is `400` `invalid_request`. Toward the server no reload request
-names a run: the run configuration is fetched by the run's labels.
+link an unknown `run_id` or a missing secret is `400` `invalid_request`. Toward the server
+no reload request names a run: the run configuration is fetched by the run's labels.
 
 **Agent traffic.** Inside a wall, the relay connects to the gateway's proxy, the
 discovery's `proxy.address`, on loopback on one machine, and between two machines over
@@ -1935,7 +1943,7 @@ unique; each period of activity is a run, of its own run id, with the run key as
 `run_key` label. Each run request of a session opens a run of its own, so one run key
 may have several runs at once, and one after another; every later request of a
 session's run carries a run credential of that run's run key, and a refreshed run
-credential continues only its own run. A refreshed run credential's labels and
+credential continues only its own run, with that run's `run_secret`. A refreshed run credential's labels and
 `about.details` are the run's: one whose `forge` or `repository` differs is `403`
 `target_differs_from_credential`, and one whose other label or key of `about.details`
 differs, or is left out, `403` `differs_from_credential`, each named with the run

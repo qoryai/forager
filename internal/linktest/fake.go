@@ -24,6 +24,9 @@ const (
 // ProxySecret is the proxy secret a fake gateway's default run answer gives.
 const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 
+// RunSecret is the run secret a fake gateway's default run answer gives.
+const RunSecret = "fake-run-secret-0123456789abcdefghij"
+
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
 // unless it is a []byte, none when nil, and headers of its own beside the digest.
 type Reply struct {
@@ -56,6 +59,7 @@ type Fake struct {
 	raw       [][]byte
 	batches   [][]map[string]any
 	reloads   []string
+	secrets   []string
 	preambles []string
 	proxied   []string
 }
@@ -162,6 +166,14 @@ func (f *Fake) Reloads() []string {
 	return slices.Clone(f.reloads)
 }
 
+// RunSecrets are the X-Qory-Run-Secret values the reloads and batches received carried,
+// in order, joined by a comma when one carried several, empty for none.
+func (f *Fake) RunSecrets() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.secrets)
+}
+
 // Preambles are the first lines of the connections the fake proxy received, without
 // their newline.
 func (f *Fake) Preambles() []string {
@@ -179,15 +191,15 @@ func (f *Fake) Proxied() []string {
 
 // RunAnswer is the fake's default answer to a run request: the request's run id and
 // labels, no policy, with the members of policy_applied of none, the proxy secret
-// ProxySecret, and behind a wall the image the request's default names, none when it
-// names none.
+// ProxySecret, the run secret RunSecret, and behind a wall the image the request's
+// default names, none when it names none.
 func RunAnswer(req server.LinkRunRequest) map[string]any {
 	labels := req.Labels
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	a := map[string]any{
-		"version": 1, "run_id": req.RunID, "credential": "none", "labels": labels, "proxy_secret": ProxySecret,
+		"version": 1, "run_id": req.RunID, "credential": "none", "labels": labels, "proxy_secret": ProxySecret, "run_secret": RunSecret,
 		"applied": map[string]any{"mode": "observe", "allow": []string{}, "deny": []string{}, "source": "none"},
 	}
 	if req.Wall && req.Images != nil && req.Images.Default != "" {
@@ -248,6 +260,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, RunPath+"/"):
 		id := strings.TrimPrefix(r.URL.Path, RunPath+"/")
 		f.reloads = append(f.reloads, id)
+		f.secrets = append(f.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
 		if h := f.onReload; h != nil {
 			f.mu.Unlock()
 			reply = h(id)
@@ -260,6 +273,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(body, &evs)
 		f.batches = append(f.batches, evs)
 		f.digests = append(f.digests, r.Header.Get(server.HeaderRunConfiguration))
+		f.secrets = append(f.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
 		if h := f.onBatch; h != nil {
 			f.mu.Unlock()
 			reply = h(evs)

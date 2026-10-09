@@ -126,6 +126,14 @@ func Held(g *Gateway) (runs, keys, spent, kept int) {
 	return len(g.runs), len(g.clientRuns), len(g.spent), len(g.endedUntil)
 }
 
+// SecretsIndexed counts the run secrets g knows a run by: its live runs', its ended
+// ones', and those its spent runs left until they lapse.
+func SecretsIndexed(g *Gateway) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.bySecret)
+}
+
 // SetOpened sets what is called once a run on the one address opened, before the
 // gateway looks again whether it refuses the run's run key.
 func SetOpened(c *Config, f func()) { c.opened = f }

@@ -549,6 +549,13 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 				req, _ := http.NewRequest(http.MethodPost, s.url()+"/v1/events", bytes.NewReader(body))
 				req.Header.Set("Content-Type", server.ContentType)
 				req.Header.Set("Authorization", link.BearerScheme+" "+cred)
+				// The run's secret, which the run directory keeps from the run's open.
+				rs, err := os.ReadFile(filepath.Join(own.Dir, "run-secret"))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				req.Header.Set(server.HeaderRunSecret, strings.TrimSuffix(string(rs), "\n"))
 				c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: s.pool, MinVersion: tls.VersionTLS13}}}
 				resp, err := c.Do(req)
 				if err != nil {

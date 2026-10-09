@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -73,6 +75,10 @@ type ResendResult struct {
 //
 // The record is never completed: a session that was lost leaves its run's end to the
 // gateway, which writes it itself. A record still held by its session is [ErrRunning].
+// Every batch carries the run's secret the directory keeps, run-secret, which is
+// removed once nothing is owed: everything accepted, the run ended at the gateway, or
+// nothing owed from the start; it is kept after a refusal or a failure to send. A
+// directory that keeps none sends without it, and the gateway answers with the 401.
 // A directory that holds the run's stream, events.jsonl, is a gateway's record, which
 // gateway.Resend sends. A run the gateway has ended answers with its 410: RunClosed,
 // and the events stay in the directory. A refusal of the run credential, the 401
@@ -127,6 +133,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		}
 	}
 	if len(owed) == 0 {
+		removeRunSecret(spec.Dir)
 		return ResendResult{}, nil
 	}
 	k, err := spec.Gateway.link(spec.ForagerVersion, nil)
@@ -134,6 +141,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		return ResendResult{}, err
 	}
 	defer k.Close()
+	k.UseRunSecret(readRunSecret(spec.Dir))
 	disc, err := k.Discover(ctx)
 	if err != nil {
 		return ResendResult{}, err
@@ -141,6 +149,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	target := sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}
 	owed = slices.DeleteFunc(owed, func(l recordedLine) bool { return !target.Wants(l.Type) })
 	if len(owed) == 0 {
+		removeRunSecret(spec.Dir)
 		return ResendResult{}, nil
 	}
 	// What was spooled is in session.jsonl as well, and is spooled again if the
@@ -178,6 +187,10 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 			}
 		}
 		res.Undelivered = len(owed) - res.Sent
+	}
+	if res.RunClosed || res.Undelivered == 0 {
+		// Nothing more is owed: the gateway took everything, or ended the run.
+		removeRunSecret(spec.Dir)
 	}
 	return res, nil
 }
@@ -286,3 +299,74 @@ func sessionRecord(file string) ([]recordedLine, error) {
 	}
 	return out, nil
 }
+
+// runSecretFile is the file of the run directory that keeps the run's secret behind a
+// separate gateway, the run answer's run_secret followed by a newline, mode 0600: written
+// when the run opens, so that [Resend] reaches the run, and removed once nothing is owed.
+const runSecretFile = "run-secret"
+
+// writeRunSecret writes the run's secret to the run directory, mode 0600, by a temporary
+// file renamed into place. Its error never holds the secret.
+func writeRunSecret(dir, secret string) error {
+	f, err := os.CreateTemp(dir, "."+runSecretFile+"-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.WriteString(secret + "\n")
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, filepath.Join(dir, runSecretFile))
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+// readRunSecret is the run's secret the run directory keeps, empty when it keeps none.
+// A file that holds more than a secret could is none.
+func readRunSecret(dir string) string {
+	f, err := os.Open(filepath.Join(dir, runSecretFile))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxRunSecretFile+1))
+	if err != nil || len(b) > maxRunSecretFile {
+		return ""
+	}
+	return strings.TrimSuffix(string(b), "\n")
+}
+
+// maxRunSecretFile is the most bytes a run-secret file holds: the longest secret the
+// schema allows and its newline.
+const maxRunSecretFile = 257
+
+// owes reports whether the session's record in dir holds an event the link takes,
+// target's, that no batch the gateway accepted contained, as [Resend] reads it: one it
+// would send. A record it cannot read owes.
+func owes(dir string, target sink.Target) bool {
+	lines, err := sessionRecord(filepath.Join(dir, sink.SessionFile))
+	if err != nil {
+		return true
+	}
+	accepted, _, err := sink.Delivered(dir)
+	if err != nil {
+		return true
+	}
+	for _, l := range lines {
+		if !accepted[l.Sequence] && l.posted() && target.Wants(l.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeRunSecret removes the run's secret from the run directory, once nothing is owed.
+func removeRunSecret(dir string) { os.Remove(filepath.Join(dir, runSecretFile)) }

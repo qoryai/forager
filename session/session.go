@@ -541,6 +541,19 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	mu.Lock()
 	sinks = append(sinks, posts)
 	mu.Unlock()
+	if remote != nil {
+		// Behind a separate gateway the run directory keeps the run's secret from now on,
+		// so a resend reaches the run, even after a session that was killed; it goes at
+		// the end, after the wall is removed, when the record owes the gateway nothing.
+		if err := writeRunSecret(dir, answer.RunSecret); err != nil {
+			return fail(err)
+		}
+		defer func() {
+			if !owes(dir, sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}) {
+				removeRunSecret(dir)
+			}
+		}()
+	}
 	// What the gateway decided the run with, which the session applies and decides
 	// none of again: the image, the placeholders, the names it sets, the variables, the
 	// authority and the members of policy_applied it decides.

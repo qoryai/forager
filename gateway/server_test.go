@@ -291,7 +291,7 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 		d := h.post(heartbeat(runID))
 		return d.Accepted() && d.Digests.RunConfiguration != first
 	})
-	r, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 		h.post(heartbeat(runID))
 		return h.reported("the reload failed: ")
 	})
-	again, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	again, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil || again.Digest != r.Digest {
 		t.Errorf("after a failed reload: %v %+v", err, again)
 	}
@@ -393,7 +393,7 @@ func TestAReloadRecordsTheTunnelsItClosesAfterItsPolicyApplied(t *testing.T) {
 				t.Errorf("the closed tunnel is recorded before the session's policy_applied: %v", types(h.record(runID)))
 			}
 			if writes {
-				r, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+				r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -461,7 +461,7 @@ func TestANewConnectionAfterAReloadFollowsItsPolicyApplied(t *testing.T) {
 	if slices.ContainsFunc(h.record(runID), denied) {
 		t.Errorf("a connection under the new policy is recorded before its policy_applied: %v", types(h.record(runID)))
 	}
-	r, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
 	if err != nil {
 		t.Fatal(err)
 	}

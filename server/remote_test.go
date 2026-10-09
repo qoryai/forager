@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -93,6 +94,7 @@ type remoteGateway struct {
 
 	mu      sync.Mutex
 	auths   []string
+	secrets []string
 	agents  []string
 	bodies  [][]byte
 	refusal func(w http.ResponseWriter, r *http.Request) bool
@@ -123,6 +125,7 @@ func (g *remoteGateway) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	g.mu.Lock()
 	g.auths = append(g.auths, strings.Join(r.Header.Values("Authorization"), "|"))
+	g.secrets = append(g.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), "|"))
 	g.agents = append(g.agents, r.Header.Get("User-Agent"))
 	g.bodies = append(g.bodies, body)
 	refuse := g.refusal
@@ -169,8 +172,8 @@ func remoteLink(t *testing.T, url string, trust server.RemoteTLS, cred func(cont
 // TestTheRemoteLinkSpeaksTheContractOverTLS pins one run's requests behind a separate
 // gateway: discovery, the run request with its narrowing, the reload and a batch, each
 // over TLS 1.3 with the run credential as Authorization: Bearer, asked for before each
-// request so a refreshed one is sent from then on; no proxy of the environment is
-// used.
+// request so a refreshed one is sent from then on, and the reload and the batch with the
+// run answer's run secret besides; no proxy of the environment is used.
 func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
@@ -205,6 +208,12 @@ func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	want := []string{"Bearer " + credential, "Bearer " + credential, "Bearer " + refreshed, "Bearer " + refreshed}
 	if fmt.Sprint(auths) != fmt.Sprint(want) || asked.Load() != 4 {
 		t.Errorf("Authorization %v, the credential asked for %d times", auths, asked.Load())
+	}
+	g.mu.Lock()
+	secrets := slices.Clone(g.secrets)
+	g.mu.Unlock()
+	if want := []string{"", "", runSecret, runSecret}; fmt.Sprint(secrets) != fmt.Sprint(want) {
+		t.Errorf("the run secrets carried %q, want the run answer's on the reload and the batch alone", secrets)
 	}
 	for _, a := range agents {
 		if a != userAgent {
