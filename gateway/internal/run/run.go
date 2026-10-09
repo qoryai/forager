@@ -108,7 +108,8 @@ type Run struct {
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
 // node's policy, the server's run configuration narrowed by it, or none, mode observe.
 // A run without a wall refuses a policy that selects credentials or tools or has path
-// rules, the node's beside a server's included, and one that selects an image. Behind a
+// rules, the node's beside a server's included, and one that selects an image, a
+// [*refusal.NeedsWall]. Behind a
 // wall the policy's image is resolved among [Config.Images]: a definition that cannot be
 // one, a name defined twice and a name the machine does not define, image_unknown, are
 // no run.
@@ -145,11 +146,10 @@ func Decide(cfg Config) (*Run, error) {
 		}
 		r.runDigest = pol.RunConfiguration
 	}
-	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0) && !cfg.Wall {
-		return nil, errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them")
-	}
-	if pol.Policy.Image != "" && !cfg.Wall {
-		return nil, fmt.Errorf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", pol.Policy.Image)
+	if !cfg.Wall {
+		if err := needsWall(pol); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.Wall {
 		img, err := cfg.Images.resolve(pol.Policy.Image)
@@ -160,6 +160,29 @@ func Decide(cfg Config) (*Run, error) {
 	}
 	r.start, r.pol = pol, pol
 	return r, nil
+}
+
+// needsWall refuses what a policy selects that needs a wall, a [*refusal.NeedsWall]
+// naming it: credentials, tools and path rules, the node's beside a server's included,
+// and an image.
+func needsWall(pol *policy.Loaded) error {
+	var names []string
+	if len(pol.Policy.Credentials) > 0 {
+		names = append(names, "credentials")
+	}
+	if len(pol.Policy.Tools) > 0 {
+		names = append(names, "tools")
+	}
+	if len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 {
+		names = append(names, "paths")
+	}
+	if pol.Policy.Image != "" {
+		names = append(names, "image="+pol.Policy.Image)
+	}
+	if names == nil {
+		return nil
+	}
+	return &refusal.NeedsWall{Names: names}
 }
 
 // Hold resolves the credentials the policy in force selects and chooses its tools,

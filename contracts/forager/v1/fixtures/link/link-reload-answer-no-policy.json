@@ -1,3 +1,8 @@
 {
-  "version": 1
+  "version": 1,
+  "applied": {
+    "mode": "observe",
+    "allow": [],
+    "source": "none"
+  }
 }

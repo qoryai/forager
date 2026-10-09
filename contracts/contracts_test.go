@@ -150,11 +150,11 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 	return kind
 }
 
-// TestLinkFixturesValidate pins that every document under fixtures/link passes the
-// schema of the gateway's link its name starts with: the discovery of the local link and
-// of a separate gateway, each with its proxy address, a run request without a wall, one
-// with a wall, the names it passes and its images, and one with a narrowing as well, a
-// run answer with a wall, its placeholders, reserved names, image and certificate
+// TestLinkFixturesValidate pins that every document under fixtures/link passes the schema
+// of the gateway's link its name starts with: the discovery of the local link and of a
+// separate gateway, each with its proxy address, a run request without a wall, one with a
+// wall, the names it passes and its images, and one with a narrowing as well, a run
+// answer with a wall, its placeholders, reserved names, image, applied and certificate
 // authority, one with a wall and an image but no certificate authority, one without a
 // wall and one without a policy, a reload answer with and without a policy, a batch of a
 // session's events without sequence, a batch of a run.refused with a session's own code,
@@ -243,18 +243,18 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // quiet_seconds and another reason, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
-// answer without its proxy secret or whose image has no reference, a link reload answer
-// with the proxy secret or the certificate authority, a link batch whose event carries a
-// sequence, that holds a ping or a run.egress, a run.started a gateway opened, a
-// run.exited with a reason other than timeout, or a run.refused with a gateway's code,
-// run_closed, another code of the server's or a name of the form <member>=<value>, a link
-// discovery that lists a node or has no heartbeat interval or proxy, a link refusal
-// without from, and run credentials with alg none or HS256, without an audience, with a
-// label of claims and no join, a key without its file, a plain http issuer, a run_key
-// from a claim other than sub, or a member the schema does not define. The longest schema
-// name the file name starts with is the schema, so
-// run-configuration-variable-value-not-string is held to the run configuration and not to
-// a schema named run.
+// answer without its proxy secret or applied or whose image has no reference, a link
+// reload answer with the proxy secret or the certificate authority or whose applied holds
+// variables, a link batch whose event carries a sequence, that holds a ping or a
+// run.egress, a run.started a gateway opened, a run.exited with a reason other than
+// timeout, or a run.refused with a gateway's code, run_closed, another code of the
+// server's or a name of the form <member>=<value>, a link discovery that lists a node or
+// has no heartbeat interval or proxy, a link refusal without from, and run credentials
+// with alg none or HS256, without an audience, with a label of claims and no join, a key
+// without its file, a plain http issuer, a run_key from a claim other than sub, or a
+// member the schema does not define. The longest schema name the file name starts with is
+// the schema, so run-configuration-variable-value-not-string is held to the run
+// configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
