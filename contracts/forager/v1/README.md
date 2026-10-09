@@ -739,7 +739,7 @@ The types, one namespace. Forager's own:
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the ping, or since `dev.qory.run.started` when the run has no server | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.run.exited` | the run ended: the runtime exited, or the run ended without one; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state` and `exit_code` on a session's run, `signal`, `reason`, `quiet_seconds` when `reason` is `quiet`, `duration_ms` |
-| `dev.qory.run.refused` | the run was refused before it started; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last. The session writes it: when the server closed the run, with a `410` `run_closed` in its signed answer, recorded in the file sink alone; when a gateway refused the run request, with the code in its answer on the link, recorded in the session's file record and on the link, and the gateway delivers the session's events | `code`; for the server's close `run_closed` and `status`, `410`; for a gateway's refusal its code and, when it lists any, `names` |
+| `dev.qory.run.refused` | the run was refused before it started; in place of `dev.qory.run.started`, the first event after the ping where there is one, heartbeats aside, and the last. The session writes it: when the server closed the run, with a `410` `run_closed` in its signed answer, recorded in the file sink alone; when a gateway refused the run request, with the code in its answer on the link, which opens no run at the gateway, recorded in the session's own record alone, and nothing reaches the server for it; when the session fails after the gateway's run answer and before its process starts, posted on the link too, and the gateway delivers it | `code`; for the server's close `run_closed` and `status`, `410`; for a gateway's refusal its code and, when it lists any, `names` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
@@ -1401,6 +1401,12 @@ The names of `target_differs_from_credential` and of `differs_from_credential` a
 other, the member being `labels.<key>` or `about.details.<key>`:
 `labels.repository=example-namespace/project`, for one.
 
+A run request the gateway refuses opens no run at the gateway. The session records the
+`dev.qory.run.refused` it received in its own record alone, as with the server's `410`
+before `dev.qory.run.started`, and nothing reaches the server for it. A session that
+fails after the run answer and before its process starts posts its
+`dev.qory.run.refused` on the link: the gateway holds that run, and delivers it.
+
 The answer is a `200`, `application/json`, whose body is a `link-run-answer.schema.json`
 document:
 
@@ -1446,7 +1452,9 @@ keeps its own file record of its own events, numbered as today (§The record fil
 that record is the session's, not the run's stream. The gateway keeps the record of
 what it sent, and resends it after a crash (§The server, After Forager stops
 unexpectedly). The gateway answers a batch as the server does, unsigned: a `2xx` is
-accepted, and anything but a `2xx` or a `410` is retried.
+accepted. A `400` `invalid_request` is final: the session stops delivering to the
+gateway, reports it, and the run continues on its file record, as after a `410` without
+a code toward the server. Anything else but a `2xx` or a `410` is retried.
 
 A session writes no event the gateway or the run credential decides. The gateway
 refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
@@ -2052,7 +2060,7 @@ the option experimental.
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
-| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started, the `dev.qory.run.refused` of a run a gateway refused with `differs_from_credential`, each name a member and the run credential's value, the first and the last batch of a run a gateway opened, `gateway-first.json` and `gateway-quiet.json`, and the `dev.qory.run.exited` of such a run that ends `gateway_lost`, with no `state` and no `exit_code`, `gateway-lost.json` | `batch.schema.json` |
+| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started, the first and the last batch of a run a gateway opened, `gateway-first.json` and `gateway-quiet.json`, and the `dev.qory.run.exited` of such a run that ends `gateway_lost`, with no `state` and no `exit_code`, `gateway-lost.json`; and, in the shape of a batch, `refused-differs-from-credential.json`, the `dev.qory.run.refused` a session records when a gateway refuses its run request with `differs_from_credential`, each name a member and the run credential's value | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |

@@ -128,12 +128,15 @@ release may change what an existing document does, and says so under Upgrading.
   each member and the run credential's value, `labels.<key>=<value>` or
   `about.details.<key>=<value>`, the one value a refusal's names carry.
   `events/run.refused.schema.json` lists the four codes and says so of `names`, and
-  that the session records a gateway's refusal it received, in its record and on the
-  link, and the gateway delivers the session's events;
+  that a run request the gateway refuses opens no run at the gateway: the session
+  records the refusal it received in its own record alone, and nothing reaches the
+  server for it. A session that fails after the run answer and before its process
+  starts posts its `dev.qory.run.refused` on the link, and the gateway delivers it;
   `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
   `refusal.GatewayDecides` reports a gateway's code. `fixtures/batch/` has
-  `refused-differs-from-credential.json`.
+  `refused-differs-from-credential.json`, the `dev.qory.run.refused` a session records
+  when a gateway refuses its run request, in the shape of a batch.
 - Contract `v1` revision 1, amended in place, gains `run-credentials.schema.json`: the
   issuers of run credentials a gateway accepts, the list under `gateway.run_credentials`
   of the operator's `forager.yaml`. Per issuer: `issuer`, an https URL; `audience`,
@@ -223,7 +226,9 @@ release may change what an existing document does, and says so under Upgrading.
   reasons. `dev.qory.run.policy_applied` is the session's, from the run answer and a
   reload answer whose digest changed; the gateway merges only its own
   `dev.qory.run.egress` into a session's run, and writes `dev.qory.run.policy_applied`
-  for a run with no session. A walled agent never reaches the local link's socket, and
+  for a run with no session. A `400` `invalid_request` to a batch is final: the session
+  stops delivering to the gateway, reports it, and the run continues on its file
+  record. A walled agent never reaches the local link's socket, and
   an unwalled one never holds the link secret, which `qory` hands the session in
   memory. A session's
   heartbeats are its run's, and a session silent for 3 × the interval ends the run,
