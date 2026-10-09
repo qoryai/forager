@@ -173,7 +173,7 @@ res, err := session.Run(ctx, session.Spec{
   `CAFile` and its pin.
 - The run credential's file must not sit in a directory a walled run mounts, and an
   unwalled agent's environment must not carry it. Keeping it out of both is the
-  caller's job, as `qory` does.
+  caller's job.
 - No access key is involved, and the gateway holds no files on the session's machine, so
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.
