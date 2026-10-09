@@ -9,9 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io/fs"
 	"maps"
 	"math/big"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -46,6 +48,13 @@ func TestKnownAnswersAreCurrent(t *testing.T) {
 			t.Errorf("%s differs from what the seed makes (go generate ./runcredential)", name)
 		}
 	}
+	src, err := knownanswers.FixtureKeysSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile("fixturekeys.go"); err != nil || !bytes.Equal(got, src) {
+		t.Errorf("fixturekeys.go differs from what the seed makes (go generate ./runcredential): %v", err)
+	}
 	var keys struct {
 		Seed string `json:"seed"`
 	}
@@ -60,6 +69,42 @@ func TestKnownAnswersAreCurrent(t *testing.T) {
 		if int(b) != 193+n {
 			t.Errorf("seed byte %d is %d; want %d", n, b, 193+n)
 		}
+	}
+}
+
+// TestFixtureKeysAreTheKnownAnswers pins that the keys Key.PublicKey refuses as fixture
+// keys are exactly the public keys of the known answers, rs256.pem, es256.pem and
+// eddsa.pem, each once.
+func TestFixtureKeysAreTheKnownAnswers(t *testing.T) {
+	var files []string
+	for _, name := range []string{"rs256.pem", "es256.pem", "eddsa.pem"} {
+		block, _ := pem.Decode(knownFile(t, name))
+		if block == nil {
+			t.Fatalf("%s holds no PEM block", name)
+		}
+		files = append(files, base64.StdEncoding.EncodeToString(block.Bytes))
+	}
+	if !slices.Equal(fixtureKeys, files) {
+		t.Errorf("fixtureKeys differ from rs256.pem, es256.pem and eddsa.pem (go generate ./runcredential)")
+	}
+	if len(slices.Compact(slices.Sorted(slices.Values(fixtureKeys)))) != 3 {
+		t.Errorf("fixtureKeys hold %d keys; want three different ones", len(fixtureKeys))
+	}
+	for _, name := range []string{"rs256.pem", "es256.pem", "eddsa.pem"} {
+		pub, err := parsePublicKey(map[string]string{"rs256.pem": RS256, "es256.pem": ES256, "eddsa.pem": EdDSA}[name], knownFile(t, name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !fixtureKey(pub) {
+			t.Errorf("%s is not reported as a fixture key", name)
+		}
+	}
+	other, err := madeKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub, err := parsePublicKey(ES256, other["es256.pem"]); err != nil || fixtureKey(pub) {
+		t.Errorf("a key made by the tests is reported as a fixture key: %v", err)
 	}
 }
 
@@ -136,7 +181,12 @@ func TestKnownAnswers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := l.Check(read); err != nil {
+		// The published fixture keys are refused outside the known answers; the known
+		// answers reach the parser through the path that skips that check alone.
+		if err := l.Check(read); err == nil || !strings.Contains(err.Error(), "a published fixture key") {
+			t.Fatalf("%s: Check: %v; want the fixture key refused", name, err)
+		}
+		if err := l.check(read, true); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		configs[name] = l[0]
@@ -177,7 +227,7 @@ func TestKnownAnswers(t *testing.T) {
 			if c.RefusedAt == "header" {
 				return
 			}
-			pub, err := i.Keys[n].PublicKey(read)
+			pub, err := i.Keys[n].publicKey(read, true)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -67,7 +67,14 @@ func TestLabels(t *testing.T) {
 		{"a repository of 257 bytes", issuer(), map[string]any{"project": strings.Repeat("p", 257-len("example-namespace/"))}, nil, "a label is beyond the label limits"},
 		{"a repository of 256 bytes", issuer(), map[string]any{"project": strings.Repeat("p", 256-len("example-namespace/"))}, map[string]string{"forge": "example-forge", "repository": "example-namespace/" + strings.Repeat("p", 256-len("example-namespace/")), "run_key": "rk-0001"}, ""},
 		{"a sub of 257 bytes", issuer(), map[string]any{"sub": strings.Repeat("r", 257)}, nil, "a label is beyond the label limits"},
-		{"a sub not UTF-8", issuer(), map[string]any{"sub": "rk-\xff"}, nil, "a label is beyond the label limits"},
+		{"a sub not UTF-8", issuer(), map[string]any{"sub": "rk-\xff"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a sub with a line feed", issuer(), map[string]any{"sub": "rk-0001\nother"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a sub with U+2028", issuer(), map[string]any{"sub": "rk-0001\u2028"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a repository claim with a tab", issuer(), map[string]any{"project": "pro\tject"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a repository claim with U+0085", issuer(), map[string]any{"namespace": "example\u0085namespace"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a repository from one claim with DEL", fromClaim, map[string]any{"forge": "example-forge", "project": "project\x7f"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a forge claim with a carriage return", fromClaim, map[string]any{"forge": "example-forge\r"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
+		{"a forge claim with NUL", fromClaim, map[string]any{"forge": "example\x00forge"}, nil, "a claim of labels is not UTF-8 or holds a control character"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			claims := validClaims()

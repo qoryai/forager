@@ -40,9 +40,14 @@ Every claim the mapping names for a label is a string, and is required: a run cr
 without one is refused, since a run's labels come from the run credential alone. A
 descriptive claim is a string when present, and a run credential that carries one of
 another type is refused; one it does not carry leaves that `about.details` key undecided,
-and the client's own value stands. A label value is at most 256 bytes of UTF-8. A claim that names the target never
-contains the `join` the operator sets between them, so two different targets never make
-one repository.
+and the client's own value stands. A label value is at most 256 bytes of UTF-8, and no
+claim the mapping names, for a label or for `about.details`, holds a control character.
+A claim that names the target never contains the `join` the operator sets between them,
+so two different targets never make one repository.
+
+A descriptive claim, such as `requester`, may be personal data: its value appears in the
+run's `about.details`, and in the names of a refusal when a session sends that key with
+another value.
 
 The examples here use `namespace` and `project` as the claims that name the target and
 `requester` as a descriptive claim. The names are the operator's choice; the gateway holds
@@ -164,7 +169,8 @@ gateway:
   the client sends sets a label. The control plane picks the run's target by these
   labels, and a run credential whose labels match no target opens no run.
 - `details` names the `about.details` keys the run credential decides, each from one
-  claim.
+  claim. A key holds no `=`: a refusal names a key as `about.details.<key>=<value>`, and
+  a key with `=` would make that name ambiguous.
 
 With this run credential, the run's labels are `forge: example-forge`,
 `repository: example-namespace/project` and `run_key: rk-0001`, and its `about.details`
@@ -211,7 +217,7 @@ label such as `run_key` or an `about.details` key such as `requester`, with anot
 the gateway refuses it with `differs_from_credential`. Each refusal names the member and
 the run credential's value, `labels.<key>=<value>` or `about.details.<key>=<value>`.
 
-The session takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment. A variable
+qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment. A variable
 an issuer itself sets for the run, `QORY_RUN_CREDENTIAL_SECRET` or any other, is the
 operator's to deny through the node's variables policy.
 
@@ -236,5 +242,6 @@ The contract publishes known answers under
 [`fixtures/known-answers/run-credentials/`](../contracts/forager/v1/fixtures/known-answers/run-credentials/):
 fixture keys of each algorithm derived from a published seed, two configurations of the
 fixture issuer, and run credentials signed under the keys, each with the outcome it gets
-at a fixed time and, for a refused one, the step that refuses it. No gateway accepts the
-fixture keys outside a test.
+at a fixed time and, for a refused one, the step that refuses it. These keys are public:
+anyone can derive their private keys from the seed. Forager refuses them in a
+configuration; never pin them.
