@@ -1,0 +1,5 @@
+{
+  "error": "session_lost",
+  "message": "the gateway refused the run: session_lost",
+  "from": "gateway"
+}

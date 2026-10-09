@@ -44,8 +44,9 @@ const (
 )
 
 // The reasons of dev.qory.run.exited, why a run ended other than by the runtime's own
-// exit. The session writes timeout and run_closed, and the resend of a record writes
-// gateway_lost; the gateway writes the others.
+// exit. The session writes timeout and run_closed, and in its own record the code of the
+// gateway's 410, batch_refused among them; the resend of a record writes gateway_lost;
+// the gateway writes the others.
 const (
 	ReasonTimeout           = "timeout"
 	ReasonRunClosed         = "run_closed"
@@ -54,6 +55,10 @@ const (
 	ReasonQuiet             = "quiet"
 	ReasonCredentialExpired = "credential_expired"
 	ReasonRunEndedAtIssuer  = "run_ended_at_issuer"
+	// ReasonBatchRefused is the gateway's 410 to a session whose batch it refused, and
+	// the reason of the session's own dev.qory.run.exited after it; the gateway's record
+	// of the same end says session_lost.
+	ReasonBatchRefused = "batch_refused"
 )
 
 // Prefix is what every type of the contract starts with; a descriptor's session types

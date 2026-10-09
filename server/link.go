@@ -39,10 +39,12 @@ const LocalOrigin = "http://localhost"
 const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway, which
-// the session records as the reason of its dev.qory.run.exited: the server closed the
-// run, the run credential expired with no fresh one, or its issuer reports it no longer
-// active. A 410 with another code, or none, is run_closed.
-var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer}
+// the session records as the reason of its dev.qory.run.exited: the server or the
+// gateway closed the run, the run credential expired with no fresh one, its issuer
+// reports it no longer active, the gateway heard nothing from the session for too
+// long, or it refused a batch of the session's. A 410 with another code, or none, is
+// run_closed.
+var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonSessionLost, event.ReasonBatchRefused}
 
 // CodeInvalidRequest is the gateway's 400 to a request of the link its rules refuse; to
 // a batch it ends the run.
@@ -756,7 +758,7 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 // delivery with the given id, with the run configuration digest when it holds one, and
 // returns what the gateway answered, its Link set: a 2xx is accepted; a 410 ends the
 // run with its End, one of [EndCodes], and its From; a 400 invalid_request ends it
-// too, the gateway having ended the run, with run_closed; anything else is retried. The
+// too, the gateway having ended the run, with batch_refused; anything else is retried. The
 // digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
 // Timeout is an error. The body is the session's events of the run, with their ids and
 // without sequence.
@@ -783,8 +785,8 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 		d.End, d.From = a.end(), a.from()
 	case a.status == http.StatusBadRequest && d.Code == CodeInvalidRequest:
 		// The gateway ends a run whose batch it refuses: its later requests are a 410
-		// run_closed, and the session records run_closed as after one.
-		d.End, d.From = accesskey.CodeRunClosed, a.from()
+		// batch_refused, and the session records batch_refused as after one.
+		d.End, d.From = event.ReasonBatchRefused, a.from()
 	default:
 		d.Digests = a.digests
 	}

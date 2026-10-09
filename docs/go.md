@@ -282,8 +282,11 @@ A program that needs code of its own implements the interface.
   `Timeout`.
 - `Undelivered`, how many of the session's events the gateway did not accept.
 - `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
-  server, or `gateway`, and `ClosedReason` the code, `run_closed`, `credential_expired`
-  or `run_ended_at_issuer`. The runtime was stopped as at its time limit.
+  server, or `gateway`, and `ClosedReason` the code of the gateway's `410`, unchanged:
+  `run_closed`, `credential_expired` or `run_ended_at_issuer`; from `gateway`,
+  `session_lost` when it heard nothing from the session for 3 heartbeat intervals and
+  `batch_refused` when it refused a batch of the session's. The runtime was stopped as
+  at its time limit.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.

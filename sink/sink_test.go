@@ -444,7 +444,9 @@ func TestTheGatewaysEndOfTheRunReachesTheCaller(t *testing.T) {
 	}{
 		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway"},
 		{http.StatusGone, `{"error":"run_closed","from":"apiary"}`, "run_closed apiary"},
-		{http.StatusBadRequest, `{"error":"invalid_request"}`, "run_closed gateway"},
+		{http.StatusGone, `{"error":"session_lost","from":"gateway"}`, "session_lost gateway"},
+		{http.StatusGone, `{"error":"batch_refused","from":"gateway"}`, "batch_refused gateway"},
+		{http.StatusBadRequest, `{"error":"invalid_request"}`, "batch_refused gateway"},
 	} {
 		g := &linkGateway{answer: func(int) (int, string) { return c.status, c.body }}
 		var mu sync.Mutex

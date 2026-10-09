@@ -1,0 +1,5 @@
+{
+  "error": "batch_refused",
+  "message": "the gateway refused the run: batch_refused",
+  "from": "gateway"
+}
