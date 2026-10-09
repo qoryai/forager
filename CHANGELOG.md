@@ -659,7 +659,10 @@ release may change what an existing document does, and says so under Upgrading.
   30 minutes when zero.
 - `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
   is, since the run never opened at the server: its ping was never accepted, or it had
-  no server.
+  no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
+  resend reports then, which a caller that reports `NotOpened` itself may leave out,
+  and `gateway.ResendTorn` the one for lines of the record that are not whole events,
+  a format of their count and the record's path.
 
 #### Changed
 

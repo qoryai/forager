@@ -400,7 +400,8 @@ with `e2e` to check them together.
 - `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, and with
   `Config.Listen` on one address of its own, with the proxy, the credentials and the
   tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
-  and the `Gateway` it returns, `Resend` with its `ResendConfig`, and the types their
+  and the `Gateway` it returns, `Resend` with its `ResendConfig` and the lines it
+  reports, `ResendTorn`, `ResendNoServer` and `ResendNotOpened`, and the types their
   fields need are the package's whole surface.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
