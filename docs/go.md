@@ -201,9 +201,11 @@ with `e2e` to check them together.
   - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
     `program/`.
   - `runcredential/`: the run credential an issuer gives a run: the configuration of the
-    issuers a gateway accepts and its checks, the checks of a run credential's header and
-    of its verified claims, and the mapping of its claims to the run's labels and
-    `about.details`. See [run credentials](gateway-run-credentials.md).
+    issuers a gateway accepts and its checks, the verifier of a run credential (its
+    serialisation, header, signature, claims and scope), the mapping of its claims to the
+    run's labels and `about.details`, the client of an issuer's introspection endpoint,
+    and the ended run keys a gateway keeps in its state directory. See
+    [run credentials](gateway-run-credentials.md).
   - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the
     loopback address, the variables that name the run's socket and a tool's socket, the
     headers the proxy sets for a tool, the placeholder value, and the names of the

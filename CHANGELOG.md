@@ -186,6 +186,48 @@ release may change what an existing document does, and says so under Upgrading.
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
   and that the run credential never appears in an event, a record or a log.
+- `runcredential.NewVerifier` and `Verifier.Verify` verify a run credential under the
+  issuers a gateway accepts, their keys read once. The serialisation is the strict JWS
+  compact form: at most `runcredential.MaxCredentialBytes`, 16384 bytes, exactly three
+  parts of base64url without padding, white space or another byte, with no bits beyond
+  a part's last byte. The header is one JSON object with each member name once, through
+  `Issuer.SelectKey`. The signature is verified under each key the header selects, over
+  the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5 with SHA-256, `ES256` of exactly
+  64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by Ed25519. The payload is read only
+  after a signature verified, one JSON object with each member name once, and the issuer
+  is the one whose key verified it and whose issuer equals `iss`. Then `CheckClaims`,
+  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the issuer, the run
+  key, `exp`, the claims, the labels and the details. Every failure is
+  `runcredential.ErrRefused`, whose text holds no part of the run credential.
+- `Issuer.SelectKey` refuses a `typ` other than `JWT`, compared without regard to case.
+- `Issuer.Check` refuses a `leeway` above `runcredential.MaxLeeway`, 5 minutes, and
+  `Issuer.CheckClaims` refuses every run credential under such an issuer built in Go.
+  `run-credentials.schema.json` says so.
+- `runcredential.NewIntrospector` and `Introspector.Active` ask an issuer's RFC 7662
+  endpoint whether a run credential is still active: a `POST` over TLS 1.2 or later of
+  the form `token` and `token_type_hint=access_token`, with HTTP Basic as the configured
+  client, the client id and the secret each form-encoded, the secret read once from its
+  file; directly, through no proxy, following no redirect, within
+  `runcredential.IntrospectionTimeout`, 10 seconds. It is active only on status 200 with
+  one JSON object, each member name once, of at most
+  `runcredential.MaxIntrospectionAnswer`, 65536 bytes, whose `active` is the JSON
+  `true`; any other answer, or a failure, is not active. Each answer, a failure
+  included, is kept for the issuer's `cache`, or the heartbeat interval, by the SHA-256
+  of the run credential, and callers for the same run credential share one request. Its
+  errors name neither the run credential nor the secret.
+- `runcredential.OpenEnded` and `runcredential.Ended` keep the ended run keys by issuer
+  in `ended-run-keys.json` of the gateway's state directory, mode 0600, written
+  atomically, in a directory of mode 0700 that only its user writes. Each is kept until
+  its run credential's `exp` plus 5 minutes, the longest leeway, and dropped on open and
+  on `Ended.Add`; `Ended.Has` asks. A file that cannot be read is refused, so a gateway
+  never starts having forgotten an ended run.
+- The known answers of the run credential gain the step `serialisation` and run
+  credentials refused at it (padding, a line feed, a space, four parts, two parts), at
+  the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature
+  (over an altered header; an `ES256` signature of 63 or 65 bytes, with `R` zero or `S`
+  the order) and at the claims (a member name twice, no `exp`, no `aud`), and accepted
+  ones with `typ` `jwt` and without `typ`. `runcredential`'s tests run
+  `Verifier.Verify` on every one.
 - Forager reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and

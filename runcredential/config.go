@@ -1,21 +1,23 @@
 // Package runcredential is the run credential of the contract, contracts/forager/v1: the
-// configuration of the issuers a gateway accepts, its checks, the checks of a run
-// credential's claims, and the mapping of its claims to a run's labels and
-// about.details.
+// configuration of the issuers a gateway accepts, its checks, the verifier of a run
+// credential, the mapping of its claims to a run's labels and about.details, the client
+// of an issuer's introspection endpoint, and the ended run keys a gateway keeps.
 //
 // A run credential is a JWT (RFC 7519) signed as a JWS (RFC 7515) with an asymmetric
-// key, which an issuer gives one run. A gateway verifies it in four steps: the header
-// selects a pinned key ([Issuer.SelectKey]), the signature is verified under it, the
-// claims are checked ([Issuer.CheckClaims]), and the scope is checked ([Issuer.Allowed]).
-// The labels and the details are then made from the claims ([Issuer.Labels],
-// [Issuer.Details]), and what a session sends beside the run credential is compared
-// with them ([Compare]).
+// key, which an issuer gives one run. [Verifier.Verify] verifies it: the serialisation
+// is the strict compact form, the header selects a pinned key ([Issuer.SelectKey]), the
+// signature is verified under it over the exact bytes received, and only then are the
+// claims read and checked ([Issuer.CheckClaims]), the scope checked ([Issuer.Allowed]),
+// and the labels and the details made from the claims ([Issuer.Labels],
+// [Issuer.Details]). What a session sends beside the run credential is compared with
+// them ([Compare]). An [Introspector] asks the issuer whether a run credential is still
+// active (RFC 7662), failing closed, and [Ended] keeps the run keys whose run ended, so
+// a restart does not reopen them.
 //
-// The signature step is the gateway's: every function of this package that reads
-// claims takes claims a verifier has already verified, and reads nothing else of the
-// request. Every failure of a run credential is one opaque error, [ErrRefused], which
-// a gateway answers with [Refused]: the error names no claim value and never contains
-// the run credential.
+// The functions that read claims, beside Verify, take claims a verifier has already
+// verified, and read nothing else of the request. Every failure of a run credential is
+// one opaque error, [ErrRefused], which a gateway answers with [Refused]: the error
+// names no claim value and never contains the run credential.
 package runcredential
 
 import (
@@ -48,6 +50,10 @@ func supported(alg string) bool { return alg == RS256 || alg == ES256 || alg == 
 
 // DefaultLeeway is the clock skew allowed in the time checks when an issuer sets none.
 const DefaultLeeway = 60 * time.Second
+
+// MaxLeeway is the largest leeway an issuer may set: a leeway stretches every time
+// check, and one above a few minutes would keep an expired run credential alive.
+const MaxLeeway = 5 * time.Minute
 
 // MinRSABits is the smallest RSA modulus a pinned RS256 key may have, in bits.
 const MinRSABits = 2048
@@ -257,8 +263,8 @@ func (l Issuers) check(read ReadFile, fixtures bool) error {
 //   - each key's public_key_file, read with read, is one PEM block of type PUBLIC KEY of
 //     the key type its alg needs, and none of the published fixture keys (see
 //     [Key.PublicKey]);
-//   - the leeway is not negative, and max_lifetime and the introspection cache are
-//     positive when they are set;
+//   - the leeway is not negative and at most [MaxLeeway], and max_lifetime and the
+//     introspection cache are positive when they are set;
 //   - the scope, the labels and the details are well formed: forge is a constant or a
 //     claim, repository a constant, a claim, or claims with a join, run_key the claim
 //     sub, a constant a label value of 1 to 256 bytes of UTF-8 with no control
@@ -316,6 +322,9 @@ func (i Issuer) check(read ReadFile, fixtures bool) error {
 	}
 	if i.Leeway != nil && *i.Leeway < 0 {
 		return fmt.Errorf("issuer %s: the leeway is negative", i.Issuer)
+	}
+	if i.Leeway != nil && time.Duration(*i.Leeway) > MaxLeeway {
+		return fmt.Errorf("issuer %s: the leeway %s is above %s", i.Issuer, time.Duration(*i.Leeway), MaxLeeway)
 	}
 	if i.MaxLifetime != nil && *i.MaxLifetime <= 0 {
 		return fmt.Errorf("issuer %s: max_lifetime is not positive", i.Issuer)
