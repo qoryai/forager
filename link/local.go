@@ -1,6 +1,7 @@
 package link
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 )
@@ -13,8 +14,9 @@ const ToolDirPrefix = "qory-tool-"
 // Local is what a session needs of a gateway on the same machine, the local link: the
 // gateway hands it to whoever starts the session.
 //
-// Its Secret is never printed: every verb of the fmt package, String, GoString and a
-// value logged with log/slog show it as [redacted], so a Local can be logged whole.
+// Its Secret is never printed: every verb of the fmt package, String, GoString, a value
+// logged with log/slog and its JSON show it as [redacted], so a Local can be logged
+// whole.
 type Local struct {
 	// Socket is the path of the gateway's link socket, [LinkSocketName] in a private
 	// directory that begins with [LinkDirPrefix].
@@ -86,3 +88,7 @@ func (l Local) LogValue() slog.Value {
 		slog.Any("reserved", s.Reserved),
 	)
 }
+
+// MarshalJSON is l as encoding/json writes a struct, its Secret redacted. A Local is
+// never handed on as JSON; this is for a log or a dump that writes it so.
+func (l Local) MarshalJSON() ([]byte, error) { return json.Marshal(l.shown()) }

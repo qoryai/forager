@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +118,10 @@ func TestTheServerClosesARun(t *testing.T) {
 	}
 	if got := c.lines(t); got[len(got)-1].Type == event.RunExited {
 		t.Error("the server was sent the gateway's run.exited")
+	}
+	// The user is told once, in today's words.
+	if got := h.reportsWith("closed the run"); len(got) != 1 || !strings.Contains(got[0], "the server closed the run with a signed 410 run_closed; the run ends, and no further batch is sent") {
+		t.Errorf("reports %q", got)
 	}
 }
 

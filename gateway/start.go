@@ -173,14 +173,11 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.ln.Close()
 		return nil, err
 	}
-	var refusedPreamble, refusedSecret sync.Once
+	var refused sync.Once
 	g.proxies, err = proxy.NewListener("", func(why string) {
-		// Each kind is told once: a peer that keeps trying says nothing new.
-		once := &refusedSecret
-		if why == proxy.RefusedPreamble {
-			once = &refusedPreamble
-		}
-		once.Do(func() { report(why) })
+		// Told once, as today's session tells it for its one run: a peer that keeps
+		// trying says nothing new.
+		refused.Do(func() { report(why) })
 	})
 	if err != nil {
 		g.ln.Close()
@@ -195,7 +192,11 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	})
 	sum := sha256.Sum256(g.discovery)
 	g.discoveryDigest = "sha256=" + hex.EncodeToString(sum[:])
-	g.link = newLinkListener(g.ln, secret)
+	uid := os.Getuid()
+	if cfg.uid != nil {
+		uid = *cfg.uid
+	}
+	g.link = newLinkListener(g.ln, secret, uid)
 	g.http = &http.Server{Handler: g.handler(), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
 	go g.http.Serve(g.link)
 	ok = true

@@ -291,14 +291,20 @@ func (h *harness) record(runID string) []recorded {
 }
 
 func (h *harness) reported(part string) bool {
+	return len(h.reportsWith(part)) > 0
+}
+
+// reportsWith are the lines the gateway reported that hold part.
+func (h *harness) reportsWith(part string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	var out []string
 	for _, l := range h.reports {
 		if strings.Contains(l, part) {
-			return true
+			out = append(out, l)
 		}
 	}
-	return false
+	return out
 }
 
 // ev is one of the session's events of the run, as a link batch carries it.
