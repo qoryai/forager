@@ -43,6 +43,9 @@ type process struct {
 	// changes while the runtime runs. Neither means anything on pipes.
 	cols, rows int
 	resized    func(cols, rows int)
+	// exited is called the moment the runtime's exit is observed, when Wait returns,
+	// before what it wrote last is flushed; nil for nothing.
+	exited func()
 }
 
 // The size a pseudo-terminal gets when Forager's own input is not a terminal, or
@@ -93,6 +96,13 @@ func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 	return cmd
 }
 
+// observed tells exited, when there is one, that the runtime's exit was observed.
+func (p *process) observed() {
+	if p.exited != nil {
+		p.exited()
+	}
+}
+
 // runPipes runs the process on pipes: its input is stdin, its standard output goes to
 // the terminal-less log as stdout, to the output source when there is one, and to
 // stdout; its standard error to the log as stderr and to stderr.
@@ -113,6 +123,7 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
 	}
 	err := cmd.Wait()
+	p.observed()
 	out.Flush()
 	errs.Flush()
 	if lines != nil {
@@ -155,6 +166,7 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 		io.Copy(io.MultiWriter(log, p.stdout), ptmx)
 	}()
 	err = cmd.Wait()
+	p.observed()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

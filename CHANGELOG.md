@@ -1129,6 +1129,11 @@ release may change what an existing document does, and says so under Upgrading.
   not valid, a refusal or no answer in time, the exit decides, `succeeded` on 0 and `failed` otherwise, and nothing is added
   to the record or reported. A run stopped at its time limit, by the caller's context or
   by the gateway asks nothing, and a run on the local link never asks or waits.
+  `Result.Cancelled`, beside `Result.TimedOut`, says the caller's context had ended
+  when the session observed the runtime's exit, whoever stopped the runtime; a context
+  that ends after the exit, while the gateway is asked or the sinks close, leaves it
+  false, as do the time limit and a signal from elsewhere. `dev.qory.run.exited` is
+  unchanged.
 - The session fetches the run's configuration from the gateway again whenever the
   gateway's answers carry a new run-configuration digest, and records it in another
   `dev.qory.run.policy_applied`.

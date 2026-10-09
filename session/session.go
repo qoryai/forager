@@ -201,6 +201,16 @@ type Result struct {
 	Reason string
 	// TimedOut says the runtime was stopped at the spec's Timeout.
 	TimedOut bool
+	// Cancelled says the run's context had ended when the session observed the
+	// runtime's exit, whatever the exit status or the signal, and whoever stopped the
+	// runtime: the session at the context's end, or the runtime itself, at a Ctrl-C
+	// that reached both. In a race it is whichever the session saw first: a context
+	// that had ended when the exit was observed makes it true. A context that ends
+	// later, while the gateway is asked for the outcome or the sinks close, leaves it
+	// false, as do the time limit, which is TimedOut, never both, and a signal from
+	// elsewhere while the context lasts. It is the result's alone: run.exited says
+	// nothing of it.
+	Cancelled bool
 	// Undelivered is how many of the session's events the gateway did not accept.
 	Undelivered int
 	// RunClosed says the gateway closed the run, a 410 on the gateway's link, or the
@@ -832,6 +842,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Timeout > 0 {
 		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
 	}
+	// Whether the run was cancelled is decided the moment the runtime's exit is
+	// observed: the caller's context had ended by then, and not the limit first. What
+	// ends it later, while the gateway is asked or the sinks close, changes nothing.
+	var cancelled bool
+	proc.exited = func() { cancelled = ctx.Err() != nil && !errors.Is(context.Cause(limited), errTimeout) }
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)
@@ -896,7 +911,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if reason != "" {
 		exited["reason"] = reason
 	}
-	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, RunClosed: closed}
+	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
 	switch {
 	case closed:
 		// The end of the run at the gateway is in its stream already: the session
