@@ -421,7 +421,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		args[i] = strings.ReplaceAll(a, "${argument}", h.argument)
 	}
 	cmd := exec.CommandContext(ctx, d.Adapter[0], args...)
-	// The access key's variables are the gateway's, and no credential program's.
+	// The access key's variables are Forager's, and no credential program's.
 	cmd.Env = accesskey.WithoutVariables(os.Environ())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

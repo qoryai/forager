@@ -1646,7 +1646,7 @@ func TestRunClosedBeforeTheRuntimeStartsEndsTheRun(t *testing.T) {
 		}
 		once.Do(func() {
 			// Hold the start here, after run.started, until the server has closed the
-			// run and the gateway has read the answer.
+			// run and the session has read the answer.
 			c.closed.Store(true)
 			for c.closedAnswers.Load() == 0 {
 				time.Sleep(10 * time.Millisecond)

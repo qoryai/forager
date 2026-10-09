@@ -1,4 +1,4 @@
-# A server elsewhere: https, the origin only. The gateway finds the endpoints under it,
+# A server elsewhere: https, the origin only. Forager finds the endpoints under it,
 # signs every request as the access key, and verifies every answer under the pin. The
 # access key's secret lives outside this document.
 version: 1
