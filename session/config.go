@@ -167,7 +167,7 @@ func bothDeny(ceiling, own []string) []string {
 }
 
 // Variables are the run's and the machine's variables and how a run takes the
-// server's: for qory, --env, wall.env and forager.yaml's variables section.
+// server's: for qory, --env and wall.env.
 //
 // For each name the highest source that sets it wins: the run's fixed names, those
 // Forager, the wall, the runtime's preparation and the placeholders set and
@@ -190,8 +190,7 @@ type Variables struct {
 	Machine []string
 	// Deny are names and patterns, in which * matches any run of characters, of
 	// variables the run leaves out of the server's, Run, Machine and
-	// [Spec.LaunchDefaults], matched regardless of case: forager.yaml's
-	// variables.deny.
+	// [Spec.LaunchDefaults], matched regardless of case. qory sets none.
 	Deny []string
 	// Unwalled is how a run without a Wall takes the server's variables:
 	// [UnwalledAccept] applies them as a walled run does, after the deny list;
