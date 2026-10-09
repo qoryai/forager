@@ -28,12 +28,13 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a separate
-// gateway, a heartbeat the discovery cannot announce, no place for the records.
+// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: an address
+// with no issuer of run credentials, a certificate with no address, a heartbeat the
+// discovery cannot announce, no place for the records.
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
-		"an address":                  {Dir: dir, Listen: "127.0.0.1:0"},
+		"an address without issuers":  {Dir: dir, Listen: "127.0.0.1:0"},
 		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
 		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
 		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
@@ -166,6 +167,7 @@ func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.Close()
+	again.UseRunSecret(a.RunSecret)
 	if _, err := again.Discover(context.Background()); err != nil {
 		t.Fatalf("with another listener at the socket's path: %v", err)
 	}
@@ -210,6 +212,20 @@ func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
 	for _, out := range outs {
 		if strings.Contains(out, secret) || !strings.Contains(out, h.g.Addr()) {
 			t.Errorf("printed %s", out)
+		}
+	}
+	// A copy of the Gateway, *g, whose print methods are on the pointer, prints its
+	// fields: neither the link secret nor a live run's proxy secret is among what they
+	// show, under a verb that reprints what a field points to either.
+	a := h.open(server.LinkRunRequest{})
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+		if out := gateway.PrintedCopy(h.g, format); strings.Contains(out, secret) || strings.Contains(out, a.ProxySecret) || !strings.Contains(out, "secret") && format == "%+v" {
+			t.Errorf("a copy printed with %s: %s", format, out)
+		}
+	}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		if out := gateway.PrintedSecret(h.g, format); out != "[redacted]" {
+			t.Errorf("the secret's own type printed with %s: %s", format, out)
 		}
 	}
 }
@@ -450,18 +466,18 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		if d := h.post(started(a.RunID, labels), applied(a.RunID, a.Applied)); !d.Accepted() {
 			t.Fatalf("%s: the first batch: %+v", name, d)
 		}
-		if d := h.post(batch(a.RunID, a)...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(batch(a.RunID, a)...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: %+v", name, d)
 		}
-		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.Code != "batch_refused" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: after the refusal: %+v", name, d)
 		}
 		b, _ := json.Marshal([]map[string]any{heartbeat(a.RunID)})
-		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["message"] != "the gateway refused the run: run_closed" {
+		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "batch_refused" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: batch_refused" {
 			t.Errorf("%s: the 410's message: %d %v", name, status, got)
 		}
 		var r *accesskey.Refusal
-		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "run_closed" || r.From != "gateway" {
+		if _, err := h.linkOf(a.RunID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "batch_refused" || r.From != "gateway" {
 			t.Errorf("%s: a reload after the refusal: %v", name, err)
 		}
 	}
@@ -503,14 +519,14 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 				t.Fatalf("%s: the first batch: %+v", name, d)
 			}
 		}
-		d, err := h.link.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+		d, err := h.linkOf(a.RunID).Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+		if d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: %+v", name, d)
 		}
-		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.Code != "batch_refused" || d.End != "batch_refused" || d.From != "gateway" {
 			t.Errorf("%s: after the refusal: %+v", name, d)
 		}
 		if !first {
@@ -522,10 +538,15 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 	maps.Copy(runs, rawRuns)
 	// A run.started whose labels are not the run's, before any.
 	a := h.open(server.LinkRunRequest{Labels: labels})
-	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "run_closed" {
+	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("other labels: %+v", d)
 	}
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "run_closed" {
+	// A run.started that says an issuer gave the local link's run its credential.
+	b := h.open(server.LinkRunRequest{Labels: labels})
+	if d := h.post(issuerStarted(b.RunID, labels)); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+		t.Errorf("an issuer's credential on the local link: %+v", d)
+	}
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "batch_refused" {
 		t.Errorf("delivery %+v", d)
 	}
 	for name, runID := range runs {
@@ -560,11 +581,15 @@ func TestASessionThatSendsNothingIsLost(t *testing.T) {
 			t.Fatalf("a run that keeps asking: %+v", d)
 		}
 	}
-	if d := h.post(heartbeat(lost.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+	if d := h.post(heartbeat(lost.RunID)); d.Status != http.StatusGone || d.Code != "session_lost" || d.End != "session_lost" || d.From != "gateway" {
 		t.Errorf("a lost run: %+v", d)
 	}
+	b, _ := json.Marshal([]map[string]any{heartbeat(lost.RunID)})
+	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: session_lost" {
+		t.Errorf("a lost run's 410: %d %v", status, got)
+	}
 	h.post(exited(kept.RunID))
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" {
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "session_lost" {
 		t.Errorf("delivery %+v", d)
 	}
 	lines := h.record(lost.RunID)

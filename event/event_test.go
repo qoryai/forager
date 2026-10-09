@@ -49,8 +49,10 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	}{
 		{"events/run.exited.schema.json", "reason", []string{event.ReasonTimeout, event.ReasonRunClosed,
 			event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet,
-			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer}},
+			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonBatchRefused,
+			event.ReasonIssuerUnreachable, event.ReasonIssuerAnswerInvalid}},
 		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
+		{"events/run.started.schema.json", "credential", []string{event.CredentialIssuer, event.CredentialNone}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {

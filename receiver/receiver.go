@@ -123,9 +123,6 @@ type Handler struct {
 	// more; true is a signed 410 without a code, after which Forager sends no
 	// further batch and its run goes on. Nil means never.
 	Stop func(runID string) bool
-	// Closed, when set, is called per run id to learn whether the receiver has closed
-	// the run; true is a signed 410 run_closed, which ends the run. Nil means never.
-	Closed func(runID string) bool
 	// Admit, when set, is called for a ping to learn whether the instance may start a
 	// run; false is a signed 409 instance_limit, and the run does not start. Nil
 	// admits every instance.
@@ -352,9 +349,8 @@ type head struct {
 // deliver answers one verified delivery, in the events endpoint's order: a batch that
 // is not one, or a ping whose interval_seconds is absent or outside 1 to 300, 400
 // invalid_request; one whose events the store holds every one of,
-// 202 again; an event of a run the receiver closed, 410 run_closed; of a run it wants
-// nothing more of, 410; a ping from an instance it does not admit, 409
-// instance_limit; otherwise each new event stored and 202.
+// 202 again; an event of a run it wants nothing more of, 410; a ping from an instance
+// it does not admit, 409 instance_limit; otherwise each new event stored and 202.
 func (h *Handler) deliver(w http.ResponseWriter, r *http.Request, v verified, body []byte) {
 	var batch []json.RawMessage
 	if err := json.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
@@ -378,11 +374,6 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request, v verified, bo
 	}
 	subject := heads[len(heads)-1].Subject
 	if fresh {
-		if h.Closed != nil && h.Closed(subject) {
-			h.digests(w, subject)
-			h.refuseSigned(w, v, http.StatusGone, "run_closed")
-			return
-		}
 		if h.Stop != nil && h.Stop(subject) {
 			h.digests(w, subject)
 			h.answer(w, v, http.StatusGone, nil)

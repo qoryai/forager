@@ -35,7 +35,7 @@ func posted(g *linktest.Fake) []string { return types(g.Events()) }
 // an error before a run directory is made.
 func TestARunWithoutAGatewayIsNone(t *testing.T) {
 	sp := spec(t)
-	sp.Gateway = session.Gateway{}
+	sp.Gateway = nil
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "no gateway") {
 		t.Errorf("a run without a gateway: %v", err)
 	}
@@ -94,7 +94,9 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 // refusal is a session.Refusal with its code, names and who refused, recorded as
 // run.refused in the session's record alone, the server's with its status; the
 // gateway's wall_required is the error a run without a wall always had, word for
-// word, recorded nowhere; a 410 is the run closed before it started; and a 500 is the
+// word, recorded nowhere; a 410 is the run closed before it started, the server's or
+// the gateway's with each of its codes, recorded as run.refused with the 410's code and
+// status, which the schema validates; and a 500 is the
 // failure the gateway's message says, word for word, or one naming its status without
 // one, recorded nowhere. Nothing is posted for any of them.
 func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
@@ -117,9 +119,34 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			"", "", nil, "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them", nil},
 		"wall_required for an image": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "image=with-docker")},
 			"", "", nil, `the policy selects the image "with-docker", which needs a wall: without one the runtime is this machine's process`, nil},
-		"the server's close": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "apiary")},
-			"run_closed", accesskey.FromApiary, nil, "the server closed the run before it started: run_closed (status 410)",
+		"the gateway's run_closed": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "gateway")},
+			"run_closed", accesskey.FromGateway, nil, "the gateway closed the run before it started: run_closed (status 410)",
 			map[string]any{"code": "run_closed", "status": 410.0}},
+		"the gateway's session_lost": {linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
+			"session_lost", accesskey.FromGateway, nil, "the gateway closed the run before it started: session_lost (status 410)",
+			map[string]any{"code": "session_lost", "status": 410.0}},
+		"the gateway's batch_refused": {linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
+			"batch_refused", accesskey.FromGateway, nil, "the gateway closed the run before it started: batch_refused (status 410)",
+			map[string]any{"code": "batch_refused", "status": 410.0}},
+		"the gateway's credential_expired": {linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
+			"credential_expired", accesskey.FromGateway, nil, "the gateway closed the run before it started: credential_expired (status 410)",
+			map[string]any{"code": "credential_expired", "status": 410.0}},
+		"the gateway's run_ended_at_issuer": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},
+			"run_ended_at_issuer", accesskey.FromGateway, nil, "the gateway closed the run before it started: run_ended_at_issuer (status 410)",
+			map[string]any{"code": "run_ended_at_issuer", "status": 410.0}},
+		"the gateway's 410 issuer_unreachable": {linktest.Reply{Status: 410, Body: linktest.Refusal("issuer_unreachable", "gateway")},
+			"issuer_unreachable", accesskey.FromGateway, nil, "the gateway closed the run before it started: issuer_unreachable (status 410)",
+			map[string]any{"code": "issuer_unreachable", "status": 410.0}},
+		"the gateway's 503 issuer_unreachable": {linktest.Reply{Status: 503, Body: map[string]any{"error": "issuer_unreachable", "from": "gateway", "message": "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again"}},
+			"issuer_unreachable", accesskey.FromGateway, nil, "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again",
+			map[string]any{"code": "issuer_unreachable"}},
+		"the gateway's 502 issuer_answer_invalid": {linktest.Reply{Status: 502, Body: map[string]any{"error": "issuer_answer_invalid", "from": "gateway", "message": "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer"}},
+			"issuer_answer_invalid", accesskey.FromGateway, nil, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer",
+			map[string]any{"code": "issuer_answer_invalid"}},
+		"the server's not_found": {linktest.Reply{Status: 404, Body: linktest.Refusal("not_found", "apiary")},
+			"not_found", accesskey.FromApiary, nil, "the gateway: not_found (status 404)", map[string]any{"code": "not_found", "status": 404.0}},
+		"a code of the server's the contract does not list": {linktest.Reply{Status: 404, Body: linktest.Refusal("example_server_code", "apiary")},
+			"example_server_code", accesskey.FromApiary, nil, "the gateway: example_server_code (status 404)", map[string]any{"code": "example_server_code", "status": 404.0}},
 		"a 500 with a message": {linktest.Reply{Status: 500, Body: map[string]any{"message": "credential git: the adapter exited with status 1"}},
 			"", "", nil, "credential git: the adapter exited with status 1", nil},
 		"a refusal with a message": {linktest.Reply{Status: 409, Body: map[string]any{"error": "instance_limit", "from": "apiary", "message": "ping https://apiary.example/v1/events: instance_limit (status 409)"}},
@@ -145,7 +172,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			if c.code == "" && errors.As(err, &r) {
 				t.Errorf("a refusal %v, want an error that is none", r)
 			}
-			if c.code != "run_closed" && err.Error() != c.text {
+			if c.reply.Status != 410 && err.Error() != c.text {
 				t.Errorf("%q, want exactly %q", err, c.text)
 			}
 			evs := events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)})
@@ -263,9 +290,9 @@ func TestADigestThatChangesIsReloaded(t *testing.T) {
 	}
 }
 
-// TestTheRunEndsWhenItIsClosed pins the end of a run from outside: a 410 to a batch
-// from the server or from the gateway, a 410 to a reload, and the gateway's 400 to a
-// batch, which ends the run there. The runtime is stopped as at its time limit, the
+// TestTheRunEndsWhenItIsClosed pins the end of a run at the gateway: the gateway's 410
+// to a batch, a 410 to a reload, and the gateway's 400 to a batch, which ends the run
+// there. The runtime is stopped as at its time limit, the
 // result says who closed it and with what, run.exited with that code as its reason is
 // in the session's record alone, and nothing more is posted.
 func TestTheRunEndsWhenItIsClosed(t *testing.T) {
@@ -273,12 +300,20 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 		batch, reload *linktest.Reply
 		code, from    string
 	}{
-		"the server's 410": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "apiary")}, code: "run_closed", from: "apiary"},
+		"the gateway's run_closed": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "gateway")}, code: "run_closed", from: "gateway"},
 		"the gateway's 410": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
 			code: "credential_expired", from: "gateway"},
 		"a 410 to a reload": {reload: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},
 			code: "run_ended_at_issuer", from: "gateway"},
-		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "run_closed", from: "gateway"},
+		"the gateway's 410 issuer_unreachable": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("issuer_unreachable", "gateway")},
+			code: "issuer_unreachable", from: "gateway"},
+		"the gateway's 410 issuer_answer_invalid to a reload": {reload: &linktest.Reply{Status: 410, Body: linktest.Refusal("issuer_answer_invalid", "gateway")},
+			code: "issuer_answer_invalid", from: "gateway"},
+		"the gateway's 410 to a lost session": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
+			code: "session_lost", from: "gateway"},
+		"the gateway's 410 after a refused batch": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
+			code: "batch_refused", from: "gateway"},
+		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "batch_refused", from: "gateway"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g := specGateway(t)

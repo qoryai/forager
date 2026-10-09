@@ -66,8 +66,8 @@ type Sink interface {
 	Close(ctx context.Context) error
 	// Undelivered is the number of events the server did not accept.
 	Undelivered() int
-	// RunClosed says the server closed the run, a signed 410 run_closed.
-	RunClosed() bool
+	// Stopped says the server asked for nothing more, a signed 410.
+	Stopped() bool
 }
 
 var _ Sink = (*sink.Server)(nil)
@@ -174,8 +174,6 @@ type Result struct {
 	// Undelivered is how many events the server did not accept; they are under the
 	// record directory's undelivered/.
 	Undelivered int
-	// RunClosed says the server closed the run, a signed 410 run_closed.
-	RunClosed bool
 }
 
 // Run is the stream of one run. It is safe for concurrent use: every event is numbered
@@ -549,7 +547,7 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.s.cfg.CloseWait)
 		errs = append(errs, srv.Close(flush))
 		cancel()
-		r.result = Result{Undelivered: srv.Undelivered(), RunClosed: srv.RunClosed()}
+		r.result = Result{Undelivered: srv.Undelivered()}
 	}
 	errs = append(errs, rec.Sync(), rec.Close())
 	r.unlock()
@@ -557,6 +555,21 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 	delete(r.s.runs, r.id)
 	r.s.mu.Unlock()
 	return r.result, errors.Join(errs...)
+}
+
+// Discard closes the run's stream as [Run.Close] does, then removes what the stream
+// wrote under the run's record directory, events.jsonl, the delivery state and its
+// lock, and the directory itself when nothing else is left in it, so the run id opens
+// again: a run that never opened.
+func (r *Run) Discard(ctx context.Context) error {
+	_, err := r.Close(ctx)
+	errs := []error{err}
+	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, lockFile} {
+		errs = append(errs, os.RemoveAll(filepath.Join(r.dir, name)))
+	}
+	// Left in place when it holds anything else, a session's own files on one machine.
+	os.Remove(r.dir)
+	return errors.Join(errs...)
 }
 
 // DecodeBatch reads a link batch, a JSON array of the session's events, keeping each

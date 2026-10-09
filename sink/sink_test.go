@@ -101,7 +101,9 @@ type station struct {
 	runDigest atomic.Pointer[string]
 }
 
-func newStation(t *testing.T, stop, closed func(string) bool) *station {
+// newStation starts a receiver; closed answers every delivery with a signed 410
+// run_closed, a server's 410 with a code.
+func newStation(t *testing.T, stop func(string) bool, closed bool) *station {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
 	if err != nil {
@@ -115,7 +117,6 @@ func newStation(t *testing.T, stop, closed func(string) bool) *station {
 		Signer:        signer,
 		Store:         store,
 		Stop:          stop,
-		Closed:        closed,
 		Configuration: func() ([]byte, string) { return []byte("{}"), "sha256=configuration" },
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +125,13 @@ func newStation(t *testing.T, stop, closed func(string) bool) *station {
 		s.runDigest.Store(&d)
 		if code := s.fail.Load(); code != 0 {
 			w.WriteHeader(int(code))
+			return
+		}
+		if closed {
+			body := []byte(`{"error":"run_closed"}`)
+			w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
+			w.WriteHeader(http.StatusGone)
+			w.Write(body)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -163,14 +171,14 @@ func waitFor(t *testing.T, cond func() bool) {
 // set on the sink goes with every delivery after it, and the answers' digests come
 // back to the caller.
 func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
-	s := newStation(t, nil, nil)
+	s := newStation(t, nil, false)
 	var mu sync.Mutex
 	var answers []server.Digests
 	w := sink.NewServer(client(s), target(s, "dev.qory.run.started", "dev.qory.run.heartbeat"), t.TempDir(), nil, func(d server.Digests) {
 		mu.Lock()
 		answers = append(answers, d)
 		mu.Unlock()
-	}, nil)
+	})
 	w.SetRunDigest("sha256=run")
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
@@ -206,11 +214,11 @@ func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
 // count reported at close. Its answers are unsigned, so they are no answers, a 410
 // among them, and are retried.
 func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
-	s := newStation(t, nil, nil)
+	s := newStation(t, nil, false)
 	s.fail.Store(500)
 	var notes []string
 	dir := t.TempDir()
-	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil, nil)
+	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, func() bool { return s.hits.Load() >= 1 })
@@ -243,54 +251,58 @@ func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
 // TestReceiverStopEndsDeliveries pins a signed 410: the sink sends nothing more for
 // the run and drops what follows without spooling it, and the run is not closed.
 func TestReceiverStopEndsDeliveries(t *testing.T) {
-	s := newStation(t, func(string) bool { return true }, nil)
-	closed := false
-	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil, func() { closed = true })
+	s := newStation(t, func(string) bool { return true }, false)
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, w.Stopped)
 	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed"}))
 	w.Close(context.Background())
-	if s.hits.Load() != 1 || w.Undelivered() != 0 || w.RunClosed() || closed {
-		t.Errorf("%d deliveries, %d undelivered after stop, closed %v", s.hits.Load(), w.Undelivered(), closed)
+	if s.hits.Load() != 1 || w.Undelivered() != 0 || w.RunClosed() {
+		t.Errorf("%d deliveries, %d undelivered after stop, closed %v", s.hits.Load(), w.Undelivered(), w.RunClosed())
 	}
 }
 
-// TestRunClosedEndsDeliveriesAndTheRun pins a signed 410 run_closed: the sink calls
-// its caller once, sends nothing more, and records the stop, so a resend sends nothing
-// either.
-func TestRunClosedEndsDeliveriesAndTheRun(t *testing.T) {
-	s := newStation(t, nil, func(string) bool { return true })
-	var calls atomic.Int32
+// TestRunClosedIsAStop pins a server's signed 410 run_closed: a stop like any other
+// signed 410. The sink sends nothing more, records the stop, so a resend sends nothing
+// either, reports the one line of a stop, and ends no run.
+func TestRunClosedIsAStop(t *testing.T) {
+	s := newStation(t, nil, true)
 	dir := t.TempDir()
-	w := sink.NewServer(client(s), target(s), dir, nil, nil, func() { calls.Add(1) })
+	var mu sync.Mutex
+	var notes []string
+	w := sink.NewServer(client(s), target(s), dir, func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
-	waitFor(t, w.RunClosed)
-	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
+	waitFor(t, w.Stopped)
+	w.Write(e.Make(event.RunExited, map[string]any{"state": "succeeded"}))
 	w.Close(context.Background())
-	if s.hits.Load() != 1 || calls.Load() != 1 || !w.Stopped() || w.Undelivered() != 0 {
-		t.Errorf("%d deliveries, %d calls, stopped %v", s.hits.Load(), calls.Load(), w.Stopped())
+	if s.hits.Load() != 1 || w.RunClosed() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, closed %v, %d undelivered", s.hits.Load(), w.RunClosed(), w.Undelivered())
 	}
 	if _, stopped, err := sink.Delivered(dir); err != nil || !stopped {
 		t.Errorf("the record of accepted batches has no stop: %v", err)
 	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "the server answered 410; no further batch is sent for this run, which goes on"; len(notes) != 1 || notes[0] != want {
+		t.Errorf("reports %q, want one: %q", notes, want)
+	}
 }
 
-// TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a signed 410 run_closed ends
-// the deliveries at once: the batches already queued behind the closed one are
-// dropped, not posted, and the caller hears of the close once.
+// TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a server's signed 410
+// run_closed stops the deliveries at once: the batches already queued behind the
+// stopped one are dropped, not posted, and no run is closed.
 func TestRunClosedDropsTheBatchesQueuedBeforeIt(t *testing.T) {
-	s := newStation(t, nil, func(string) bool { return true })
-	var calls atomic.Int32
-	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil, func() { calls.Add(1) })
+	s := newStation(t, nil, true)
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	for i := 0; i < 3*sink.BatchEvents+50; i++ {
 		w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": i, "interval_seconds": 30}))
 	}
 	w.Close(context.Background())
-	if s.hits.Load() != 1 || calls.Load() != 1 || !w.RunClosed() || w.Undelivered() != 0 {
-		t.Errorf("%d deliveries, %d calls, closed %v, %d undelivered", s.hits.Load(), calls.Load(), w.RunClosed(), w.Undelivered())
+	if s.hits.Load() != 1 || !w.Stopped() || w.RunClosed() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, stopped %v, closed %v, %d undelivered", s.hits.Load(), w.Stopped(), w.RunClosed(), w.Undelivered())
 	}
 }
 
@@ -298,13 +310,13 @@ func TestRunClosedDropsTheBatchesQueuedBeforeIt(t *testing.T) {
 // run_closed answer that carries a new run configuration digest leads to no reload,
 // and no request reaches the server after it.
 func TestAStopCarriesNoDigests(t *testing.T) {
-	s := newStation(t, nil, func(string) bool { return true })
+	s := newStation(t, nil, true)
 	s.srv.Config.Handler = digestOn410(s.srv.Config.Handler)
 	var digests atomic.Int32
-	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, func(server.Digests) { digests.Add(1) }, nil)
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, func(server.Digests) { digests.Add(1) })
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
-	waitFor(t, w.RunClosed)
+	waitFor(t, w.Stopped)
 	hits := s.hits.Load()
 	w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
 	w.Close(context.Background())
@@ -443,8 +455,10 @@ func TestTheGatewaysEndOfTheRunReachesTheCaller(t *testing.T) {
 		body, want string
 	}{
 		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway"},
-		{http.StatusGone, `{"error":"run_closed","from":"apiary"}`, "run_closed apiary"},
-		{http.StatusBadRequest, `{"error":"invalid_request"}`, "run_closed gateway"},
+		{http.StatusGone, `{"error":"run_closed","from":"gateway"}`, "run_closed gateway"},
+		{http.StatusGone, `{"error":"session_lost","from":"gateway"}`, "session_lost gateway"},
+		{http.StatusGone, `{"error":"batch_refused","from":"gateway"}`, "batch_refused gateway"},
+		{http.StatusBadRequest, `{"error":"invalid_request"}`, "batch_refused gateway"},
 	} {
 		g := &linkGateway{answer: func(int) (int, string) { return c.status, c.body }}
 		var mu sync.Mutex
@@ -489,5 +503,33 @@ func TestALinkSinkWithoutARunDirectoryCountsWhatItCouldNotDeliver(t *testing.T) 
 	defer mu.Unlock()
 	if w.Undelivered() != 1 || len(notes) != 0 {
 		t.Errorf("%d undelivered, notes %q", w.Undelivered(), notes)
+	}
+}
+
+// TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence pins the resend of a
+// session's record to its gateway: a line of session.jsonl goes as the link carries it,
+// with its id and data and without its sequence, and the record of accepted batches in
+// the run directory names it by the session's sequence.
+func TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence(t *testing.T) {
+	g := &linkGateway{answer: func(int) (int, string) { return http.StatusAccepted, "" }}
+	dir := t.TempDir()
+	w := linkSink(t, g, sink.Config{Spool: dir})
+	ev := event.NewEmitter(event.NewRunID(), nil).Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30})
+	line, err := ev.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Resend(context.Background(), line, ev.Sequence) {
+		t.Fatal("the resend was not queued")
+	}
+	w.Close(context.Background())
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.bodies) != 1 || bytes.Contains(g.bodies[0], []byte(`"sequence"`)) || !bytes.Contains(g.bodies[0], []byte(ev.ID)) || !bytes.Contains(g.bodies[0], []byte(`"elapsed_seconds":30`)) {
+		t.Fatalf("the batches %q", g.bodies)
+	}
+	accepted, stopped, err := sink.Delivered(dir)
+	if err != nil || stopped || !accepted[ev.Sequence] || len(accepted) != 1 {
+		t.Errorf("delivered %v, stopped %v, %v", accepted, stopped, err)
 	}
 }

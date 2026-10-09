@@ -137,7 +137,7 @@ wall:
 
 - `gateway.egress` is the policy when the server offers no run configuration, and it
   narrows the server's when the server offers one. See [the policy](policy.md).
-- `gateway.server` defines the control plane. See [the server](server.md).
+- `gateway.server` defines Qory Apiary. See [the server](server.md).
 - `wall.env` is the whole of the node's environment that goes in, by name: the
   machine's variables. A server's value of the same name wins over one, and `--env`
   does too. See [variables](server.md#variables) and [credentials](credentials.md).
@@ -206,6 +206,29 @@ res, err := session.Run(ctx, session.Spec{
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
 refused.
+
+### The relay to a separate gateway
+
+Behind a `session.RemoteGateway` the gateway's proxy is on another machine, at the
+gateway's one address. The relay still reaches the session's forwarder, on the address
+the enclosure names, as on one machine, and the forwarder carries every connection to the
+gateway over TLS 1.3, with the link's trust: the system's roots or `CAFile`, the host
+name of the gateway's URL, and the pin when one is set.
+
+- The relay opens every connection with `QORY-RELAY` and a token the session makes for
+  the run's forwarder alone, 256 bits from the system's random source, in place of the
+  run's proxy secret. It is the token the wall's relay is given,
+  `wall.Launch.ProxyToken`, and so the one in the relay's environment file.
+- The forwarder reads the token first, compares it in constant time, and closes a
+  connection without it unanswered: whoever else reaches the forwarder's address, another
+  container of the engine or a process of the machine, reaches nothing.
+- It then opens the connection to the gateway, and sends `QORY-RELAY` and the run's
+  proxy secret inside TLS, before what the relay sent.
+- So the proxy secret is in no file of the wall's and never leaves the machine outside
+  TLS, and the token opens nothing at the gateway.
+
+On one machine nothing changes: the relay sends the run's proxy secret, and the
+forwarder passes the connection on to the gateway's proxy on loopback as it is.
 
 ### Forager's files
 

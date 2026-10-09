@@ -25,7 +25,7 @@ import (
 // unanswered, and nothing is logged of it.
 type linkListener struct {
 	ln     net.Listener
-	secret string
+	secret secretValue
 	uid    int
 	conns  chan net.Conn
 	done   chan struct{}
@@ -39,7 +39,7 @@ type linkListener struct {
 // newLinkListener serves the connections of uid's processes on ln, and those made in
 // memory; a nil ln is no socket, and the connections made in memory alone.
 func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
-	l := &linkListener{ln: ln, secret: secret, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+	l := &linkListener{ln: ln, secret: newSecretValue(secret), uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	if ln != nil {
 		l.wg.Add(1)
 		go l.accept()
@@ -135,7 +135,7 @@ func (l *linkListener) opens(c net.Conn, inMemory bool) (bool, *bufio.Reader) {
 	c.SetReadDeadline(time.Now().Add(link.PreambleWait))
 	defer c.SetReadDeadline(time.Time{})
 	r := bufio.NewReader(c)
-	if ok, err := link.ReadLinkPreamble(r, l.secret); !ok || err != nil {
+	if ok, err := link.ReadLinkPreamble(r, l.secret.reveal()); !ok || err != nil {
 		return false, nil
 	}
 	return true, r
@@ -203,8 +203,9 @@ func quietLog() *log.Logger { return log.New(io.Discard, "", 0) }
 // is cut at.
 const maxBatch = 2 << 20
 
-// handler routes the link's requests.
-func (g *Gateway) handler() http.Handler {
+// handler routes the requests of the contract that reach the gateway by s: its local
+// link, or its one address.
+func (g *Gateway) handler(s *side) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.Header.Get(server.HeaderContractVersion); v != "" && v != strconv.Itoa(server.Revision) {
 			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway, gatewayText("unsupported_contract_version"))
@@ -212,13 +213,13 @@ func (g *Gateway) handler() http.Handler {
 		}
 		switch {
 		case r.URL.Path == server.WellKnown && r.Method == http.MethodGet:
-			g.discover(w)
+			g.discover(s, w, r)
 		case r.URL.Path == runPath && r.Method == http.MethodPost:
-			g.openRun(w, r)
+			g.openRun(s, w, r)
 		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
-			g.reload(w, strings.TrimPrefix(r.URL.Path, runPath+"/"))
+			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
 		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
-			g.batch(w, r)
+			g.batch(s, w, r)
 		case r.URL.Path == server.WellKnown || r.URL.Path == runPath || r.URL.Path == eventsPath || strings.HasPrefix(r.URL.Path, runPath+"/"):
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		default:
@@ -227,12 +228,18 @@ func (g *Gateway) handler() http.Handler {
 	})
 }
 
-// discover answers the link's discovery.
-func (g *Gateway) discover(w http.ResponseWriter) {
+// discover answers the link's discovery: 400 invalid_request on the one address to a
+// request whose Host names no origin a discovery can list.
+func (g *Gateway) discover(s *side, w http.ResponseWriter, r *http.Request) {
+	body, digest, ok := g.discoveryOf(s, r)
+	if !ok {
+		invalid(w)
+		return
+	}
 	w.Header().Set("Content-Type", server.LinkContentType)
-	w.Header().Set(server.HeaderConfiguration, g.discoveryDigest)
+	w.Header().Set(server.HeaderConfiguration, digest)
 	w.WriteHeader(http.StatusOK)
-	w.Write(g.discovery)
+	w.Write(body)
 }
 
 // linkRefusal is the body of a refusal on the link, link-refusal.schema.json: the code,
@@ -262,19 +269,10 @@ func invalid(w http.ResponseWriter) {
 	refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, gatewayText(server.CodeInvalidRequest))
 }
 
-// gone answers the 410 of a run that ended at the gateway: its code, and who ended it.
-// The server's close of a run that has not started reads as today's session's error
-// then; of one that has, the same without "before it started".
-func gone(w http.ResponseWriter, code, from string, started bool) {
-	text := gatewayText(code)
-	if from == accesskey.FromApiary {
-		detail := "the server closed the run before it started"
-		if started {
-			detail = "the server closed the run"
-		}
-		text = (&accesskey.Refusal{Code: code, Status: http.StatusGone, Detail: detail}).Error()
-	}
-	refuse(w, http.StatusGone, code, nil, from, text)
+// gone answers the 410 of a run that ended at the gateway: its code, and who ended it,
+// always the gateway, since a server's 410 ends no run.
+func gone(w http.ResponseWriter, code, from string) {
+	refuse(w, http.StatusGone, code, nil, from, gatewayText(code))
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

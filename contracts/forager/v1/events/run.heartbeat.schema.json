@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json",
   "title": "dev.qory.run.heartbeat",
-  "description": "The run is alive. Sent every interval_seconds from the accepted ping until the run's final event, so the start, from the ping to dev.qory.run.started, is covered too, or from dev.qory.run.started when the run has no server; a run is live from its accepted ping until its final event, or until no accepted event has arrived for 3 × interval_seconds.",
+  "description": "The run is alive. Sent every interval_seconds from the accepted ping until the run's final event, so the start, from the ping to dev.qory.run.started, is covered too, or from dev.qory.run.started when the run has no server; a run is live from its accepted ping until its final event, or until it has no recent heartbeat: none within 3 × interval_seconds, each judged by its own time (README §The server).",
   "type": "object",
   "additionalProperties": false,
   "required": ["elapsed_seconds", "interval_seconds"],

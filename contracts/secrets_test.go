@@ -768,31 +768,33 @@ func TestDeniedVariables(t *testing.T) {
 }
 
 // TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's,
-// Forager's, qory's and a gateway's.
+// Forager's, qory's and a gateway's, the list a code without a status is held to.
 func TestRunRefusedCodes(t *testing.T) {
 	var s struct {
-		Properties struct {
-			Code struct {
-				Enum []string `json:"enum"`
-			} `json:"code"`
-		} `json:"properties"`
+		Then struct {
+			Properties struct {
+				Code struct {
+					Enum []string `json:"enum"`
+				} `json:"code"`
+			} `json:"properties"`
+		} `json:"then"`
 	}
 	load(t, "events/run.refused.schema.json", &s)
 	want := []string{
-		"answer_unsigned", "apiary_public_key_missing", "bad_request",
-		"differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
-		"invalid_request", "key_invalid", "key_limit", "labels_changed",
+		"answer_unsigned", "apiary_public_key_missing", "bad_request", "batch_refused",
+		"credential_expired", "differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
+		"invalid_request", "issuer_answer_invalid", "issuer_unreachable", "key_invalid", "key_limit", "labels_changed",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
-		"mount_through_link", "placeholder_conflict", "rate_limited", "run_closed",
-		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused",
-		"run_id_used", "secrets_not_allowed", "server_needs_wall",
+		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_closed",
+		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused", "run_ended_at_issuer",
+		"run_id_used", "secrets_not_allowed", "server_needs_wall", "session_lost",
 		"target_differs_from_credential", "tool_unknown", "unauthorized", "unavailable",
 		"unsupported_contract_version", "variable_reserved",
 	}
-	if len(want) != 30 {
-		t.Fatalf("%d codes in the test's list; want 30", len(want))
+	if len(want) != 37 {
+		t.Fatalf("%d codes in the test's list; want 37", len(want))
 	}
-	if got := slices.Sorted(slices.Values(s.Properties.Code.Enum)); !slices.Equal(got, want) {
+	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)
 	}
 }

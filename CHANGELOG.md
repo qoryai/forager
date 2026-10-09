@@ -18,17 +18,26 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
-- `dev.qory.run.started` requires `opened_by`, and `dev.qory.run.exited` no longer
-  requires `state` and `exit_code`. A receiver reads `opened_by` to tell a session's run
-  from one a gateway opened, which contains neither.
+- `dev.qory.run.started` requires `opened_by` and `credential`, and
+  `dev.qory.run.exited` no longer requires `state` and `exit_code`. A receiver reads
+  `opened_by` to tell a session's run from one a gateway opened, which contains
+  neither, and `credential` to tell a run whose run credential an issuer gave,
+  `issuer`, from one on a gateway's local link, `none`.
 
 #### Added
 
-- `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`, and
+- `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`,
+  `event.CredentialIssuer` and `event.CredentialNone`, the values of `credential`, and
   `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
-  `ReasonQuiet`, `ReasonCredentialExpired` and `ReasonRunEndedAtIssuer`, the reasons of
-  `dev.qory.run.exited`. The session's `dev.qory.run.started` contains `opened_by`
-  `session`.
+  `ReasonQuiet`, `ReasonCredentialExpired`, `ReasonRunEndedAtIssuer`,
+  `ReasonBatchRefused`, `ReasonIssuerUnreachable` and `ReasonIssuerAnswerInvalid`, the
+  reasons of `dev.qory.run.exited`; `batch_refused` is the gateway's `410` to a session
+  whose batch it refused, and the reason the session records in its own record after
+  it; `issuer_unreachable` and `issuer_answer_invalid` end a run whose issuer's
+  introspection endpoint could not be reached after the gateway's tries, or gave no
+  valid answer, and are also the codes of the gateway's `503` and `502` to a run
+  request for the same. The session's `dev.qory.run.started` contains
+  `opened_by` `session`, and the `credential` of the gateway's run answer.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
@@ -97,8 +106,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The reference receiver accepts the public keys its configuration holds, answers in
   the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
   being `invalid_request`, and signs every answer after verification under its own key,
-  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
-  `run_closed` and refuse an instance's ping with `instance_limit`.
+  the `410` of its `Stop` among them. Its new hook `Admit` refuses an instance's ping
+  with `instance_limit`.
 - `dev.qory.run.started` contains `about` when the caller passes one: what the run is
   about, as the caller passed it, every member optional. `kind` is the kind of run, at
   most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
@@ -132,7 +141,16 @@ release may change what an existing document does, and says so under Upgrading.
   `events/run.refused.schema.json` lists the four codes and says so of `names`, and
   that a run request the gateway refuses opens no run at the gateway: the session
   records the refusal it received in its own record alone, and nothing reaches the
-  server for it. A session that fails after the run answer and before its process
+  server for it. A gateway's `410` before the runtime starts is recorded the same way,
+  as `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
+  include `session_lost`, `batch_refused`, `credential_expired`, `run_ended_at_issuer`,
+  `issuer_unreachable` and `issuer_answer_invalid`, and the server's `not_found`, its
+  signed `404` to the run configuration of a workspace with no policy,
+  `accesskey.CodeNotFound`. A code without `status` is held to the schema's list; a
+  code of the server's, with its `status`, is kept as the server sent it, one the list
+  does not hold yet included, and a receiver shows a code it does not know as it is.
+  `fixtures/batch/` has `refused-not-found.json` and
+  `refused-unlisted-server-code.json`. A session that fails after the run answer and before its process
   starts posts its `dev.qory.run.refused` on the link, and the gateway delivers it;
   `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
@@ -186,6 +204,63 @@ release may change what an existing document does, and says so under Upgrading.
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
   and that the run credential never appears in an event, a record or a log.
+- `runcredential.NewVerifier` and `Verifier.Verify` verify a run credential under the
+  issuers a gateway accepts, their keys read once. The serialisation is the strict JWS
+  compact form: at most `runcredential.MaxCredentialBytes`, 16384 bytes, exactly three
+  parts of base64url without padding, white space or another byte, with no bits beyond
+  a part's last byte. The header is one JSON object with each member name once, through
+  `Issuer.SelectKey`. The signature is verified under each key the header selects, over
+  the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5 with SHA-256, `ES256` of exactly
+  64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by Ed25519. The payload is read only
+  after a signature verified, one JSON object with each member name once, and the issuer
+  is the one whose key verified it and whose issuer equals `iss`. Then `CheckClaims`,
+  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the issuer, the run
+  key, `exp`, the claims, the labels and the details. Every failure is
+  `runcredential.ErrRefused`, whose text holds no part of the run credential.
+  `Verifier.VerifyExpired` verifies, with every step of `Verify`, a run credential
+  `Verify` refuses only because its `exp` passed, less than `MaxLeeway` before.
+- `Issuer.SelectKey` refuses a `typ` other than `JWT`, compared without regard to case.
+- `Issuer.Check` refuses a `leeway` above `runcredential.MaxLeeway`, 5 minutes, and
+  `Issuer.CheckClaims` refuses every run credential under such an issuer built in Go.
+  `run-credentials.schema.json` says so.
+- `runcredential.NewIntrospector` and `Introspector.Active` ask an issuer's RFC 7662
+  endpoint whether a run credential is still active: a `POST` over TLS 1.2 or later of
+  the form `token` and `token_type_hint=access_token`, with HTTP Basic as the configured
+  client, the client id and the secret each form-encoded, the secret read once from its
+  file; directly, through no proxy, following no redirect, each try within
+  `runcredential.IntrospectionTimeout`, 2 seconds. It is active only on status 200 with
+  one JSON object, each member name once, of at most
+  `runcredential.MaxIntrospectionAnswer`, 65536 bytes, whose `active` is the JSON
+  `true`; any other answer, or a failure, is not active. A try that gets no answer, a
+  transport, TLS or timeout failure, a failed read, a `5xx` or a `429`, is tried again,
+  up to 3 tries, 1 second and then 2 seconds apart, a try starting only within 4 seconds
+  of the first, and then `runcredential.ErrIssuerUnreachable`; any other answer that is
+  not a valid one is tried once and wraps `runcredential.ErrAnswerInvalid`, naming its
+  status, "the introspection endpoint answered status 401" say. A caller whose context
+  ends gets its context's error. Each answer the endpoint gives,
+  active or not, is kept for the issuer's `cache`, or the heartbeat interval, by the
+  SHA-256 of the run credential, at most `runcredential.MaxIntrospectionAnswers`, 4096,
+  the one that lapses first going when it is full; a failure is kept for no one, and the
+  next caller asks again. Callers for the same run credential share one request, which
+  a caller that gives up does not end for the others, and late callers join the tries
+  in flight. Its errors name neither the run credential nor the secret.
+- `runcredential.OpenEnded` and `runcredential.Ended` keep the run keys a gateway
+  refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
+  0600, written atomically, in a directory of mode 0700 that only its user writes. Each
+  is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
+  dropped on open and on `Ended.Add`; `Ended.Has` asks, and `Ended.Written` whether the
+  file, as last read or written, refuses a run key, which a failed write leaves out. A
+  file that cannot be read, that others can read or write, or that holds no array
+  `ended` is refused, so a gateway never starts having forgotten a run key it refuses,
+  and so is a directory it cannot create a file in, "the ended run keys: <directory>
+  cannot be written: <error>", so a gateway never starts unable to keep one.
+- The known answers of the run credential gain the step `serialisation` and run
+  credentials refused at it (padding, a line feed, a space, four parts, two parts), at
+  the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature
+  (over an altered header; an `ES256` signature of 63 or 65 bytes, with `R` zero or `S`
+  the order) and at the claims (a member name twice, no `exp`, no `aud`), and accepted
+  ones with `typ` `jwt` and without `typ`. `runcredential`'s tests run
+  `Verifier.Verify` on every one.
 - Forager reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
@@ -227,10 +302,13 @@ release may change what an existing document does, and says so under Upgrading.
   never a value, `images`, the session's `default` and `definitions`, each with `name`,
   `ref`, `runtime` and `docker`, whose references the gateway never logs or reports
   since one may carry a registry's credentials, and, behind a separate gateway, a
-  `narrowing` that only narrows; the request is one-shot per `run_id`, and the gateway
-  refuses it with `invalid_request`, `run_credential_refused`, `run_id_used`,
-  `target_differs_from_credential` or `differs_from_credential`, the last two naming
-  each member that differs as `<member>=<the run credential's value>`. With `passes`
+  `narrowing` that only narrows; the request is one-shot per `run_id`. Behind a
+  separate gateway the run credential is decided first, a refused one `401`
+  `run_credential_refused` before the body is read; then the gateway refuses the
+  request in order with `invalid_request`, `run_credential_refused` for a run key that
+  has a run, `run_id_used`, and `target_differs_from_credential` or
+  `differs_from_credential`, the last two naming each member that differs as
+  `<member>=<the run credential's value>`. With `passes`
   and `images` the gateway decides the run, and each reload, as the session decides it
   today and in the same order, before it sets anything: the policy in force, what needs
   a wall, the image, `image_unknown`, the credentials and the tools, and
@@ -238,7 +316,13 @@ release may change what an existing document does, and says so under Upgrading.
   is a `403` with the session's code of `refusal.Decides` and `from: gateway`, while the
   server's refusals pass through with their own status and `from: apiary`; a start that
   fails without a code is a `500` `internal` from `gateway` whose `message`, the
-  error's text, the session returns as its error. A refused reload leaves the policy in
+  error's text, the session returns as its error. The gateway tries the server's ping
+  and run configuration up to 3 times, 1 second and then 2 seconds apart, starting a
+  try again only within 6 seconds of the run request: after no answer, a `5xx`, signed
+  or not, and a signed `429` `rate_limited`, the ping with its delivery id and recorded
+  once; once the tries are spent the last answer is the session's, as without them. A
+  `404` does not fetch the configuration document again. A signed answer at run start
+  with no code is a `server.AnswerError`, with its status. A refused reload leaves the policy in
   force: behind a separate gateway it is answered as a refused start is, and on the
   local link it stays off the link. A start without a wall whose policy selects what
   needs one is `wall_required`, a `403` from `gateway` and a code of the link alone,
@@ -258,7 +342,9 @@ release may change what an existing document does, and says so under Upgrading.
   and whose value an unwalled run has left out, `image`, the image the run gets when it has a wall, `applied`,
   required, the members of `dev.qory.run.policy_applied` the gateway decides, every one
   but `variables` and `harness_hosts`, which the session adds to write its own, the run's
-  `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
+  `proxy_secret`, its `run_secret`, which the session sends in the header
+  `X-Qory-Run-Secret` on every reload and batch, and its `certificate_authority` when
+  `wall` is true and the gateway
   reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
   wall with a server always; the session's `dev.qory.run.started` contains exactly
   those labels, and those keys with those values. Discovery on the link is
@@ -280,11 +366,14 @@ release may change what an existing document does, and says so under Upgrading.
   is not refused; or a `dev.qory.run.refused` whose code is not one of
   `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
   `opened_by`, `timeout` as the one reason and the codes and names of
-  `dev.qory.run.refused`. A
-  `400` `invalid_request` to a batch ends the run at the gateway: the gateway writes
-  `dev.qory.run.exited` with `session_lost`, refuses the run's proxy secret and answers
-  the session's further requests with a `410` `run_closed`; the session stops the
-  runtime and records `dev.qory.run.exited` with `run_closed` in its own record alone.
+  `dev.qory.run.refused`. A batch without the run's `run_secret`, or with one of no
+  such run, is `400` `invalid_request` on the local link, and ends no run; a batch whose
+  body does not arrive whole, its client gone before the end, is `400`
+  `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch
+  ends its run at the gateway: the gateway writes `dev.qory.run.exited` with
+  `session_lost`, refuses the run's proxy secret and answers
+  the session's further requests with a `410` `batch_refused`; the session stops the
+  runtime and records `dev.qory.run.exited` with `batch_refused` in its own record alone.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
   `dev.qory.run.egress`, every one after a reload's switch held until the session's
@@ -296,15 +385,19 @@ release may change what an existing document does, and says so under Upgrading.
   a program the agent starts does not inherit it. A session's heartbeats are its run's,
   and a session silent for 3 × the interval ends the run, `session_lost`. When the
   gateway ends a session's run, with `session_lost`, `credential_expired`,
-  `run_ended_at_issuer` or the server's `run_closed`, it writes the run's
-  `dev.qory.run.exited` itself, `failed` and `-1`, and delivers it toward the server,
-  except after the server's own `410`, where it records it in its record alone. It
-  answers the session's next request and every one after it with a `410`, whose code
-  the session records as the reason of its own `dev.qory.run.exited`, in its own record
-  alone, posting nothing more: `run_closed` from `apiary` when the server closed the
-  run, and from `gateway` `credential_expired`, `run_ended_at_issuer`, or `run_closed`
-  after `session_lost`, from silence or a refused batch. Every `410` on the link carries
-  `from`. The relay opens its
+  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`, it writes the run's `dev.qory.run.exited` itself, `failed` and
+  `-1`, and delivers it toward the server. It answers the session's next request and
+  every one after it with a `410`, whose code the session records as the reason of its
+  own `dev.qory.run.exited`, in its own record alone, posting nothing more: from
+  `gateway` `credential_expired`, `run_ended_at_issuer`, `issuer_unreachable`,
+  `issuer_answer_invalid`, `session_lost` after a silent
+  session, or `batch_refused` after a refused batch, which the gateway's record says as
+  `session_lost`. Every `410` on the link carries `from`, and the gateway's own `410`
+  `run_closed` to a request of a run already ended is unchanged. A server's signed
+  `410`, with any code or none, stops delivery: the gateway sends no further batch for
+  the run and marks its record `stopped`, and the run goes on, its record keeping every
+  event. A `410` to the ping, or to the run configuration as a run opens, signed or
+  not, is no run, and no refusal: no server's `410` crosses the link. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
@@ -331,7 +424,24 @@ release may change what an existing document does, and says so under Upgrading.
   that way alone.
   `link.WriteLinkPreamble` and `link.ReadLinkPreamble` write and read the link's
   preamble, compared in constant time in a read of exactly its length, beside
-  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
+  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`;
+  `link.ReadRelayPreamble` reads the relay's the same way.
+- `server.NewRemoteLink(url, server.RemoteTLS{CAFile, CertificateSHA256}, credential,
+  userAgent, digests)` is the client of a separate gateway's link, with the local
+  link's `Discover`, `OpenRun`, `Reload` and `Deliver` and their refusals: an `https`
+  URL of a host and an optional port alone; TLS 1.3 alone; the system's roots, or the
+  CA file's authorities in their place; the URL's host name; the pin, the SHA-256 of
+  the certificate's DER SubjectPublicKeyInfo in standard base64 with padding, checked
+  after the chain; no proxy of the environment and no redirect; and
+  `Authorization: Bearer` with the run credential, asked for before every request and
+  sent only in the syntax of RFC 6750 §2.1, never in an error or a print. Its discovery
+  must list the gateway's origin alone and name its one address as the proxy.
+  `Link.DialProxy` opens a connection to that address over TLS with the same trust, and
+  `Link.ProxyAddress` names it.
+- `server.Delivery` has `Refusal`: on the link, a coded answer other than a `2xx` as the
+  `*accesskey.Refusal` it is, with its code, status, names, who refused and its
+  message. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
+  and posts it without its sequence.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -384,8 +494,9 @@ release may change what an existing document does, and says so under Upgrading.
 - Contract `v1` revision 1 is amended in place: Forager signs every request with an
   access key, an Ed25519 key, and verifies every answer under the server's key it pins.
   The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
-  no secret; `session.Server` has the same members, and `session.Spec` and
-  `session.ResendSpec` have `AccessKey`, `InstanceID` and `InstanceName`. Every request
+  no secret; `gateway.Server` has the same members, and `AccessKey`, `InstanceID` and
+  `InstanceName`, which `session.Server` and `session.Spec` had until a session spoke
+  to a gateway alone (Session, Upgrading). Every request
   contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
   `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
   but a `401` is signed under the server's key and bound to the request's signature,
@@ -421,30 +532,40 @@ release may change what an existing document does, and says so under Upgrading.
   every import path start with it.
 - Contract `v1` revision 1 is amended in place for a run a gateway opens, with no
   session and no process. `dev.qory.run.started` has `opened_by`, `session` or
-  `gateway`, required; opened by a session it requires what it did, and opened by a
-  gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
+  `gateway`, required, and `credential`, required: `issuer`, an issuer gave the run its
+  run credential, for a session's run behind a separate gateway and every run a
+  gateway opened, and `none` for a run on the local link, which the gateway decides,
+  puts in its run answer, required there too, and holds a session's `run.started` to;
+  nothing else of the issuer is reported. Opened by a session it requires what it did,
+  and opened by a gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
   `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
   version of what opened the run, and `host` is the agent's machine's. A gateway-opened
   run's `labels`, `run_key` among them, and `about.details` come from the run
   credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, the
   session was silent or the gateway refused a batch of its, `quiet`,
   `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
-  `timeout`, `run_closed` and `gateway_lost`; when the gateway ends a session's run it
-  writes the run's `dev.qory.run.exited`, and the session records the same reason in its
-  own record alone. `quiet_seconds`, the quiet period the gateway applied, is present
+  `timeout`, `run_closed` and `gateway_lost`, and `batch_refused`, which only the
+  session writes; when the gateway ends a session's run it writes the run's
+  `dev.qory.run.exited`, and the session records the code of the gateway's `410` in its
+  own record alone, the same reason but `batch_refused` after a refused batch. `quiet_seconds`, the quiet period the gateway applied, is present
   with `quiet` alone. `state` and `exit_code` are optional: a session's run contains
-  both, `failed` and `-1` with `gateway_lost` and `session_lost` and in every
-  `dev.qory.run.exited` the gateway writes for it, and a run a gateway opened neither,
+  both, `failed` and `-1` with `gateway_lost` and in every `dev.qory.run.exited` the
+  gateway writes for it, `session_lost` included, and a run a gateway opened neither,
   `gateway_lost` included; the schema fixes them to `failed` and `-1` with
-  `gateway_lost` and `session_lost` when they are present, and requires neither. The
+  `gateway_lost` when they are present, and requires neither. The
   contract no longer says the state is `failed` with each reason; a receiver maps each
   reason to a state of its own.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
-  the fixtures contains `opened_by` `session`, and the four batches under
+  the fixtures contains `opened_by` and `credential`, and the four batches under
   `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
   gateway opened, which ends `quiet`, `fixtures/batch/` its first and last batch and
   the `dev.qory.run.exited` of such a run that ends `gateway_lost`, and
-  `fixtures/invalid/` seven refused `run.started` and `run.exited` events.
+  `fixtures/invalid/` nine refused `run.started` and `run.exited` events, two of them
+  without a `credential` or with one of no kind it names, and a run answer without
+  `credential`.
+- The server judges a run's liveness by its heartbeats' own `time`, corrected by the
+  run's clock offset, with a tolerance of 300 seconds and never later than their
+  arrival, and a delivery id is never used again for other events.
 
 ### Gateway
 
@@ -463,9 +584,157 @@ release may change what an existing document does, and says so under Upgrading.
   session opens on its link resolves the credentials and starts the tools the run's
   policy selects among `gateway.Config`'s `Credentials` and `Tools`. A test in
   `internal/importrules` fails on any other export.
+- `gateway.TLS` is `{CertFile, KeyFile}`, in place of `{Certificate, Key}`, and
+  `gateway.Config` has `Listen`, `TLS`, `RunCredentials` and `Runs`, a `RunsConfig`.
+  `Start` with `Listen` empty serves the local link alone, as before, and refuses a
+  `TLS` without a `Listen`.
+
+#### Added
+
+- `gateway.Config.Listen`, the gateway's one address, served beside the local link.
+  Every connection is routed by its first bytes, after the TLS handshake when there is
+  TLS, within the time and the size the relay's preamble has: `QORY-RELAY` and a run's
+  proxy secret to that run's proxy; a proxy request, `CONNECT` or an absolute-form
+  target, to the proxy of the run its `Proxy-Authorization` names, the password of
+  Basic a live run's proxy secret or else a run credential, and `407` with
+  `Proxy-Authenticate: Basic realm="qory"` without one; anything else to the contract,
+  where every request's `Authorization: Bearer` run credential is decided first and a
+  request without one, or with one refused, is `401` `run_credential_refused` from the
+  gateway, with `WWW-Authenticate: Bearer`.
+- The one address verifies run credentials under the issuers of
+  `gateway.Config.RunCredentials`, their keys pinned. A session's run request there is
+  decided by its run credential: the run's labels and `about.details` are the run
+  credential's, and the run answer carries them; a session's `forge` or `repository`
+  that differs is `403` `target_differs_from_credential`, another label or detail the
+  mapping sets `403` `differs_from_credential`, each naming the run credential's value;
+  its `run.started` must carry the same `about.details`. The gateway tracks run keys
+  and does not require them to be unique; each period of activity is a run: every run
+  request opens a run of its own, of its own run id and proxy secret, with the run key
+  as its `run_key` label. Every later request of the run carries a run credential of
+  its run key, a refreshed one carrying only its own run to its `exp`, its labels and
+  `about.details` the run's, else `403` `target_differs_from_credential` or
+  `differs_from_credential`, and a client's connection `407`; one of another run key
+  is `401`; every reload and batch also carries the run's `run_secret`, which the run
+  answer gives: a batch is of that run, and any other request of the run key is `401`,
+  so no run can be probed. A batch over the limit, or one that does not decode, ends
+  its run, `batch_refused`.
+  The run ends at its latest `exp` with no fresher run credential,
+  `credential_expired`; when the issuer's introspection no longer holds its run
+  credential active, `run_ended_at_issuer`; and when the issuer's introspection
+  endpoint could not be reached after the tries, `issuer_unreachable`, or gave no valid
+  answer, `issuer_answer_invalid`, neither of which holds the run key: the gateway
+  writes its
+  `dev.qory.run.exited`, and every later request gets the `410` with that code, a
+  reload or a batch even with a run credential whose `exp` passed less than 5 minutes
+  before, which reaches nothing else. A run request whose issuer's endpoint could not be
+  reached is a `503` `issuer_unreachable`, with the message "the gateway could not open
+  the run: the issuer's introspection endpoint could not be reached; try again", and
+  one whose endpoint gave no valid answer a `502` `issuer_answer_invalid`, with "the
+  gateway could not open the run: the issuer's introspection endpoint gave no valid
+  answer"; neither opens or records a run. After
+  the issuer's end, the gateway refuses every request of a run of the run key until the
+  latest `exp` of the run credentials of the key the gateway still holds, and of any
+  presented during the hold, plus `runcredential.MaxLeeway`, 5 minutes: those of the run
+  key's live runs, and of its ended runs whose record is not yet flushed. During the
+  hold, a session's run request is `401` `run_credential_refused`, a reload or a batch
+  of a session's run of the run key that is still live the run's `410`
+  `run_ended_at_issuer`, which ends the run, and a client's connection `407`, which ends
+  the client's run of the run key it would join, `run_ended_at_issuer`; the discovery is
+  answered to a run credential of the run key as to any, and opens nothing; a run
+  credential for a refused run key presented during the hold, verified, is refused and
+  extends the hold to its own `exp`, and one that fails verification extends nothing.
+  The gateway keeps these run keys in `ended-run-keys.json` in its directory, so a
+  restart refuses them too; a write of it that fails is reported once, the run key's
+  requests are refused all the same while the gateway runs, and the file is written
+  again on each refused request of the run key, every 5 seconds, and once more at Close,
+  until a write succeeds; the write that succeeds again is reported, and at Close, when
+  the write still fails, how many run keys a restart would not refuse. A
+  session's narrowing is accepted on the one address and narrows the run's policy, at
+  its start and on each reload; it opens none of the gateway's own addresses, which
+  only the policy before it opens, when it enforces and names the host itself. Its
+  `dev.qory.run.policy_applied` has the `source` of the policy it narrows, with the
+  narrowed policy's own `digest`, and `source` `config` for a narrowing of no policy.
+  The local link reaches none of the one address's runs.
+- A client with no session sets the gateway's one address as its HTTPS proxy, its run
+  credential the password of Basic in `Proxy-Authorization`; every failure of its login
+  is the same `407`, with `Proxy-Authenticate: Basic realm="qory"` and the text "a
+  valid run credential is required as the proxy password". A connection of a run key
+  with no open client's run opens one, of the gateway's own run id, decided as a
+  walled run, with the credentials, the tools and the path rules its policy selects,
+  as a session's run: the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
+  every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
+  HTTPS with the gateway's own authority. Every later connection of the run key joins
+  the run while it is open; a client has at most one open run per run key, and never
+  joins a session's run, which only its proxy secret reaches. The run ends after
+  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or at
+  the issuer's word; its `dev.qory.run.exited` holds neither `state` nor `exit_code`.
+  A run that ended is never opened again: the next connection of its run key opens a
+  new run, of a new run id. A run refused with a code gets the gateway's
+  `dev.qory.run.refused` with that code, right after its ping; one that fails without
+  a code gets no event. Its connection gets a `503` with the text "the gateway could not
+  open the run; try again" for a failure that may pass, the issuer's endpoint
+  unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
+  signed `429` `rate_limited`, once the tries are spent, among it, at once for Qory
+  Apiary's `410` to the ping or the run configuration, signed or not, with any code or
+  none,
+  and for one with neither a code nor a status of Qory
+  Apiary's; and a `403` with one line for a reason that does not pass: "the gateway
+  could not open the run: Qory Apiary refused it, \<code\>" for a code of Qory
+  Apiary's answer, `answer_unsigned` among them, "the gateway could not open the run:
+  the gateway refused it, \<code\>" for one the gateway decides, "the gateway could not
+  open the run: Qory Apiary refused it, status \<n\>" for a signed answer, other than a
+  `5xx` or a `410`, with no code,
+  and "the gateway could not open the run: the issuer's introspection endpoint gave no
+  valid answer". A connection that would join a run whose issuer's endpoint could not
+  be reached, or gave no valid answer, ends the run and gets the same `503` or `403`. A refusal's answer is written in
+  full, the connection's writing side closed and what the client still sends read
+  briefly before it closes, so no reset takes the answer's place.
+- Once a run of the one address has ended and its record is flushed, and after the
+  issuer's end its run key is kept, the gateway holds only how a later request of the
+  run is answered, until a run credential of it can no longer be accepted. A gateway's own authority keeps at
+  most 1024 hosts' certificates, the least recently used going first.
+- A run's end closes every tunnel of its proxy, at both ends, and the connections whose
+  TLS the proxy ends, so no connection relays past the run.
+- `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
+  1.3 alone. A plain listener is allowed on loopback alone. `Start` refuses a `Listen`
+  that is not `host:port`, one that is not loopback without `TLS`, certificate and key
+  files it cannot read or that do not match, and a `Listen` without `RunCredentials` or
+  without `Dir`.
+- The discovery on the one address lists every URL on the origin the session reached,
+  by its `Host`, and `proxy.address` that same address.
+- The proxy of every run served through the one address is guarded, whatever its wall:
+  the machine's own addresses are refused unless the policy's allow list names the
+  host, as for a walled run. A local run's proxy, which may not be guarded, is never
+  reached from the one address.
+- With `Listen`, the gateway keeps a certificate authority of its own in its directory,
+  `authority/ca.pem`, the directory mode `0700` and the file `0600`: made once, reused
+  by every later start, for its proxy to read inside HTTPS for the clients with no
+  session, whose machines trust it. A directory or a file another user may reach is
+  refused.
+- `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
+  30 minutes when zero.
+- `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
+  is, since the run never opened at the server: its ping was never accepted, or it had
+  no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
+  resend reports then, which a caller that reports `NotOpened` itself may leave out,
+  and `gateway.ResendTorn` the one for lines of the record that are not whole events,
+  a format of their count and the record's path. `gateway.Delivery.Stopped` says the
+  server answered a signed `410` and wants no more events of the run: during the run,
+  so the resend sent nothing, or during the resend, with `Sent` what the server
+  accepted before it and `Undelivered` what was not sent, which stays in the record's
+  `events.jsonl`, none under `undelivered/`.
 
 #### Changed
 
+- A run request whose session gives up waiting for its run answer, ten seconds, opens
+  no run: once its connection goes, the gateway asks Qory Apiary nothing more for it,
+  the ping and the run configuration among it, and removes what it recorded of the
+  run, so the same `run_id` sent again opens the run instead of `run_id_used`. Before,
+  the run opened and ended `session_lost` after three heartbeat intervals. A session
+  that goes while the run answer is on its way may still leave such a run.
+- A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
+  neither `state` nor `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
 - The organization of the run's certificate authority is `Forager gateway, one run
   only`. The gateway's `403` for a link-local address or the machine's own address
@@ -473,6 +742,31 @@ release may change what an existing document does, and says so under Upgrading.
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
   gateway: the path could be read two ways".
+
+#### Fixed
+
+- `gateway.Resend` reads on past a line of `events.jsonl` that holds no whole event, a
+  write the gateway did not finish, on a full disk: it skips those bytes, and keeps and
+  sends every event the gateway wrote after them, one the next write put on the same
+  line too, the object that ends the line, never one inside the bytes before it. When
+  those bytes are themselves exactly one whole event, a write that lost its newline
+  alone, it is kept too. A whole event numbered at or below the one before it is
+  skipped. Before, it cut the file at that line, and every event after it was lost. A
+  last line without its newline that is a whole event is kept, and gets its newline
+  before `gateway_lost` follows it; any other is cut off, as before. The resend
+  reports "<n> lines of <file> are not whole events and are not sent". `gateway_lost`
+  is numbered after the highest sequence of the whole events or of `delivered.log`,
+  since an event whose line was not finished may have reached the server whole, and the
+  file is changed only when `gateway_lost` is added.
+- `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
+  that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
+  its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend
+  reports "the server never accepted the run's ping; nothing is sent". Before, its
+  ping and events were posted, which reported a run that never opened. The same holds
+  of a record with no ping and no `delivered.log`, of a run that had no server, sent to
+  a server: it never opened there, and the resend reports "the run had no server;
+  nothing is sent". Before, its events were posted without a ping. A record with a
+  `delivered.log` is sent, its ping's line torn or not.
 
 ### Wall
 
@@ -568,21 +862,35 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- A session speaks to a gateway alone, over the gateway's local link. `session.Spec`
-  gains `Gateway`, made by `session.LocalGateway(l link.Local)` from the link
-  `(*gateway.Gateway).LocalLink()` hands out; the link's secret stays in the process's
-  memory, and a `session.Gateway` prints and logs by its socket alone. A spec without
-  one is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
+- A session speaks to a gateway alone, over the gateway's link. `session.Spec`
+  gains `Gateway`, an interface: `session.LocalGateway(l link.Local)` from the link
+  `(*gateway.Gateway).LocalLink()` hands out, or a `session.RemoteGateway` (Added,
+  below); the link's secret stays in the process's memory, and a `session.Gateway`
+  prints and logs by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret. A spec without one, a nil `Gateway`, is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
   `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
-  `(*Policy).Under`, `Resend`, `ResendSpec` and `ResendResult`: the policy, the credentials, the tools and the server are
+  `(*Policy).Under`: the policy, the credentials, the tools and the server are
   `gateway.Config`'s, the stream that follows every event is `gateway.Config.Events`,
   the heartbeat interval is `gateway.Config.Heartbeat`, which the link's discovery
-  announces, and a resend is the gateway's. What the entries below say of these
-  members holds of the gateway's.
+  announces, and the resend of the run's stream is the gateway's, `gateway.Resend`. What
+  the entries below say of these members holds of the gateway's.
+- `session.Resend` sends a run's record again to the separate gateway the run spoke to
+  (Added, below). `ResendSpec` has `Gateway`, the run's `session.RemoteGateway`, `Dir`,
+  `ForagerVersion` and `Report`, and no `Server`, `Wall` or `RunnerVersion`: a record on
+  one machine is `gateway.Resend`'s, and what a wall left is the caller's to remove,
+  `(*wall.Docker).Reap`. `Resend` returns a `ResendResult` value with `Sent`,
+  `Undelivered`, `RunClosed`, `ClosedBy`, `Reason` and `NotOpened`, and no `RunID`,
+  `Closed` or `Reaped`: the session completes no record.
 - The session's own record is `session.jsonl` and `output.log` in the run directory;
-  the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state.
+  the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
+  toward the server. Behind a separate gateway, the session's run directory on its own
+  machine also holds `delivered.log`, what the gateway accepted of `session.jsonl` by the
+  session's sequence, and `stopped` when the gateway ended the run, and `undelivered/`,
+  the session's batches the gateway did not accept; neither holds the run credential.
+  Behind a separate gateway alone, it also holds `run-secret`, the run's `run_secret`,
+  mode 0600, written when the run opens and removed once nothing is owed.
   `Result.Undelivered` counts the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
   `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's
@@ -620,10 +928,47 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
-  the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
-  `gateway`, and with what code, `run_closed`, `credential_expired` or
-  `run_ended_at_issuer`. The runtime is stopped as at its time limit, and the session's
+- `session.RemoteGateway{URL, CAFile, CertificateSHA256, Credential}`, a separate
+  gateway on a machine of its own. The session reaches its one address over TLS 1.3
+  alone, verifies the chain for the host name of `URL` against the system's roots or,
+  with `CAFile`, that file's authorities alone, and the certificate's public key against
+  `CertificateSHA256` when it is set, and sends `Authorization: Bearer` and the run
+  credential `Credential` returns on every request, asked for again before each one, so
+  a refreshed run credential is picked up. It holds no access key, prints as its URL,
+  its `CAFile` and its pin, never the run credential, and without `Credential` is no
+  run. The discovery's proxy is the gateway's one address, the run request carries the
+  spec's labels and `about` and no narrowing, and `run_credential_refused`,
+  `target_differs_from_credential` and `differs_from_credential` return a
+  `*session.Refusal` with the gateway's message as its text. Agent traffic goes through
+  the session's forwarder to the gateway's one address over TLS with the same trust:
+  without a wall, the agent's proxy URL is the forwarder on loopback with the run's
+  proxy secret as its password, so the agent's environment holds the proxy secret;
+  behind a wall, the relay opens every connection with a token of the run's forwarder
+  alone, `wall.Launch.ProxyToken`, which the forwarder checks and replaces with the
+  run's proxy secret inside TLS, so the proxy secret is in no file of the wall's.
+- `session.Resend(ctx, session.ResendSpec)` sends a separate gateway what a run's session
+  did not deliver to it, from the run directory on the session's machine, through the
+  run's `RemoteGateway` with its run credential. Every event of `session.jsonl` the link
+  takes that `delivered.log` does not name is posted in order, in the link's batches,
+  until the gateway accepts it or the context ends, and what it does not accept is under
+  `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
+  sent. Every batch carries the run's `run_secret` from `run-secret`, which is removed
+  once nothing is owed. A record that owes nothing is sent nothing, with no request. A record with no
+  `delivered.log`, of a run that never opened at the gateway, a run refused at its run
+  request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
+  the gateway has ended answers with its `410`:
+  `RunClosed`, with `ClosedBy` and `Reason`, and nothing more is sent. The gateway's
+  `401` `run_credential_refused`, which an expired run credential gets at the discovery,
+  and its `403` `target_differs_from_credential` and `differs_from_credential` are a
+  `*session.Refusal` from `gateway`, the events left under `undelivered/`. A record its
+  session holds is `session.ErrRunning`, and a directory with `events.jsonl` is a
+  gateway's record. After a gateway restart, the session's undelivered events get the
+  `401` and stay in the run directory, and the gateway's own resend completes the run
+  `gateway_lost`.
+- `Result.RunClosed`, `Result.ClosedBy` and `Result.ClosedReason`: a run the gateway
+  closed, by a `410` on the gateway's link or the gateway's `400` to a batch, says who
+  closed it, `gateway`, and with what code, `run_closed`, `credential_expired`,
+  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`. The runtime is stopped as at its time limit, and the session's
   record has `dev.qory.run.exited` with that code as its reason.
 - The session fetches the run's configuration from the gateway again whenever the
   gateway's answers carry a new run-configuration digest, and records it in another
@@ -690,7 +1035,8 @@ release may change what an existing document does, and says so under Upgrading.
   credential, and every headless session, start Claude Code as before.
 - No tool, credential program or agent receives `QORY_ACCESS_KEY_SECRET`,
   `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the session leaves them out of every
-  environment it starts a program with.
+  environment it starts a program with. Nor does an agent, walled or not, receive
+  `QORY_RUN_CREDENTIAL_SECRET`, whatever brought it.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
   document is read and before the ping, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.
@@ -749,13 +1095,6 @@ release may change what an existing document does, and says so under Upgrading.
   binds them. `events/run.refused.schema.json` lists the four codes.
 - The session passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
-- A server can close a run with a signed `410` `run_closed` to a delivery: the session
-  stops the runtime as at its time limit, records `dev.qory.run.exited` with
-  `reason: run_closed` in the file sink and sends nothing further; before
-  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
-  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
-  run the same way, with exit code -1.
-  `session.Result` has `RunClosed`.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
   status: `apiary_public_key_missing` for a server without a pin, before any request;
   `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and

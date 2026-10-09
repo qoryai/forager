@@ -85,12 +85,14 @@ For each run the session, over the gateway's link:
    the gateway, a heartbeat every interval among them;
 5. fetches the run's configuration again whenever the gateway's answers carry a new
    run-configuration digest, and records it in another `dev.qory.run.policy_applied`;
-6. ends the run when the gateway or the server closes it: a `410` on the link, or the
-   gateway's `400` to a batch.
+6. ends the run when the gateway closes it: a `410` on the link, or the gateway's `400`
+   to a batch.
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 Every connection to the proxy opens with the relay's preamble and the run's proxy
 secret: without a wall the forwarder writes it, behind one the wall's relay does.
+Behind a separate gateway the forwarder reaches the gateway's one address over TLS
+instead: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -98,6 +100,169 @@ the refusal's `message`, the text such a run always returned, such as
 `ping https://qory.example/v1/events: instance_limit (status 409)`. A run whose policy
 needs a wall and has none returns the error such a run always had, and so does a run
 the gateway could not open for a reason without a code.
+
+## A separate gateway
+
+A gateway serves the sessions of other machines, and clients with no session, on one
+address of its own, beside its local link. Its `gateway.Config` sets it:
+
+- `Listen`, the one address, `host:port`. Empty means the local link alone. Every
+  connection is routed by its first bytes, after the TLS handshake: `QORY-RELAY` and a
+  run's proxy secret go to that run's proxy; a proxy request, `CONNECT` or an
+  absolute-form target, to the proxy of the run its `Proxy-Authorization` names; any
+  other request to the contract, where every request carries
+  `Authorization: Bearer <run credential>`
+  ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)). The
+  proxy of every run served there is guarded, wall or none. `Gateway.Addr` is this
+  address.
+- `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
+  address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
+- `RunCredentials`, the issuers whose run credentials open a run there, required with
+  `Listen` ([run credentials](gateway-run-credentials.md)). A run's labels and
+  `about.details` are its run credential's. The gateway tracks run keys and does not
+  require them to be unique; each period of activity is a run.
+- `Runs.Quiet`, how long a run with no session lasts with no connection: 30 minutes when
+  zero.
+- `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
+  `authority/ca.pem`, which the machines of the clients with no session trust, and the
+  run keys it refuses after the issuer's end, `ended-run-keys.json`, so a restart refuses
+  them too.
+
+A run of the one address ends as a local run does, and also at its run credential's
+`exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
+longer holds the run credential active, or the issuer ended another run of the same run
+key, `run_ended_at_issuer`; when the issuer's introspection endpoint could not be
+reached after the gateway's tries, `issuer_unreachable`, or gave no valid answer,
+`issuer_answer_invalid`, neither of which holds the run key. The gateway writes its
+`dev.qory.run.exited`; a session's later requests get the `410` with that code in
+`Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
+connection, `quiet`. After `run_ended_at_issuer`, the gateway refuses every request of a
+run of the run key until the latest `exp` of the run credentials of the key the gateway
+still holds, and of any presented during the hold, plus `runcredential.MaxLeeway`, 5
+minutes.
+
+`Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
+`host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
+read or that do not match, `TLS` without `Listen`, `Listen` without `RunCredentials`
+or `Dir`, and with `Listen` a `Dir` it cannot create a file in, "the ended run keys:
+<directory> cannot be written: <error>".
+
+### The session behind a separate gateway
+
+A session on another machine names the gateway with a `session.RemoteGateway` in place
+of `session.LocalGateway`:
+
+```go
+res, err := session.Run(ctx, session.Spec{
+	// …the runtime, the command and the rest, as on one machine
+	Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project"},
+	Gateway: session.RemoteGateway{
+		URL:               "https://gateway.example:8443", // its one address
+		CAFile:            caFile,                          // empty: the system's roots
+		CertificateSHA256: pin,                             // empty: no pin
+		Credential: func(context.Context) (string, error) { // asked before every request
+			b, err := os.ReadFile(runCredentialFile)
+			return strings.TrimSpace(string(b)), err
+		},
+	},
+})
+```
+
+- `URL` is `https` and a host with an optional port, `443` when it has none, and no user
+  information, path, query or fragment. The link is TLS 1.3 alone. The session verifies
+  the gateway's certificate chain for the URL's host name against the system's roots,
+  or, with `CAFile`, against the authorities of that PEM file alone, which replace the
+  system's roots. With `CertificateSHA256`, the SHA-256 of the certificate's DER
+  SubjectPublicKeyInfo in standard base64 with padding, it accepts only a certificate
+  with that key, and still checks its chain. No proxy of the environment is used, and no
+  redirect is followed.
+- `Credential` returns the run credential. Every request on the link carries it as
+  `Authorization: Bearer <run credential>`, and the session asks for it before each
+  request, so a run credential its issuer refreshes in a file is sent from then on. Its
+  error is the request's, and must not hold the run credential. A `RemoteGateway`
+  without `Credential` is no run. The run credential is never printed, logged,
+  recorded or contained in an error: a `session.RemoteGateway` prints as its URL, its
+  `CAFile` and its pin. Every reload and batch also carries `X-Qory-Run-Secret`, the
+  run answer's `run_secret`, which names the run.
+- The run credential's file must not sit in a directory a walled run mounts, and an
+  unwalled agent's environment must not carry it. Keeping it out of both is the
+  caller's job. As a backstop, the session leaves `QORY_RUN_CREDENTIAL_SECRET` out of the
+  agent's environment, walled or not, whatever brought it, as it does the access key's
+  variables.
+- No access key is involved, and the gateway holds no files on the session's machine, so
+  none of its files are checked against a walled run's mounts, and it reserves no
+  variables there.
+- The run directory on the session's machine holds the session's record,
+  `session.jsonl` and `output.log`, and what the gateway accepted of it, `delivered.log`,
+  and the batches it did not, `undelivered/`, and, behind a separate gateway, the run's
+  `run_secret`, `run-secret`, mode 0600, written when the run opens and removed once
+  nothing is owed. The gateway's record, `events.jsonl`, with its own delivery state
+  toward the server, is on the gateway's machine ([where the record is](events.md#where-the-record-is)).
+- The discovery must list URLs of the gateway's origin alone, and name the gateway's one
+  address, the URL's host and port, as its proxy; the loopback check of the local link
+  does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
+  among them, and `About`. The run's labels are the run credential's, and the run
+  request carries no narrowing: `Spec` has none.
+- The gateway's refusals return a `*session.Refusal` as on one machine, its `Error` the
+  refusal's `message`: `run_credential_refused`, a `401` that may come to discovery as
+  well, before anything is recorded; `target_differs_from_credential` and
+  `differs_from_credential`, whose names are `<member>=<the run credential's value>`;
+  and `run_id_used`. A refusal of the run request is recorded in the session's record
+  alone.
+- Agent traffic goes to the gateway's one address over TLS, with the link's trust,
+  through the session's forwarder. Without a wall, the agent's proxy URL is the
+  forwarder on loopback with the run's proxy secret as its password,
+  `http://qory:<proxy secret>@127.0.0.1:<port>`, as the contract has it: the agent's
+  environment holds the proxy secret, and every program the agent starts can read it,
+  and print it into the run's output. It is the run's alone, refused once the run ends,
+  and never the run credential. Behind a wall, the proxy secret stays in the session's
+  memory: see [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway).
+
+### Sending the session's record again
+
+`session.Resend` sends a separate gateway what the session's run directory says it did
+not accept: after a session that died, or a gateway that was out of reach. It reaches
+the gateway as the run did, with the same `session.RemoteGateway`:
+
+```go
+res, err := session.Resend(ctx, session.ResendSpec{
+	Gateway:        gw, // the RemoteGateway the run's Spec had
+	Dir:            filepath.Join(runsDir, runID),
+	ForagerVersion: version,
+	Report:         func(line string) { fmt.Fprintln(os.Stderr, line) },
+})
+```
+
+- A record its session still holds is `session.ErrRunning`; a directory with no
+  `session.jsonl` is `fs.ErrNotExist`; a directory with the run's stream, `events.jsonl`,
+  is a gateway's record, which `gateway.Resend` sends.
+- Every event of `session.jsonl` the link takes that `delivered.log` does not name is
+  posted to the discovery's events URL, in order, in the link's batches, until the
+  gateway accepts it or `ctx` ends; what it still has not accepted is under
+  `undelivered/` again, unless the gateway ended the run. The events the session
+  records in its own record alone are not sent. A record that owes nothing is sent
+  nothing, with no request.
+- A record with no `delivered.log` is of a run that never opened at the gateway, a run
+  refused at its run request say: `ResendResult.NotOpened` says so, the record is left
+  as it is, and nothing is sent, with no request. A record that owes nothing has a
+  `delivered.log`, and `NotOpened` false.
+- `ResendResult` has `Sent`, the events the gateway accepted now, and `Undelivered`,
+  those it still has not. `RunClosed` says the gateway had ended the run: its `410`,
+  with `ClosedBy` and `Reason` as `Result` has them; nothing more is sent, and the
+  events stay in the run directory.
+- The refusals of the run credential are a `*session.Refusal` from `gateway`, with the
+  events left under `undelivered/`: `run_credential_refused`, the `401`, which an
+  expired run credential gets at the discovery; `target_differs_from_credential` and
+  `differs_from_credential`, the `403` of a run credential that differs from the run's.
+- Every batch carries the run's `run_secret` from the run directory's `run-secret`,
+  which is removed once nothing is owed: everything accepted, the gateway's `410`, or
+  nothing owed from the start; it is kept after a refusal or a failure to send. Without
+  the file, the batches get the `401`.
+- `session.jsonl` is never completed: the gateway writes the end of a run whose session
+  was lost.
+- After a gateway restarts, it holds no run of the run credential: the session's
+  undelivered events get the `401`, and stay in the run directory, and the gateway's own
+  resend, `gateway.Resend`, completes the run `gateway_lost`.
 
 ## The runtime
 
@@ -137,12 +302,15 @@ A program that needs code of its own implements the interface.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
-  link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The session reaches
-  that gateway in the process's memory, never by its socket's path, which serves a
+  link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
+  `session.RemoteGateway` on a machine of its own (see
+  [the session behind a separate gateway](#the-session-behind-a-separate-gateway)). The session reaches
+  a gateway of its own process in memory, never by its socket's path, which serves a
   session in another process, and which a gateway started with `NoLinkSocket` does not
   make. The link's secret stays in the process's memory: a `session.Gateway` is printed
-  and logged by its socket alone, and a `*gateway.Gateway` by its proxy's address and
-  its socket. The zero `Gateway` is no run. The server the run reports to and the node's
+  and logged by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret, and a `*gateway.Gateway` by its proxy's address and its socket. A nil
+  `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).
@@ -175,10 +343,17 @@ A program that needs code of its own implements the interface.
   [the record](events.md#where-the-record-is).
 - `ExitCode`, `Signal` and `State`, the runtime's; `TimedOut` when it was stopped at
   `Timeout`.
-- `Undelivered`, how many of the session's events the gateway did not accept.
-- `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
-  server, or `gateway`, and `ClosedReason` the code, `run_closed`, `credential_expired`
-  or `run_ended_at_issuer`. The runtime was stopped as at its time limit.
+- `Undelivered`, how many of the session's events the gateway did not accept; behind a
+  separate gateway they are under the run directory's `undelivered/`.
+- `RunClosed` when the gateway closed the run: `ClosedBy` says who, always `gateway`,
+  and `ClosedReason` the code of the gateway's `410`, unchanged: `run_closed`,
+  `credential_expired` or `run_ended_at_issuer`, `issuer_unreachable` and
+  `issuer_answer_invalid` when its issuer's introspection endpoint could not be reached
+  or gave no valid answer, `session_lost` when it heard nothing
+  from the session for 3 heartbeat intervals, and `batch_refused` when it refused a
+  batch of the session's. The runtime was stopped as at its time limit. A server's
+  `410` closes no run: Qory Apiary records what a run reports and never ends a run it
+  did not start.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.
@@ -205,9 +380,11 @@ with `e2e` to check them together.
   - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
     `program/`.
   - `runcredential/`: the run credential an issuer gives a run: the configuration of the
-    issuers a gateway accepts and its checks, the checks of a run credential's header and
-    of its verified claims, and the mapping of its claims to the run's labels and
-    `about.details`. See [run credentials](gateway-run-credentials.md).
+    issuers a gateway accepts and its checks, the verifier of a run credential (its
+    serialisation, header, signature, claims and scope), the mapping of its claims to the
+    run's labels and `about.details`, the client of an issuer's introspection endpoint,
+    and the run keys a gateway refuses, kept in its state directory. See
+    [run credentials](gateway-run-credentials.md).
   - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the
     loopback address, the variables that name the run's socket and a tool's socket, the
     headers the proxy sets for a tool, the placeholder value, and the names of the
@@ -217,7 +394,9 @@ with `e2e` to check them together.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.
   - `session.Run` takes a launch spec, with the gateway and the wall as values, and
-    returns the exit status. It speaks to the gateway over its local link alone.
+    returns the exit status. It speaks to the gateway over the gateway's link alone:
+    the local link on one machine, or a separate gateway's one address over TLS.
+  - `session.Resend` sends a separate gateway what a run's session did not deliver.
   - `session.Forward` is the hook forwarder behind it.
   - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
     session and the program it runs: how a launch is prepared, what the program's records
@@ -229,11 +408,12 @@ with `e2e` to check them together.
     - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
   - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
     and `variables`.
-- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, with the
-  proxy, the credentials and the tools in `gateway/internal/`, and reports every run to
-  the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
-  and the `Gateway` it returns, `Resend` with its `ResendConfig`, and the types their
-  fields need are the package's whole surface.
+- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, and with
+  `Config.Listen` on one address of its own, with the proxy, the credentials and the
+  tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
+  and the `Gateway` it returns, `Resend` with its `ResendConfig` and its lines of a
+  run that never opened and of torn lines, `ResendNoServer`, `ResendNotOpened` and
+  `ResendTorn`, and the types their fields need are the package's whole surface.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.
@@ -253,7 +433,8 @@ holds the imports to these rules:
 - The core imports no part.
 - `gateway` and `wall` import the core.
 - `session` imports the core and `wall` for the interface, and no gateway package: it
-  speaks to the gateway over its local link alone. Its tests import
+  speaks to the gateway over the gateway's link alone, the local link on one machine or
+  a separate gateway's one address over TLS. Its tests import
   `internal/linktest`, a fake gateway's link, and package `gateway`, to run a session
   against a real one, using only its surface.
 - Package `gateway` exports its surface alone. A new export fails the test until its

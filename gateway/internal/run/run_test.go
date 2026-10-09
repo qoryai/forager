@@ -2,6 +2,8 @@ package run_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -714,5 +716,99 @@ func TestTheEgressEventOfADecision(t *testing.T) {
 	}
 	if got := run.Egress(proxy.Decision{Host: "x.example", Port: 443, Method: "CONNECT", Mode: policy.Observe, Outcome: "refused"}); got["decision"] != "denied" || len(got) != 7 {
 		t.Errorf("a denial %v", got)
+	}
+}
+
+// TestASessionsNarrowingOnlyNarrows pins the narrowing a session sends behind a
+// separate gateway: under enforce when it lists allow, so a host it does not cover is
+// removed, and under observe otherwise; its deny added; an observe policy put under
+// enforce by its allow; the digest the narrowed policy's own; and a reload's policy
+// narrowed the same way.
+func TestASessionsNarrowingOnlyNarrows(t *testing.T) {
+	read := func(doc string) *policy.Loaded {
+		t.Helper()
+		p, err := policy.Read("policy", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	enforce := read(`{"version":1,"egress":{"mode":"enforce","allow":["*.example","git.example.org"],"deny":["bad.example"]}}`)
+	for name, c := range map[string]struct {
+		pol         *policy.Loaded
+		n           *run.Narrowing
+		mode        policy.Mode
+		allow, deny []string
+		source      string
+	}{
+		"an allow under enforce":     {enforce, &run.Narrowing{Allow: []string{"api.example", "other.test"}}, policy.Enforce, []string{"api.example"}, []string{"bad.example"}, "config"},
+		"a deny alone":               {enforce, &run.Narrowing{Deny: []string{"tracker.example"}}, policy.Enforce, []string{"*.example", "git.example.org"}, []string{"bad.example", "tracker.example"}, "config"},
+		"an allow under observe":     {policy.None(), &run.Narrowing{Allow: []string{"api.example"}}, policy.Enforce, []string{"api.example"}, nil, "config"},
+		"a deny under observe":       {policy.None(), &run.Narrowing{Deny: []string{"tracker.example"}}, policy.Observe, []string{}, []string{"tracker.example"}, "config"},
+		"an empty allow allows none": {enforce, &run.Narrowing{Allow: []string{}}, policy.Enforce, []string{}, []string{"bad.example"}, "config"},
+	} {
+		got := run.Narrow(c.pol, c.n)
+		e := got.Policy.Egress
+		if e.Mode != c.mode || !slices.Equal(e.Allow, c.allow) || !slices.Equal(e.Deny, c.deny) || got.Source != c.source {
+			t.Errorf("%s: %+v %s", name, e, got.Source)
+		}
+		b, _ := json.Marshal(got.Policy)
+		if sum := sha256.Sum256(b); got.Digest != hex.EncodeToString(sum[:]) {
+			t.Errorf("%s: the digest is not the narrowed policy's", name)
+		}
+	}
+	if run.Narrow(enforce, nil) != enforce {
+		t.Error("no narrowing changed the policy")
+	}
+	// The start and a reload alike.
+	r, err := run.Decide(run.Config{RunID: runID, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"observe"}}`, digest('a')), Narrowing: &run.Narrowing{Allow: []string{"api.example"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := r.Policy().Policy.Egress; e.Mode != policy.Enforce || !slices.Equal(e.Allow, []string{"api.example"}) || r.Policy().Source != "fetched" || r.Policy().RunConfiguration != digest('a') {
+		t.Errorf("the start: %+v %s", e, r.Policy().Source)
+	}
+	next, err := r.Read(*served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example","git.example"]}}`, digest('b')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := next.Policy.Egress; !slices.Equal(e.Allow, []string{"api.example"}) {
+		t.Errorf("a reload: %+v", e)
+	}
+	// No narrowing, no change: the node's policy as it was read.
+	r, err = run.Decide(run.Config{RunID: runID, Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Policy().Source != "config" {
+		t.Errorf("without a narrowing: %s", r.Policy().Source)
+	}
+}
+
+// TestANarrowingOpensNoneOfTheMachinesAddresses pins the guard's names under a
+// session's narrowing: those of the policy before it, and only when that policy
+// enforces. Under observe, or no policy, a narrowing's allow opens nothing; under
+// enforce, a narrowed entry the policy does not name itself opens nothing either, the
+// policy's own names being the only ones; and without a narrowing the names are the
+// allow list's, as today.
+func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
+	loaded := func(mode policy.Mode, allow ...string) *policy.Loaded {
+		return &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: mode, Allow: allow}}, Source: "config"}
+	}
+	narrowing := &run.Narrowing{Allow: []string{"127.0.0.1", "api.example"}}
+	for name, c := range map[string]struct {
+		pol  *policy.Loaded
+		n    *run.Narrowing
+		want []string
+	}{
+		"no policy":                      {policy.None(), narrowing, nil},
+		"observe":                        {loaded(policy.Observe, "127.0.0.1"), narrowing, nil},
+		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1", "*.example"}},
+		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, []string{"*.example"}},
+		"no narrowing, observe":          {loaded(policy.Observe, "127.0.0.1"), nil, []string{"127.0.0.1"}},
+	} {
+		if got := run.GuardNames(c.pol, c.n); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %v", name, got)
+		}
 	}
 }

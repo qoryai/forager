@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/ping.schema.json",
   "title": "dev.qory.ping",
-  "description": "Sent to the server's events endpoint before the runtime starts, when a server is configured. The server answers a signed 2xx or the run does not start; a run is live from its accepted ping until its final event, or until no accepted event has arrived for 3 × interval_seconds.",
+  "description": "Sent to the server's events endpoint before the runtime starts, when a server is configured. The server answers a signed 2xx or the run does not start; a run is live from its accepted ping until its final event, or until it has no recent heartbeat: none within 3 × interval_seconds, each judged by its own time (README §The server).",
   "type": "object",
   "additionalProperties": false,
   "required": ["forager_version", "events", "contract_version", "interval_seconds"],

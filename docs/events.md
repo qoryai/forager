@@ -26,9 +26,9 @@ The run is written to its run directory, `<id>/` in the runs directory the calle
 passes. `qory` keeps them under its state directory and prints the path:
 
 - `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
-  writes it, with the run's delivery state beside it, `delivered.log` and
-  `undelivered/`: every event the session posts on the gateway's link, and the
-  gateway's own.
+  writes it, with the run's delivery state toward the server beside it,
+  `delivered.log` and `undelivered/`: every event the session posts on the gateway's
+  link, and the gateway's own.
 - `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
   session's own sequence, which is not the stream's: every event the session posts,
   and the few it records alone (below).
@@ -37,6 +37,18 @@ passes. `qory` keeps them under its state directory and prints the path:
 The gateway's record and the session's are in the same directory when the caller
 points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
 Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>/`.
+
+Behind a separate gateway the two records are on two machines. The gateway's machine
+holds `events.jsonl`, with its `delivered.log` and `undelivered/` toward the server. The
+session's machine holds `session.jsonl` and `output.log`, and the session's delivery
+state toward the gateway beside them:
+
+- `delivered.log`: what the gateway accepted of `session.jsonl`, a line per batch, by
+  the session's sequence, and `stopped` when the gateway ended the run.
+- `undelivered/`: the session's batches the gateway did not accept, when there are any.
+
+Neither holds the run credential. `session.Resend` sends the gateway what they say it
+still lacks ([sending the session's record again](go.md#sending-the-sessions-record-again)).
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
 
@@ -61,22 +73,30 @@ whose session sends nothing for three. The exit status of a run is the runtime's
 around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
 with no session. A run a gateway opened has no process, so its `dev.qory.run.started`
 names no runtime, command or host, and its `dev.qory.run.exited` contains no exit status
-and no state.
+and no state. Its `credential` says where the run's credential came from: `issuer`, an
+issuer gave the run its run credential, for a session's run behind a separate gateway
+and every run a gateway opened; `none` for a run on the local link. The gateway decides
+it and refuses a session's batch whose `dev.qory.run.started` says otherwise.
 
 When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
-`reason`. The session writes `timeout`, and posts it. The gateway writes the others:
+`reason`. The session writes `timeout`, and posts it, and `batch_refused`, in its own
+record alone (below). The gateway writes the others:
 `session_lost`, the session was silent, or the gateway refused a batch of the
 session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
-`run_ended_at_issuer`; `run_closed` when the server closes the run; and sending a
-record again writes `gateway_lost`. When the gateway or the server ends a session's
-run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
-request with a `410` and a code. The session records its own `dev.qory.run.exited` in
+`run_ended_at_issuer`; `issuer_unreachable`, the issuer's introspection endpoint could
+not be reached after the gateway's tries; `issuer_answer_invalid`, it gave no valid
+answer; and sending a record again writes `gateway_lost`. When the
+gateway ends a session's run, the gateway writes the run's `dev.qory.run.exited`, and
+answers the session's next request with a `410` and a code. The session records its own `dev.qory.run.exited` in
 `session.jsonl` alone, with the 410's code as its reason, and posts nothing more:
-`credential_expired`, `run_ended_at_issuer` or `run_closed` as the gateway ended the
-run, and `run_closed` after `session_lost`, the session silent or a batch of its
-refused. A refusal of the run request with a code other than `wall_required` is
-recorded the same way: the session records `dev.qory.run.refused` in its own record
-alone, since the gateway opened no run. A run the gateway could not open for a reason
+`credential_expired`, `run_ended_at_issuer`, `issuer_unreachable`,
+`issuer_answer_invalid`, `run_closed` or `session_lost` as the gateway ended the run, and `batch_refused` when the gateway refused a batch of its,
+which the gateway's record says as `session_lost`. A refusal of the run request with a
+code other than `wall_required` is recorded the same way: the session records
+`dev.qory.run.refused` in its own record alone, since the gateway opened no run;
+`issuer_unreachable`, the gateway's `503`, and `issuer_answer_invalid`, its `502`, among
+them. A code of the server's comes with its status, and is recorded as the server sent
+it, `not_found` among them, and one the contract does not list yet too. A run the gateway could not open for a reason
 without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the
 gateway's message says. The contract describes each.
 
