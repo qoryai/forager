@@ -90,20 +90,25 @@ func claimString(claims map[string]any, name string) (string, error) {
 }
 
 // Details makes the keys of about.details the run credential decides from its
-// verified claims, one per key of the issuer's details, each the value of its claim. A
-// claim the mapping names is required, so a key the issuer meant the run credential to
-// decide is never left to the session; it is a string with no control character.
-// Every failure is [ErrRefused]. The 8192 bytes of about.details are the session's
-// and the gateway's check of the whole about, not this one's.
+// verified claims: for each key of the issuer's details whose claim the run credential
+// carries, the value of that claim, a string with no control character. A key whose
+// claim the run credential does not carry is not decided by it, and the session's own
+// value stands. A claim that is present and not such a string is [ErrRefused]. The
+// 8192 bytes of about.details are the session's and the gateway's check of the whole
+// about, not this one's.
 func (i Issuer) Details(claims map[string]any) (map[string]string, error) {
 	if len(i.DetailMapping) == 0 {
 		return nil, nil
 	}
 	out := make(map[string]string, len(i.DetailMapping))
 	for key, c := range i.DetailMapping {
-		v, ok := claims[c.Claim].(string)
+		raw, present := claims[c.Claim]
+		if !present {
+			continue
+		}
+		v, ok := raw.(string)
 		if !ok {
-			return nil, refuse("a claim of details is missing or not a string")
+			return nil, refuse("a claim of details is not a string")
 		}
 		if !plain(v) {
 			return nil, refuse("a claim of details holds a control character")
@@ -128,8 +133,10 @@ func (i Issuer) Details(claims map[string]any) (map[string]string, error) {
 //
 // A session's label the mapping does not set is ignored: a run's labels come from the
 // run credential alone. A session's key of about.details the mapping does not set is
-// kept: qory's flags fill the rest. A key of about.details the session sends as other
-// than a string differs from the run credential's string.
+// kept: qory's flags fill the rest. That includes a key of the issuer's details whose
+// claim the run credential does not carry, which [Issuer.Details] leaves out of
+// credDetails. A key of about.details the session sends as other than a string differs
+// from the run credential's string.
 func Compare(sessionLabels map[string]string, sessionDetails map[string]any, credLabels, credDetails map[string]string) *accesskey.Refusal {
 	var target, other []string
 	for _, key := range []string{LabelForge, LabelRepository} {

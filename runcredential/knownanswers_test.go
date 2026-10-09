@@ -111,8 +111,8 @@ func verify(t *testing.T, pub crypto.PublicKey, alg, input string, sig []byte) b
 	return false
 }
 
-// TestKnownAnswers holds the header step, the claim checks, the scope and the mapping
-// to every run credential of the known answers, at their now: a run credential refused
+// TestKnownAnswers holds the header step, the claim checks, the scope and the mapping,
+// Labels and Details, to every run credential of the known answers, at their now: a run credential refused
 // at a step fails that step and passes every earlier one; an accepted one passes every
 // step and maps to the labels and details listed. The signature step is this test's
 // own check, left to the gateway's verifier: a credential refused at signature passes
@@ -141,7 +141,7 @@ func TestKnownAnswers(t *testing.T) {
 		}
 		configs[name] = l[0]
 	}
-	steps := []string{"header", "signature", "claims", "scope"}
+	steps := []string{"header", "signature", "claims", "scope", "mapping"}
 	seen := map[string]bool{}
 	for _, c := range index.Credentials {
 		t.Run(c.Name, func(t *testing.T) {
@@ -198,19 +198,22 @@ func TestKnownAnswers(t *testing.T) {
 			if i.Allowed(claims) != reached("scope") {
 				t.Fatalf("Allowed: %v; want %v", i.Allowed(claims), reached("scope"))
 			}
-			labels, err := i.Labels(claims)
-			if c.RefusedAt != "" {
-				if c.RefusedAt == "signature" && err != nil {
-					t.Errorf("Labels refuses the credential refused at signature: %v", err)
-				}
+			if c.RefusedAt == "scope" {
 				return
 			}
-			if err != nil || !maps.Equal(labels, c.Labels) {
-				t.Errorf("Labels = %v, %v; want %v", labels, err, c.Labels)
+			labels, lerr := i.Labels(claims)
+			details, derr := i.Details(claims)
+			if mapped := lerr == nil && derr == nil; mapped != reached("mapping") {
+				t.Fatalf("Labels: %v, Details: %v; want them to pass: %v", lerr, derr, reached("mapping"))
 			}
-			details, err := i.Details(claims)
-			if err != nil || !maps.Equal(details, c.Details) {
-				t.Errorf("Details = %v, %v; want %v", details, err, c.Details)
+			if c.RefusedAt != "" {
+				return
+			}
+			if !maps.Equal(labels, c.Labels) {
+				t.Errorf("Labels = %v; want %v", labels, c.Labels)
+			}
+			if !maps.Equal(details, c.Details) {
+				t.Errorf("Details = %v; want %v", details, c.Details)
 			}
 		})
 	}

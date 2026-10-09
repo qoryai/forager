@@ -143,11 +143,13 @@ release may change what an existing document does, and says so under Upgrading.
   checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
   of a run credential whose signature is verified, at a given time; `Issuer.Allowed` is
   the scope; `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label
-  limits; `Issuer.Details` makes the `about.details` keys; and `Compare` returns
-  `target_differs_from_credential` or `differs_from_credential` for what a session sends
-  with another value, with each member and the run credential's value as names. Every
-  failure of a run credential is `runcredential.ErrRefused`, one text that names no claim,
-  and `runcredential.Refused` is its `run_credential_refused`.
+  limits, refusing a label claim the run credential does not carry; `Issuer.Details`
+  makes the `about.details` keys whose claims it carries, leaving the others to the
+  session; and `Compare` returns `target_differs_from_credential` or
+  `differs_from_credential` for what a session sends with another value, with each
+  member and the run credential's value as names. Every failure of a run credential is
+  `runcredential.ErrRefused`, one text that names no claim, and `runcredential.Refused`
+  is its `run_credential_refused`.
 - `fixtures/known-answers/run-credentials/` holds the fixture issuer's keys, RSA 2048,
   P-256 and Ed25519, derived from a published seed, two configurations of the issuer, and
   run credentials signed under the keys, accepted ones per algorithm and refused ones,

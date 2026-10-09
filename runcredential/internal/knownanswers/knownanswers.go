@@ -166,7 +166,7 @@ type Case struct {
 	// Outcome is accepted or refused.
 	Outcome string `json:"outcome"`
 	// RefusedAt is the step that refuses a refused run credential: header, signature,
-	// claims or scope.
+	// claims, scope or mapping.
 	RefusedAt string            `json:"refused_at,omitempty"`
 	Labels    map[string]string `json:"labels,omitempty"`
 	Details   map[string]string `json:"details,omitempty"`
@@ -280,6 +280,8 @@ func Files() (map[string][]byte, error) {
 		{"rs256", one, hRS, claims(nil), rs256, "", "RS256 under the one key, which has no kid; the credential carries none"},
 		{"rs256-aud-array", one, hRS, claims(map[string]any{"aud": []string{"another-service", Audience}}), rs256, "", "aud is an array that contains the audience"},
 		{"rs256-expired-within-leeway", one, hRS, claims(map[string]any{"iat": Now - 630, "exp": Now - 30}), rs256, "", "exp passed 30 seconds ago, within the leeway of 60 seconds"},
+		{"rs256-no-requester", one, hRS, claims(map[string]any{"requester": nil}), rs256, "", "no requester: the run credential does not decide about.details.requester, and the session's value stands"},
+		{"requester-not-string", one, hRS, claims(map[string]any{"requester": 7}), rs256, "mapping", "requester is a number, not the string details needs"},
 		{"es256", two, hES, claims(nil), es256, "", "ES256 under the key k-es256, the signature R and S, 32 bytes each"},
 		{"eddsa", two, hEd, claims(nil), eddsa, "", "EdDSA under the Ed25519 key k-eddsa"},
 		{"alg-none", one, map[string]any{"alg": "none", "typ": "JWT"}, claims(nil), nil, "header", "alg none, with an empty signature"},
@@ -310,6 +312,9 @@ func Files() (map[string][]byte, error) {
 			c.Outcome, c.RefusedAt = "refused", s.refusedAt
 		} else {
 			c.Labels, c.Details = accepted, details
+			if _, ok := s.payload["requester"]; !ok {
+				c.Details = nil
+			}
 		}
 		cases = append(cases, c)
 	}
@@ -339,7 +344,8 @@ func Files() (map[string][]byte, error) {
 	}
 	index := map[string]any{
 		"note": "Run credentials of the fixture issuer, each with its outcome at now, under the configuration named, a file beside this one. " +
-			"refused_at is the step that refuses one: header, the alg and the key the header selects; signature, over the exact bytes received; claims, the time, iss, aud and sub; scope, allow. " +
+			"refused_at is the step that refuses one: header, the alg and the key the header selects; signature, over the exact bytes received; claims, the time, iss, aud and sub; scope, allow; mapping, a claim the labels or details name that is present and not a string. " +
+			"A details claim the credential does not carry leaves that key undecided, and the session's value stands; a label claim it does not carry refuses it. " +
 			"A credential refused at a later step passes every earlier one, and an accepted one passes every step, the signature included, with the labels and details listed. " +
 			"Every refusal is the same opaque answer: run_credential_refused to a session, 407 to a client with no session.",
 		"now":         Now,

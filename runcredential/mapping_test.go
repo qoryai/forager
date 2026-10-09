@@ -110,8 +110,10 @@ func TestDetails(t *testing.T) {
 		{"no details", none, nil, nil, ""},
 		{"two keys", two, map[string]any{"team": "example-team"}, map[string]string{"requester": "example-requester", "team": "example-team"}, ""},
 		{"an empty value", issuer(), map[string]any{"requester": ""}, map[string]string{"requester": ""}, ""},
-		{"missing", issuer(), map[string]any{"requester": nil}, nil, "a claim of details is missing or not a string"},
-		{"a number", issuer(), map[string]any{"requester": 1.0}, nil, "a claim of details is missing or not a string"},
+		{"missing, so not decided", issuer(), map[string]any{"requester": nil}, map[string]string{}, ""},
+		{"one of two missing", two, nil, map[string]string{"requester": "example-requester"}, ""},
+		{"a number", issuer(), map[string]any{"requester": 1.0}, nil, "a claim of details is not a string"},
+		{"an array", issuer(), map[string]any{"requester": []any{"example-requester"}}, nil, "a claim of details is not a string"},
 		{"a line feed", issuer(), map[string]any{"requester": "a\nb"}, nil, "a claim of details holds a control character"},
 		{"U+2029", issuer(), map[string]any{"requester": "a b"}, nil, "a claim of details holds a control character"},
 		{"not UTF-8", issuer(), map[string]any{"requester": "a\xffb"}, nil, "a claim of details holds a control character"},
@@ -133,6 +135,36 @@ func TestDetails(t *testing.T) {
 				t.Errorf("Details = %v; want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// TestDetailsNullIsPresent pins that a claim present as JSON null is a claim that is not
+// a string, not a missing one.
+func TestDetailsNullIsPresent(t *testing.T) {
+	claims := validClaims()
+	claims["requester"] = nil
+	if _, err := issuer().Details(claims); reason(t, err) != "a claim of details is not a string" {
+		t.Errorf("a requester of null: %v", err)
+	}
+}
+
+// TestCompareKeepsAKeyTheCredentialDoesNotDecide pins that a details key whose claim
+// the run credential does not carry is the session's: Details leaves it out, and
+// Compare lets the session's value stand.
+func TestCompareKeepsAKeyTheCredentialDoesNotDecide(t *testing.T) {
+	claims := validClaims()
+	delete(claims, "requester")
+	i := issuer()
+	labels, err := i.Labels(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, err := i.Details(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := Compare(nil, map[string]any{"requester": "example-requester-flag"}, labels, details); r != nil {
+		t.Errorf("Compare = %v; want the session's requester to stand", r)
 	}
 }
 

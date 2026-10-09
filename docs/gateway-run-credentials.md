@@ -36,9 +36,11 @@ The gateway verifies the run credential, not the run key.
 `exp`, `iat` and `nbf` are NumericDates: seconds since the epoch, a JSON number. The
 leeway is 60 seconds unless the operator sets another.
 
-Every claim the mapping names is a string, and is required: a run credential without one
-is refused, so a key the operator meant the run credential to decide is never left to the
-client. A label value is at most 256 bytes of UTF-8. A claim that names the target never
+Every claim the mapping names for a label is a string, and is required: a run credential
+without one is refused, since a run's labels come from the run credential alone. A
+descriptive claim is a string when present, and a run credential that carries one of
+another type is refused; one it does not carry leaves that `about.details` key undecided,
+and the client's own value stands. A label value is at most 256 bytes of UTF-8. A claim that names the target never
 contains the `join` the operator sets between them, so two different targets never make
 one repository.
 
@@ -170,8 +172,9 @@ holds `requester: example-requester`.
 
 ## How the gateway verifies a run credential
 
-The gateway checks the signature against the pinned keys before it uses any claim, in
-this order:
+The gateway checks the signature against the pinned keys before it uses any claim. It
+reads `iss` and `kid` from the unverified payload and header only to select the issuer's
+pinned keys, and trusts no claim before the signature verifies. In order:
 
 1. **Header and keys:** `alg` is among the issuer's algorithms and equals the selected
    key's; the key is selected by `kid`, or is the one key pinned.
