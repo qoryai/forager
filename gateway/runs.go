@@ -227,6 +227,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			if how.request.Err() == nil {
 				return failed(err)
 			}
+			if err == nil {
+				// No failure comes without an error now; should one, the session's going
+				// is the error, so no caller takes the missing run for one that opened.
+				err = how.request.Err()
+			}
 			lr.release()
 			if derr := st.Discard(g.base); derr != nil {
 				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
