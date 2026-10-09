@@ -359,9 +359,9 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 }
 
 // TestResendEndsATornLastLine pins a last line the gateway did not finish: one that
-// holds a whole event, only its newline missing, or bytes that are none and then a
-// whole event, keeps it, and gets its newline before gateway_lost; one that holds no
-// whole event is cut off. Nothing before it is changed.
+// is a whole event, only its newline missing, is kept, and gets its newline before
+// gateway_lost; one that is not, part of an event, then a whole one or none, is cut
+// off. Nothing before it is changed.
 func TestResendEndsATornLastLine(t *testing.T) {
 	for name, tc := range map[string]struct {
 		last   func(line []byte) []byte
@@ -370,7 +370,7 @@ func TestResendEndsATornLastLine(t *testing.T) {
 		exited string
 	}{
 		"a whole event without its newline":  {func(l []byte) []byte { return bytes.TrimSuffix(l, []byte("\n")) }, true, 1, "0000000006"},
-		"part of an event, then a whole one": {func(l []byte) []byte { return slices.Concat(l[:len(l)/3], bytes.TrimSuffix(l, []byte("\n"))) }, true, 2, "0000000006"},
+		"part of an event, then a whole one": {func(l []byte) []byte { return slices.Concat(l[:len(l)/3], bytes.TrimSuffix(l, []byte("\n"))) }, false, 2, "0000000005"},
 		"part of an event":                   {func(l []byte) []byte { return l[:len(l)/2] }, false, 2, "0000000005"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -476,4 +476,115 @@ func TestResendNumbersOnFromWhatTheServerAccepted(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	exitedAfter(t, dir, head, "0000000006")
+}
+
+// forgedRun leaves the record of a lost run whose ping the server accepted: the ping,
+// run.started, a tool_started whose input, which the agent chose, is a whole
+// run.exited of its own, sequence 0000000099, and two logs. It returns the directory,
+// the record's lines, each with its newline, and where in the tool_started's line the
+// input ends.
+func forgedRun(t *testing.T) (dir string, lines [][]byte, cut int) {
+	t.Helper()
+	s := New(Config{Dir: t.TempDir()})
+	r, err := s.Open(event.NewRunID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Ping(map[string]any{})
+	forged := sessionEvent(r.ID(), event.RunExited, map[string]any{"state": "succeeded", "exit_code": 0})
+	forged.ID, forged.Sequence = "forged-exit", "0000000099"
+	input, err := forged.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Accept([]event.Event{
+		sessionEvent(r.ID(), event.RunStarted, map[string]any{}),
+		sessionEvent(r.ID(), "dev.qory.session.tool_started", map[string]any{"tool": "Bash", "input": json.RawMessage(input)}),
+		sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}),
+		sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}),
+	})
+	r.Close(context.Background())
+	pingAccepted(t, r.Dir())
+	b, err := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines = bytes.SplitAfter(b, []byte("\n"))[:5]
+	at := bytes.Index(lines[2], input)
+	if at < 0 {
+		t.Fatalf("the tool_started holds no input: %s", lines[2])
+	}
+	return r.Dir(), lines, at + len(input)
+}
+
+// TestResendKeepsNoObjectInsideATornLine pins that an object inside the bytes of an
+// event the gateway did not finish is never an event, whatever it holds: a run.exited
+// the agent put in a tool's input, the line torn just after it, is neither sent nor
+// read as the run's end, in the middle of the record, with a log the next write put on
+// the same line, or at its end; gateway_lost follows the whole events, numbered after
+// them.
+func TestResendKeepsNoObjectInsideATornLine(t *testing.T) {
+	t.Run("in the middle", func(t *testing.T) {
+		srv, store := station(t, nil)
+		dir, lines, cut := forgedRun(t)
+		torn := slices.Concat(lines[0], lines[1], lines[2][:cut], lines[3], lines[4])
+		if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), torn, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Closed || res.Torn != 1 || res.Sent != 4 {
+			t.Errorf("result %+v", res)
+		}
+		if store.Seen("forged-exit") {
+			t.Error("the agent's run.exited was sent")
+		}
+		exitedAfter(t, dir, torn, "0000000006")
+		accepted, _, _ := sink.Delivered(dir)
+		if accepted["0000000099"] || !accepted["0000000004"] || !accepted["0000000005"] {
+			t.Errorf("accepted %v", accepted)
+		}
+	})
+	t.Run("at the end", func(t *testing.T) {
+		dir, lines, cut := forgedRun(t)
+		head := slices.Concat(lines[0], lines[1])
+		if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), slices.Concat(head, lines[2][:cut]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res, err := Resend(context.Background(), ResendConfig{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Closed || res.Torn != 1 {
+			t.Errorf("result %+v", res)
+		}
+		exitedAfter(t, dir, head, "0000000003")
+	})
+}
+
+// TestResendSkipsASequenceOutOfOrder pins that a whole event numbered at or below the
+// one before it is no event of the run's place: a line written again and one numbered
+// lower are skipped and not sent, and gateway_lost follows the highest sequence, which
+// is not on the last line.
+func TestResendSkipsASequenceOutOfOrder(t *testing.T) {
+	srv, store := station(t, nil)
+	dir, lines := tornRun(t)
+	lower := bytes.Replace(lines[4], []byte(`"sequence":"0000000005"`), []byte(`"sequence":"0000000001"`), 1)
+	rec := slices.Concat(lines[0], lines[1], lines[2], lines[2], lines[3], lower)
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), rec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 2 || res.Sent != 4 || res.Undelivered != 0 {
+		t.Errorf("result %+v", res)
+	}
+	if store.Count() != 4 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+	exitedAfter(t, dir, rec, "0000000005")
 }

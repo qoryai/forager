@@ -1256,10 +1256,13 @@ server's filter selects
 that no accepted batch contained is posted, in order, in batches cut the same way, until
 the server accepts them or Forager stops retrying. A line of `events.jsonl` that holds
 no whole event, a write Forager did not finish, on a full disk, is skipped, and every
-whole event after it is read and sent, one the next write put on the same line
-included. A last line without its newline is made a line before
-`dev.qory.run.exited` follows it: one that holds a whole event gets its newline, and one
-that holds none is cut off. Nothing else of the file is changed. `delivered.log` is
+event the gateway wrote after it is read and sent, one the next write put on the same
+line included: the object that ends that line, when it is one whole event from where it
+starts and numbered at least two after the event before it, never an object inside the
+bytes before it. A whole event numbered at or below the one before it is skipped too. A
+last line without its newline is made a line before `dev.qory.run.exited` follows it:
+one that is a whole event, its newline alone lost, gets its newline, and any other is
+cut off. Nothing else of the file is changed. `delivered.log` is
 made once the server accepts the ping, its first line the ping's: a record that holds a
 ping and no `delivered.log` is of a run whose ping was never accepted, which never
 opened, and nothing of it is sent or added to it. Neither is anything of a record with

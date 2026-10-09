@@ -198,7 +198,8 @@ type recorded struct {
 
 // recordFile is what Resend reads of events.jsonl.
 type recordFile struct {
-	// lines are the whole events, in the file's order, which is the sequence's.
+	// lines are the whole events, in the file's order, each numbered after the one
+	// before it: the sequence's order.
 	lines []recorded
 	// torn is how many lines hold bytes that are no whole event.
 	torn int
@@ -210,18 +211,27 @@ type recordFile struct {
 }
 
 // record reads the events file, and writes nothing. A whole event is a JSON object with
-// a type and a sequence, a decimal number. A write the gateway did not finish, on a
-// full disk, leaves part of a line, which is no event; the next write the gateway made
-// goes on in the same line. So a line that is not one whole event is read for whole
-// events after the bytes that are none, each '{' starting a try: those found are kept,
-// the bytes that are none are skipped, and every line after it is read as any other. A
-// blank line is skipped.
+// a type and a sequence, a decimal number above the sequence of the whole event before
+// it. The gateway numbers a run's events one after the other and writes each, a line,
+// in that order, so a whole line of the record holds the next sequence, or a later one
+// when a write before it left nothing at all. A write the gateway did not finish, on a
+// full disk, leaves part of a line, which is no event and holds the next sequence; the
+// next write the gateway finished goes on in the same line and ends it. So a line that
+// is not one whole event holds at most one, the object that ends the line, which the
+// gateway wrote whole: never an object inside the bytes before it, which may hold
+// anything a session sent. It is kept when it decodes as one whole event from where it
+// starts to the end of the line, and its sequence is at least two above the one before
+// it, the bytes before it having taken one. A last line with no newline is kept only
+// when the whole of it is one whole event, its newline alone lost. A blank line is
+// skipped; every other line that is not kept, or holds bytes before what is, counts as
+// torn.
 func record(file string) (*recordFile, error) {
 	b, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
 	rec := &recordFile{size: int64(len(b)), whole: int64(len(b))}
+	var prev uint64
 	for off := 0; off < len(b); {
 		end := bytes.IndexByte(b[off:], '\n')
 		last := end < 0
@@ -231,13 +241,16 @@ func record(file string) (*recordFile, error) {
 		} else {
 			end += off
 		}
-		evs, torn := events(b[off:end])
-		rec.lines = append(rec.lines, evs...)
+		l, kept, torn := readLine(b[off:end], last, prev)
+		if kept {
+			rec.lines = append(rec.lines, l)
+			prev = l.seq
+		}
 		if torn {
 			rec.torn++
 		}
 		if last {
-			rec.tailKept = len(evs) > 0
+			rec.tailKept = kept
 		}
 		off = end + 1
 	}
@@ -247,33 +260,74 @@ func record(file string) (*recordFile, error) {
 	return rec, nil
 }
 
-// events reads the whole events of one line of the record, and says whether the line
-// holds bytes that are none.
-func events(line []byte) (out []recorded, torn bool) {
+// readLine reads one line of the record, after the whole event of the sequence prev, as
+// [record] says: the whole event it holds, if any, and whether it holds bytes that are
+// none. final says the line has no newline.
+func readLine(line []byte, final bool, prev uint64) (l recorded, kept, torn bool) {
 	if len(bytes.TrimSpace(line)) == 0 {
-		return nil, false
+		return recorded{}, false, false
 	}
 	if l, ok := whole(line); ok {
-		return []recorded{l}, false
+		if l.seq <= prev {
+			return recorded{}, false, true
+		}
+		return l, true, false
 	}
-	for rest := line; len(rest) > 0; {
-		dec := json.NewDecoder(bytes.NewReader(rest))
-		var raw json.RawMessage
-		if dec.Decode(&raw) == nil {
-			if l, ok := whole(raw); ok {
-				out = append(out, l)
-				rest = bytes.TrimLeft(rest[dec.InputOffset():], " \t\r")
-				continue
+	if final {
+		return recorded{}, false, true
+	}
+	start := lastObject(line)
+	if start <= 0 {
+		return recorded{}, false, true
+	}
+	l, ok := whole(line[start:])
+	if !ok || l.seq < prev+2 {
+		return recorded{}, false, true
+	}
+	return l, true, true
+}
+
+// lastObject is where the JSON object that ends the line starts, or -1: it reads back
+// from the line's last '}', minding strings, to the '{' that opens it, each byte once.
+// It does not check the JSON; [whole] does.
+func lastObject(line []byte) int {
+	i := len(bytes.TrimRight(line, " \t\r")) - 1
+	if i < 0 || line[i] != '}' {
+		return -1
+	}
+	depth, inString := 0, false
+	for ; i >= 0; i-- {
+		c := line[i]
+		if inString {
+			if c == '"' && !escaped(line, i) {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '}', ']':
+			depth++
+		case '{', '[':
+			if depth--; depth == 0 {
+				if c == '{' {
+					return i
+				}
+				return -1
 			}
 		}
-		torn = true
-		i := bytes.IndexByte(rest[1:], '{')
-		if i < 0 {
-			break
-		}
-		rest = rest[i+1:]
 	}
-	return out, torn
+	return -1
+}
+
+// escaped says the quote at i is escaped: an odd number of backslashes before it.
+func escaped(line []byte, i int) bool {
+	n := 0
+	for j := i - 1; j >= 0 && line[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // whole reads b as one whole event: a JSON object with a type and a sequence.
