@@ -1,0 +1,7 @@
+{
+  "error": "placeholder_conflict",
+  "names": [
+    "GIT_SECRET"
+  ],
+  "from": "gateway"
+}

@@ -10,5 +10,8 @@
   "run": {
     "url": "http://localhost/v1/run-configuration"
   },
+  "proxy": {
+    "address": "127.0.0.1:41000"
+  },
   "node_id": "nd_f1xt0re000000000"
 }

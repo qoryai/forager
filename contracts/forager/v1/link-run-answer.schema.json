@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the run's proxy secret, and the run's certificate authority exactly when the run request's wall is true. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the variable names the gateway sets, the run's image when it has a wall, the run's proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "labels", "proxy_secret"],
@@ -42,13 +42,27 @@
       "description": "The variables the agent's process receives, as a run configuration contains them.",
       "$ref": "run-configuration.schema.json#/properties/variables"
     },
+    "placeholders": {
+      "description": "The variables the agent sees in place of a credential or a tool's secret the gateway holds: the session sets each to a value that is no credential, and the run passes no value of its own for one, placeholder_conflict. Names alone, never a value. Absent means none.",
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
+    },
+    "reserved": {
+      "description": "The names of the variables the gateway sets for the run, which the session must not set. Absent means none.",
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
+    },
+    "image": {
+      "description": "The image the run gets, the one the policy in force selects or the machine's default, resolved against the run request's images: present when the run request's wall is true. Its reference may carry a registry's credentials in its user information: never logged or reported.",
+      "$ref": "link-run-request.schema.json#/$defs/image"
+    },
     "proxy_secret": {
       "description": "The run's proxy secret: at least 128 bits from the system's random source, made by the gateway for this run. The relay opens every connection with it, and without a wall the agent's proxy URL carries it as its password. Compared in constant time, never logged, refused once its run ends, sent between machines only inside TLS. Characters a URL's password and the relay's preamble carry as they are.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "certificate_authority": {
-      "description": "The certificate of the run's own certificate authority, PEM: present exactly when the run request's wall is true, absent when it is false. The certificate the enclosure trusts after the image's own; never its key, which stays with the gateway.",
+      "description": "The certificate of the run's own certificate authority, PEM: present when the run request's wall is true and the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and behind a wall with a server always, since a reload may bring path rules or credentials; absent otherwise, and always when wall is false. The certificate the enclosure trusts after the image's own; never its key, which stays with the gateway.",
       "type": "string",
       "maxLength": 16384,
       "pattern": "^-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\r?\\n?$"

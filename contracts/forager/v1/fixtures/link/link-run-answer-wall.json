@@ -32,6 +32,19 @@
       "value": "test"
     }
   },
+  "placeholders": [
+    "GIT_SECRET"
+  ],
+  "reserved": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "image": {
+    "name": "base",
+    "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
+    "runtime": "sysbox-runc"
+  },
   "proxy_secret": "fixture-proxy-secret-0000000000000000000000",
   "certificate_authority": "-----BEGIN CERTIFICATE-----\nMIIB5TCCAYugAwIBAgIUR119TkjoHNp2qszWedwOz4lFHyIwCgYIKoZIzj0EAwIw\nSDEmMCQGA1UECgwdRm9yYWdlciBnYXRld2F5LCBvbmUgcnVuIG9ubHkxHjAcBgNV\nBAMMFWZpeHR1cmUgcnVuIGF1dGhvcml0eTAeFw0yNjEwMDkwMTAwNDZaFw0yNjEw\nMTAwMTAwNDZaMEgxJjAkBgNVBAoMHUZvcmFnZXIgZ2F0ZXdheSwgb25lIHJ1biBv\nbmx5MR4wHAYDVQQDDBVmaXh0dXJlIHJ1biBhdXRob3JpdHkwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAAQE/e1hoKKuyrI2KJZMrmwyW2UJdT1yuer3Md6wQvJEITEH\nQD+G+gE7ibLoEFLB4JhcnToKsKoRYIR+KQrhNN/Lo1MwUTAdBgNVHQ4EFgQUMc4K\nP/w/PsYQkghwJtcEnzd3R0wwHwYDVR0jBBgwFoAUMc4KP/w/PsYQkghwJtcEnzd3\nR0wwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBPptP6Tsdk9NPh\nXOrgpXZBRku9egZKRUkHKNYPiUZpkAIhAMIt1DKKOriE634DUi0NxZXqq0qPH4xP\nbPydQiQVl8Ya\n-----END CERTIFICATE-----\n"
 }

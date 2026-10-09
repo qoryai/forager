@@ -18,5 +18,18 @@
     "NODE_ENV": {
       "value": "test"
     }
+  },
+  "placeholders": [
+    "GIT_SECRET"
+  ],
+  "reserved": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "image": {
+    "name": "base",
+    "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
+    "runtime": "sysbox-runc"
   }
 }
