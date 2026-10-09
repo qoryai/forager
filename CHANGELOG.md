@@ -756,7 +756,10 @@ release may change what an existing document does, and says so under Upgrading.
   the run while it is open; a client has at most one open run per run key, and never
   joins a session's run, which only its proxy secret reaches. The run ends after
   `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or at
-  the starter's word; its `dev.qory.run.exited` holds its `state` and no `exit_code`.
+  the starter's word, which the gateway asks at each connection and, once per heartbeat
+  interval in which nothing asked of the run credential, of a run with no traffic too,
+  so it learns the starter's end within about one interval and the answer's `cache`; its
+  `dev.qory.run.exited` holds its `state` and no `exit_code`.
   A run that ended is never opened again: the next connection of its run key opens a
   new run, of a new run id. A run refused with a code gets the gateway's
   `dev.qory.run.refused` with that code, right after its ping; one that fails without

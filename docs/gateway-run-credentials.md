@@ -256,14 +256,17 @@ reads nothing else of the answer but `qory_outcome` and `qory_reason`, below.
 | A session's run request | `503`, "the run did not start: its run credential could not be checked; try again" | `502`, "the run did not start: its run credential could not be checked" |
 | A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the run did not start: its run credential could not be checked" |
 | A session's reload or batch | the run ends; `410` `credential_check_unreachable` | the run ends; `410` `credential_check_invalid` |
-| A client's run, asked again while it has connections | the run ends | the run ends |
+| A client's run, asked again while it has connections, or once per heartbeat interval | the run ends | the run ends |
 
 A client secret the endpoint refuses, a `401` say, is therefore `credential_check_invalid`.
 Each comes only after the run credential's signature and claims verified.
 
 The gateway asks before it opens a run. For a session's run it asks again on each of
 the session's requests; for a run with no session, at most every `cache` while the run
-has connections, or had one since it last asked. It keeps each answer the endpoint
+has connections, or had one since it last asked, and once per heartbeat interval in which
+nothing asked of its run credential, so a run with no traffic learns the starter's end
+within one heartbeat interval and `cache`, and does with the answer what a connection's
+check does. It keeps each answer the endpoint
 gives, active or not, for `cache`, by the SHA-256 of the run credential, never by the
 run credential itself, so a refreshed run credential is asked about anew; it keeps at
 most 4096, and none of a failure to ask or of an answer that is not valid, which the
