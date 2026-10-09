@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/link"
@@ -125,7 +126,7 @@ func NewRemoteLink(gatewayURL string, trust RemoteTLS, credential func(context.C
 	origin := "https://" + u.Host
 	k := &Link{
 		userAgent: userAgent, origin: origin, name: "the gateway at " + origin, digests: digests,
-		credential: credential, address: net.JoinHostPort(u.Hostname(), port), tls: cfg,
+		credential: credential, address: net.JoinHostPort(u.Hostname(), port), tls: cfg, runSecret: new(atomic.Pointer[string]),
 	}
 	k.http = &http.Client{
 		Timeout: Timeout,

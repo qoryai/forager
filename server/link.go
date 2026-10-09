@@ -322,9 +322,9 @@ type Link struct {
 	credential func(context.Context) (string, error)
 	address    string
 	tls        *tls.Config
-	// runSecret is the run's secret, set once the run is open, [Link.UseRunSecret]; nil
-	// before.
-	runSecret atomic.Pointer[string]
+	// runSecret holds the run's secret, set once the run is open, [Link.UseRunSecret];
+	// it holds nil before. A pointer, so a copy of the Link printed shows no secret.
+	runSecret *atomic.Pointer[string]
 }
 
 // NewLocalLink returns the client of a gateway's local link. Each connection is the
@@ -347,7 +347,7 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 	if err := link.WriteLinkPreamble(io.Discard, l.Secret); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	k := &Link{userAgent: userAgent, origin: LocalOrigin, name: name, digests: digests, uid: os.Getuid()}
+	k := &Link{userAgent: userAgent, origin: LocalOrigin, name: name, digests: digests, uid: os.Getuid(), runSecret: new(atomic.Pointer[string])}
 	k.http = &http.Client{
 		Timeout: Timeout,
 		Transport: &http.Transport{
