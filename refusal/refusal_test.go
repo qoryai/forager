@@ -2,6 +2,7 @@ package refusal
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/qoryai/forager/accesskey"
@@ -41,5 +42,23 @@ func TestByGateway(t *testing.T) {
 	}
 	if g.Code != s.Code || g.Detail != s.Detail || !slices.Equal(g.Names, []string{"a", "b"}) || g.Error() != s.Error() {
 		t.Errorf("ByGateway %+v, New %+v", g, s)
+	}
+}
+
+// TestNeedsWallSaysWhatARunAlwaysSaid pins the text of a run without a wall whose policy
+// selects what needs one, rebuilt from the link's names word for word: the credentials'
+// before the image's.
+func TestNeedsWallSaysWhatARunAlwaysSaid(t *testing.T) {
+	const selects = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	for names, want := range map[string]string{
+		"credentials":            selects,
+		"tools":                  selects,
+		"paths":                  selects,
+		"credentials,image=base": selects,
+		"image=base":             `the policy selects the image "base", which needs a wall: without one the runtime is this machine's process`,
+	} {
+		if got := (&NeedsWall{Names: strings.Split(names, ",")}).Error(); got != want {
+			t.Errorf("%s: %s", names, got)
+		}
 	}
 }

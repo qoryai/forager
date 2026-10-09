@@ -191,9 +191,21 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	if d := h.post(applied(runID, r.Applied)); !d.Accepted() {
 		t.Errorf("the reload's policy_applied: %+v", d)
 	}
+	// A run configuration the gateway refuses fails the reload: the user is told as
+	// today, and the policy in force stays, its digest too.
+	c.serve(`{"version":1,"egress":{"mode":"bogus"}}`, 'c')
+	h.post(logged(runID))
+	eventually(t, "the failed reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported("the reload failed: ")
+	})
+	again, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil || again.Digest != r.Digest {
+		t.Errorf("after a failed reload: %v %+v", err, again)
+	}
 	h.post(exited(runID))
 	h.close()
-	if got := types(h.record(runID)); !slices.Equal(got[len(got)-2:], []string{event.PolicyApplied, event.RunExited}) {
+	if got := types(h.record(runID)); !slices.Equal(got[len(got)-2:], []string{event.RunHeartbeat, event.RunExited}) {
 		t.Errorf("record %v", got)
 	}
 }

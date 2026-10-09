@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"slices"
 	"sync"
 	"time"
 
@@ -31,9 +29,6 @@ var (
 	batchSchema      = sync.OnceValues(func() (*jsonschema.Schema, error) { return contracts.Compile("link-batch.schema.json") })
 )
 
-// variableName is the name of a variable, as passes lists them.
-var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-
 // validate reports whether the schema accepts the JSON document b.
 func validate(schema func() (*jsonschema.Schema, error), b []byte) bool {
 	s, err := schema()
@@ -47,49 +42,13 @@ func validate(schema func() (*jsonschema.Schema, error), b []byte) bool {
 	return s.Validate(doc) == nil
 }
 
-// readRunRequest reads a run request: one JSON object with each member name once, which
-// link-run-request.schema.json accepts, beside passes, the names of the variables the
-// run passes a value for, and images, the session's image table, which the gateway
-// checks itself.
+// readRunRequest reads a run request: one JSON object in UTF-8 with each member name
+// once, which link-run-request.schema.json accepts.
 func readRunRequest(body []byte) (*server.LinkRunRequest, bool) {
-	var members map[string]jsontext.Value
-	if jsonv2.Unmarshal(body, &members) != nil {
-		return nil, false
-	}
 	var req server.LinkRunRequest
-	if v, ok := members["passes"]; ok {
-		if v.Kind() != '[' || jsonv2.Unmarshal(v, &req.Passes) != nil {
-			return nil, false
-		}
-		for _, name := range req.Passes {
-			if !variableName.MatchString(name) {
-				return nil, false
-			}
-		}
-		delete(members, "passes")
-	}
-	if v, ok := members["images"]; ok {
-		var im server.LinkImages
-		if v.Kind() != '{' || jsonv2.Unmarshal(v, &im, jsonv2.RejectUnknownMembers(true)) != nil {
-			return nil, false
-		}
-		for _, d := range im.Definitions {
-			if d.Ref == "" {
-				return nil, false
-			}
-		}
-		req.Images = &im
-		delete(members, "images")
-	}
-	rest, err := jsonv2.Marshal(members)
-	if err != nil || !validate(runRequestSchema, rest) {
+	if !validate(runRequestSchema, body) || jsonv2.Unmarshal(body, &req) != nil {
 		return nil, false
 	}
-	passes, im := req.Passes, req.Images
-	if jsonv2.Unmarshal(rest, &req) != nil {
-		return nil, false
-	}
-	req.Passes, req.Images = passes, im
 	return &req, true
 }
 
@@ -164,9 +123,15 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
 // names, and who refused: the server's with its status, apiary; the gateway's own,
-// gateway, a 403 for a refusal of the run's configuration Forager decides. Any other
+// gateway, a 403 for a refusal of the run's configuration Forager decides and for a
+// run without a wall whose policy needs one, wall_required. Any other
 // failure is told the user here, never with a secret, and answered 500.
 func (g *Gateway) refuseOpen(w http.ResponseWriter, runID string, err error) {
+	var wall *refusal.NeedsWall
+	if errors.As(err, &wall) {
+		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway)
+		return
+	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) {
 		g.report(fmt.Sprintf("run %s did not open: %v", runID, err))
@@ -281,14 +246,6 @@ func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// gatewayReasons are the reasons of dev.qory.run.exited the gateway writes, and
-// endReasons those of an end at the gateway, which a session writes only after the
-// gateway ended the run with one, when it sends the gateway nothing more.
-var (
-	gatewayReasons = []string{event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet}
-	endReasons     = []string{event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonRunClosed}
-)
-
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
 var gatewayName = regexp.MustCompile(`^(labels|about\.details)\.[^=]*=`)
 
@@ -336,12 +293,14 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			startedID = ev.ID
 		case event.RunExited:
-			reason, _ := data["reason"].(string)
-			if slices.Contains(gatewayReasons, reason) || slices.Contains(endReasons, reason) {
+			if reason, ok := data["reason"]; ok && reason != event.ReasonTimeout {
 				return "a run.exited with a reason the gateway decides"
 			}
 			final = true
 		case event.RunRefused:
+			if startedID != "" {
+				return "a run.refused after run.started"
+			}
 			code, _ := data["code"].(string)
 			if !refusal.Decides(code) {
 				return "a run.refused with a code the session does not decide"

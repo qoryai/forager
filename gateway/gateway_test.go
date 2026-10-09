@@ -220,7 +220,12 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 		t.Error("another secret was served")
 	}
 	h.post(started(runID, nil), applied(runID, a.Applied))
-	h.post(exited(runID))
+	// The session's own exit at its time limit is the one reason its batch carries.
+	timedOut := exited(runID)
+	timedOut["data"].(map[string]any)["reason"] = "timeout"
+	if d := h.post(timedOut); !d.Accepted() {
+		t.Errorf("a run.exited timeout: %+v", d)
+	}
 	h.close()
 	lines := h.record(runID)
 	if want := []string{event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunEgress, event.RunExited}; !slices.Equal(types(lines), want) {
@@ -282,6 +287,14 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			p := applied(id, a.Applied)
 			p["data"].(map[string]any)["terminated"] = []string{"a.example"}
 			return []map[string]any{p}
+		},
+		"a run.exited quiet": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			e := exited(id)
+			e["data"].(map[string]any)["reason"] = "quiet"
+			return []map[string]any{e}
+		},
+		"a run.refused after run.started": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunRefused, map[string]any{"code": "image_unknown", "names": []string{"base"}})}
 		},
 		"a run.refused of a gateway's code": func(id string, _ *server.LinkRunAnswer) []map[string]any {
 			return []map[string]any{ev(id, event.RunRefused, map[string]any{"code": "run_id_used"})}
@@ -383,3 +396,53 @@ func (s *syncWriter) Write(b []byte) (int, error) {
 }
 
 func seq(n int) string { return fmt.Sprintf("%010d", n) }
+
+// TestAWalledRunWithACredential pins what a run behind a wall is given: the run's
+// authority, the credential's placeholder, the variable it is read from as reserved,
+// the image the policy resolves to, and in applied the credential and the terminated
+// host; a placeholder the run passes is placeholder_conflict, and the same policy
+// without a wall wall_required, each a 403 from the gateway.
+func TestAWalledRunWithACredential(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
+	ref := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
+	h := start(t, gateway.Config{
+		Credentials: []gateway.Credential{{Name: "api", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"api.example"}, Scheme: "bearer", Placeholders: []string{"API_TOKEN"}}},
+		Policy:      &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}, Credentials: []gateway.PolicyCredential{{Name: "api"}}},
+	})
+	h.secrets = append(h.secrets, "s3cret-value-of-the-test", ref)
+	if l := h.g.LocalLink(); !slices.Equal(l.Reserved, []string{"GATEWAY_TEST_SECRET"}) {
+		t.Errorf("reserved %v", l.Reserved)
+	}
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: ref, Runtime: "sysbox-runc"}}}
+	a := h.open(server.LinkRunRequest{Wall: true, Images: images, Passes: []string{"HOME"}})
+	if !strings.HasPrefix(a.CertificateAuthority, "-----BEGIN CERTIFICATE-----") || !slices.Equal(a.Placeholders, []string{"API_TOKEN"}) ||
+		!slices.Equal(a.Reserved, []string{"GATEWAY_TEST_SECRET"}) || a.Image == nil || a.Image.Name != "base" || a.Image.Ref != ref || a.Image.Runtime != "sysbox-runc" {
+		t.Errorf("answer %+v", a)
+	}
+	var members map[string]any
+	json.Unmarshal(a.Applied, &members)
+	if creds, _ := members["credentials"].([]any); len(creds) != 1 || !slices.Equal(anyStrings(members["terminated"]), []string{"api.example"}) {
+		t.Errorf("applied %s", a.Applied)
+	}
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Errorf("the session's policy_applied: %+v", d)
+	}
+	var r *accesskey.Refusal
+	if _, err := h.tryOpen(server.LinkRunRequest{Wall: true, Images: images, Passes: []string{"API_TOKEN"}}); !errors.As(err, &r) || r.Code != "placeholder_conflict" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"API_TOKEN"}) {
+		t.Errorf("a placeholder the run passes: %v", err)
+	}
+	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "wall_required" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"credentials"}) {
+		t.Errorf("no wall: %v", err)
+	}
+	h.post(exited(a.RunID))
+	h.close()
+}
+
+func anyStrings(v any) []string {
+	list, _ := v.([]any)
+	out := make([]string, len(list))
+	for i, x := range list {
+		out[i], _ = x.(string)
+	}
+	return out
+}
