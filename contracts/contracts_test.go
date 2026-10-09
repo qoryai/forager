@@ -158,7 +158,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // authority, one with a wall and an image but no certificate authority, one without a
 // wall and one without a policy, a reload answer with and without a policy, a batch of a
 // session's events without sequence, a batch of a run.refused with a session's own code,
-// a batch of a run.exited with timeout, and refusals from the gateway and from apiary.
+// a batch of a run.exited with timeout, and refusals from the gateway, two internal ones
+// among them, one whose message spans lines, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
 	seen := map[string]bool{}
@@ -249,12 +250,13 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // run.egress, a run.started a gateway opened, a run.exited with a reason other than
 // timeout, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// has no heartbeat interval or proxy, a link refusal without from, and run credentials
-// with alg none or HS256, without an audience, with a label of claims and no join, a key
-// without its file, a plain http issuer, a run_key from a claim other than sub, or a
-// member the schema does not define. The longest schema name the file name starts with is
-// the schema, so run-configuration-variable-value-not-string is held to the run
-// configuration and not to a schema named run.
+// has no heartbeat interval or proxy, a link refusal without from or with a control
+// character other than tab and newline in its message, and run credentials with alg none
+// or HS256, without an audience, with a label of claims and no join, a key without its
+// file, a plain http issuer, a run_key from a claim other than sub, or a member the
+// schema does not define. The longest schema name the file name starts with is the
+// schema, so run-configuration-variable-value-not-string is held to the run configuration
+// and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
