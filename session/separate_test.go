@@ -843,10 +843,14 @@ func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
 	if runs := s.runs(); len(runs) != 0 {
 		t.Errorf("the gateway opened %v", runs)
 	}
+	// Under every verb it prints as String does, its URL, CA file and pin alone. Go's own
+	// printing of the struct would show its fields, the run credential's function as an
+	// address among them.
 	gw := s.remote(fixedCredential(cred))
+	want := "session.RemoteGateway{" + s.url() + " ca_file=" + s.caFile + " certificate_sha256=" + s.pin + "}"
 	for _, out := range []string{fmt.Sprint(gw), fmt.Sprintf("%#v", gw), fmt.Sprintf("%+v", &gw), gw.String()} {
-		if !strings.Contains(out, s.url()) || strings.Contains(out, cred) || strings.Contains(out, "0x") {
-			t.Errorf("printed as %s", out)
+		if out != want || strings.Contains(out, cred) {
+			t.Errorf("printed as %s, want %s", out, want)
 		}
 	}
 	// A URL the session refuses prints by its origin alone, nothing after it or before
