@@ -375,7 +375,8 @@ with `e2e` to check them together.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.
   - `session.Run` takes a launch spec, with the gateway and the wall as values, and
-    returns the exit status. It speaks to the gateway over its local link alone.
+    returns the exit status. It speaks to the gateway over the gateway's link alone:
+    the local link on one machine, or a separate gateway's one address over TLS.
   - `session.Resend` sends a separate gateway what a run's session did not deliver.
   - `session.Forward` is the hook forwarder behind it.
   - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
