@@ -85,3 +85,10 @@ func WriteLinkPreamble(w io.Writer, secret string) error {
 func ReadLinkPreamble(r *bufio.Reader, secret string) (ok bool, err error) {
 	return readPreamble(r, LinkPreamble, secret)
 }
+
+// ReadRelayPreamble reads the relay's preamble, [RelayPreamble], a space, the secret
+// and a newline, from the start of a connection, as [ReadLinkPreamble] reads the local
+// link's: exactly its length and no further, compared in constant time.
+func ReadRelayPreamble(r io.Reader, secret string) (ok bool, err error) {
+	return readPreamble(r, RelayPreamble, secret)
+}
