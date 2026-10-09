@@ -475,7 +475,7 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 		t.Errorf("a batch of another run's events: %d %s", status, body)
 	}
 	status, body := b.reload(t, other, b.a.RunID)
-	gone(t, "the run whose batch was refused", status, body, "run_closed")
+	gone(t, "the run whose batch was refused", status, body, "batch_refused")
 	// A refreshed run credential carries the run past the first's exp.
 	refreshed := mint(issuerKey(), "rk-0001", time.Now().Add(3500*time.Millisecond), nil)
 	s.secrets = append(s.secrets, refreshed)

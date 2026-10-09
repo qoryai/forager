@@ -390,7 +390,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		invalid(w)
 		if lr != nil {
 			g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
-			lr.end(sessionLost)
+			lr.end(batchRefused)
 		}
 	}
 	body, ok := readBody(r, maxBatch)
