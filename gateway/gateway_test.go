@@ -244,8 +244,15 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("denied: %d", resp.StatusCode)
 	}
-	if _, err := relay(h.g.Addr(), strings.Repeat("x", len(a.ProxySecret))).Get(origin.URL); err == nil {
-		t.Error("another secret was served")
+	for range 2 {
+		if _, err := relay(h.g.Addr(), strings.Repeat("x", len(a.ProxySecret))).Get(origin.URL); err == nil {
+			t.Error("another secret was served")
+		}
+	}
+	// Told once per gateway, in today's session's words.
+	eventually(t, "the refusal's report", func() bool { return h.reported("was refused") })
+	if got := h.reportsWith("was refused"); len(got) != 1 || got[0] != "a connection to the proxy that was not the run's relay was refused" {
+		t.Errorf("reports %q", got)
 	}
 	h.post(started(runID, nil), applied(runID, a.Applied))
 	// The session's own exit at its time limit is the one reason its batch carries.
@@ -528,4 +535,66 @@ func anyStrings(v any) []string {
 		out[i], _ = x.(string)
 	}
 	return out
+}
+
+// TestARunThatFailsWithoutACodeIsAnInternal500 pins a failure without a code: the
+// gateway tells the user nothing of it, and answers 500 internal from the gateway with
+// the error's text, which the session returns as its error.
+func TestARunThatFailsWithoutACodeIsAnInternal500(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, gateway.Config{RunDir: func(id string) string { return filepath.Join(file, id) }})
+	runID := event.NewRunID()
+	status, body := rawPost(t, raw(t, h.g.LocalLink()), "/v1/run-configuration", server.LinkContentType, `{"version":1,"run_id":"`+runID+`","wall":false}`)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("%d %s", status, body)
+	}
+	want := "mkdir " + file + ": not a directory"
+	if status != http.StatusInternalServerError || got["error"] != "internal" || got["from"] != "gateway" || got["message"] != want || len(got) != 3 {
+		t.Errorf("%d %s, want the message %q", status, body, want)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.reports) != 0 {
+		t.Errorf("reported %q", h.reports)
+	}
+}
+
+// TestRefuseOpen pins how a refusal passes on: the server's keeps its status and from
+// apiary, a code Forager decides among them; the gateway's own of such a code is a
+// 403; and an error's text in a 500's message keeps tab and newline, has a space for
+// any other control character, and is cut to 8192 characters.
+func TestRefuseOpen(t *testing.T) {
+	for _, c := range []struct {
+		err    error
+		status int
+		from   string
+	}{
+		{&accesskey.Refusal{Code: "run_configuration_invalid", Status: http.StatusUnprocessableEntity, From: "apiary"}, http.StatusUnprocessableEntity, "apiary"},
+		{&accesskey.Refusal{Code: "run_configuration_invalid", Status: http.StatusOK}, http.StatusForbidden, "gateway"},
+		{&accesskey.Refusal{Code: "instance_limit", Status: http.StatusConflict, From: "apiary"}, http.StatusConflict, "apiary"},
+	} {
+		w := httptest.NewRecorder()
+		gateway.RefuseOpen(w, c.err)
+		var r server.LinkRefusal
+		json.Unmarshal(w.Body.Bytes(), &r)
+		if w.Code != c.status || r.From != c.from {
+			t.Errorf("%v: %d %s", c.err, w.Code, w.Body)
+		}
+	}
+	if got := gateway.MessageOf(errors.New("one\ttwo\nthree\rfour\x00five\x1bsix\x7fseven")); got != "one\ttwo\nthree four five six seven" {
+		t.Errorf("%q", got)
+	}
+	long := gateway.MessageOf(errors.New(strings.Repeat("é", 9000)))
+	if n := len([]rune(long)); n != 8192 || long != strings.Repeat("é", 8192) {
+		t.Errorf("a long text: %d characters", n)
+	}
+	w := httptest.NewRecorder()
+	gateway.RefuseOpen(w, errors.New("a\rb"))
+	if w.Code != http.StatusInternalServerError || w.Body.String() != `{"error":"internal","message":"a b","from":"gateway"}` {
+		t.Errorf("%d %s", w.Code, w.Body)
+	}
 }

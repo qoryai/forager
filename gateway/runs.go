@@ -271,7 +271,7 @@ func (lr *linkRun) onServerClosed() {
 	opened := lr.opened
 	lr.mu.Unlock()
 	if opened {
-		lr.g.report(fmt.Sprintf("run %s: the server closed the run; it ends", lr.id))
+		// The sink tells the user, as today.
 		lr.end(serverClosedRun)
 	}
 }

@@ -226,12 +226,12 @@ func TestListenerRefusesWhatNamesNoLiveRun(t *testing.T) {
 		t.Errorf("the live run's secret was answered %q, want its proxy's refusal of a request that names no target", got)
 	}
 	for _, c := range []struct{ name, open, want string }{
-		{"no preamble", "", proxy.RefusedPreamble},
-		{"another word", "QORY-RELAX " + live + "\n", proxy.RefusedPreamble},
-		{"wrong secret", link.RelayPreamble + " " + wrong + "\n", proxy.RefusedSecret},
-		{"a prefix of the secret", link.RelayPreamble + " " + live[:30] + "\n", proxy.RefusedSecret},
-		{"ended run", link.RelayPreamble + " " + ended + "\n", proxy.RefusedSecret},
-		{"overlong", link.RelayPreamble + " " + strings.Repeat("a", 300) + "\n", proxy.RefusedPreamble},
+		{"no preamble", "", proxy.RefusedRelay},
+		{"another word", "QORY-RELAX " + live + "\n", proxy.RefusedRelay},
+		{"wrong secret", link.RelayPreamble + " " + wrong + "\n", proxy.RefusedRelay},
+		{"a prefix of the secret", link.RelayPreamble + " " + live[:30] + "\n", proxy.RefusedRelay},
+		{"ended run", link.RelayPreamble + " " + ended + "\n", proxy.RefusedRelay},
+		{"overlong", link.RelayPreamble + " " + strings.Repeat("a", 300) + "\n", proxy.RefusedRelay},
 	} {
 		if got := raw(t, l, c.open); got != "" {
 			t.Errorf("%s: answered %q", c.name, got)
@@ -258,7 +258,7 @@ func TestListenerRefusesWhatNamesNoLiveRun(t *testing.T) {
 			t.Error("a slow peer was not closed when its wait was over")
 		}
 		c.Close()
-		if got := r.wait(t); got != proxy.RefusedPreamble {
+		if got := r.wait(t); got != proxy.RefusedRelay {
 			t.Errorf("slow peer: reported %q", got)
 		}
 	}

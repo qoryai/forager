@@ -173,14 +173,11 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.ln.Close()
 		return nil, err
 	}
-	var refusedPreamble, refusedSecret sync.Once
+	var refused sync.Once
 	g.proxies, err = proxy.NewListener("", func(why string) {
-		// Each kind is told once: a peer that keeps trying says nothing new.
-		once := &refusedSecret
-		if why == proxy.RefusedPreamble {
-			once = &refusedPreamble
-		}
-		once.Do(func() { report(why) })
+		// Told once, as today's session tells it for its one run: a peer that keeps
+		// trying says nothing new.
+		refused.Do(func() { report(why) })
 	})
 	if err != nil {
 		g.ln.Close()

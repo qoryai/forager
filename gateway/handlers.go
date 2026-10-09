@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,7 +106,7 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 			delete(g.used, req.RunID)
 			g.mu.Unlock()
 		}
-		g.refuseOpen(w, req.RunID, err)
+		refuseOpen(w, err)
 		return
 	}
 	g.mu.Lock()
@@ -122,11 +123,13 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
-// names, and who refused: the server's with its status, apiary; the gateway's own,
-// gateway, a 403 for a refusal of the run's configuration Forager decides and for a
-// run without a wall whose policy needs one, wall_required. Any other
-// failure is told the user here, never with a secret, and answered 500.
-func (g *Gateway) refuseOpen(w http.ResponseWriter, runID string, err error) {
+// names, and who refused: the server's with its status, apiary, whatever its code; the
+// gateway's own, gateway, a 403 for a refusal of the run's configuration Forager
+// decides and for a run without a wall whose policy needs one, wall_required. Any
+// other failure is a 500 internal whose message is the error's text, which the
+// session returns as its error, as today's session returned it; the gateway itself
+// tells the user nothing of it.
+func refuseOpen(w http.ResponseWriter, err error) {
 	var wall *refusal.NeedsWall
 	if errors.As(err, &wall) {
 		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway)
@@ -134,8 +137,10 @@ func (g *Gateway) refuseOpen(w http.ResponseWriter, runID string, err error) {
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) {
-		g.report(fmt.Sprintf("run %s did not open: %v", runID, err))
+		b, _ := json.Marshal(internalRefusal{Error: codeInternal, Message: messageOf(err), From: accesskey.FromGateway})
+		w.Header().Set("Content-Type", server.LinkContentType)
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(b)
 		return
 	}
 	from := ref.From
@@ -144,13 +149,42 @@ func (g *Gateway) refuseOpen(w http.ResponseWriter, runID string, err error) {
 	}
 	status := ref.Status
 	switch {
-	case refusal.Decides(ref.Code):
+	case from != accesskey.FromApiary && refusal.Decides(ref.Code):
 		status = http.StatusForbidden
 	case status < 400 || status > 599:
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
 	refuse(w, status, ref.Code, ref.Names, from)
+}
+
+// codeInternal is the code of a run that failed to open for a reason without one.
+const codeInternal = "internal"
+
+// internalRefusal is link-refusal.schema.json's body of a run that failed to open for a
+// reason without a code: the error's text in message.
+type internalRefusal struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+	From    string `json:"from"`
+}
+
+// maxMessage is the most characters a refusal's message holds.
+const maxMessage = 8192
+
+// messageOf is an error's text as a refusal's message holds it: tab and newline kept,
+// every other control character and DEL a space, at most maxMessage characters.
+func messageOf(err error) string {
+	out := []rune(strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\t' && r != '\n') || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, err.Error()))
+	if len(out) > maxMessage {
+		out = out[:maxMessage]
+	}
+	return string(out)
 }
 
 // answerHeaders sets the digests every answer for a run carries: the link's discovery's,
