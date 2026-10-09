@@ -184,8 +184,9 @@ func quietLog() *log.Logger { return log.New(io.Discard, "", 0) }
 // is cut at.
 const maxBatch = 2 << 20
 
-// handler routes the link's requests.
-func (g *Gateway) handler() http.Handler {
+// handler routes the requests of the contract that reach the gateway by s: its local
+// link, or its one address.
+func (g *Gateway) handler(s *side) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.Header.Get(server.HeaderContractVersion); v != "" && v != strconv.Itoa(server.Revision) {
 			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway, gatewayText("unsupported_contract_version"))
@@ -193,13 +194,13 @@ func (g *Gateway) handler() http.Handler {
 		}
 		switch {
 		case r.URL.Path == server.WellKnown && r.Method == http.MethodGet:
-			g.discover(w)
+			g.discover(s, w, r)
 		case r.URL.Path == runPath && r.Method == http.MethodPost:
-			g.openRun(w, r)
+			g.openRun(s, w, r)
 		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
-			g.reload(w, strings.TrimPrefix(r.URL.Path, runPath+"/"))
+			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
 		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
-			g.batch(w, r)
+			g.batch(s, w, r)
 		case r.URL.Path == server.WellKnown || r.URL.Path == runPath || r.URL.Path == eventsPath || strings.HasPrefix(r.URL.Path, runPath+"/"):
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		default:
@@ -208,12 +209,18 @@ func (g *Gateway) handler() http.Handler {
 	})
 }
 
-// discover answers the link's discovery.
-func (g *Gateway) discover(w http.ResponseWriter) {
+// discover answers the link's discovery: 400 invalid_request on the one address to a
+// request whose Host names no origin a discovery can list.
+func (g *Gateway) discover(s *side, w http.ResponseWriter, r *http.Request) {
+	body, digest, ok := g.discoveryOf(s, r)
+	if !ok {
+		invalid(w)
+		return
+	}
 	w.Header().Set("Content-Type", server.LinkContentType)
-	w.Header().Set(server.HeaderConfiguration, g.discoveryDigest)
+	w.Header().Set(server.HeaderConfiguration, digest)
 	w.WriteHeader(http.StatusOK)
-	w.Write(g.discovery)
+	w.Write(body)
 }
 
 // linkRefusal is the body of a refusal on the link, link-refusal.schema.json: the code,

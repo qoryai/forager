@@ -6,6 +6,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/runcredential"
 )
 
 // Config is what a gateway is given: the server it is the node toward, the machine's
@@ -49,10 +50,20 @@ type Config struct {
 	// session sends a heartbeat every interval, and the gateway ends a run whose session
 	// sends nothing for three.
 	Heartbeat time.Duration
-	// Listen and TLS are a separate gateway's address and certificate. Only the local
-	// link is served yet: Listen must be empty and TLS nil.
+	// Listen is a separate gateway's one address, host:port, port 0 a port of the
+	// system's choosing: the contract for the sessions of other machines, and the proxy
+	// for their agents and for clients with no session, routed connection by connection.
+	// Empty means the local link alone. Any address but loopback needs TLS; the local
+	// link is served beside it either way, as without it.
 	Listen string
-	TLS    *TLS
+	// TLS is the certificate and key Listen serves, TLS 1.3 alone; nil serves Listen
+	// without TLS, which a loopback address alone may.
+	TLS *TLS
+	// RunCredentials are the issuers whose run credentials open a run on Listen,
+	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
+	RunCredentials runcredential.Issuers
+	// Runs is how the gateway keeps the runs of clients with no session.
+	Runs RunsConfig
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's
@@ -61,13 +72,30 @@ type Config struct {
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
+	// runAuth and proxyLogin, when not nil, decide the run credentials Listen is given,
+	// in place of refusing every one: tests set them.
+	runAuth    runAuth
+	proxyLogin proxyLogin
 }
 
-// TLS is a separate gateway's certificate and key, files in PEM. A separate gateway is
-// not served yet.
+// TLS is the certificate and key a separate gateway serves on its one address, files in
+// PEM: gateway.tls.certificate and gateway.tls.key of qory's configuration.
 type TLS struct {
-	Certificate, Key string
+	// CertFile is the certificate chain, the gateway's own certificate first.
+	CertFile string
+	// KeyFile is the certificate's private key.
+	KeyFile string
 }
+
+// RunsConfig is how the gateway keeps the runs of clients with no session.
+type RunsConfig struct {
+	// Quiet is how long such a run lasts with no connection before it ends, quiet:
+	// gateway.runs.quiet of the operator's forager.yaml; zero means 30 minutes.
+	Quiet time.Duration
+}
+
+// defaultRunsQuiet is [RunsConfig.Quiet] when the config sets none.
+const defaultRunsQuiet = 30 * time.Minute
 
 // Server is the server document, contracts/forager/v1/server.schema.json, as the caller
 // passes it to Forager, with what signs and names every request: the server whose

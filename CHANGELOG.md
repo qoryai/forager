@@ -499,6 +499,42 @@ release may change what an existing document does, and says so under Upgrading.
   session opens on its link resolves the credentials and starts the tools the run's
   policy selects among `gateway.Config`'s `Credentials` and `Tools`. A test in
   `internal/importrules` fails on any other export.
+- `gateway.TLS` is `{CertFile, KeyFile}`, in place of `{Certificate, Key}`, and
+  `gateway.Config` has `Listen`, `TLS`, `RunCredentials` and `Runs`, a `RunsConfig`.
+  `Start` with `Listen` empty serves the local link alone, as before, and refuses a
+  `TLS` without a `Listen`.
+
+#### Added
+
+- `gateway.Config.Listen`, the gateway's one address, served beside the local link.
+  Every connection is routed by its first bytes, after the TLS handshake when there is
+  TLS, within the time and the size the relay's preamble has: `QORY-RELAY` and a run's
+  proxy secret to that run's proxy; a proxy request, `CONNECT` or an absolute-form
+  target, to the proxy of the run its `Proxy-Authorization` names, the password of
+  Basic a live run's proxy secret or else a run credential, and `407` with
+  `Proxy-Authenticate: Basic realm="qory"` without one; anything else to the contract,
+  where every request's `Authorization: Bearer` run credential is decided first and a
+  request without one, or with one refused, is `401` `run_credential_refused` from the
+  gateway, with `WWW-Authenticate: Bearer`. The verifier of run credentials is not
+  wired in yet: until it is, the one address refuses every run credential.
+- `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
+  1.3 alone. A plain listener is allowed on loopback alone. `Start` refuses a `Listen`
+  that is not `host:port`, one that is not loopback without `TLS`, certificate and key
+  files it cannot read or that do not match, and a `Listen` without `RunCredentials` or
+  without `Dir`.
+- The discovery on the one address lists every URL on the origin the session reached,
+  by its `Host`, and `proxy.address` that same address.
+- The proxy of every run served through the one address is guarded, whatever its wall:
+  the machine's own addresses are refused unless the policy's allow list names the
+  host, as for a walled run. A local run's proxy, which may not be guarded, is never
+  reached from the one address.
+- With `Listen`, the gateway keeps a certificate authority of its own in its directory,
+  `authority/ca.pem`, the directory mode `0700` and the file `0600`: made once, reused
+  by every later start, for its proxy to read inside HTTPS for the clients with no
+  session, whose machines trust it. A directory or a file another user may reach is
+  refused.
+- `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
+  30 minutes when zero.
 
 #### Changed
 
