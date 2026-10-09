@@ -458,8 +458,9 @@ release may change what an existing document does, and says so under Upgrading.
 - Contract `v1` revision 1 is amended in place: Forager signs every request with an
   access key, an Ed25519 key, and verifies every answer under the server's key it pins.
   The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
-  no secret; `session.Server` has the same members, and `session.Spec` has
-  `AccessKey`, `InstanceID` and `InstanceName`. Every request
+  no secret; `gateway.Server` has the same members, and `AccessKey`, `InstanceID` and
+  `InstanceName`, which `session.Server` and `session.Spec` had until a session spoke
+  to a gateway alone (Session, Upgrading). Every request
   contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
   `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
   but a `401` is signed under the server's key and bound to the request's signature,
