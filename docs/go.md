@@ -253,8 +253,14 @@ res, err := session.Resend(ctx, session.ResendSpec{
   `delivered.log`, and `NotOpened` false.
 - `ResendResult` has `Sent`, the events the gateway accepted now, and `Undelivered`,
   those it still has not. `RunClosed` says the gateway had ended the run: its `410`,
-  with `ClosedBy` and `Reason` as `Result` has them; nothing more is sent, and the
-  events stay in the run directory.
+  with `ClosedReason`, its code, as `Result` has it; nothing more is sent, and the
+  events stay in the run directory. `State` and `Reason` say how the run ended where
+  that is known, as `Result` has them: the state and the reason the gateway's `410`
+  says, as the session records them, and otherwise, a `410` `run_closed` among them,
+  those of the `dev.qory.run.exited` in `session.jsonl`; both empty when neither says.
+- A `dev.qory.run.exited` with a reason of the run's starter's, the outcome it gave at
+  the runtime's exit, is sent again like any other event; one whose reason is the code
+  of a gateway's `410` is in the session's record alone, and is not.
 - The refusals of the run credential are a `*session.Refusal` from `gateway`, with the
   events left under `undelivered/`: `run_credential_refused`, the `401`, which an
   expired run credential gets at the discovery; `target_differs_from_credential` and
@@ -346,13 +352,28 @@ A program that needs code of its own implements the interface.
 
 - `RunID`, and `Dir`, the run directory with the session's record. See
   [the record](events.md#where-the-record-is).
-- `ExitCode` and `Signal`, the runtime's, and `State`, the state of the session's
-  `dev.qory.run.exited`: `succeeded` or `failed` by the runtime's exit, and `cancelled`
-  with `TimedOut`, when it was stopped at `Timeout`.
+- `ExitCode` and `Signal`, the runtime's, whatever the run's state.
+- `State` and `Reason`, the state and the reason of the session's
+  `dev.qory.run.exited`, how the run ended:
+  - When the runtime exits by itself behind a separate gateway, the session asks the
+    gateway once, before it writes `dev.qory.run.exited`, how the run's starter says the
+    run ended, and waits at most about 10 seconds. An outcome sets `State` and `Reason`,
+    such as `failed` and `checks_failed` for a runtime that exited 0; the reason is
+    empty when the starter gave none.
+  - With no outcome, an answer of `{}`, one that is not valid, a refusal or no answer
+    in time, the runtime's exit decides: `succeeded` on 0, `failed` otherwise, with no
+    reason, and nothing is added to the record. On the local link there is no starter to
+    ask: the session asks nothing and does not wait.
+  - At `Timeout`, `cancelled` and `timeout`, with `TimedOut`; nothing is asked. A
+    runtime the context's end stopped is decided by its exit, and nothing is asked.
+  - When the gateway closed the run, `RunClosed`, the state and the reason its `410`
+    says, such as `cancelled` and `no_longer_needed`; `batch_refused` as the reason after
+    a refused batch; and `failed` with the code as the reason for an end that carries
+    no state, `run_closed` among them. Nothing is asked.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
-- `RunClosed` when the gateway closed the run: `ClosedBy` says who, always `gateway`,
-  and `ClosedReason` the code of the gateway's `410`, unchanged: `run_closed`,
+- `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
+  gateway's `410`, unchanged: `run_closed`,
   `credential_expired` or `stopped`, `credential_check_unreachable` and
   `credential_check_invalid` when its run credential could not be checked, the
   introspection endpoint unreachable or its answer not valid, `session_lost` when it heard nothing

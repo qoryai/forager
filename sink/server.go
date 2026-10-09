@@ -97,10 +97,11 @@ type Config struct {
 	// the worker's goroutine, and must not block.
 	OnDigests func(server.Digests)
 	// OnEnded, when not nil, is called once, on the worker's goroutine, when the
-	// gateway ends the run, with the end code and who ended it: on the link the answer's
-	// End, one of [server.EndCodes], and its From. A server never ends a run: its signed
-	// 410 only stops the deliveries. It must not block.
-	OnEnded func(code, from string)
+	// gateway ends the run, with how it ended: on the link the answer's
+	// [server.Delivery.RunEnd], its code, one of [server.EndCodes], who ended it, and
+	// the state and the reason a 410 carries. A server never ends a run: its signed 410
+	// only stops the deliveries. It must not block.
+	OnEnded func(server.RunEnd)
 	// Wait is how long a batch waits after its first event; zero means [BatchWait].
 	Wait time.Duration
 	// Link posts to the gateway's link: each event without its sequence, which the
@@ -115,7 +116,7 @@ type Server struct {
 	target    atomic.Pointer[Target]
 	runDigest atomic.Pointer[string]
 	onDigests func(server.Digests)
-	onEnded   func(code, from string)
+	onEnded   func(server.RunEnd)
 	closeOnce sync.Once
 	dir       string
 	report    func(string)
@@ -359,7 +360,7 @@ func (w *Server) deliver(batch []queued) {
 			if d.Closed() {
 				w.closeOnce.Do(func() {
 					if w.onEnded != nil {
-						w.onEnded(d.End, d.From)
+						w.onEnded(d.RunEnd())
 					}
 				})
 				return

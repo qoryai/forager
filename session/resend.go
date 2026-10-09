@@ -48,12 +48,17 @@ type ResendResult struct {
 	Sent        int
 	Undelivered int
 	// RunClosed says the run had ended at the gateway: nothing more was sent, and the
-	// events stay in the run directory. ClosedBy says who ended it, always "gateway",
-	// and Reason the code of the gateway's 410, as [Result.ClosedReason] holds it;
-	// batch_refused when the gateway refused a batch.
-	RunClosed bool
-	ClosedBy  string
-	Reason    string
+	// events stay in the run directory. ClosedReason is the code of the gateway's 410,
+	// as [Result.ClosedReason] holds it; batch_refused when the gateway refused a batch.
+	RunClosed    bool
+	ClosedReason string
+	// State and Reason are how the run ended, where that is known, as [Result] has them:
+	// when the gateway had ended the run, the state and the reason its 410 says, as the
+	// session records them; otherwise, and after a 410 run_closed, the state and the
+	// reason of the run.exited the record holds. Both are empty when neither says, and
+	// Reason when the end has none.
+	State  string
+	Reason string
 	// NotOpened says the record holds no delivered.log: the run never opened at the
 	// gateway, so nothing of it is sent, and the record is left as it is. A record
 	// that owes nothing has a delivered.log, and NotOpened false.
@@ -122,6 +127,8 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if err != nil {
 		return ResendResult{}, err
 	}
+	// How the run ended, as far as the record says.
+	state, reason := exitOf(lines)
 	accepted, _, err := sink.Delivered(spec.Dir)
 	if err != nil {
 		return ResendResult{}, err
@@ -134,7 +141,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	}
 	if len(owed) == 0 {
 		removeRunSecret(spec.Dir)
-		return ResendResult{}, nil
+		return ResendResult{State: state, Reason: reason}, nil
 	}
 	k, err := spec.Gateway.link(spec.ForagerVersion, nil)
 	if err != nil {
@@ -150,7 +157,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	owed = slices.DeleteFunc(owed, func(l recordedLine) bool { return !target.Wants(l.Type) })
 	if len(owed) == 0 {
 		removeRunSecret(spec.Dir)
-		return ResendResult{}, nil
+		return ResendResult{State: state, Reason: reason}, nil
 	}
 	// What was spooled is in session.jsonl as well, and is spooled again if the
 	// gateway still does not take it.
@@ -160,10 +167,10 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	sendCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	to := &refusing{to: k, stop: stop}
-	var closedCode, closedFrom string
+	var closedEnd server.RunEnd
 	posts := sink.New(sink.Config{
 		To: to, Target: target, Spool: spec.Dir, Report: spec.Report,
-		OnEnded: func(code, from string) { closedCode, closedFrom = code, from },
+		OnEnded: func(e server.RunEnd) { closedEnd = e },
 		Wait:    sink.LinkBatchWait, Link: true,
 	})
 	for _, l := range owed {
@@ -176,9 +183,14 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if r := to.refused(); r != nil {
 		return ResendResult{}, r
 	}
-	res := ResendResult{RunClosed: posts.RunClosed(), Undelivered: len(owed)}
+	res := ResendResult{RunClosed: posts.RunClosed(), Undelivered: len(owed), State: state, Reason: reason}
 	if res.RunClosed {
-		res.ClosedBy, res.Reason = closedFrom, closedCode
+		res.ClosedReason = closedEnd.Code
+		// The gateway's end of the run is how it ended, as the session records it; a
+		// run_closed says only that it had ended otherwise, which the record says.
+		if closedEnd.State != "" || closedEnd.Code != event.ReasonRunClosed {
+			res.State, res.Reason = recorded(closedEnd)
+		}
 	}
 	if after, _, err := sink.Delivered(spec.Dir); err == nil {
 		for _, l := range owed {
@@ -255,6 +267,7 @@ type recordedLine struct {
 	Sequence string `json:"sequence"`
 	ID       string `json:"id"`
 	Data     struct {
+		State  string          `json:"state"`
 		Reason string          `json:"reason"`
 		Code   string          `json:"code"`
 		Status json.RawMessage `json:"status"`
@@ -263,16 +276,31 @@ type recordedLine struct {
 }
 
 // posted reports whether the line is one the session posts on the link: not a
-// run.exited with a reason other than timeout, nor a run.refused of a code the session
-// does not decide or with a status, which the session records in its own record alone.
+// run.exited whose reason is the code of a gateway's 410, one of [server.EndCodes],
+// nor a run.refused of a code the session does not decide or with a status, which the
+// session records in its own record alone. A run.exited with no reason, timeout or a
+// reason of the run's starter's is posted: the session's own record of a 410 with the
+// starter's reason, or none, reads the same, and the gateway, which ended that run,
+// answers it with its 410.
 func (l recordedLine) posted() bool {
 	switch l.Type {
 	case event.RunExited:
-		return l.Data.Reason == "" || l.Data.Reason == event.ReasonTimeout
+		return !slices.Contains(server.EndCodes, l.Data.Reason)
 	case event.RunRefused:
 		return refusal.Decides(l.Data.Code) && l.Data.Status == nil
 	}
 	return true
+}
+
+// exitOf is the state and the reason of the record's run.exited, empty when it holds
+// none.
+func exitOf(lines []recordedLine) (state, reason string) {
+	for _, l := range slices.Backward(lines) {
+		if l.Type == event.RunExited {
+			return l.Data.State, l.Data.Reason
+		}
+	}
+	return "", ""
 }
 
 // sessionRecord reads session.jsonl, up to a last line the session died in the middle
