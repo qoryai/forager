@@ -202,6 +202,13 @@ func TestRunRequestsTheLinkRefuses(t *testing.T) {
 			t.Errorf("%s: %d %s", name, status, body)
 		}
 	}
+	// The gateway's own codes read as the gateway's refusal, with the code alone.
+	if status, got := h.refusalOf("/v1/run-configuration", openBody(a.RunID)); status != http.StatusConflict || got["message"] != "the gateway refused the run: run_id_used" {
+		t.Errorf("the same run id: %d %v", status, got)
+	}
+	if status, got := h.refusalOf("/v1/run-configuration", `{`); status != http.StatusBadRequest || got["message"] != "the gateway refused the run: invalid_request" {
+		t.Errorf("no JSON: %d %v", status, got)
+	}
 	// None of those opened a run, so the id is unused still.
 	if _, err := h.tryOpen(server.LinkRunRequest{RunID: id}); err != nil {
 		t.Errorf("the id after refusals: %v", err)
@@ -354,6 +361,10 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		}
 		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
 			t.Errorf("%s: after the refusal: %+v", name, d)
+		}
+		b, _ := json.Marshal([]map[string]any{heartbeat(a.RunID)})
+		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["message"] != "the gateway refused the run: run_closed" {
+			t.Errorf("%s: the 410's message: %d %v", name, status, got)
 		}
 		var r *accesskey.Refusal
 		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "run_closed" || r.From != "gateway" {
@@ -524,6 +535,16 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	}
 	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "wall_required" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{"credentials"}) {
 		t.Errorf("no wall: %v", err)
+	}
+	// Each message is today's session's error text.
+	want := "API_TOKEN is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside: placeholder_conflict: API_TOKEN"
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true, Images: images, Passes: []string{"API_TOKEN"}})
+	if _, got := h.refusalOf("/v1/run-configuration", string(body)); got["message"] != want {
+		t.Errorf("placeholder_conflict's message %q", got["message"])
+	}
+	want = "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
+	if _, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); got["message"] != want {
+		t.Errorf("wall_required's message %q", got["message"])
 	}
 	h.post(exited(a.RunID))
 	h.close()

@@ -16,7 +16,7 @@ func SetLinkUID(c *Config, uid int) { c.uid = &uid }
 func RefuseOpen(w http.ResponseWriter, err error) { refuseOpen(w, err) }
 
 // MessageOf is err's text as a refusal's message holds it.
-func MessageOf(err error) string { return messageOf(err) }
+func MessageOf(err error) string { return message(err.Error()) }
 
 // SetCloseWait bounds each run's flush when it closes by d.
 func SetCloseWait(c *Config, d time.Duration) { c.closeWait = d }

@@ -363,6 +363,25 @@ func raw(t *testing.T, l link.Local) *http.Client {
 	}}}
 }
 
+// refusalOf posts body to path on the link and returns the status and the members of
+// the refusal it answers.
+func (h *harness) refusalOf(path, body string) (int, map[string]any) {
+	h.t.Helper()
+	contentType := server.LinkContentType
+	if path == "/v1/events" {
+		contentType = server.ContentType
+	}
+	status, got := rawPost(h.t, raw(h.t, h.g.LocalLink()), path, contentType, body)
+	var r map[string]any
+	if err := json.Unmarshal([]byte(got), &r); err != nil {
+		h.t.Fatalf("%d %q: %v", status, got, err)
+	}
+	return status, r
+}
+
+// openBody is a run request of the run id, without a wall.
+func openBody(runID string) string { return `{"version":1,"run_id":"` + runID + `","wall":false}` }
+
 // rawPost posts body to path on the link and returns the status and the body.
 func rawPost(t *testing.T, c *http.Client, path, contentType, body string) (int, string) {
 	t.Helper()

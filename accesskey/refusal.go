@@ -52,6 +52,11 @@ type Refusal struct {
 	// a refusal Forager decides, answer_unsigned or apiary_public_key_missing say, and
 	// for a session's own. Error does not show it.
 	From string
+	// Text, when not empty, is what Error returns, in place of the text made of the
+	// members: a refusal on the gateway's link carries the text the refusal's own Error
+	// returned, which the session sets here, so the user reads what they read when the
+	// session decided it.
+	Text string
 }
 
 // The values of [Refusal.From].
@@ -64,7 +69,11 @@ const (
 	FromApiary = "apiary"
 )
 
+// Error is Text when it is set; else the Detail, the code, the status and the names.
 func (r *Refusal) Error() string {
+	if r.Text != "" {
+		return r.Text
+	}
 	var b strings.Builder
 	if r.Detail != "" {
 		b.WriteString(r.Detail + ": ")
