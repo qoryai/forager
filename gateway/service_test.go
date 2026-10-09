@@ -42,10 +42,12 @@ import (
 // there are some, and the tests' verifier decides every run credential.
 var testIssuers = runcredential.Issuers{{Issuer: "https://issuer.example", Audience: "qory-gateway"}}
 
-// The run credentials of the tests' verifier: good opens a run, any other is refused.
+// The run credentials of the tests' verifier: good opens a run of rk-0001, other one
+// of rk-0003, any other is refused.
 const (
-	goodCredential = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAxIn0.c2lnbmF0dXJl"
-	badCredential  = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAyIn0.c2lnbmF0dXJl"
+	goodCredential  = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAxIn0.c2lnbmF0dXJl"
+	badCredential   = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAyIn0.c2lnbmF0dXJl"
+	otherCredential = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAzIn0.c2lnbmF0dXJl"
 )
 
 // testCertificate writes a certificate for 127.0.0.1, ::1 and localhost, and its key,
@@ -92,10 +94,11 @@ func (v *verifier) authenticate(credential string) (gateway.RunIdentity, error) 
 	v.mu.Lock()
 	v.seen = append(v.seen, credential)
 	v.mu.Unlock()
-	if credential != goodCredential {
+	runKey := map[string]string{goodCredential: "rk-0001", otherCredential: "rk-0003"}[credential]
+	if runKey == "" {
 		return gateway.RunIdentity{}, runcredential.ErrRefused
 	}
-	return gateway.RunIdentity{RunKey: "rk-0001", Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project", "run_key": "rk-0001"}, Expires: time.Now().Add(time.Hour)}, nil
+	return gateway.RunIdentity{Issuer: "https://issuer.example", RunKey: runKey, Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project", "run_key": runKey}, Expires: time.Now().Add(time.Hour)}, nil
 }
 
 func (v *verifier) handed() []string {
@@ -125,7 +128,7 @@ func startService(t *testing.T, cfg gateway.Config, plain bool) *service {
 	}
 	gateway.SetRunAuth(&cfg, s.v.authenticate)
 	s.harness = start(t, cfg)
-	s.secrets = append(s.secrets, goodCredential, badCredential)
+	s.secrets = append(s.secrets, goodCredential, badCredential, otherCredential)
 	return s
 }
 
@@ -205,12 +208,18 @@ func do(t *testing.T, c *http.Client, method, u, contentType, body string) (*htt
 // openOver opens a run on the one address with the good run credential.
 func (s *service) openOver(t *testing.T, req server.LinkRunRequest) (*server.LinkRunAnswer, http.Header) {
 	t.Helper()
+	return s.openWith(t, goodCredential, req)
+}
+
+// openWith opens a run on the one address with the run credential given.
+func (s *service) openWith(t *testing.T, credential string, req server.LinkRunRequest) (*server.LinkRunAnswer, http.Header) {
+	t.Helper()
 	req.Version = 1
 	if req.RunID == "" {
 		req.RunID = event.NewRunID()
 	}
 	body, _ := json.Marshal(req)
-	resp, b := do(t, s.client(goodCredential), http.MethodPost, s.url("/v1/run-configuration"), server.LinkContentType, string(body))
+	resp, b := do(t, s.client(credential), http.MethodPost, s.url("/v1/run-configuration"), server.LinkContentType, string(body))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the run request: %d %s", resp.StatusCode, b)
 	}
@@ -224,11 +233,19 @@ func (s *service) openOver(t *testing.T, req server.LinkRunRequest) (*server.Lin
 	return &a, resp.Header
 }
 
-// postOver posts one batch of a run's events on the one address.
+// postOver posts one batch of a run's events on the one address, with the good run
+// credential.
 func (s *service) postOver(t *testing.T, evs ...map[string]any) int {
 	t.Helper()
+	return s.postWith(t, goodCredential, evs...)
+}
+
+// postWith posts one batch of a run's events on the one address, with the run
+// credential given.
+func (s *service) postWith(t *testing.T, credential string, evs ...map[string]any) int {
+	t.Helper()
 	body, _ := json.Marshal(evs)
-	resp, b := do(t, s.client(goodCredential), http.MethodPost, s.url("/v1/events"), server.ContentType, string(body))
+	resp, b := do(t, s.client(credential), http.MethodPost, s.url("/v1/events"), server.ContentType, string(body))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Errorf("a batch: %d %s", resp.StatusCode, b)
 	}
@@ -510,12 +527,12 @@ func TestARunOverTheOneAddress(t *testing.T) {
 	var d server.LinkDiscovery
 	json.Unmarshal(discovered, &d)
 	a, header := s.openOver(t, server.LinkRunRequest{})
-	b, _ := s.openOver(t, server.LinkRunRequest{})
+	b, _ := s.openWith(t, otherCredential, server.LinkRunRequest{})
 	if a.ProxySecret == "" || a.ProxySecret == b.ProxySecret || header.Get(server.HeaderConfiguration) == "" || header.Get(server.HeaderRunConfiguration) == "" {
 		t.Fatalf("answers %+v %+v %v", a, b, header)
 	}
-	s.postOver(t, started(a.RunID, nil), applied(a.RunID, a.Applied))
-	s.postOver(t, started(b.RunID, nil), applied(b.RunID, b.Applied))
+	s.postOver(t, started(a.RunID, a.Labels), applied(a.RunID, a.Applied))
+	s.postWith(t, otherCredential, started(b.RunID, b.Labels), applied(b.RunID, b.Applied))
 	resp, body := do(t, s.client(goodCredential), http.MethodGet, d.Run.URL+"/"+a.RunID, "", "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get(server.HeaderRunConfiguration) != header.Get(server.HeaderRunConfiguration) {
 		t.Errorf("the reload: %d %s", resp.StatusCode, body)
@@ -760,7 +777,7 @@ func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
 // without the one address.
 func TestTheGatewaysOwnAuthority(t *testing.T) {
 	dir := t.TempDir()
-	cfg := gateway.Config{Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, Report: func(string) {}}
+	cfg := gateway.Config{Dir: dir, Listen: "127.0.0.1:0", RunCredentials: realIssuers(t, false), Report: func(string) {}}
 	g, err := gateway.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -531,8 +531,36 @@ release may change what an existing document does, and says so under Upgrading.
   `Proxy-Authenticate: Basic realm="qory"` without one; anything else to the contract,
   where every request's `Authorization: Bearer` run credential is decided first and a
   request without one, or with one refused, is `401` `run_credential_refused` from the
-  gateway, with `WWW-Authenticate: Bearer`. The verifier of run credentials is not
-  wired in yet: until it is, the one address refuses every run credential.
+  gateway, with `WWW-Authenticate: Bearer`.
+- The one address verifies run credentials under the issuers of
+  `gateway.Config.RunCredentials`, their keys pinned. A session's run request there is
+  decided by its run credential: the run's labels and `about.details` are the run
+  credential's, and the run answer carries them; a session's `forge` or `repository`
+  that differs is `403` `target_differs_from_credential`, another label or detail the
+  mapping sets `403` `differs_from_credential`, each naming the run credential's value;
+  its `run.started` must carry the same `about.details`. A run key opens one run at a
+  gateway: a second run request of it, live or ended, is `401`
+  `run_credential_refused`, and the gateway keeps each ended run key in
+  `ended-run-keys.json` in its directory, so a restart does not reopen it. Every later
+  request of the run carries a run credential of its run key, a refreshed one carrying
+  the run to its `exp`; one of another run key is `401`, so no run id can be probed.
+  The run ends at its latest `exp` with no fresher run credential,
+  `credential_expired`, and when the issuer's introspection no longer holds its run
+  credential active, `run_ended_at_issuer`: the gateway writes its
+  `dev.qory.run.exited`, and every later request gets the `410` with that code. A
+  session's narrowing is accepted on the one address and narrows the run's policy, at
+  its start and on each reload. The local link reaches none of the one address's runs.
+- A client with no session sets the gateway's one address as its HTTPS proxy, its run
+  credential the password of Basic in `Proxy-Authorization`. The first connection of a
+  run key with no run opens one, of the gateway's own run id, decided as a walled run:
+  the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
+  every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
+  HTTPS with the gateway's own authority. Every later connection of the run key joins
+  the run. The run ends after `Runs.Quiet` with no connection, `quiet`, with
+  `quiet_seconds`; at its `exp`; at the issuer's word; or at the server's `410`; its
+  `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
+  credentials are `407` from then on.
 - `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
   1.3 alone. A plain listener is allowed on loopback alone. `Start` refuses a `Listen`
   that is not `host:port`, one that is not loopback without `TLS`, certificate and key
@@ -554,6 +582,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
+  neither `state` nor `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
 - The organization of the run's certificate authority is `Forager gateway, one run
   only`. The gateway's `403` for a link-local address or the machine's own address

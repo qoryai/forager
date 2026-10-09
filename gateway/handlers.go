@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -61,9 +63,13 @@ func mediaType(r *http.Request, want string) bool {
 }
 
 // openRun answers a run request: 400 invalid_request for a body the schema refuses and
-// for a narrowing, which the local link refuses; 409 run_id_used for a run id that
-// already names a run here; the run's refusal when it does not open; else the run
-// answer.
+// for a narrowing, which the local link refuses; on the one address 401
+// run_credential_refused for a run key that already has a run here, live or ended, or
+// whose run credential the issuer no longer holds active; 409 run_id_used for a run id
+// that already names a run here; on the one address 403
+// target_differs_from_credential or differs_from_credential for labels or details
+// that are not the run credential's; the run's refusal when it does not open; else the
+// run answer.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.LinkContentType) {
 		invalid(w)
@@ -75,9 +81,18 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, ok := readRunRequest(body)
-	if !ok || req.Narrowing != nil {
+	if !ok || (req.Narrowing != nil && !s.remote) {
 		invalid(w)
 		return
+	}
+	var id *runIdentity
+	if s.remote {
+		got, ok := identityOf(r.Context())
+		if !ok {
+			refuseCredential(w)
+			return
+		}
+		id = &got
 	}
 	g.mu.Lock()
 	if g.closing {
@@ -85,16 +100,49 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
+	if id != nil {
+		// A run key opens one run at a gateway, live or ended.
+		k := keyOf(*id)
+		if g.keyTaken(k) {
+			g.mu.Unlock()
+			g.presented(*id)
+			refuseCredential(w)
+			return
+		}
+		opened := make(chan struct{})
+		g.opening[k] = opened
+		defer func() {
+			g.mu.Lock()
+			delete(g.opening, k)
+			g.mu.Unlock()
+			close(opened)
+		}()
+	}
+	g.opens.Add(1)
+	g.mu.Unlock()
+	defer g.opens.Done()
+	if id != nil && !id.isActive(r.Context()) {
+		refuseCredential(w)
+		return
+	}
+	var differs *accesskey.Refusal
+	if id != nil {
+		differs = runcredential.Compare(req.Labels, aboutDetails(req.About), id.Labels, id.Details)
+	}
+	g.mu.Lock()
 	if g.used[req.RunID] {
 		g.mu.Unlock()
 		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 		return
 	}
+	if differs != nil {
+		g.mu.Unlock()
+		refuse(w, http.StatusForbidden, differs.Code, differs.Names, accesskey.FromGateway, gatewayText(differs.Code))
+		return
+	}
 	g.used[req.RunID] = true
-	g.opens.Add(1)
 	g.mu.Unlock()
-	defer g.opens.Done()
-	lr, recorded, err := g.open(req, s.remote)
+	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id})
 	if err != nil {
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
@@ -112,6 +160,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	g.runs[lr.id] = lr
+	if lr.cred != nil {
+		g.keys[lr.cred.key] = lr
+	}
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
@@ -119,7 +170,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
-	w.Write(answer)
+	io.WriteString(w, answer.reveal())
 	lr.arm()
 }
 
@@ -188,20 +239,101 @@ func (g *Gateway) answerHeaders(s *side, w http.ResponseWriter, r *http.Request,
 	w.Header().Set(server.HeaderRunConfiguration, runDigest)
 }
 
-// reload answers a GET of a run's configuration by its run id: the reload answer as it
-// stands, 410 for a run that ended at the gateway, 400 invalid_request for a run id
-// this gateway holds no run of.
-func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
-	g.mu.Lock()
-	lr := g.runs[runID]
-	g.mu.Unlock()
-	if lr == nil {
-		invalid(w)
-		return
+// aboutDetails are the about.details a run request sends, as a JSON object decodes;
+// nil for none.
+func aboutDetails(about *server.About) map[string]any {
+	if about == nil || len(about.Details) == 0 {
+		return nil
 	}
+	var out map[string]any
+	json.Unmarshal(about.Details, &out)
+	return out
+}
+
+// localRun is the run of the local link a request names, nil for none: a run of the
+// one address is not the local link's.
+func (g *Gateway) localRun(runID string) *linkRun {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if lr := g.runs[runID]; lr != nil && lr.cred == nil {
+		return lr
+	}
+	return nil
+}
+
+// credentialRun is the session's run of the run credential a request on the one
+// address carried, by its run key, live or ended; nil, with the 401
+// run_credential_refused answered, when the run key has no session's run at this
+// gateway, so no run is reached but the credential's.
+func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request) (*linkRun, runIdentity) {
+	id, ok := identityOf(r.Context())
+	var lr *linkRun
+	if ok {
+		g.mu.Lock()
+		lr = g.keys[keyOf(id)]
+		g.mu.Unlock()
+	}
+	if lr == nil || lr.client {
+		if ok {
+			g.presented(id)
+		}
+		refuseCredential(w)
+		return nil, id
+	}
+	return lr, id
+}
+
+// admit decides a request of the run on the one address, after its run is found, by
+// the run credential it carries: a run that ended is its 410, the run credential noted
+// against its ended run key; a run credential with a later exp keeps the run going
+// until then; and an issuer that no longer holds it active ends the run,
+// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
+		lr.g.presented(id)
 		gone(w, code, from, lr.st.Started())
-		return
+		return false
+	}
+	lr.renew(id)
+	if !lr.stillActive(r.Context()) {
+		if code, from, ended := lr.gone(); ended {
+			gone(w, code, from, lr.st.Started())
+		} else {
+			// The request went before the issuer answered.
+			refuseCredential(w)
+		}
+		return false
+	}
+	return true
+}
+
+// reload answers a GET of a run's configuration by its run id: the reload answer as it
+// stands, 410 for a run that ended at the gateway; on the local link 400
+// invalid_request for a run id this gateway holds no run of, and on the one address
+// 401 run_credential_refused for a run id that is not the run credential's run.
+func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
+	var lr *linkRun
+	if s.remote {
+		var id runIdentity
+		if lr, id = g.credentialRun(w, r); lr == nil {
+			return
+		}
+		if lr.id != runID {
+			refuseCredential(w)
+			return
+		}
+		if !lr.admit(w, r, id) {
+			return
+		}
+	} else {
+		if lr = g.localRun(runID); lr == nil {
+			invalid(w)
+			return
+		}
+		if code, from, ended := lr.gone(); ended {
+			gone(w, code, from, lr.st.Started())
+			return
+		}
 	}
 	lr.touch()
 	lr.mu.Lock()
@@ -216,38 +348,59 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 
 // batch answers one link batch: 202 when its events are numbered; 410 for a run that
 // ended at the gateway; 400 invalid_request for one the link refuses, which ends the
-// run with session_lost when it names one this gateway holds.
+// run with session_lost when it names one this gateway holds. On the one address the
+// batch is of the run credential's run: 401 run_credential_refused when its run key
+// has none here, and every 400 ends that run.
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 		return
 	}
-	// A batch over the limit, one that does not decode and one whose first event names
-	// no run this gateway holds are refused without ending a run: the gateway ends a
-	// run only when it can tell which one the batch is of; otherwise the run's liveness
-	// ends it, when its session sends nothing it accepts.
+	var lr *linkRun
+	var id runIdentity
+	if s.remote {
+		if lr, id = g.credentialRun(w, r); lr == nil {
+			return
+		}
+		lr.batch.Lock()
+		defer lr.batch.Unlock()
+		if !lr.admit(w, r, id) {
+			return
+		}
+	}
+	// On the local link, a batch over the limit, one that does not decode and one whose
+	// first event names no run this gateway holds are refused without ending a run: the
+	// gateway ends a run only when it can tell which one the batch is of; otherwise the
+	// run's liveness ends it, when its session sends nothing it accepts. On the one
+	// address the run credential tells.
+	refused := func(why string) {
+		invalid(w)
+		if lr != nil {
+			g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
+			lr.end(sessionLost)
+		}
+	}
 	body, ok := readBody(r, maxBatch)
 	if !ok {
-		invalid(w)
+		refused("one over the limit")
 		return
 	}
 	evs, err := stream.DecodeBatch(body)
 	if err != nil || len(evs) == 0 {
-		invalid(w)
+		refused("one that does not decode")
 		return
 	}
-	g.mu.Lock()
-	lr := g.runs[evs[0].Subject]
-	g.mu.Unlock()
-	if lr == nil {
-		invalid(w)
-		return
-	}
-	lr.batch.Lock()
-	defer lr.batch.Unlock()
-	if code, from, ended := lr.gone(); ended {
-		gone(w, code, from, lr.st.Started())
-		return
+	if !s.remote {
+		if lr = g.localRun(evs[0].Subject); lr == nil {
+			invalid(w)
+			return
+		}
+		lr.batch.Lock()
+		defer lr.batch.Unlock()
+		if code, from, ended := lr.gone(); ended {
+			gone(w, code, from, lr.st.Started())
+			return
+		}
 	}
 	lr.touch()
 	if why := lr.check(body, evs); why != "" {
@@ -326,6 +479,9 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			if !sameLabels(data["labels"], lr.labels) {
 				return "a run.started whose labels are not the run's"
 			}
+			if lr.cred != nil && !sameDetails(data["about"], lr.cred.details) {
+				return "a run.started whose about.details differ from the run credential's"
+			}
 			if startedID != "" && startedID != ev.ID {
 				return "a second run.started"
 			}
@@ -387,6 +543,22 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 		}
 	}
 	return final
+}
+
+// sameDetails reports whether a run.started's about, as its data decodes, holds each
+// key of about.details the run credential decides with its value.
+func sameDetails(about any, decided map[string]string) bool {
+	if len(decided) == 0 {
+		return true
+	}
+	a, _ := about.(map[string]any)
+	details, _ := a["details"].(map[string]any)
+	for k, want := range decided {
+		if v, ok := details[k].(string); !ok || v != want {
+			return false
+		}
+	}
+	return true
 }
 
 // sameLabels reports whether a run.started's labels, as its data decodes, are the
