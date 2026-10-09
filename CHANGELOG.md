@@ -121,6 +121,43 @@ release may change what an existing document does, and says so under Upgrading.
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
   `refusal.GatewayDecides` reports a gateway's code. `fixtures/batch/` has
   `refused-differs-from-credential.json`.
+- Contract `v1` revision 1, amended in place, gains `run-credentials.schema.json`: the
+  issuers of run credentials a gateway accepts, the list under `gateway.run_credentials`
+  of the operator's `forager.yaml`. Per issuer: `issuer`, an https URL; `audience`,
+  required; `algorithms` among `RS256`, `ES256` and `EdDSA`, never `none` or an HMAC
+  algorithm; the pinned `keys`, each with its `alg`, a `public_key_file` and a `kid`;
+  `leeway`, 60 s by default; `max_lifetime`; the scope `allow`; `labels`, `forge` a
+  constant or a claim, `repository` the claims that name the target joined with `join`,
+  a claim or a constant, and `run_key` always `sub`; `details`, the `about.details` keys
+  the run credential decides; and `introspection`, an RFC 7662 endpoint with its client
+  and a `cache` that defaults to the run's heartbeat interval. `fixtures/run-credentials/`
+  holds two accepted documents and `fixtures/invalid/` the refused ones.
+- The public package `runcredential` is the run credential of the contract. `Parse`
+  reads the document against the schema, refusing a member it does not define;
+  `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the issuer's
+  algorithms, two keys without a `kid` or with the same one, the same issuer twice, and a
+  `public_key_file` that is not one PEM block of type `PUBLIC KEY` of its key type: RSA of
+  at least 2048 bits, P-256, or Ed25519 that passes the checks of an Ed25519 public key.
+  Over a run credential: `Issuer.SelectKey` selects the pinned key by `kid` and `alg`,
+  without a `kid` only while one key is pinned, and refuses `crit`; `Issuer.CheckClaims`
+  checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
+  of a run credential whose signature is verified, at a given time; `Issuer.Allowed` is
+  the scope; `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label
+  limits; `Issuer.Details` makes the `about.details` keys; and `Compare` returns
+  `target_differs_from_credential` or `differs_from_credential` for what a session sends
+  with another value, with each member and the run credential's value as names. Every
+  failure of a run credential is `runcredential.ErrRefused`, one text that names no claim,
+  and `runcredential.Refused` is its `run_credential_refused`.
+- `fixtures/known-answers/run-credentials/` holds the fixture issuer's keys, RSA 2048,
+  P-256 and Ed25519, derived from a published seed, two configurations of the issuer, and
+  run credentials signed under the keys, accepted ones per algorithm and refused ones,
+  each with its outcome at a fixed time and the step that refuses it. `go generate
+  ./runcredential` writes them with Go's standard library, and `go test ./...` fails while
+  they differ.
+- `docs/gateway-run-credentials.md` says how an issuer integrates with the Qory gateway:
+  the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
+  audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
+  and that the run credential never appears in an event, a record or a log.
 - Forager reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and

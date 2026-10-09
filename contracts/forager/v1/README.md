@@ -1234,6 +1234,45 @@ instance; a receiver under test holds the fixture access key under
 are. A receiver written by anyone else follows this section, replays those files, and
 may read that code.
 
+## Run credentials
+
+A gateway that serves other machines opens a run only for a run credential: a JWT (RFC
+7519) signed as a JWS (RFC 7515) with an asymmetric key, which an issuer the operator
+trusts gives one run. Its `sub` is the run key, which identifies one run; its `aud`
+contains the gateway's own audience; and the claims the operator names make the run's
+labels and `about.details`. `run-credentials.schema.json` defines the issuers a gateway
+accepts, the list under `gateway.run_credentials` of the operator's `forager.yaml`: per
+issuer, `issuer`, `audience`, `algorithms` among `RS256`, `ES256` and `EdDSA`, the pinned
+`keys`, `leeway` (60 s by default), `max_lifetime`, the scope `allow`, the mapping
+`labels` and `details`, and `introspection` (RFC 7662).
+
+The public package `runcredential` holds the rules beyond the schema:
+
+- `Issuers.Check` and `Issuer.Check`: no two issuers are the same; every key's `alg` is
+  among the issuer's algorithms; with more than one key, every key has a `kid`, and no
+  two the same; and each `public_key_file` is one PEM block of type `PUBLIC KEY` of the
+  key its `alg` needs: RSA of at least 2048 bits for `RS256`, P-256 for `ES256`, Ed25519
+  for `EdDSA`, which passes the checks of an Ed25519 public key.
+- `Issuer.SelectKey`, the header: `alg` is among the issuer's algorithms, never `none` or
+  an HMAC algorithm, and equals the selected key's; the key is selected by `kid`, and a
+  run credential without one is accepted only while one key is pinned; `crit` is refused.
+- `Issuer.CheckClaims`, the claims of a run credential whose signature is verified:
+  `exp` required and after now less the leeway; `iat` and `nbf`, when present, no later
+  than now plus the leeway; `exp - iat` at most `max_lifetime` when it is set, which then
+  requires `iat`; `iss` the issuer; `aud`, a string or an array, containing the audience;
+  `sub` present.
+- `Issuer.Allowed`, the scope; `Issuer.Labels`, the labels `forge`, `repository` and
+  `run_key`, which come from the run credential alone; `Issuer.Details`, the
+  `about.details` keys it decides; and `Compare`, which refuses a session that sends
+  `forge` or `repository` with another value with `target_differs_from_credential`, and
+  any other key the mapping sets with `differs_from_credential`.
+
+Every failure of a run credential is one opaque answer, `run_credential_refused` to a
+session and `407` to a client with no session, and names no claim value. The run
+credential never appears in an event, a record or a log. The signature, the proxy login
+over TLS, introspection and the refusal of an ended run are the gateway's. How an issuer
+integrates: [docs/gateway-run-credentials.md](../../../docs/gateway-run-credentials.md).
+
 ## The runtime
 
 The session starts a program, records it and stops it, and contains nothing specific to
@@ -1709,9 +1748,11 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
+| `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture issuer's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture issuer; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's), the signature (over an altered payload), the claims (`aud` and `iss` another's, expired, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`) or the scope | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, check the header, the claims, the scope and the mapping of each, and verify each signature |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 Every fixture is synthetic. No host name of anyone's infrastructure, no real secret, no
@@ -1777,3 +1818,14 @@ Public sources this contract was written from, and nothing else:
   [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers)
   and [best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks),
   the model for the delivery headers and the ten-second answer.
+- The run credential: JWT, [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html), and
+  its best current practices, [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html);
+  JWS, [RFC 7515](https://www.rfc-editor.org/rfc/rfc7515.html), for the compact
+  serialisation, `kid` and `crit`; the algorithms of
+  [RFC 7518](https://www.rfc-editor.org/rfc/rfc7518.html) §3.3 and §3.4, `RS256` and
+  `ES256` with its 64-byte signature, and `EdDSA` of
+  [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.html); OAuth 2.0 token
+  introspection, [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662.html); and
+  [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) §11.7 with the Basic scheme of
+  [RFC 7617](https://www.rfc-editor.org/rfc/rfc7617.html) for the proxy login and its
+  `407`.

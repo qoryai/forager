@@ -85,16 +85,28 @@ func TestEverySchemaCompiles(t *testing.T) {
 	}
 }
 
-// TestDocumentFixturesValidate pins that every policy, server, configuration and run
-// configuration fixture passes its schema.
+// TestDocumentFixturesValidate pins that every policy, server, configuration, run
+// configuration and run credentials fixture passes its schema, the run credentials of
+// the known answers included.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-configuration.schema.json")
+		"run-configuration.schema.json", "run-credentials.schema.json")
 	dirs := map[string]string{
 		"fixtures/policy":            "policy.schema.json",
 		"fixtures/server":            "server.schema.json",
 		"fixtures/configuration":     "configuration.schema.json",
 		"fixtures/run-configuration": "run-configuration.schema.json",
+		"fixtures/run-credentials":   "run-credentials.schema.json",
+	}
+	for _, f := range []string{"one-key.json", "two-keys.json"} {
+		f = "fixtures/known-answers/run-credentials/" + f
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s["run-credentials.schema.json"].Validate(doc); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
 	}
 	for dir, schema := range dirs {
 		for _, f := range files(t, dir) {
@@ -113,13 +125,14 @@ func TestDocumentFixturesValidate(t *testing.T) {
 // the schema its name starts with: a policy that widens, a server without its access
 // key id or its pin or with a secret, a configuration without events, a ping whose
 // interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
-// an expression. The longest schema name the file name starts with is the schema, so
+// an expression, run credentials without an audience or with alg none or HS256. The longest schema name the file name starts with is the schema, so
 // run-configuration-variable-value-not-string is held to the run configuration and not to a
 // schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json")
+		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
+		"run-credentials.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := ""
 		for name := range s {

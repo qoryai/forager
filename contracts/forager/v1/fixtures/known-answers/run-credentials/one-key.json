@@ -1,0 +1,43 @@
+[
+  {
+    "algorithms": [
+      "RS256"
+    ],
+    "allow": {
+      "claim": "namespace",
+      "values": [
+        "example-namespace"
+      ]
+    },
+    "audience": "qory-gateway",
+    "details": {
+      "requester": {
+        "claim": "requester"
+      }
+    },
+    "issuer": "https://issuer.example",
+    "keys": [
+      {
+        "alg": "RS256",
+        "public_key_file": "rs256.pem"
+      }
+    ],
+    "labels": {
+      "forge": {
+        "value": "example-forge"
+      },
+      "repository": {
+        "claims": [
+          "namespace",
+          "project"
+        ],
+        "join": "/"
+      },
+      "run_key": {
+        "claim": "sub"
+      }
+    },
+    "leeway": "60s",
+    "max_lifetime": "1h"
+  }
+]
