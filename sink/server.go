@@ -39,8 +39,9 @@ const QueueSize = 10000
 
 // DeliveredFile is the file in the run directory that holds what the server accepted,
 // a line per batch written as the answer comes: the delivery id, then the sequence of
-// each event in it. A server's stop, a signed 410 with any code or none, is the one
-// word stopped. With events.jsonl it says what a run cut short still owes
+// each event in it. A server's stop, a signed 410 with any code or none, and on the
+// link an answer that ended the run, one [Server.RunEnded] records among them, is the
+// one word stopped. With events.jsonl it says what a run cut short still owes
 // its server.
 const DeliveredFile = "delivered.log"
 
@@ -97,10 +98,11 @@ type Config struct {
 	// the worker's goroutine, and must not block.
 	OnDigests func(server.Digests)
 	// OnEnded, when not nil, is called once, on the worker's goroutine, when the
-	// gateway ends the run, with the end code and who ended it: on the link the answer's
-	// End, one of [server.EndCodes], and its From. A server never ends a run: its signed
-	// 410 only stops the deliveries. It must not block.
-	OnEnded func(code, from string)
+	// gateway ends the run, with how it ended: on the link the answer's
+	// [server.Delivery.RunEnd], its code, one of [server.EndCodes], who ended it, and
+	// the state and the reason a 410 carries. A server never ends a run: its signed 410
+	// only stops the deliveries. It must not block.
+	OnEnded func(server.RunEnd)
 	// Wait is how long a batch waits after its first event; zero means [BatchWait].
 	Wait time.Duration
 	// Link posts to the gateway's link: each event without its sequence, which the
@@ -115,7 +117,7 @@ type Server struct {
 	target    atomic.Pointer[Target]
 	runDigest atomic.Pointer[string]
 	onDigests func(server.Digests)
-	onEnded   func(code, from string)
+	onEnded   func(server.RunEnd)
 	closeOnce sync.Once
 	dir       string
 	report    func(string)
@@ -359,7 +361,7 @@ func (w *Server) deliver(batch []queued) {
 			if d.Closed() {
 				w.closeOnce.Do(func() {
 					if w.onEnded != nil {
-						w.onEnded(d.End, d.From)
+						w.onEnded(d.RunEnd())
 					}
 				})
 				return
@@ -468,6 +470,20 @@ func (w *Server) Stopped() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.stopped
+}
+
+// RunEnded records that an answer of the gateway's the sink did not read itself, a
+// reload's 410 say, ended the run: nothing more is sent, [Server.RunClosed] reports
+// true, and [DeliveredFile] says stopped, once, as after the sink's own.
+func (w *Server) RunEnded() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runClosed = true
+	if w.stopped {
+		return
+	}
+	w.stopped = true
+	w.ack(stoppedWord, nil)
 }
 
 // RunClosed reports whether an answer on the link ended the run. A server's signed 410

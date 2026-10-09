@@ -30,6 +30,9 @@ release may change what an existing document does, and says so under Upgrading.
   `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's own codes, or the run's starter's,
   carried as given. A receiver reads the state from `state`, and shows a reason it does
   not know as it is.
+- `server.Ended` returns a `server.RunEnd`, the code, who ended the run, and the state
+  and the reason of that end, in place of the code alone, and `sink.Config.OnEnded`
+  takes a `server.RunEnd` in place of the code and who ended it.
 
 #### Added
 
@@ -485,8 +488,26 @@ release may change what an existing document does, and says so under Upgrading.
   `Link.ProxyAddress` names it.
 - `server.Delivery` has `Refusal`: on the link, a coded answer other than a `2xx` as the
   `*accesskey.Refusal` it is, with its code, status, names, who refused and its
-  message. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
-  and posts it without its sequence.
+  message.
+- `server.RunEnd` is how a run ended at the gateway, as the link says it: `Code`, one of
+  `server.EndCodes`, `From`, and `State` and `Reason`, the state and the reason a `410`
+  that ends a run carries, each held to `run.exited.schema.json`'s, and both empty for
+  a `410` that carries none, `run_closed`, or one the schema refuses. `server.Ended`
+  returns it from a `410` of the link, and `server.Delivery` has `State` and `Reason`
+  beside `End` and `From`, and `Delivery.RunEnd` returns all four.
+  `(*server.Link).Outcome(ctx, runURL, runID)` asks a separate
+  gateway once for the run's outcome, `GET <runURL>/<runID>/outcome` with the run
+  credential and the run's secret as a reload carries them, bounded to
+  `server.OutcomeTimeout`, 10 seconds, and returns a `server.LinkOutcome`, `State` and
+  `Reason`: the starter's outcome from a `200` that `link-outcome-answer.schema.json`
+  accepts, a reason that is one of Forager's reserved codes, or one the schema refuses,
+  dropped alone and the state kept, and `{}` for anything else, an error, no answer in
+  time, another status, a `410` among them, or an answer that is not valid, a state the
+  schema refuses among them. On the local
+  link it sends nothing and returns `{}`. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
+  and posts it without its sequence. `(*sink.Server).RunEnded` records that an answer
+  the sink did not read itself, a reload's `410`, ended the run: nothing more is sent,
+  `RunClosed` reports true, and `delivered.log` says `stopped`.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -924,8 +945,12 @@ release may change what an existing document does, and says so under Upgrading.
   `ForagerVersion` and `Report`, and no `Server`, `Wall` or `RunnerVersion`: a record on
   one machine is `gateway.Resend`'s, and what a wall left is the caller's to remove,
   `(*wall.Docker).Reap`. `Resend` returns a `ResendResult` value with `Sent`,
-  `Undelivered`, `RunClosed`, `ClosedBy`, `Reason` and `NotOpened`, and no `RunID`,
-  `Closed` or `Reaped`: the session completes no record.
+  `Undelivered`, `RunClosed`, `ClosedReason`, `State`, `Reason` and `NotOpened`, and no
+  `RunID`, `Closed` or `Reaped`: the session completes no record.
+- `session.Result.ClosedBy` and `session.ResendResult.ClosedBy` are removed: with
+  Forager's gateway they always said `gateway`. `ResendResult.ClosedReason` is the code
+  of the gateway's `410`, which `ResendResult.Reason` held before, and
+  `ResendResult.Reason` is now the reason of how the run ended, as `Result.Reason` is.
 - The session's own record is `session.jsonl` and `output.log` in the run directory;
   the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
   toward the server. Behind a separate gateway, the session's run directory on its own
@@ -996,11 +1021,18 @@ release may change what an existing document does, and says so under Upgrading.
   until the gateway accepts it or the context ends, and what it does not accept is under
   `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
   sent. Every batch carries the run's `run_secret` from `run-secret`, which is removed
-  once nothing is owed. A record that owes nothing is sent nothing, with no request. A record with no
+  once nothing is owed. A record that owes nothing is sent nothing, with no request, and
+  the result is the zero `ResendResult`. A record with no
   `delivered.log`, of a run that never opened at the gateway, a run refused at its run
   request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
   the gateway has ended answers with its `410`:
-  `RunClosed`, with `ClosedBy` and `Reason`, and nothing more is sent. The gateway's
+  `RunClosed`, with `ClosedReason`, and nothing more is sent. Once something was sent,
+  `State` and `Reason` say how the run ended where that is known: the state and the
+  reason the gateway's `410` says, as the session records them, else those of the
+  record's `dev.qory.run.exited`. The `dev.qory.run.exited` the session posted is sent
+  again; the one it records after the gateway ended the run is the session's alone, and
+  is never sent: `delivered.log` says `stopped` before it, whether the `410` answered a
+  batch or a reload. The gateway's
   `401` `run_credential_refused`, which an expired run credential gets at the discovery,
   and its `403` `target_differs_from_credential` and `differs_from_credential` are a
   `*session.Refusal` from `gateway`, the events left under `undelivered/`. A record its
@@ -1008,11 +1040,27 @@ release may change what an existing document does, and says so under Upgrading.
   gateway's record. After a gateway restart, the session's undelivered events get the
   `401` and stay in the run directory, and the gateway's own resend completes the run
   `gateway_lost`.
-- `Result.RunClosed`, `Result.ClosedBy` and `Result.ClosedReason`: a run the gateway
-  closed, by a `410` on the gateway's link or the gateway's `400` to a batch, says who
-  closed it, `gateway`, and with what code, `run_closed`, `credential_expired`,
-  `stopped`, `credential_check_unreachable` or `credential_check_invalid`. The runtime is stopped as at its time limit, and the session's
-  record has `dev.qory.run.exited` with that code as its reason.
+- `Result.RunClosed` and `Result.ClosedReason`: a run the gateway closed, by a `410` on
+  the gateway's link or the gateway's `400` to a batch, says with what code,
+  `run_closed`, `credential_expired`, `stopped`, `credential_check_unreachable` or
+  `credential_check_invalid`. The runtime is stopped as at its time limit, and the
+  session's record has `dev.qory.run.exited` with the state and the reason the `410`
+  says, such as `cancelled` and `no_longer_needed`, and the runtime's own exit status:
+  `batch_refused` as the reason after a refused batch, and `failed` with the code as
+  the reason when the `410` carries no state, or one the schema refuses. A run the
+  gateway closed before its runtime started is a `*session.Refusal` with the code,
+  status `410` and the text `the run did not start: it has ended already`, and records
+  `dev.qory.run.refused` as before.
+- `Result.State` and `Result.Reason` say how the run ended, as the session's
+  `dev.qory.run.exited` does. Behind a separate gateway, a runtime that exits by itself
+  asks the gateway once for the outcome its starter gave, before `dev.qory.run.exited`
+  is written, and waits at most about 10 seconds: an outcome sets the state and the
+  reason, such as `failed` and `checks_failed` for a runtime that exited 0, whose
+  `exit_code` stays 0; a reserved reason, or one that is not a code, is dropped alone,
+  the state kept, and the heartbeats go on while it waits. With `{}`, an answer that is
+  not valid, a refusal or no answer in time, the exit decides, `succeeded` on 0 and `failed` otherwise, and nothing is added
+  to the record or reported. A run stopped at its time limit, by the caller's context or
+  by the gateway asks nothing, and a run on the local link never asks or waits.
 - The session fetches the run's configuration from the gateway again whenever the
   gateway's answers carry a new run-configuration digest, and records it in another
   `dev.qory.run.policy_applied`.

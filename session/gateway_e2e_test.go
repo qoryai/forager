@@ -351,7 +351,7 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.RunClosed || res.ClosedBy != "" || res.State != "succeeded" || res.ExitCode != 0 || res.TimedOut || res.Undelivered != 0 {
+			if res.RunClosed || res.State != "succeeded" || res.Reason != "" || res.ExitCode != 0 || res.TimedOut || res.Undelivered != 0 {
 				t.Errorf("result %+v", res)
 			}
 			if d := rg.close(t); d != (gateway.Delivery{}) {
@@ -521,7 +521,7 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 			if time.Since(start) > 20*time.Second {
 				t.Errorf("the run took %s", time.Since(start))
 			}
-			if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != cause || res.State != "failed" || res.TimedOut {
+			if !res.RunClosed || res.ClosedReason != cause || res.State != "failed" || res.Reason != cause || res.TimedOut {
 				t.Errorf("result %+v", res)
 			}
 			if d := rg.close(t); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != cause {

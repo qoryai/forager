@@ -460,7 +460,7 @@ func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != "credential_expired" || res.State != "failed" || time.Since(start) > 20*time.Second {
+	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "failed" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
 		t.Errorf("result %+v after %s", res, time.Since(start))
 	}
 	own := events(t, res)
@@ -491,7 +491,7 @@ func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != "credential_expired" || res.State != "failed" || time.Since(start) > 20*time.Second {
+	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "failed" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
 		t.Errorf("result %+v after %s", res, time.Since(start))
 	}
 	if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" {
@@ -572,7 +572,7 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != cause || res.State != "failed" || res.TimedOut || time.Since(start) > 20*time.Second {
+			if !res.RunClosed || res.ClosedReason != cause || res.State != "failed" || res.Reason != cause || res.TimedOut || time.Since(start) > 20*time.Second {
 				t.Errorf("result %+v after %s", res, time.Since(start))
 			}
 			if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != cause {

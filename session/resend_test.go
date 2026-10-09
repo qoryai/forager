@@ -137,7 +137,7 @@ func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Sent: res.Undelivered}) {
+	if got != (session.ResendResult{Sent: res.Undelivered, State: "succeeded"}) {
 		t.Errorf("the resend %+v; the session left %d undelivered", got, res.Undelivered)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, sink.UndeliveredDir)); err == nil {
@@ -190,7 +190,7 @@ func TestAResendOfARunTheSeparateGatewayEndedSendsNothingMore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Undelivered: res.Undelivered, RunClosed: true, ClosedBy: accesskey.FromGateway, Reason: "session_lost"}) {
+	if got != (session.ResendResult{Undelivered: res.Undelivered, RunClosed: true, ClosedReason: "session_lost", State: "failed", Reason: "session_lost"}) {
 		t.Errorf("the resend %+v; the session left %d undelivered", got, res.Undelivered)
 	}
 	if !bytes.Equal(sessionLines(t, res.Dir), before) {
@@ -262,7 +262,7 @@ func TestAResendOfARunClosedDuringItsSessionPostsNoOwnEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Undelivered: notAccepted - 1, RunClosed: true, ClosedBy: accesskey.FromGateway, Reason: "session_lost"}) || notAccepted < 2 {
+	if got != (session.ResendResult{Undelivered: notAccepted - 1, RunClosed: true, ClosedReason: "session_lost", State: "failed", Reason: "session_lost"}) || notAccepted < 2 {
 		t.Errorf("the resend %+v; %d events of the record were not accepted, its own run.exited among them", got, notAccepted)
 	}
 	s.close(t)

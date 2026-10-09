@@ -570,6 +570,10 @@ type Delivery struct {
 	// From is, on the link, who ended or refused: [accesskey.FromApiary] when the
 	// body says so, else [accesskey.FromGateway]. Empty toward the server.
 	From string
+	// State and Reason are, on the link, the state and the reason of the end of the
+	// run a 410 carries, as [RunEnd] has them: empty for a 410 without a state, for
+	// batch_refused after a 400, for any other answer, and always toward the server.
+	State, Reason string
 	// Digests are the digests a signed answer, or an answer on the link, contains.
 	Digests Digests
 	// Refusal is, on the link, a coded answer other than a 2xx as the refusal it is:
@@ -590,6 +594,12 @@ func (d Delivery) Accepted() bool { return d.Authentic() && d.Status >= 200 && d
 // The run ends, as at its time limit, and nothing further is sent. Toward the server it
 // is always false: a server's 410 is a [Delivery.Stop] alone, and never ends a run.
 func (d Delivery) Closed() bool { return d.Link && d.End != "" }
+
+// RunEnd is the end of the run the answer says, its End, From, State and Reason; the
+// zero RunEnd for an answer that ends no run.
+func (d Delivery) RunEnd() RunEnd {
+	return RunEnd{Code: d.End, From: d.From, State: d.State, Reason: d.Reason}
+}
 
 // Stop reports whether the server wants nothing more for the run: a signed 410, or on
 // the link an answer with an End. Its events go on to the file sink alone.
