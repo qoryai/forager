@@ -979,11 +979,17 @@ not exactly two lines, whose first line is outside the pattern or contains an ac
 key secret, or whose second line is not this machine's hash, yields a new id, so a file
 copied to another machine yields a new id there. The instance's
 display name, the host name by default, is sent unsigned and serves display alone. A
-ping from a new instance id beyond its node's limit
-is a signed `409` `instance_limit`, and that run does not start; an instance counts
-while one of its runs is live. A run is live from its accepted ping until its final
-event, `dev.qory.run.exited`, until the server closes it, or until no accepted event of
-the run has arrived for 3 × the `interval_seconds` its ping announced.
+ping from a new instance id beyond its node's limit is a signed `409` `instance_limit`,
+and that run does not start; an instance counts while one of its runs is live. For the
+server, a run is live from its accepted ping until its final event,
+`dev.qory.run.exited`, or until it has no recent heartbeat: none within 3 × the
+`interval_seconds` its ping announced. A heartbeat is as recent as its own `time`,
+corrected by the run's clock offset (the smallest arrival time less `time` over the
+run's heartbeats), plus a tolerance of 300 seconds, and never more recent than its
+arrival. So a backlog delivered late keeps no run live, and a clock that runs ahead
+holds nothing live. The gateway's link judges a session by arrival alone (§The
+gateway's link, Heartbeats and liveness): there, "the session lives" is not the
+server's "live".
 
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
 server's key can rotate. Every answer of the server, to discovery, to the run
@@ -1039,7 +1045,7 @@ One `POST` per batch to the events URL, with the headers above and:
 | Header | Value |
 |---|---|
 | `Content-Type` | `application/cloudevents-batch+json` |
-| `X-Qory-Delivery` | a UUID per batch. A retry of the same batch contains the same id |
+| `X-Qory-Delivery` | a UUID per batch. A retry of the same batch contains the same id, and an id is never used for other events: a batch cut again, after a restart or a resend, has a new id |
 | `X-Qory-Run-Configuration` | the server's digest of the run configuration the run uses, `sha256=<hex>`, when it uses a fetched one; absent otherwise |
 
 **A signed GET**, for the configuration document and the run configuration, contains
@@ -1715,7 +1721,8 @@ its events:
 **Heartbeats and liveness.** A run has one source of heartbeats. For a session's run,
 the session's `dev.qory.run.heartbeat` events on the link, every `interval_seconds` of
 the link's discovery, are the run's heartbeats: the gateway numbers and forwards them
-like any other event of the session's, and they are its sign that the session lives.
+like any other event of the session's, and they are its sign that the session lives,
+judged by their arrival, not by the server's rule (§The server).
 The gateway writes `dev.qory.run.heartbeat` only for a run with no session. When the
 session sends nothing for 3 × `interval_seconds`, counted from the run answer and again
 from each request of the session's, the gateway ends the run with

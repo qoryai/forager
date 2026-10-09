@@ -532,6 +532,9 @@ release may change what an existing document does, and says so under Upgrading.
   `fixtures/invalid/` nine refused `run.started` and `run.exited` events, two of them
   without a `credential` or with one of no kind it names, and a run answer without
   `credential`.
+- The server judges a run's liveness by its heartbeats' own `time`, corrected by the
+  run's clock offset, with a tolerance of 300 seconds and never later than their
+  arrival, and a delivery id is never used again for other events.
 
 ### Gateway
 
