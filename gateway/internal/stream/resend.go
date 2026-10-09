@@ -51,10 +51,12 @@ type ResendResult struct {
 	Sent        int
 	Undelivered int
 	// NotOpened says the run never opened at the server, so nothing of it is sent, and
-	// the record is left as it is: the record holds a ping the server never accepted,
-	// or, NoServer, it holds no ping, the run having had no server, and is sent to one.
+	// the record is left as it is: the record holds a ping and there is no
+	// delivered.log, the server never having accepted the ping, or NoServer.
 	NotOpened bool
-	NoServer  bool
+	// NoServer says the record holds no ping and there is no delivered.log: the run had
+	// no server, so it never opened at the one it is sent to. NotOpened is set too.
+	NoServer bool
 	// Torn is how many lines of the record hold bytes that are no whole event: a write
 	// the gateway did not finish. They are skipped and stay in the file, but for a last
 	// line that holds no whole event, which is cut off when run.exited follows it.
@@ -76,7 +78,8 @@ var reportNoServer = ""
 // Resend completes and delivers the record of one run whose gateway is gone, as the
 // session's resend does today. A record still held, by an open run or by the run's
 // session, is [ErrRunning], and is left as it is. A record with run.started and no
-// run.exited gets one, numbered on from its last event, with the reason gateway_lost,
+// run.exited gets one, numbered on from the higher of its highest whole event's sequence
+// and the highest sequence delivered.log names, with the reason gateway_lost,
 // and state failed and exit_code -1 for a session's run; a run a gateway opened, with
 // no process, has neither. Then every event the server wants that no accepted batch
 // contained is posted, in order and in the run's own batches, until the server accepts
