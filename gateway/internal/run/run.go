@@ -13,6 +13,8 @@ package run
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +58,10 @@ type Config struct {
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
 	Images Images
+	// Narrowing is the session's narrowing of the policy, behind a separate gateway
+	// alone; nil means none. It narrows the start's policy and every policy a reload
+	// puts in force.
+	Narrowing *Narrowing
 	// Passes, when not nil, reports whether the run passes a value of its own for the
 	// variable: a placeholder it passes a value for is then placeholder_conflict, at
 	// the start and at every reload, as the session refuses it. [Passing] makes one of
@@ -135,7 +141,9 @@ func Decide(cfg Config) (*Run, error) {
 		}
 		r.node, pol = node, node
 	}
-	if cfg.Fetched != nil {
+	if cfg.Fetched == nil {
+		pol = Narrow(pol, cfg.Narrowing)
+	} else {
 		fetched, err := r.Read(*cfg.Fetched)
 		if err != nil {
 			return nil, err
@@ -386,7 +394,49 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
 	}
-	return pol, nil
+	return Narrow(pol, r.cfg.Narrowing), nil
+}
+
+// Narrowing is a session's narrowing of the policy the gateway holds for its run,
+// behind a separate gateway alone: the narrowing of link-run-request.schema.json.
+type Narrowing struct {
+	// Allow, when not nil, puts the narrowing's side under enforce: a host it does not
+	// cover is removed. Nil leaves its side under observe.
+	Allow []string
+	// Deny adds to the hosts denied.
+	Deny []string
+}
+
+// Narrow is the policy pol narrowed by n, which only narrows: it combines with pol as
+// a node's policy narrows a server's ([policy.Narrowed]), n's side under enforce when
+// it lists allow and under observe otherwise, its deny added to pol's. The path rules,
+// the credentials, the tools, the image, the source's URL and digest of the run
+// configuration, and the node's side are pol's. The digest is the narrowed policy's
+// own, the hex SHA-256 of its canonical JSON; a policy of source none that a
+// narrowing narrows is of source config, the narrowing being the document the session
+// passes. A nil n is pol.
+func Narrow(pol *policy.Loaded, n *Narrowing) *policy.Loaded {
+	if n == nil {
+		return pol
+	}
+	mode := policy.Observe
+	if n.Allow != nil {
+		mode = policy.Enforce
+	}
+	side := &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: mode, Allow: slices.Clone(n.Allow), Deny: slices.Clone(n.Deny)}}}
+	out, err := policy.Narrowed(pol, side)
+	if err != nil {
+		// The narrowing selects no tool, credential or image, which alone refuse.
+		return pol
+	}
+	out.Node = pol.Node
+	if out.Source == "none" {
+		out.Source = "config"
+	}
+	b, _ := json.Marshal(out.Policy)
+	sum := sha256.Sum256(b)
+	out.Digest = hex.EncodeToString(sum[:])
+	return out
 }
 
 // Settled reports whether a failed fetch of the run configuration is one the server
