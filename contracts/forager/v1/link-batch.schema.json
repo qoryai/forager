@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-batch.schema.json",
   "title": "Link batch",
-  "description": "The body of one POST of the session to the events URL of its gateway's link, application/cloudevents-batch+json: events of one run, in the session's order, never empty. Each is an event of the contract without sequence, and none is an event the gateway writes: the gateway numbers the run's stream, sends the ping as the node toward the server, and writes the run's dev.qory.run.egress. A dev.qory.run.started is opened by the session, a dev.qory.run.exited is the session's own, the runtime's exit, with timeout as its only reason, since the gateway writes the event of every other reason itself, and a dev.qory.run.refused has a code the session decides itself, those of refusal.Decides, and no name of the form <member>=<value>, which only a gateway's refusal carries. The gateway refuses a batch on rules the schema cannot state as well: the README's §The gateway's link lists them.",
+  "description": "The body of one POST of the session to the events URL of its gateway's link, application/cloudevents-batch+json: events of one run, in the session's order, never empty. Each is an event of the contract without sequence, and none is an event the gateway writes: the gateway numbers the run's stream, sends the ping as the node toward the server, and writes the run's dev.qory.run.egress. A dev.qory.run.started is opened by the session, a dev.qory.run.exited is the session's own, the runtime's exit, with timeout as the only one of Forager's reasons, or the reason of the run's starter the gateway's outcome answer gave, since the gateway writes the event of every other reason itself; with no outcome answer, the gateway also holds its state to the runtime's exit, succeeded with exit_code 0 and failed otherwise, both with no reason, or cancelled with timeout, which a schema cannot tell from a run with an outcome answer, and a dev.qory.run.refused has a code the session decides itself, those of refusal.Decides, and no name of the form <member>=<value>, which only a gateway's refusal carries. The gateway refuses a batch on rules the schema cannot state as well: the README's §The gateway's link lists them.",
   "type": "array",
   "minItems": 1,
   "items": {"$ref": "#/$defs/event"},
   "$defs": {
     "event": {
-      "description": "An event as event.schema.json defines it, with no sequence, and not dev.qory.ping or dev.qory.run.egress, which the gateway writes. A dev.qory.run.started has opened_by session, a dev.qory.run.exited's reason, when present, is timeout, and a dev.qory.run.refused's code is one the session decides itself, with no name labels.<key>=<value> or about.details.<key>=<value>.",
+      "description": "An event as event.schema.json defines it, with no sequence, and not dev.qory.ping or dev.qory.run.egress, which the gateway writes. A dev.qory.run.started has opened_by session, a dev.qory.run.exited's reason, when present, is timeout, with the state cancelled, or none of Forager's other codes, run_closed and the three old names among them, and a dev.qory.run.refused's code is one the session decides itself, with no name labels.<key>=<value> or about.details.<key>=<value>.",
       "not": {"required": ["type"], "properties": {"type": {"enum": ["dev.qory.ping", "dev.qory.run.egress"]}}},
       "allOf": [
         {
@@ -24,7 +24,14 @@
         },
         {
           "if": {"required": ["type"], "properties": {"type": {"const": "dev.qory.run.exited"}}},
-          "then": {"properties": {"data": {"properties": {"reason": {"const": "timeout"}}}}}
+          "then": {"properties": {"data": {
+            "properties": {"reason": {"anyOf": [
+              {"const": "timeout"},
+              {"not": {"enum": ["quiet", "credential_expired", "stopped", "session_lost", "gateway_lost", "batch_refused", "credential_check_unreachable", "credential_check_invalid", "run_closed", "run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"]}}
+            ]}},
+            "if": {"required": ["reason"], "properties": {"reason": {"const": "timeout"}}},
+            "then": {"properties": {"state": {"const": "cancelled"}}}
+          }}}
         },
         {"$ref": "cloudevents.schema.json"},
         {

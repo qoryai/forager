@@ -78,9 +78,9 @@ type ResendResult struct {
 // session's resend does today. A record still held, by an open run or by the run's
 // session, is [ErrRunning], and is left as it is. A record with run.started and no
 // run.exited gets one, numbered on from the higher of its highest whole event's sequence
-// and the highest sequence delivered.log names, with the reason gateway_lost,
-// and state failed and exit_code -1 for a session's run; a run a gateway opened, with
-// no process, has neither. Then every event the server wants that no accepted batch
+// and the highest sequence delivered.log names, with the reason gateway_lost
+// and state failed, and exit_code -1 for a session's run; a run a gateway opened, with
+// no process, has no exit_code. Then every event the server wants that no accepted batch
 // contained is posted, in order and in the run's own batches, until the server accepts
 // it or the context ends. A server that said stop during the run is sent nothing. A
 // line of the record that holds bytes that are no whole event, a write the gateway did
@@ -423,11 +423,11 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 	if end, err := time.Parse(time.RFC3339Nano, last.Time); err == nil && !started.IsZero() && end.After(started) {
 		ran = end.Sub(started).Milliseconds()
 	}
-	data := map[string]any{"reason": event.ReasonGatewayLost, "duration_ms": ran}
+	data := map[string]any{"state": "failed", "reason": event.ReasonGatewayLost, "duration_ms": ran}
 	if !byGateway {
 		// A session's run: no exit status was recorded. A run a gateway opened has no
-		// process, and its run.exited neither.
-		data["state"], data["exit_code"] = "failed", -1
+		// process, and its run.exited no exit_code.
+		data["exit_code"] = -1
 	}
 	ev := event.NewEmitterAfter(runID, max(last.seq, delivered), now).Make(event.RunExited, data)
 	line, err := ev.JSON()

@@ -1,7 +1,7 @@
 [
   {
     "specversion": "1.0",
-    "id": "7e1c0000-0000-7000-8000-000000000139",
+    "id": "7e1c0000-0000-7000-8000-000000000132",
     "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
     "type": "dev.qory.run.exited",
     "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
@@ -11,7 +11,7 @@
       "state": "cancelled",
       "exit_code": -1,
       "signal": "SIGTERM",
-      "reason": "run_ended_at_issuer",
+      "reason": "stopped",
       "duration_ms": 600000
     }
   }

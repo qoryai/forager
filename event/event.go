@@ -43,19 +43,22 @@ const (
 	OpenedByGateway = "gateway"
 )
 
-// Where a run's credential came from, the credential of dev.qory.run.started: an
-// issuer gave the run its run credential, a session's run on a gateway's one address
+// Where a run's credential came from, the credential of dev.qory.run.started: the run's
+// starter gave the run its run credential, a session's run on a gateway's one address
 // and every run a gateway opened; or none, a run on a gateway's local link. Nothing
-// else of the issuer is reported.
+// else of the starter is reported.
 const (
-	CredentialIssuer = "issuer"
-	CredentialNone   = "none"
+	CredentialStarter = "starter"
+	CredentialNone    = "none"
 )
 
-// The reasons of dev.qory.run.exited, why a run ended other than by the runtime's own
-// exit. The session writes timeout and run_closed, and in its own record the code of the
-// gateway's 410, batch_refused among them; the resend of a record writes gateway_lost;
-// the gateway writes the others.
+// Forager's own reasons of dev.qory.run.exited, why a run ended other than by the
+// runtime's own exit. A reason is an open code: one of these, or the code the run's
+// starter gave, carried as given. Forager's codes are reserved, and so are the old
+// names run_ended_at_issuer, issuer_unreachable and issuer_answer_invalid, which
+// Forager never writes. The session writes timeout and run_closed, and in its own
+// record the code of the gateway's 410, batch_refused among them; the resend of a
+// record writes gateway_lost; the gateway writes the others.
 const (
 	ReasonTimeout           = "timeout"
 	ReasonRunClosed         = "run_closed"
@@ -63,17 +66,20 @@ const (
 	ReasonSessionLost       = "session_lost"
 	ReasonQuiet             = "quiet"
 	ReasonCredentialExpired = "credential_expired"
-	ReasonRunEndedAtIssuer  = "run_ended_at_issuer"
+	// ReasonStopped is a run whose starter answered that its run credential is no
+	// longer active and gave no outcome, or that ended another run of the same run key.
+	ReasonStopped = "stopped"
 	// ReasonBatchRefused is the gateway's 410 to a session whose batch it refused, and
 	// the reason of the session's own dev.qory.run.exited after it; the gateway's record
 	// of the same end says session_lost.
 	ReasonBatchRefused = "batch_refused"
-	// ReasonIssuerUnreachable is a run whose issuer's introspection endpoint could not
-	// be reached after the gateway's tries, and ReasonIssuerAnswerInvalid one whose
-	// endpoint gave no valid answer: the gateway's 410 to the session's later requests
-	// of a live run, and the code of its refusal of a run request, a 503 and a 502.
-	ReasonIssuerUnreachable   = "issuer_unreachable"
-	ReasonIssuerAnswerInvalid = "issuer_answer_invalid"
+	// ReasonCredentialCheckUnreachable is a run whose run credential could not be
+	// checked because the introspection endpoint could not be reached after the
+	// gateway's tries, and ReasonCredentialCheckInvalid one whose endpoint gave no valid
+	// answer: the gateway's 410 to the session's later requests of a live run, and the
+	// code of its refusal of a run request, a 503 and a 502.
+	ReasonCredentialCheckUnreachable = "credential_check_unreachable"
+	ReasonCredentialCheckInvalid     = "credential_check_invalid"
 )
 
 // Prefix is what every type of the contract starts with; a descriptor's session types

@@ -164,7 +164,7 @@ func refusedText(err error) (string, bool) {
 // its proxy reading inside HTTPS with the gateway's own authority for the credentials,
 // the tools and the path rules its policy selects. The run is its run key's client's
 // run from then on; a run key the issuer ended while the run opened ends it,
-// run_ended_at_issuer, and is [errKeyRefused]. Qory Apiary is tried again until
+// stopped, and is [errKeyRefused]. Qory Apiary is tried again until
 // deadline.
 func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, error) {
 	req := &server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true}
@@ -184,7 +184,7 @@ func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, erro
 	if g.blocked(k) {
 		// Among the runs, so Close waits for its record.
 		g.mu.Unlock()
-		lr.end(endedAtIssuer)
+		lr.end(stopped)
 		return nil, errKeyRefused
 	}
 	g.clientRuns[k] = lr
@@ -194,7 +194,7 @@ func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, erro
 }
 
 // errKeyRefused is a run that opened for a run key the gateway refuses since: ended at
-// once, run_ended_at_issuer.
+// once, stopped.
 var errKeyRefused = errors.New("the gateway refuses the run key")
 
 // join is a later connection of the run's run key: the run takes it, once its run
@@ -203,11 +203,11 @@ var errKeyRefused = errors.New("the gateway refuses the run key")
 // introspection endpoint gave no valid answer, with the 403 of an [*openRefused], or
 // could not be reached, with the 503 of [errNotOpened]. A run key the gateway
 // refuses after the issuer's end of another of its runs ends the run too,
-// run_ended_at_issuer, and the connection is refused, 407. A run that has ended takes
+// stopped, and the connection is refused, 407. A run that has ended takes
 // none, [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	if lr.g.blocked(keyOf(id)) {
-		lr.end(endedAtIssuer)
+		lr.end(stopped)
 		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
@@ -275,7 +275,7 @@ func (lr *linkRun) watchQuiet() {
 	}
 	lr.mu.Unlock()
 	lr.g.report(fmt.Sprintf("run %s: it had no connection for %s; the run ends, quiet", lr.id, lr.g.runsQuiet))
-	e := ending{reason: event.ReasonQuiet, code: event.ReasonQuiet, from: accesskey.FromGateway, closed: true, quietSeconds: quietSeconds(lr.g.runsQuiet)}
+	e := ending{reason: event.ReasonQuiet, state: stateCancelled, code: event.ReasonQuiet, from: accesskey.FromGateway, closed: true, quietSeconds: quietSeconds(lr.g.runsQuiet)}
 	lr.end(e)
 }
 

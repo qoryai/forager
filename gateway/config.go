@@ -198,7 +198,7 @@ type Delivery struct {
 	// says who, always "gateway", since a server's 410 ends no run, and Reason the code
 	// of the 410 the session's later requests get: session_lost when it heard nothing
 	// from the session for 3 heartbeat intervals, batch_refused when it refused a batch,
-	// and behind a separate gateway credential_expired or run_ended_at_issuer.
+	// and behind a separate gateway credential_expired or stopped.
 	RunClosed bool
 	ClosedBy  string
 	Reason    string

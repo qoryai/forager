@@ -129,14 +129,15 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
   them too.
 
 A run of the one address ends as a local run does, and also at its run credential's
-`exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
-longer holds the run credential active, or the issuer ended another run of the same run
-key, `run_ended_at_issuer`; when the issuer's introspection endpoint could not be
-reached after the gateway's tries, `issuer_unreachable`, or gave no valid answer,
-`issuer_answer_invalid`, neither of which holds the run key. The gateway writes its
-`dev.qory.run.exited`; a session's later requests get the `410` with that code in
+`exp` with no fresher one, `credential_expired`, and when the starter's introspection
+endpoint no longer holds the run credential active, or the starter ended another run of
+the same run key so, `stopped`; when the run credential could not be checked, the
+introspection endpoint unreachable after the gateway's tries,
+`credential_check_unreachable`, or its answer not valid, `credential_check_invalid`,
+neither of which holds the run key. The gateway writes its `dev.qory.run.exited`, with
+the state of that end; a session's later requests get the `410` with that code in
 `Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
-connection, `quiet`. After `run_ended_at_issuer`, the gateway refuses every request of a
+connection, `quiet`. After `stopped`, the gateway refuses every request of a
 run of the run key until the latest `exp` of the run credentials of the key the gateway
 still holds, and of any presented during the hold, plus `runcredential.MaxLeeway`, 5
 minutes.
@@ -341,15 +342,16 @@ A program that needs code of its own implements the interface.
 
 - `RunID`, and `Dir`, the run directory with the session's record. See
   [the record](events.md#where-the-record-is).
-- `ExitCode`, `Signal` and `State`, the runtime's; `TimedOut` when it was stopped at
-  `Timeout`.
+- `ExitCode` and `Signal`, the runtime's, and `State`, the state of the session's
+  `dev.qory.run.exited`: `succeeded` or `failed` by the runtime's exit, and `cancelled`
+  with `TimedOut`, when it was stopped at `Timeout`.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run: `ClosedBy` says who, always `gateway`,
   and `ClosedReason` the code of the gateway's `410`, unchanged: `run_closed`,
-  `credential_expired` or `run_ended_at_issuer`, `issuer_unreachable` and
-  `issuer_answer_invalid` when its issuer's introspection endpoint could not be reached
-  or gave no valid answer, `session_lost` when it heard nothing
+  `credential_expired` or `stopped`, `credential_check_unreachable` and
+  `credential_check_invalid` when its run credential could not be checked, the
+  introspection endpoint unreachable or its answer not valid, `session_lost` when it heard nothing
   from the session for 3 heartbeat intervals, and `batch_refused` when it refused a
   batch of the session's. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it

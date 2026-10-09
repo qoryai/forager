@@ -40,19 +40,17 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	}
 }
 
-// TestReasonsAndOpenersAreTheContracts pins the constants of run.exited's reason and
-// run.started's opened_by to the enums of their schemas, in the schemas' order.
+// TestReasonsAndOpenersAreTheContracts pins the constants of run.started's opened_by and
+// credential to the enums of their schema, in the schema's order, and Forager's reasons
+// of run.exited to its open code: each matches the reason's pattern and is named in its
+// description among the reserved codes, beside the three old names Forager never writes.
 func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	for _, c := range []struct {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.exited.schema.json", "reason", []string{event.ReasonTimeout, event.ReasonRunClosed,
-			event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet,
-			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonBatchRefused,
-			event.ReasonIssuerUnreachable, event.ReasonIssuerAnswerInvalid}},
 		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
-		{"events/run.started.schema.json", "credential", []string{event.CredentialIssuer, event.CredentialNone}},
+		{"events/run.started.schema.json", "credential", []string{event.CredentialStarter, event.CredentialNone}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
@@ -62,6 +60,31 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 		if got := fmt.Sprint(member["enum"]); got != fmt.Sprint(c.want) {
 			t.Errorf("%s %s: the schema's enum is %s; the constants are %v", c.schema, c.member, got, c.want)
 		}
+	}
+	doc, err := contracts.Document("events/run.exited.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)
+	if _, ok := reason["enum"]; ok {
+		t.Error("run.exited's reason holds an enum; it is an open code")
+	}
+	pattern := regexp.MustCompile(reason["pattern"].(string))
+	description := reason["description"].(string)
+	for _, code := range []string{event.ReasonTimeout, event.ReasonRunClosed, event.ReasonGatewayLost,
+		event.ReasonSessionLost, event.ReasonQuiet, event.ReasonCredentialExpired, event.ReasonStopped,
+		event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid,
+		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
+		if !pattern.MatchString(code) {
+			t.Errorf("run.exited's reason pattern refuses %s", code)
+		}
+		if !regexp.MustCompile(`\b` + code + `\b`).MatchString(description) {
+			t.Errorf("run.exited's reason description does not name %s", code)
+		}
+	}
+	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
+	if got := fmt.Sprint(state["enum"]); got != "[succeeded failed cancelled]" {
+		t.Errorf("run.exited's state enum is %s; want succeeded, failed and cancelled", got)
 	}
 }
 

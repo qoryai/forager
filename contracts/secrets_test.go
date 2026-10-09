@@ -782,12 +782,13 @@ func TestRunRefusedCodes(t *testing.T) {
 	load(t, "events/run.refused.schema.json", &s)
 	want := []string{
 		"answer_unsigned", "apiary_public_key_missing", "bad_request", "batch_refused",
-		"credential_expired", "differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
-		"invalid_request", "issuer_answer_invalid", "issuer_unreachable", "key_invalid", "key_limit", "labels_changed",
+		"credential_check_invalid", "credential_check_unreachable", "credential_expired",
+		"differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
+		"invalid_request", "key_invalid", "key_limit", "labels_changed",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
 		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_closed",
-		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused", "run_ended_at_issuer",
-		"run_id_used", "secrets_not_allowed", "server_needs_wall", "session_lost",
+		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused",
+		"run_id_used", "secrets_not_allowed", "server_needs_wall", "session_lost", "stopped",
 		"target_differs_from_credential", "tool_unknown", "unauthorized", "unavailable",
 		"unsupported_contract_version", "variable_reserved",
 	}

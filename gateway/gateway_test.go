@@ -376,6 +376,7 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 	// The session's own exit at its time limit is the one reason its batch carries.
 	timedOut := exited(runID)
 	timedOut["data"].(map[string]any)["reason"] = "timeout"
+	timedOut["data"].(map[string]any)["state"] = "cancelled"
 	if d := h.post(timedOut); !d.Accepted() {
 		t.Errorf("a run.exited timeout: %+v", d)
 	}

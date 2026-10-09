@@ -392,7 +392,7 @@ const (
 
 // TestAnIssuerWithNoAnswerAtOpen pins a run whose issuer's introspection endpoint gives
 // no answer, or none that is valid, when it would open: the session's run request gets
-// the 503 issuer_unreachable or the 502 issuer_answer_invalid with its message, the
+// the 503 credential_check_unreachable or the 502 credential_check_invalid with its message, the
 // client's login the 503 that says to try again or the 403 that says the answer was not
 // valid, with a report line; no run opens, nothing is recorded, no run key is held, and
 // the same run credential opens a run once the issuer answers active.
@@ -415,9 +415,9 @@ func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 		clientText    string
 		report        string
 	}{
-		{"unreachable", runcredential.ErrIssuerUnreachable, http.StatusServiceUnavailable, "issuer_unreachable", unreachableText,
+		{"unreachable", runcredential.ErrIssuerUnreachable, http.StatusServiceUnavailable, "credential_check_unreachable", unreachableText,
 			http.StatusServiceUnavailable, tryAgainText, "a run of a client with no session did not open: the issuer's introspection endpoint could not be reached"},
-		{"no valid answer", answerInvalid("the introspection endpoint answered status 401"), http.StatusBadGateway, "issuer_answer_invalid", invalidText,
+		{"no valid answer", answerInvalid("the introspection endpoint answered status 401"), http.StatusBadGateway, "credential_check_invalid", invalidText,
 			http.StatusForbidden, invalidText, "a run of a client with no session did not open: the introspection endpoint answered status 401"},
 	} {
 		issuer.set(false, c.err)
@@ -451,7 +451,7 @@ func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 
 // TestALiveRunWhoseIssuerGivesNoAnswer pins a session's live run whose issuer's
 // introspection endpoint no longer answers, or answers no valid answer: the run ends,
-// issuer_unreachable or issuer_answer_invalid, its record's run.exited with that reason,
+// credential_check_unreachable or credential_check_invalid, its record's run.exited with that reason,
 // failed and -1, and a report line; the request and every later one get the 410 with
 // its code from the gateway; no run key is held, and the same run credential opens a
 // new run once the issuer answers active.
@@ -461,8 +461,8 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 		code   string
 		report string
 	}{
-		{runcredential.ErrIssuerUnreachable, "issuer_unreachable", "the issuer's introspection endpoint could not be reached; the run ends, issuer_unreachable"},
-		{answerInvalid("the introspection endpoint answered status 401"), "issuer_answer_invalid", "the introspection endpoint answered status 401; the run ends, issuer_answer_invalid"},
+		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable", "the introspection endpoint could not be reached; the run ends, credential_check_unreachable"},
+		{answerInvalid("the introspection endpoint answered status 401"), "credential_check_invalid", "the introspection endpoint answered status 401; the run ends, credential_check_invalid"},
 	} {
 		t.Run(c.code, func(t *testing.T) {
 			issuer := &issuerAnswers{}
@@ -502,10 +502,10 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 
 // TestAClientsRunWhoseIssuerGivesNoAnswer pins a client's live run whose issuer's
 // introspection endpoint no longer answers, or answers no valid answer: a later
-// connection of its run key ends the run, issuer_unreachable or issuer_answer_invalid,
+// connection of its run key ends the run, credential_check_unreachable or credential_check_invalid,
 // and gets the 503 that says to try again or the 403 that says the answer was not
 // valid; asked again while the run has a connection, the run ends the same way; its
-// record's run.exited has that reason and neither state nor exit_code; no run key is
+// record's run.exited has that reason, the state failed and no exit_code; no run key is
 // held, and the next connection opens a new run once the issuer answers active.
 func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 	o := origin(t)
@@ -516,10 +516,10 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 		status       int
 		text, report string
 	}{
-		{runcredential.ErrIssuerUnreachable, "issuer_unreachable", http.StatusServiceUnavailable, tryAgainText,
-			"the issuer's introspection endpoint could not be reached; the run ends, issuer_unreachable"},
-		{answerInvalid("the introspection endpoint answered status 400"), "issuer_answer_invalid", http.StatusForbidden, invalidText,
-			"the introspection endpoint answered status 400; the run ends, issuer_answer_invalid"},
+		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable", http.StatusServiceUnavailable, tryAgainText,
+			"the introspection endpoint could not be reached; the run ends, credential_check_unreachable"},
+		{answerInvalid("the introspection endpoint answered status 400"), "credential_check_invalid", http.StatusForbidden, invalidText,
+			"the introspection endpoint answered status 400; the run ends, credential_check_invalid"},
 	} {
 		for _, how := range []string{"a later connection", "the periodic ask"} {
 			t.Run(c.code+", "+how, func(t *testing.T) {
@@ -572,7 +572,7 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 				s.close()
 				rec := s.record(ids[0])
 				end := rec[len(rec)-1].Data
-				if end["reason"] != c.code || end["state"] != nil || end["exit_code"] != nil {
+				if end["reason"] != c.code || end["state"] != "failed" || end["exit_code"] != nil {
 					t.Errorf("run.exited %v", end)
 				}
 				validEvents(t, rec)
@@ -739,8 +739,8 @@ func TestAReloadFirstLearnsTheIssuerGivesNoAnswer(t *testing.T) {
 		err  error
 		code string
 	}{
-		{runcredential.ErrIssuerUnreachable, "issuer_unreachable"},
-		{answerInvalid("the introspection endpoint answered status 401"), "issuer_answer_invalid"},
+		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable"},
+		{answerInvalid("the introspection endpoint answered status 401"), "credential_check_invalid"},
 	} {
 		t.Run(c.code, func(t *testing.T) {
 			issuer := &issuerAnswers{}
@@ -771,7 +771,7 @@ func TestAReloadFirstLearnsTheIssuerGivesNoAnswer(t *testing.T) {
 // TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise pins the hold after the issuer's
 // end when another request ended the run first: a batch's ask of the issuer, for a
 // refreshed run credential, is in flight while a reload, for the first run credential,
-// ends the run issuer_unreachable, which holds nothing; the batch's answer, active
+// ends the run credential_check_unreachable, which holds nothing; the batch's answer, active
 // false, then holds the run key all the same, so a new run request of it is refused,
 // until the latest exp of the run key's run credentials the gateway holds: another live
 // run's later exp, not the ended run's own.
@@ -810,7 +810,7 @@ func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
 	<-asked
 	unreachable.Store(true)
 	status, b := r.reload(t, first, r.a.RunID)
-	gone(t, "the reload", status, b, "issuer_unreachable")
+	gone(t, "the reload", status, b, "credential_check_unreachable")
 	close(release)
 	if got := <-batch; !strings.HasPrefix(string(got), "410 ") {
 		t.Errorf("the batch: %s", got)

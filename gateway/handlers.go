@@ -68,10 +68,9 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
 // during its hold, or whose run credential the issuer no longer holds
-// active, 503 issuer_unreachable when the issuer's introspection endpoint could not be
-// reached, and 502 issuer_answer_invalid when it gave no valid answer; 409 run_id_used
-// for a run id
-// that already names a run here; on the one address 403
+// active, 503 credential_check_unreachable when the introspection endpoint could not
+// be reached, and 502 credential_check_invalid when it gave no valid answer; 409
+// run_id_used for a run id that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
 // that are not the run credential's; the run's refusal when it does not open; else the
 // run answer.
@@ -121,9 +120,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		if err := id.checkActive(r.Context()); err != nil {
 			switch {
 			case errors.Is(err, runcredential.ErrIssuerUnreachable):
-				refuse(w, http.StatusServiceUnavailable, event.ReasonIssuerUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
+				refuse(w, http.StatusServiceUnavailable, event.ReasonCredentialCheckUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
 			case errors.Is(err, runcredential.ErrAnswerInvalid):
-				refuse(w, http.StatusBadGateway, event.ReasonIssuerAnswerInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
+				refuse(w, http.StatusBadGateway, event.ReasonCredentialCheckInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
 			default:
 				refuseCredential(w)
 			}
@@ -208,7 +207,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		// The issuer ended a run of the run key while this one opened: it ends at once,
 		// among the runs, so Close waits for its record.
 		g.mu.Unlock()
-		lr.end(endedAtIssuer)
+		lr.end(stopped)
 		g.presented(*id)
 		refuseCredential(w)
 		return
@@ -480,11 +479,12 @@ func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) 
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
 // against its run key when the gateway refuses it; a run of a run key the gateway
-// refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
+// refuses after the issuer's end of another of its runs ends, stopped, which
 // is the 410, the run credential noted; a run credential with a later exp keeps the run
 // going until then; and an issuer that no longer holds it active ends the run,
-// run_ended_at_issuer, as does one whose introspection endpoint could not be reached,
-// issuer_unreachable, or gave no valid answer, issuer_answer_invalid: each is the 410.
+// stopped, as does one whose introspection endpoint could not be reached,
+// credential_check_unreachable, or gave no valid answer, credential_check_invalid: each
+// is the 410.
 // It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
@@ -497,7 +497,7 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		// refused, the run request, a reload, a batch, a client's proxy login and its
 		// join, and a live run of it is served no more. The discovery is answered, and
 		// opens nothing.
-		lr.end(endedAtIssuer)
+		lr.end(stopped)
 		lr.g.presented(id)
 		code, from, _ := lr.gone()
 		gone(w, code, from)
