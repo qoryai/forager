@@ -32,6 +32,8 @@ import (
 // runIdentity is the run a run credential is for, as the verifier makes it from the
 // credential's verified claims through the issuer's mapping.
 type runIdentity struct {
+	// Issuer is the issuer whose key verified the run credential, the claim iss.
+	Issuer string
 	// RunKey is the run key, the claim sub.
 	RunKey string
 	// Labels are the run's labels, forge, repository and run_key, the credential's alone.
@@ -40,6 +42,12 @@ type runIdentity struct {
 	Details map[string]string
 	// Expires is the credential's exp.
 	Expires time.Time
+
+	// active, when not nil, asks the issuer's introspection endpoint whether the run
+	// credential is still active, its answer kept for cache; nil for an issuer without
+	// one. It holds the run credential, which it never shows.
+	active func(ctx context.Context) bool
+	cache  time.Duration
 }
 
 // runAuth decides the run credential of every request of the contract on the gateway's
@@ -60,10 +68,17 @@ type proxyLogin interface {
 	// login returns the proxy of the run whose run credential authorization carries,
 	// authorization being the Proxy-Authorization value as the client sent it, for the
 	// connection whose first request is first: its head, with no body. The proxy is one
-	// proxy.New made, and guarded. An error refuses the connection with 407; it is never
-	// answered, logged or reported. ctx ends when the connection's time to open is up.
-	login(ctx context.Context, authorization string, first *http.Request) (*proxy.Proxy, error)
+	// proxy.New made, and guarded; track, when not nil, is handed the connection before
+	// the proxy is, and returns the connection the proxy serves, which tells the run
+	// when it closes. [errUnserved] answers 500: the login was accepted and no run could
+	// serve it. Any other error refuses the connection with 407; it is never answered,
+	// logged or reported. ctx ends when the connection's time to open is up.
+	login(ctx context.Context, authorization string, first *http.Request) (px *proxy.Proxy, track func(net.Conn) net.Conn, err error)
 }
+
+// errUnserved is a proxy login accepted for a run that could not serve it: no run
+// opened, or the gateway is closing.
+var errUnserved = errors.New("no run could serve the connection")
 
 // refuseAll is the seam of a gateway that verifies no run credential yet: it refuses
 // every one, so nothing opens on the one address without a verifier.
@@ -73,8 +88,8 @@ func (refuseAll) authenticate(context.Context, string) (runIdentity, error) {
 	return runIdentity{}, runcredential.ErrRefused
 }
 
-func (refuseAll) login(context.Context, string, *http.Request) (*proxy.Proxy, error) {
-	return nil, runcredential.ErrRefused
+func (refuseAll) login(context.Context, string, *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
+	return nil, nil, runcredential.ErrRefused
 }
 
 // identityKey is the key of a request's [runIdentity] in its context.
@@ -355,9 +370,13 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 		return false
 	}
 	first.Body = http.NoBody
-	px := s.login(first, deadline)
+	px, track, err := s.login(first, deadline)
 	if px == nil {
-		io.WriteString(c, proxyRefused)
+		if errors.Is(err, errUnserved) {
+			io.WriteString(c, proxyUnserved)
+		} else {
+			io.WriteString(c, proxyRefused)
+		}
 		return false
 	}
 	if !px.Guarded() {
@@ -367,28 +386,34 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 		return false
 	}
 	c.SetDeadline(time.Time{})
-	px.ServeConn(&linkConn{Conn: c, r: r})
+	var served net.Conn = &linkConn{Conn: c, r: r}
+	if track != nil {
+		served = track(served)
+	}
+	px.ServeConn(served)
 	return true
 }
 
-// login is the proxy of the run a proxy request's login names, or nil.
-func (s *service) login(first *http.Request, deadline time.Time) *proxy.Proxy {
+// login is the proxy of the run a proxy request's login names, and what tracks the
+// connection for it; nil and the refusal when none: [errUnserved], or anything else
+// for 407.
+func (s *service) login(first *http.Request, deadline time.Time) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	values := first.Header.Values("Proxy-Authorization")
 	if len(values) != 1 {
-		return nil
+		return nil, nil, runcredential.ErrRefused
 	}
 	if password, ok := basicPassword(values[0]); ok {
 		if px := s.g.proxies.Lookup(password, true); px != nil {
-			return px
+			return px, nil, nil
 		}
 	}
 	ctx, cancel := context.WithDeadline(s.g.base, deadline)
 	defer cancel()
-	px, err := s.g.login.login(ctx, values[0], first)
+	px, track, err := s.g.login.login(ctx, values[0], first)
 	if err != nil {
-		return nil
+		return nil, nil, err
 	}
-	return px
+	return px, track, nil
 }
 
 // basicPassword is the password of a Proxy-Authorization value of the Basic scheme

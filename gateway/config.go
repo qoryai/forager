@@ -61,6 +61,9 @@ type Config struct {
 	TLS *TLS
 	// RunCredentials are the issuers whose run credentials open a run on Listen,
 	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
+	// Start checks them as runcredential.Issuers.Check does, reading each key's file
+	// and each introspection client's secret. A run key opens one run at the gateway;
+	// the run keys whose run ended are kept in Dir, so a restart does not reopen them.
 	RunCredentials runcredential.Issuers
 	// Runs is how the gateway keeps the runs of clients with no session.
 	Runs RunsConfig
@@ -73,9 +76,13 @@ type Config struct {
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
 	// runAuth and proxyLogin, when not nil, decide the run credentials Listen is given,
-	// in place of refusing every one: tests set them.
+	// in place of the verifier of RunCredentials and the runs of clients with no
+	// session: tests set them.
 	runAuth    runAuth
 	proxyLogin proxyLogin
+	// introspector, when not nil, is the introspection endpoint of an issuer that has
+	// one, in place of runcredential's client of it: tests set it.
+	introspector func(runcredential.Issuer) activeChecker
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
@@ -164,7 +171,8 @@ type Delivery struct {
 	Undelivered int
 	// RunClosed says the run ended at the gateway before its session ended it: ClosedBy
 	// says who, "apiary" when the server closed it with a signed 410, "gateway" when the
-	// gateway ended it, and Reason the code, run_closed.
+	// gateway ended it, and Reason the code of its 410: run_closed, or behind a
+	// separate gateway credential_expired or run_ended_at_issuer.
 	RunClosed bool
 	ClosedBy  string
 	Reason    string

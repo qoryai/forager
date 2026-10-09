@@ -113,12 +113,20 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
 - `RunCredentials`, the issuers whose run credentials open a run there, required with
-  `Listen` ([run credentials](gateway-run-credentials.md)). The verifier is not wired in
-  yet: until it is, the one address refuses every run credential.
+  `Listen` ([run credentials](gateway-run-credentials.md)). A run's labels and
+  `about.details` are its run credential's, and a run key opens one run at the gateway.
 - `Runs.Quiet`, how long a run with no session lasts with no connection: 30 minutes when
   zero.
 - `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
-  `authority/ca.pem`, which the machines of the clients with no session trust.
+  `authority/ca.pem`, which the machines of the clients with no session trust, and the
+  run keys whose runs ended, `ended-run-keys.json`, so a restart does not reopen them.
+
+A run of the one address ends as a local run does, and also at its run credential's
+`exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
+longer holds the run credential active, `run_ended_at_issuer`. The gateway writes its
+`dev.qory.run.exited`; a session's later requests get the `410` with that code in
+`Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
+connection, `quiet`.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
