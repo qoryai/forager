@@ -310,11 +310,12 @@ side. The gateway reads the two members only when `active` is `false`:
   `{"active": false}` alone;
 - with a `qory_outcome` and no `qory_reason`, the run ends with that outcome, and its
   reason is empty;
-- a `qory_reason` that is one of Forager's reserved codes, `timeout`, `quiet`,
-  `credential_expired`, `stopped`, `session_lost`, `gateway_lost`, `batch_refused`,
-  `credential_check_unreachable`, `credential_check_invalid`, `run_closed`,
-  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`, or that does
-  not match the pattern, is dropped, and the reason is empty; the outcome is kept;
+- a `qory_reason` that is one of Forager's reserved codes, `timeout`, `interrupted`,
+  `quiet`, `credential_expired`, `stopped`, `session_lost`, `gateway_lost`,
+  `batch_refused`, `credential_check_unreachable`, `credential_check_invalid`,
+  `run_closed`, `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`,
+  or that does not match the pattern, is dropped, and the reason is empty; the outcome
+  is kept;
 - a `qory_outcome` other than `succeeded`, `failed` and `cancelled` is ignored, and counts
   as no outcome: the run ends `cancelled` with the reason `stopped`.
 

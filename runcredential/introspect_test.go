@@ -760,6 +760,7 @@ func TestIntrospectionReadsTheStartersOutcome(t *testing.T) {
 		{"an outcome of another case", `{"active": false, "qory_outcome": "Succeeded"}`, Answer{}},
 		{"an outcome that is no string", `{"active": false, "qory_outcome": true, "qory_reason": "checks_failed"}`, Answer{}},
 		{"a reserved reason", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "timeout"}`, Answer{Outcome: "cancelled"}},
+		{"interrupted, a reserved reason", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "interrupted"}`, Answer{Outcome: "cancelled"}},
 		{"an old name", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "run_ended_at_issuer"}`, Answer{Outcome: "cancelled"}},
 		{"run_closed", `{"active": false, "qory_outcome": "failed", "qory_reason": "run_closed"}`, Answer{Outcome: "failed"}},
 		{"a reason of upper case", `{"active": false, "qory_outcome": "failed", "qory_reason": "Checks_failed"}`, Answer{Outcome: "failed"}},
