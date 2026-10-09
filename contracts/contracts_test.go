@@ -112,25 +112,79 @@ func TestDocumentFixturesValidate(t *testing.T) {
 	}
 }
 
+// The schemas of the gateway's link.
+const (
+	linkDiscovery  = "link-discovery.schema.json"
+	linkRunRequest = "link-run-request.schema.json"
+	linkRunAnswer  = "link-run-answer.schema.json"
+	linkReload     = "link-reload-answer.schema.json"
+	linkBatch      = "link-batch.schema.json"
+)
+
+// namedSchema returns the longest schema name, without .schema.json, that the file's
+// base name starts with followed by a dash or by .json, or "" when none does.
+func namedSchema(s map[string]*jsonschema.Schema, f string) string {
+	kind := ""
+	base := path.Base(f)
+	for name := range s {
+		prefix := strings.TrimSuffix(name, ".schema.json")
+		if (strings.HasPrefix(base, prefix+"-") || strings.HasPrefix(base, prefix+".")) &&
+			len(prefix) > len(kind) {
+			kind = prefix
+		}
+	}
+	return kind
+}
+
+// TestLinkFixturesValidate pins that every document under fixtures/link passes the
+// schema of the gateway's link its name starts with: the discovery of the local link and
+// of a separate gateway, a run request without a wall and one with a wall and a
+// narrowing, a run answer with a wall, without one and without a policy, a reload
+// answer with and without a policy, and a batch of events without sequence.
+func TestLinkFixturesValidate(t *testing.T) {
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
+	seen := map[string]bool{}
+	for _, f := range files(t, "fixtures/link") {
+		kind := namedSchema(s, f)
+		schema, ok := s[kind+".schema.json"]
+		if !ok {
+			t.Errorf("%s: no schema named by the prefix", f)
+			continue
+		}
+		seen[kind] = true
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	for name := range s {
+		if kind := strings.TrimSuffix(name, ".schema.json"); !seen[kind] {
+			t.Errorf("fixtures/link holds no %s", kind)
+		}
+	}
+}
+
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
 // the schema its name starts with: a policy that widens, a server without its access
 // key id or its pin or with a secret, a configuration without events, a ping whose
 // interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
-// an expression. The longest schema name the file name starts with is the schema, so
-// run-configuration-variable-value-not-string is held to the run configuration and not to a
-// schema named run.
+// an expression, a link run request without wall, whose run id is not lower-case or
+// whose narrowing holds a member it does not define, a link run answer without its proxy
+// secret, a link reload answer with the proxy secret or the certificate authority, a
+// link batch whose event carries a sequence or that holds a ping, a link discovery that
+// lists a node or has no heartbeat interval. The longest schema name the
+// file name starts with is the schema, so run-configuration-variable-value-not-string is
+// held to the run configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json")
+		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	for _, f := range files(t, "fixtures/invalid") {
-		kind := ""
-		for name := range s {
-			prefix := strings.TrimSuffix(name, ".schema.json")
-			if strings.HasPrefix(path.Base(f), prefix+"-") && len(prefix) > len(kind) {
-				kind = prefix
-			}
-		}
+		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]
 		if !ok {
 			t.Errorf("%s: no schema named by the prefix", f)

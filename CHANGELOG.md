@@ -137,6 +137,42 @@ release may change what an existing document does, and says so under Upgrading.
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
   which rule refused the document, and never quotes a value.
+- Contract `v1` revision 1, amended in place, defines the gateway's link: §The
+  gateway's link, between a session and its gateway, by the protocol toward the server
+  on the same paths, discovery, the run configuration, the events endpoint and the `410`
+  close, over two transports. The local link is a Unix socket in `qory-link-*`, mode
+  `0700`, the socket `0600`, one of Forager's files; the session checks the socket's
+  peer is its own user and opens every connection with `QORY-LINK` and the link secret.
+  A separate gateway speaks TLS 1.3 alone, with the operator's certificate, which the
+  session verifies against the system's roots or `session.gateway.ca_file` and an
+  optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's
+  public key in base64, and every request carries `Authorization: Bearer` and a run
+  credential whose `sub` is the run's run key. Answers on the link are unsigned, and
+  carry the digest headers of a reload. A reload is a `GET` of `<run.url>/<run_id>`,
+  answered with `link-reload-answer.schema.json`, the policy in force, its `digest` and
+  `variables`, never the proxy secret or the certificate authority; on the local link
+  the link secret authorises it. A run opens with a `POST` of
+  `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
+  `labels`, `about` and, behind a separate gateway, a `narrowing` that only narrows;
+  the request is one-shot per `run_id`, and the gateway refuses it with
+  `invalid_request`, `run_credential_refused`, `run_id_used`,
+  `target_differs_from_credential` or `differs_from_credential`, the last two naming
+  each member that differs as `<member>=<the run credential's value>`.
+  The answer, `link-run-answer.schema.json`, has `run_id`, the policy in force and its
+  `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is true, its
+  `certificate_authority`. Discovery on the link is `link-discovery.schema.json`, with
+  `events.interval_seconds`, the gateway's heartbeat interval, and no `node_id`,
+  `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`, events without
+  `sequence` and never a ping, which the gateway numbers and sends itself. A session's
+  heartbeats are its run's, and a session silent for 3 × the interval ends the run,
+  `session_lost`. A run that ends at the gateway is a `410` to the session's next
+  request, its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the
+  reason of `dev.qory.run.exited`. The relay opens its connections with `QORY-RELAY`
+  and the run's proxy secret, over TLS 1.3 with the link's trust between two machines,
+  and without a wall the agent's proxy URL carries the secret as its password.
+  `fixtures/link/` holds the valid documents and `fixtures/invalid/link-*` the refused
+  ones. Package `link` has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`,
+  `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
 
 #### Changed
 

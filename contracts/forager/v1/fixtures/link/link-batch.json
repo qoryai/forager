@@ -1,0 +1,43 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000101",
+    "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "type": "dev.qory.session.started",
+    "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "time": "2026-09-16T12:00:01.400Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/session.started.schema.json",
+    "data": {
+      "session_id": "0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90",
+      "source": "startup",
+      "model": "claude-sonnet-5",
+      "cwd": "/home/dev/app"
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000102",
+    "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "type": "dev.qory.run.log",
+    "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "time": "2026-09-16T12:00:01.450Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.log.schema.json",
+    "data": {
+      "stream": "terminal",
+      "bytes": "G1s/MTA0OWgbW0ggQ2xhdWRlIENvZGUgdjIuMS4yNzMNCg=="
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000103",
+    "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "type": "dev.qory.run.heartbeat",
+    "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+    "time": "2026-09-16T12:00:30.000Z",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json",
+    "data": {
+      "elapsed_seconds": 30,
+      "interval_seconds": 30
+    }
+  }
+]
