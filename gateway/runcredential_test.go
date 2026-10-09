@@ -802,3 +802,57 @@ type bufferedConn struct {
 }
 
 func (c *bufferedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+// TestARunWithNoSessionReloads pins a reload of a run with no session: the server's
+// new run configuration, which its answers to the gateway's own heartbeats announce,
+// is put in force, the gateway writes its policy_applied itself, and a connection
+// decided under the new policy is recorded after it.
+func TestARunWithNoSessionReloads(t *testing.T) {
+	o := origin(t)
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	s := startVerifying(t, gateway.Config{Server: c.server(), Heartbeat: time.Second}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	// Kept open, so the run is not quiet while the reload comes.
+	host := strings.TrimPrefix(o.URL, "http://")
+	resp, held, _ := s.proxyRequest(t, "CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\nProxy-Authorization: Basic "+base64.StdEncoding.EncodeToString([]byte(":"+cred))+"\r\n\r\n")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT: %d", resp.StatusCode)
+	}
+	defer held.Close()
+	runID := runsIn(t, s.dir)[0]
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'b')
+	eventually(t, "the reload", func() bool {
+		n := 0
+		for _, l := range s.record(runID) {
+			if l.Type == event.PolicyApplied {
+				n++
+			}
+		}
+		return n == 2
+	})
+	if status, _, err := get(s.clientWith(cred), o.URL); err != nil || status != http.StatusForbidden {
+		t.Errorf("under the new policy: %d %v", status, err)
+	}
+	s.close()
+	rec := s.record(runID)
+	second := -1
+	for i, l := range rec {
+		if l.Type == event.PolicyApplied && l.Data["run_configuration"] == "sha256="+strings.Repeat("b", 64) {
+			second = i
+		}
+	}
+	if second < 0 {
+		t.Fatalf("record %v", types(rec))
+	}
+	for i, l := range rec {
+		if l.Type == event.RunEgress && l.Data["decision"] == "denied" && i < second {
+			t.Errorf("a connection under the new policy at %d, before its policy_applied at %d", i, second)
+		}
+	}
+	if !slices.ContainsFunc(rec[second:], func(l recorded) bool { return l.Type == event.RunEgress && l.Data["decision"] == "denied" }) {
+		t.Errorf("no denied egress after the new policy_applied: %v", types(rec))
+	}
+	validEvents(t, rec)
+}

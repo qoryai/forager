@@ -8,9 +8,10 @@
 // sends again is not numbered twice. The gateway's own run.egress waits until
 // run.started is numbered; in a run that never starts it comes before the run's final
 // event, or at its close, since today's session records each connection when it is
-// made and tells nothing of it. The run.egress of the tunnels a reload closed waits for
-// the session's run.policy_applied of the new policy, as today's session records them
-// after it ([Run.EmitAfter]). Every numbered event goes, in sequence order, to the run's
+// made and tells nothing of it. From the moment a reload puts a new policy in force,
+// every run.egress waits for the session's run.policy_applied of that policy, the
+// tunnels the reload closed first, then the connections decided after it, as today's
+// session records them after the policy's event ([Run.Hold], [Run.Await]). Every numbered event goes, in sequence order, to the run's
 // record, events.jsonl in the run's record directory as the session's file sink writes
 // it today, to the control-plane sink when the run has one, and to [Config.Events].
 //
@@ -28,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -202,7 +204,7 @@ type Run struct {
 	release bool
 	// waiting are the gateway's events that wait for an event of the session's, in the
 	// order they were made.
-	waiting []waiting
+	waiting []*Hold
 	closed  bool
 	// done is closed once Close has flushed, and result is then set.
 	done   chan struct{}
@@ -322,7 +324,8 @@ func (r *Run) Accept(evs []event.Event) (int, error) {
 // Emit numbers one of the gateway's own events: run.egress, or for a run with no
 // session its run.started, run.policy_applied, heartbeats; and run.exited when the run
 // ends at the gateway. A run.egress before run.started waits for it, and follows it;
-// in a run that never starts it comes before the run's end.
+// in a run that never starts it comes before the run's end. A run.egress while a
+// [Hold] waits joins the newest one.
 func (r *Run) Emit(typ string, data any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -332,31 +335,46 @@ func (r *Run) Emit(typ string, data any) error {
 	if r.ended {
 		return ErrEnded
 	}
-	ev := r.make(typ, data)
-	if typ == event.RunEgress && !r.started {
-		r.held = append(r.held, ev)
-		return nil
-	}
-	r.number(ev)
+	r.put(r.make(typ, data))
 	return nil
 }
 
-// waiting is gateway events that follow the next numbered event match accepts.
-type waiting struct {
+// Hold is a group of the gateway's run.egress that waits for an event of the session's:
+// from [Run.Hold] on, every run.egress the gateway emits joins the newest group, until
+// [Run.Await] says which event releases it. A Hold belongs to its run.
+type Hold struct {
+	// match is the event that releases the group, nil until Await names it: until then
+	// none does.
 	match func(*event.Event) bool
 	evs   []*event.Event
 }
 
-// EmitAfter makes one of the gateway's own events of the type for each data, and numbers
-// them right after the next numbered event match accepts: the run.egress of the tunnels
-// a reload closed follow the session's run.policy_applied of the new policy, as today's
-// session records them after it. An event match accepts releases the events made before
-// these that still wait too, in order, so a reload the session skipped does not hold
-// its egress back. When the run's final event comes first they are numbered right
-// before it, and [Run.Close] numbers what still waits. A run.egress released before
-// run.started waits for it, as with [Run.Emit]. match is called with the lock held and
-// must not call the run.
-func (r *Run) EmitAfter(match func(*event.Event) bool, typ string, data ...any) error {
+// Hold starts holding the gateway's run.egress, every one emitted from now on, in order,
+// in a new group, the newest: the egress of a run whose policy a reload is about to
+// change, which follows the session's run.policy_applied of the new policy, as today's
+// session records it, the policy, its event and the connections after, in one step.
+// Await says which event releases it. Nil when the run is closed or has ended.
+func (r *Run) Hold() *Hold {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.ended {
+		return nil
+	}
+	h := &Hold{}
+	r.waiting = append(r.waiting, h)
+	return h
+}
+
+// Await names the event that releases h: the run.egress h holds is numbered right
+// after the next numbered event match accepts, behind events of the type made from
+// first, which go before what h holds: the tunnels the reload closed. An event match
+// accepts releases the groups made before h that still wait too, in order, so a reload
+// the session skipped does not hold its egress back. When the run's final event comes
+// first they are numbered right before it, and [Run.Close] numbers what still waits. A
+// run.egress released before run.started waits for it, as with [Run.Emit]. match is
+// called with the lock held and must not call the run. A nil h, or one released
+// already, holds nothing, and first is numbered as Emit numbers it.
+func (r *Run) Await(h *Hold, match func(*event.Event) bool, typ string, first ...any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -365,15 +383,33 @@ func (r *Run) EmitAfter(match func(*event.Event) bool, typ string, data ...any) 
 	if r.ended {
 		return ErrEnded
 	}
-	if len(data) == 0 {
+	evs := make([]*event.Event, len(first))
+	for i, d := range first {
+		evs[i] = r.make(typ, d)
+	}
+	if h == nil || !slices.Contains(r.waiting, h) {
+		for _, ev := range evs {
+			r.put(ev)
+		}
 		return nil
 	}
-	w := waiting{match: match}
-	for _, d := range data {
-		w.evs = append(w.evs, r.make(typ, d))
-	}
-	r.waiting = append(r.waiting, w)
+	h.match, h.evs = match, append(evs, h.evs...)
 	return nil
+}
+
+// put numbers one of the gateway's own events in its place: a run.egress joins the
+// newest group that waits, or waits for run.started; anything else is numbered at once.
+// Called with the lock held.
+func (r *Run) put(ev *event.Event) {
+	switch {
+	case ev.Type == event.RunEgress && len(r.waiting) > 0:
+		w := r.waiting[len(r.waiting)-1]
+		w.evs = append(w.evs, ev)
+	case ev.Type == event.RunEgress && !r.started:
+		r.held = append(r.held, ev)
+	default:
+		r.number(ev)
+	}
 }
 
 // releaseWaiting numbers the first n groups of waiting events, in order: a run.egress
@@ -432,7 +468,7 @@ func (r *Run) number(ev *event.Event) {
 		return
 	}
 	for i := len(r.waiting) - 1; i >= 0; i-- {
-		if r.waiting[i].match(ev) {
+		if m := r.waiting[i].match; m != nil && m(ev) {
 			r.releaseWaiting(i + 1)
 			break
 		}

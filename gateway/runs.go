@@ -724,8 +724,10 @@ func appliedOf(pol *policy.Loaded, held *credential.Held, chosen []tool.Chosen, 
 // apply puts a policy the reload fetched in force, as today's session does: decided as
 // strictly as a start, then set on the run's proxy in one step and committed. The
 // session fetches the new policy with its reload and writes its
-// dev.qory.run.policy_applied; the tunnels the new policy closed are recorded right
-// after it, today's order, or before the run's final event when it never comes.
+// dev.qory.run.policy_applied; the tunnels the new policy closed, and every connection
+// after the switch, are recorded right after it, today's order, or before the run's
+// final event when it never comes. A run with no session has no session to write it:
+// the gateway writes it, and what it held follows.
 func (lr *linkRun) apply(next *policy.Loaded) error {
 	d, err := lr.r.Reload(lr.ctx, next)
 	if err != nil {
@@ -735,30 +737,31 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 		return nil
 	}
 	in := d.Policy.Policy.Egress
+	// Every run.egress from here on waits for the session's policy_applied of the new
+	// policy: held before the proxy decides by it, so no connection decided under it is
+	// numbered first, as today's session switched the policy and wrote its event in one
+	// step under its record's lock.
+	hold := lr.st.Hold()
 	refused := lr.px.SetPolicy(in.Mode, in.Allow, in.Deny, in.Paths, d.Uses)
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	lr.refresh()
+	// Before the session can see the new digest, so its policy_applied finds the hold
+	// waiting for it; the tunnels the policy closed go first.
+	data := make([]any, len(refused))
+	for i, dec := range refused {
+		data[i] = run.Egress(dec)
+	}
 	if lr.client {
-		// No session writes the run's policy_applied: the gateway does, and the tunnels
-		// the new policy closed right after it.
+		// No session writes the run's policy_applied: the gateway does, now, and the
+		// hold is released right after it, the closed tunnels first.
+		lr.st.Await(hold, func(ev *event.Event) bool { return ev.Type == event.PolicyApplied }, event.RunEgress, data...)
 		lr.st.Emit(event.PolicyApplied, lr.given[len(lr.given)-1])
-		for _, dec := range refused {
-			lr.st.Emit(event.RunEgress, run.Egress(dec))
-		}
 		return nil
 	}
-	if len(refused) > 0 {
-		// Before the session can see the new digest, so its policy_applied finds them
-		// waiting.
-		data := make([]any, len(refused))
-		for i, dec := range refused {
-			data[i] = run.Egress(dec)
-		}
-		lr.st.EmitAfter(appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
-	}
+	lr.st.Await(hold, appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
 	return nil
 }
 
