@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"github.com/qoryai/forager/link"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1621,6 +1622,74 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 	s.close()
 	if !kept(s.dir) {
 		t.Error("Close did not write the run key")
+	}
+}
+
+// TestARunWhoseSessionGaveUpDoesNotOpen pins a run request whose session gives up
+// waiting for its answer, while Qory Apiary is slow on the ping or on the run
+// configuration, or as the run opens: no run opens, Qory Apiary's events hold nothing of
+// it but what it took before the session gave up, the ping when the ping was taken, and
+// a retry of the same run id opens the run.
+func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
+	for _, slowAt := range []string{"ping", "fetch", "open"} {
+		c := newControl(t)
+		c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+		cfg := gateway.Config{Server: c.server()}
+		var slowOpen atomic.Bool
+		gateway.SetOpened(&cfg, func() {
+			if slowOpen.Load() {
+				time.Sleep(time.Second)
+			}
+		})
+		s := startVerifying(t, cfg, nil, 0)
+		cred := credentialFor("rk-0001")
+		s.secrets = append(s.secrets, cred)
+		runID := event.NewRunID()
+		want := []string{event.Ping}
+		switch slowAt {
+		case "ping":
+			c.slowEvents.Store(int64(5 * time.Second))
+			want = nil
+		case "fetch":
+			c.slowFetch.Store(int64(5 * time.Second))
+		case "open":
+			slowOpen.Store(true)
+		}
+		impatient := s.client(cred)
+		impatient.Timeout = 300 * time.Millisecond
+		body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+		if resp, err := impatient.Post(s.url("/v1/run-configuration"), server.LinkContentType, bytes.NewReader(body)); err == nil {
+			resp.Body.Close()
+			t.Fatalf("slow at the %s: answered %d", slowAt, resp.StatusCode)
+		}
+		eventually(t, "the run's record removed", func() bool {
+			_, err := os.Stat(filepath.Join(s.dir, "runs", runID))
+			return errors.Is(err, fs.ErrNotExist)
+		})
+		if runs, _, spent, _ := gateway.Held(s.g); runs != 0 || spent != 0 {
+			t.Errorf("slow at the %s: runs %d, spent %d", slowAt, runs, spent)
+		}
+		var got []string
+		for _, l := range c.lines(t) {
+			if l.Subject == runID {
+				got = append(got, l.Type)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("slow at the %s: Qory Apiary's events of the run %v", slowAt, got)
+		}
+		c.slowEvents.Store(0)
+		c.slowFetch.Store(0)
+		slowOpen.Store(false)
+		r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
+		if r.a == nil || r.a.RunID != runID {
+			t.Fatalf("slow at the %s: the retry %+v", slowAt, r.a)
+		}
+		if status, b := r.reload(t, cred, runID); status != http.StatusOK {
+			t.Errorf("slow at the %s: a reload of the retry: %d %s", slowAt, status, b)
+		}
+		r.post(t, cred, exited(runID))
+		s.close()
 	}
 }
 

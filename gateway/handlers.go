@@ -118,6 +118,10 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Context().Err() != nil {
+		// The session gave up waiting for its answer: no run opens.
+		return
+	}
 	// keyRefused reports, under the gateway's lock, whether the issuer ended a run of
 	// the run key since it was asked.
 	keyRefused := func() bool { return id != nil && g.blocked(keyOf(*id)) }
@@ -144,8 +148,16 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id})
+	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context()})
 	if err != nil {
+		if r.Context().Err() != nil {
+			// The session gave up waiting for its answer: the run did not open, and its
+			// run id is free for a retry.
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+			return
+		}
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of
@@ -162,6 +174,11 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	if id != nil && g.cfg.opened != nil {
 		g.cfg.opened()
+	}
+	if r.Context().Err() != nil {
+		// The session gave up as the run opened.
+		g.discard(lr)
+		return
 	}
 	g.mu.Lock()
 	g.runs[lr.id] = lr
@@ -182,7 +199,39 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, answer.reveal())
+	if r.Context().Err() != nil {
+		// The answer is not sent whole before the handler returns: a session that has
+		// gone now never has it.
+		g.discard(lr)
+		return
+	}
 	lr.arm()
+}
+
+// discard lets go of a run that opened whose session gave up before it had the run
+// answer, as if it never opened: it leaves the runs and ends with nothing more written
+// of it, what its stream wrote is removed, and then its run id is free again, so a
+// retry of it opens. A run that ended already is left to end as it does.
+func (g *Gateway) discard(lr *linkRun) {
+	g.mu.Lock()
+	lr.mu.Lock()
+	ok := !lr.ended
+	if ok {
+		lr.discarded = true
+		if g.runs[lr.id] == lr {
+			delete(g.runs, lr.id)
+		}
+	}
+	lr.mu.Unlock()
+	g.mu.Unlock()
+	if !ok {
+		return
+	}
+	lr.end(sessionGone)
+	<-lr.done
+	g.mu.Lock()
+	delete(g.used, lr.id)
+	g.mu.Unlock()
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and

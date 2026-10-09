@@ -86,6 +86,9 @@ type linkRun struct {
 	ended            bool
 	endCode, endFrom string
 	closed           bool
+	// discarded says the run's session gave up before it had the run answer: the run
+	// ends as if it never opened, [Gateway.discard].
+	discarded bool
 	// conns are the connections a run with no session has open, lastConn when one last
 	// opened or closed, and quiet the timer that ends the run once it has had none for
 	// the gateway's quiet time; asked is when the issuer was last asked of it.
@@ -134,6 +137,10 @@ type ending struct {
 // are a 410 session_lost.
 var sessionLost = ending{reason: event.ReasonSessionLost, code: event.ReasonSessionLost, from: accesskey.FromGateway, closed: true}
 
+// sessionGone ends a run whose session gave up before it had the run answer: nothing
+// more is written of it.
+var sessionGone = ending{code: event.ReasonSessionLost, from: accesskey.FromGateway}
+
 // batchRefused ends a run whose session's batch the gateway refused: its record says
 // session_lost, as for a session it no longer hears, and its later requests are a 410
 // batch_refused.
@@ -160,6 +167,9 @@ type opening struct {
 	id *runIdentity
 	// client says the run has no session.
 	client bool
+	// request, when not nil, is the context of the session's run request: once it ends,
+	// the session no longer waits for its answer, and the run does not open.
+	request context.Context
 }
 
 // open opens a run for a request the link accepted: the ping and the run configuration
@@ -219,6 +229,28 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		cancel()
 		return nil, true, err
 	}
+	ask := ctx
+	if how.request != nil {
+		// Once the session's run request goes, the server's ping and run configuration
+		// are asked no longer, and the run does not open: nothing more is written of
+		// it, and what its stream wrote goes too, so a retry of the run id opens.
+		failed := fail
+		fail = func(err error) (*linkRun, bool, error) {
+			if how.request.Err() == nil {
+				return failed(err)
+			}
+			lr.release()
+			if derr := st.Discard(g.base); derr != nil {
+				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+			}
+			cancel()
+			return nil, false, err
+		}
+		var stopAsk context.CancelFunc
+		ask, stopAsk = context.WithCancel(ctx)
+		defer stopAsk()
+		defer context.AfterFunc(how.request, stopAsk)()
+	}
 	var fetched *run.Fetched
 	if g.client != nil {
 		ping, err := st.Ping(map[string]any{"forager_version": g.cfg.Version, "events": g.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": g.interval})
@@ -230,7 +262,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.mu.Unlock()
 		body, _ := ping.JSON()
 		pingID := event.NewID()
-		if err := g.client.Ping(ctx, g.conf.Events.URL, pingID, []byte("["+string(body)+"]")); err != nil {
+		if err := g.client.Ping(ask, g.conf.Events.URL, pingID, []byte("["+string(body)+"]")); err != nil {
 			return fail(err)
 		}
 		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, labels, g.report)
@@ -243,12 +275,15 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The run configuration, when the server names one: its policy, narrowed by
 		// the node's, or the node's own when it has none, and its variables.
 		if g.conf.Run != nil {
-			rc, digest, err := g.client.RunConfiguration(ctx, g.conf.Run.URL, labels)
+			rc, digest, err := g.client.RunConfiguration(ask, g.conf.Run.URL, labels)
 			if err != nil {
 				return fail(err)
 			}
 			fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
 		}
+	}
+	if how.request != nil && how.request.Err() != nil {
+		return fail(how.request.Err())
 	}
 	var narrowing *run.Narrowing
 	if n := req.Narrowing; n != nil {
@@ -585,6 +620,7 @@ func (lr *linkRun) end(e ending) {
 		key, expires = lr.cred.key, lr.cred.expires
 	}
 	startedAt := lr.startedAt
+	discarded := lr.discarded
 	lr.mu.Unlock()
 	if lr.cred != nil && e.blocks() {
 		// A run credential with a later exp presented since: the refusal lasts to it.
@@ -593,6 +629,13 @@ func (lr *linkRun) end(e ending) {
 	go func() {
 		defer close(lr.done)
 		lr.release()
+		if discarded {
+			if err := lr.st.Discard(lr.g.base); err != nil {
+				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, err))
+			}
+			lr.cancel()
+			return
+		}
 		if e.reason != "" {
 			switch {
 			case lr.st.Started():

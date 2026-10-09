@@ -650,6 +650,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run request whose session gives up waiting for its run answer, ten seconds, opens
+  no run: once its connection goes, the gateway asks Qory Apiary nothing more for it,
+  the ping and the run configuration among it, and removes what it recorded of the
+  run, so the same `run_id` sent again opens the run instead of `run_id_used`. Before,
+  the run opened and ended `session_lost` after three heartbeat intervals. A session
+  that goes while the run answer is on its way may still leave such a run.
 - A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
   neither `state` nor `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.

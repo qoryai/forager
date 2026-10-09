@@ -1479,6 +1479,15 @@ The names of `target_differs_from_credential` and of `differs_from_credential` a
 other, the member being `labels.<key>` or `about.details.<key>`:
 `labels.repository=example-namespace/project`, for one.
 
+A session waits ten seconds for its run answer, as for any answer on the link. A run
+request whose session gives up opens no run: once its connection goes, the gateway asks
+the server nothing more for it, the ping and the run configuration among it, opens no
+run, and removes what it recorded of the run, so the same `run_id` sent again is a new
+run request, not `run_id_used`. A ping the server took before then stays the server's.
+A session that goes in the moment between the gateway's last look and the answer's
+arrival may leave a run open, which ends `session_lost` as any run whose session sends
+nothing does.
+
 With `passes` and `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in
 force, from the node's policy and the run configuration, `run_configuration_invalid` for
@@ -1715,7 +1724,8 @@ exit; the gateway can also end it, with `credential_expired`, `run_ended_at_issu
 `session_lost`, and the session records that code (The end of a run at the gateway,
 above).
 
-**Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
+**Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
+unless its session gave up before the run opened (above). A
 reload is a `GET` of the run's configuration by its run id instead,
 `<run.url>/<run_id>`: the path of `run.url`, a slash and the `run_id`, with no query.
 The gateway's answers on the link, the run answer and the reload's among them, contain
