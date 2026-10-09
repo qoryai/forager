@@ -668,7 +668,11 @@ release may change what an existing document does, and says so under Upgrading.
   no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
   resend reports then, which a caller that reports `NotOpened` itself may leave out,
   and `gateway.ResendTorn` the one for lines of the record that are not whole events,
-  a format of their count and the record's path.
+  a format of their count and the record's path. `gateway.Delivery.Stopped` says the
+  server answered a signed `410` and wants no more events of the run: during the run,
+  so the resend sent nothing, or during the resend, with `Sent` what the server
+  accepted before it and `Undelivered` what was not sent, which stays in the record's
+  `events.jsonl`, none under `undelivered/`.
 
 #### Changed
 
