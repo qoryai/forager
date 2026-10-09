@@ -1702,6 +1702,16 @@ The session stops the runtime as at its time limit, records its own
 `dev.qory.run.exited` with that code as its `reason` in its own record alone, and posts
 nothing more on the link. A `410` with another code, or none, is `run_closed`.
 
+**A session's run behind a separate gateway whose session is lost.** Such a run,
+`credential` `issuer`, ends at the gateway: with `session_lost` once the gateway has heard
+nothing from the session for 3 × `interval_seconds` (Heartbeats and liveness, above);
+earlier, with `credential_expired`, when the latest `exp` of a run credential presented
+for it passes first. The gateway asks the issuer's introspection at the session's
+requests, so `run_ended_at_issuer` ends the run while they reach it. When the gateway
+itself stops, its resend writes the run's `dev.qory.run.exited` with `gateway_lost`
+(§The server). While the session lives, the run ends with its runtime's own exit, as any
+session's run does.
+
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
 reload is a `GET` of the run's configuration by its run id instead,
 `<run.url>/<run_id>`: the path of `run.url`, a slash and the `run_id`, with no query.

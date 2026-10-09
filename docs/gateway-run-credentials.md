@@ -354,6 +354,14 @@ label such as `run_key` or an `about.details` key such as `requester`, with anot
 the gateway refuses it with `differs_from_credential`. Each refusal names the member and
 the run credential's value, `labels.<key>=<value>` or `about.details.<key>=<value>`.
 
+When the session is lost, the gateway ends its run: `session_lost` once it has heard
+nothing from the session for three heartbeat intervals, or earlier `credential_expired`
+when the latest `exp` of a run credential presented for the run passes first. The
+gateway asks the issuer's introspection endpoint at the session's requests, so
+`run_ended_at_issuer` ends the run while they reach the gateway. When the gateway itself
+stops, resending its record completes the run as `gateway_lost`. While the session lives,
+the run ends with its runtime's own exit.
+
 qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
 leaves it out too, whatever brought it, a variable of the run's among them. Any other
 variable an issuer itself sets for the run is the operator's to deny through the node's
