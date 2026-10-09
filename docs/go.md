@@ -131,7 +131,9 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
 A run of the one address ends as a local run does, and also at its run credential's
 `exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
 longer holds the run credential active, or the issuer ended another run of the same run
-key, `run_ended_at_issuer`. The gateway writes its
+key, `run_ended_at_issuer`; when the issuer's introspection endpoint could not be
+reached after the gateway's tries, `issuer_unreachable`, or gave no valid answer,
+`issuer_answer_invalid`, neither of which holds the run key. The gateway writes its
 `dev.qory.run.exited`; a session's later requests get the `410` with that code in
 `Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
 connection, `quiet`. After `run_ended_at_issuer`, the gateway refuses every request of a
@@ -340,8 +342,10 @@ A program that needs code of its own implements the interface.
 - `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
   server, or `gateway`, and `ClosedReason` the code of the gateway's `410`, unchanged:
   `run_closed`, `credential_expired` or `run_ended_at_issuer`; from `gateway`,
-  `session_lost` when it heard nothing from the session for 3 heartbeat intervals and
-  `batch_refused` when it refused a batch of the session's. The runtime was stopped as
+  `issuer_unreachable` and `issuer_answer_invalid` when its issuer's introspection
+  endpoint could not be reached or gave no valid answer, `session_lost` when it heard
+  nothing from the session for 3 heartbeat intervals and `batch_refused` when it
+  refused a batch of the session's. The runtime was stopped as
   at its time limit.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
