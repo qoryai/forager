@@ -819,8 +819,9 @@ outcome has that outcome (§Run credentials, How a run's starter says how it end
 gives the reason the run's starter gave. It is an open code: a lower-case letter, then
 lower-case letters, digits and `_`, up to 64 characters, `^[a-z][a-z0-9_]{0,63}$`.
 Forager's own codes are reserved: `timeout`, `quiet`, `credential_expired`, `stopped`,
-`session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable` and
-`credential_check_invalid`; and so are three old names, which Forager never writes:
+`session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable`,
+`credential_check_invalid` and `run_closed`; and so are three old names, which Forager
+never writes:
 `run_ended_at_issuer`, `issuer_unreachable` and `issuer_answer_invalid`. Any other code
 is the starter's, carried as given, and a receiver shows a code it does not know as it
 is. A starter's reason that equals a reserved code is dropped, and the run has no
@@ -2072,8 +2073,14 @@ when `active` is `false`:
   `{"active": false}` alone;
 - with a `qory_outcome` and no `qory_reason`, the run ends with that outcome, and its
   reason is empty;
-- a `qory_reason` that is one of Forager's reserved codes (§The events, How a run ends)
-  is dropped, and the reason is empty; the outcome is kept.
+- a `qory_reason` that is one of Forager's reserved codes (§The events, How a run ends),
+  `run_closed` among them, or that does not match the pattern, is dropped, and the
+  reason is empty; the outcome is kept;
+- a `qory_outcome` other than `succeeded`, `failed` and `cancelled` is ignored, and counts
+  as no outcome: the run ends `cancelled` with the reason `stopped`.
+
+Neither a bad `qory_outcome` nor a bad `qory_reason` makes the answer invalid: `active`
+decides as it always has, and only the member is ignored.
 
 An answer is about a run credential, so about its run key: the outcome and the reason
 apply to every live run of that run key when the answer arrives, as the end of the run

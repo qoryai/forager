@@ -53,10 +53,12 @@ release may change what an existing document does, and says so under Upgrading.
   prefixed as §3.1 asks, with one documented deviation, §2.2's SHOULD NOT about why a
   credential is inactive. The outcome applies to every live run of that run key; with
   no outcome the run ends `cancelled` with `stopped`, with no reason its reason is
-  empty, and a reason that is one of Forager's reserved codes is dropped. Forager's
+  empty, and a reason that is one of Forager's reserved codes, or no code, is dropped;
+  a `qory_outcome` other than the three is ignored and counts as no outcome, and
+  neither bad member makes the answer invalid: `active` decides as before. Forager's
   codes are reserved: `timeout`, `quiet`, `credential_expired`, `stopped`,
-  `session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable` and
-  `credential_check_invalid`, and the old names `run_ended_at_issuer`,
+  `session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable`,
+  `credential_check_invalid` and `run_closed`, and the old names `run_ended_at_issuer`,
   `issuer_unreachable` and `issuer_answer_invalid`, which are never written. A `410`
   that ends a run on the link carries the `state` and the `reason` of that end, new
   optional members of `link-refusal.schema.json`. Behind a separate gateway, a session

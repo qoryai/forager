@@ -303,9 +303,14 @@ is `false`:
   reason is empty;
 - a `qory_reason` that is one of Forager's reserved codes, `timeout`, `quiet`,
   `credential_expired`, `stopped`, `session_lost`, `gateway_lost`, `batch_refused`,
-  `credential_check_unreachable`, `credential_check_invalid`, `run_ended_at_issuer`,
-  `issuer_unreachable` or `issuer_answer_invalid`, is dropped, and the reason is empty;
-  the outcome is kept.
+  `credential_check_unreachable`, `credential_check_invalid`, `run_closed`,
+  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`, or that does
+  not match the pattern, is dropped, and the reason is empty; the outcome is kept;
+- a `qory_outcome` other than `succeeded`, `failed` and `cancelled` is ignored, and counts
+  as no outcome: the run ends `cancelled` with the reason `stopped`.
+
+Neither a bad `qory_outcome` nor a bad `qory_reason` makes the answer invalid: `active`
+decides as it always has, and only the member is ignored.
 
 The answer is about a run credential, so about its run key: the outcome and the reason
 apply to every live run of that run key when the answer arrives. The starter never
