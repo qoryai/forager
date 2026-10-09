@@ -411,8 +411,10 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		return false
 	}
 	if lr.g.blocked(keyOf(id)) {
-		// The issuer ended a run of the run key: every request of it is refused, and
-		// a live run of it is served no more.
+		// The issuer ended a run of the run key: every request of a run of it is
+		// refused, the run request, a reload, a batch, a client's proxy login and its
+		// join, and a live run of it is served no more. The discovery is answered, and
+		// opens nothing.
 		lr.end(endedAtIssuer)
 		lr.g.presented(id)
 		code, from, _ := lr.gone()

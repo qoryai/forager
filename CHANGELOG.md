@@ -581,22 +581,23 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`, and every later request gets the `410` with that code, a
   reload or a batch even with a run credential whose `exp` passed less than 5 minutes
   before, which reaches nothing else. After
-  the issuer's end, the gateway refuses the run key until the latest `exp` of the run
-  credentials of the key the gateway still holds, and of any presented during the
-  hold, plus `runcredential.MaxLeeway`, 5 minutes: those of the run key's live runs,
-  and of its ended runs whose record is not yet flushed. During the hold, a session's
-  run request is `401` `run_credential_refused`, a reload or a batch of a session's run
-  of the run key that is still live the run's `410` `run_ended_at_issuer`, which ends
-  the run, and a client's connection `407`, which ends the client's run of the run key
-  it would join, `run_ended_at_issuer`; a run credential for a refused run key
-  presented during the hold, verified, is refused and extends the hold to its own
-  `exp`, and one that fails verification extends nothing. The
-  gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart
-  refuses them too; a write of it that fails is reported once, the run key is refused
-  all the same while the gateway runs, and the file is written again on each refused
-  request of the run key, every 5 seconds, and once more at Close, until a write
-  succeeds; the write that succeeds again is reported, and at Close, when the write
-  still fails, how many run keys a restart would not refuse. A
+  the issuer's end, the gateway refuses every request of a run of the run key until the
+  latest `exp` of the run credentials of the key the gateway still holds, and of any
+  presented during the hold, plus `runcredential.MaxLeeway`, 5 minutes: those of the run
+  key's live runs, and of its ended runs whose record is not yet flushed. During the
+  hold, a session's run request is `401` `run_credential_refused`, a reload or a batch
+  of a session's run of the run key that is still live the run's `410`
+  `run_ended_at_issuer`, which ends the run, and a client's connection `407`, which ends
+  the client's run of the run key it would join, `run_ended_at_issuer`; the discovery is
+  answered to a run credential of the run key as to any, and opens nothing; a run
+  credential for a refused run key presented during the hold, verified, is refused and
+  extends the hold to its own `exp`, and one that fails verification extends nothing.
+  The gateway keeps these run keys in `ended-run-keys.json` in its directory, so a
+  restart refuses them too; a write of it that fails is reported once, the run key's
+  requests are refused all the same while the gateway runs, and the file is written
+  again on each refused request of the run key, every 5 seconds, and once more at Close,
+  until a write succeeds; the write that succeeds again is reported, and at Close, when
+  the write still fails, how many run keys a restart would not refuse. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
   only the policy before it opens, when it enforces and names the host itself. Its

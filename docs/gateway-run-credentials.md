@@ -173,25 +173,27 @@ an issuer with no leeway too, learns the run's end; such a run credential reache
 nothing else. A run id
 already in use is refused, `run_id_used`.
 
-After the issuer's end, `run_ended_at_issuer` (below), the gateway refuses the run key
-until the latest `exp` of the run credentials of the key the gateway still holds, and of
-any presented during the hold, plus 5 minutes, the longest leeway. The run credentials
-it still holds are those of the run key's runs that are live, and of those that ended
-whose record is not yet flushed; it keeps no `exp` of a run once its record is flushed.
-During the hold, a session's run request is `401` `run_credential_refused`; a reload or
-a batch of a session's run of the run key that is still live is the run's `410`
-`run_ended_at_issuer`, and the run ends; and a client's connection is `407`, and the
-client's run of the run key it would join ends, `run_ended_at_issuer`. A run credential
-for a refused run key presented during the hold, its signature and claims verified, is
-refused and extends the hold to its own `exp`; a request whose run credential fails
-verification extends nothing. The gateway keeps these run keys,
-by issuer, in a file of its state directory (mode 0600, in a directory only its user
-writes), `ended-run-keys.json`, so a restart refuses them too. When a write of the file
-fails, the gateway reports it once and refuses the run key all the same while it runs;
-it writes the file again on each refused request of the run key, every 5 seconds, and
-once more at Close, until a write succeeds. It reports the write that succeeds again,
-and at Close, when the write still fails, how many run keys a restart would not refuse.
-A run key whose write never succeeded is not refused after a restart.
+After the issuer's end, `run_ended_at_issuer` (below), the gateway holds the run key,
+refusing every request of a run of it, until the latest `exp` of the run credentials of
+the key the gateway still holds, and of any presented during the hold, plus 5 minutes,
+the longest leeway. The run credentials it still holds are those of the run key's runs
+that are live, and of those that ended whose record is not yet flushed; it keeps no
+`exp` of a run once its record is flushed. During the hold, a session's run request is
+`401` `run_credential_refused`; a reload or a batch of a session's run of the run key
+that is still live is the run's `410` `run_ended_at_issuer`, and the run ends; and a
+client's connection is `407`, and the client's run of the run key it would join ends,
+`run_ended_at_issuer`. The discovery is answered to a run credential of the run key as
+to any, and opens nothing. A run credential for a refused run key presented during the
+hold, its signature and claims verified, is refused and extends the hold to its own
+`exp`; a request whose run credential fails verification extends nothing. The gateway
+keeps these run keys, by issuer, in a file of its state directory (mode 0600, in a
+directory only its user writes), `ended-run-keys.json`, so a restart refuses them too.
+When a write of the file fails, the gateway reports it once and holds the run key all
+the same while it runs; it writes the file again on each refused request of the run key,
+every 5 seconds, and once more at Close, until a write succeeds. It reports the write
+that succeeds again, and at Close, when the write still fails, how many run keys a
+restart would not refuse. A run key whose write never succeeded is not refused after a
+restart.
 
 ## The introspection endpoint
 
@@ -347,7 +349,7 @@ The run ends, and the gateway writes its `dev.qory.run.exited`:
 When the gateway stops with the run live, the run ends without its
 `dev.qory.run.exited`, and resending its record with `qory run resend`, through
 `gateway.Resend`, completes it as `gateway_lost`. After
-the issuer's end, the gateway refuses the run key (The lifetime, above); after any
+the issuer's end, the gateway holds the run key (The lifetime, above); after any
 other end, the next connection opens a new run.
 
 For a host the policy holds to paths, the gateway reads inside HTTPS with a
