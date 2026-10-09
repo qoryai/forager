@@ -344,7 +344,8 @@ The run ends, and the gateway writes its `dev.qory.run.exited`:
   credential active.
 
 When the gateway stops with the run live, the run ends without its
-`dev.qory.run.exited`, and resending its record completes it as `gateway_lost`. After
+`dev.qory.run.exited`, and resending its record with `qory run resend`, through
+`gateway.Resend`, completes it as `gateway_lost`. After
 the issuer's end, the gateway refuses the run key (The lifetime, above); after any
 other end, the next connection opens a new run.
 
@@ -369,7 +370,8 @@ nothing from the session for three heartbeat intervals, or earlier `credential_e
 when the latest `exp` of a run credential presented for the run passes first. The
 gateway asks the issuer's introspection endpoint at the session's requests, so
 `run_ended_at_issuer` ends the run while they reach the gateway. When the gateway itself
-stops, resending its record completes the run as `gateway_lost`. While the session lives,
+stops, resending its record with `qory run resend`, through `gateway.Resend`, completes
+the run as `gateway_lost`. While the session lives,
 the run normally ends with its runtime's own exit; the gateway can also end it, with
 `credential_expired`, `run_ended_at_issuer`, or `batch_refused` after it refused a batch
 of the session's, and the session then records that code.

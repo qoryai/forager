@@ -1613,7 +1613,8 @@ event, what is held comes right before the run's final event. For a run with no 
 the gateway writes `dev.qory.run.policy_applied` itself. The session
 keeps its own file record of its own events, numbered as today (§The record files): that
 record is the session's, not the run's stream. The gateway keeps the record of what it
-sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The
+sent, which `qory run resend` sends again through `gateway.Resend` (§The server, After
+Forager stops unexpectedly). The
 gateway answers a batch as the server does, unsigned: a `2xx` is accepted. Behind a
 separate gateway, a batch is of the run its first event's `subject` names, which must be
 a run of the run credential's run key: any other, or none, is `401`
@@ -1680,9 +1681,10 @@ The gateway writes `dev.qory.run.heartbeat` only for a run with no session. When
 session sends nothing for 3 × `interval_seconds`, counted from the run answer and again
 from each request of the session's, the gateway ends the run with
 `dev.qory.run.exited`, `reason: session_lost`, and answers the session's later requests
-with a `410` `session_lost` (The end of a run at the gateway, below). When the gateway stops, the server
-receives no events from it, and the gateway's resend when it starts again writes
-`dev.qory.run.exited` with `reason: gateway_lost`.
+with a `410` `session_lost` (The end of a run at the gateway, below). When the gateway
+stops, the server receives no events from it; when `qory run resend` sends the run's
+record again, through `gateway.Resend`, the resend writes `dev.qory.run.exited` with
+`reason: gateway_lost`.
 
 **The end of a run at the gateway.** When the gateway ends a session's run, with
 `session_lost`, `credential_expired`, `run_ended_at_issuer` or the server's
@@ -1717,12 +1719,12 @@ nothing from the session for 3 × `interval_seconds` (Heartbeats and liveness, a
 earlier, with `credential_expired`, when the latest `exp` of a run credential presented
 for it passes first. The gateway asks the issuer's introspection at the session's
 requests, so `run_ended_at_issuer` ends the run while they reach it. When the gateway
-itself stops, its resend writes the run's `dev.qory.run.exited` with `gateway_lost`
-(§The server). While the session lives, the run normally ends with its runtime's own
-exit; the gateway can also end it, with `credential_expired`, `run_ended_at_issuer`, or
-`batch_refused` after it refused a batch of the session's, its record saying
-`session_lost`, and the session records that code (The end of a run at the gateway,
-above).
+itself stops, `qory run resend` sending the run's record again, through
+`gateway.Resend`, writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
+While the session lives, the run normally ends with its runtime's own exit; the gateway
+can also end it, with `credential_expired`, `run_ended_at_issuer`, or `batch_refused`
+after it refused a batch of the session's, its record saying `session_lost`, and the
+session records that code (The end of a run at the gateway, above).
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
 unless its session gave up before the run opened (above). A
@@ -1879,9 +1881,10 @@ client has at most one open run per run key. A client never joins a session's ru
 session's run is reached only by its proxy secret, and decided under that session's wall
 and narrowing, so a client of a run key whose sessions' runs are open opens or joins its
 own run beside them. A run with no session ends with `quiet`, `credential_expired` or
-`run_ended_at_issuer`, or `gateway_lost` when its record is resent (§The events, How a
-run ends). A client's run that fails to open without a refusal's code is answered
-`503 Service Unavailable`, `Content-Type: text/plain; charset=utf-8`, with the body
+`run_ended_at_issuer`, or `gateway_lost` when `qory run resend` sends its record again,
+through `gateway.Resend` (§The events, How a run ends). A client's run that fails to
+open without a refusal's code is answered `503 Service Unavailable`,
+`Content-Type: text/plain; charset=utf-8`, with the body
 "the gateway could not open the run; try again"; one refused with a code gets the
 gateway's `dev.qory.run.refused` with that code, after its ping.
 
