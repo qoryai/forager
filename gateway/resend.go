@@ -32,7 +32,7 @@ type ResendConfig struct {
 // write the gateway did not finish, is skipped, and every event after it is sent. A
 // record whose ping the server never accepted, of a run that never opened, is left as
 // it is and sent nothing: NotOpened, Sent and Undelivered 0. So is a record with no
-// ping, of a run that had no server, sent to one. A server that said stop during the
+// ping and no delivered.log, of a run that had no server, sent to one. A server that said stop during the
 // run is sent nothing. A refusal of the server's, at
 // its discovery, is an [*accesskey.Refusal] with its From, Code and Names. A server
 // that closes the run now, a signed 410 run_closed, is RunClosed, from apiary: the

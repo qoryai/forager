@@ -85,8 +85,8 @@ var reportNoServer = ""
 // not finish, is skipped, and every event after it is read on (see [record]). A record
 // that holds a ping and no delivered.log is of a run whose ping the server never
 // accepted, which never opened: it is NotOpened, left as it is, and sent nothing. So is
-// a record with no ping, of a run that had no server, when it is sent to one; with no
-// Sink it is completed, as any other.
+// a record with no ping and no delivered.log, of a run that had no server, when it is
+// sent to one; with no Sink it is completed, as any other.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -346,20 +346,22 @@ func whole(b []byte) (recorded, bool) {
 
 // notOpened reports whether the record is of a run that never opened at a server, and
 // whether that is since it had none. The gateway writes the ping to the record before
-// it posts it, and creates delivered.log, with the ping's delivery its first line, only
-// once the server accepted it: a record with a ping and no delivered.log is of a run
-// that never opened. A delivered.log without the ping's line is of a ping the server
-// accepted, the gateway stopping before it wrote the line. A record with no ping is of
-// a run with no server.
+// it posts it, and only the sink creates delivered.log, with the ping's delivery its
+// first line, once the server accepted the ping. So a delivered.log says the run
+// opened, even without the ping's line, the gateway stopping before it wrote it, and
+// even with no whole ping in the record, its line torn on a full disk. With no
+// delivered.log, a record with a ping is of a run whose ping was never accepted, and
+// one with no ping of a run that had no server.
 func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
-	if !slices.ContainsFunc(rec.lines, func(l recorded) bool { return l.Type == event.Ping }) {
-		return true, true, nil
-	}
 	_, err = os.Stat(filepath.Join(dir, sink.DeliveredFile))
-	if os.IsNotExist(err) {
-		return true, false, nil
+	if err == nil {
+		return false, false, nil
 	}
-	return false, false, err
+	if !os.IsNotExist(err) {
+		return false, false, err
+	}
+	ping := slices.ContainsFunc(rec.lines, func(l recorded) bool { return l.Type == event.Ping })
+	return true, !ping, nil
 }
 
 // highest is the highest of the sequences the server accepted, 0 for none. A line of

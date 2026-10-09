@@ -670,8 +670,9 @@ release may change what an existing document does, and says so under Upgrading.
   that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
   its `events.jsonl`, and the `Delivery` says `NotOpened`, nothing sent. Before, its
   ping and events were posted, which reported a run that never opened. The same holds
-  of a record with no ping, of a run that had no server, sent to a server: it never
-  opened there. Before, its events were posted without a ping.
+  of a record with no ping and no `delivered.log`, of a run that had no server, sent to
+  a server: it never opened there. Before, its events were posted without a ping. A
+  record with a `delivered.log` is sent, its ping's line torn or not.
 
 ### Wall
 

@@ -1266,7 +1266,9 @@ cut off. Nothing else of the file is changed. `delivered.log` is
 made once the server accepts the ping, its first line the ping's: a record that holds a
 ping and no `delivered.log` is of a run whose ping was never accepted, which never
 opened, and nothing of it is sent or added to it. Neither is anything of a record with
-no ping, of a run that had no server, which never opened at the server it is sent to.
+no ping and no `delivered.log`, of a run that had no server, which never opened at the
+server it is sent to. A `delivered.log` says the run opened, even when its ping's line
+was not finished.
 The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under

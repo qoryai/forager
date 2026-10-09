@@ -588,3 +588,27 @@ func TestResendSkipsASequenceOutOfOrder(t *testing.T) {
 	}
 	exitedAfter(t, dir, rec, "0000000005")
 }
+
+// TestResendSendsARunWhosePingLineIsTorn pins that a delivered.log says the run opened:
+// a record whose ping's line the gateway did not finish, on a full disk, holds no whole
+// ping, yet the server accepted it, so the record is completed and sent, not taken for
+// one of a run with no server.
+func TestResendSendsARunWhosePingLineIsTorn(t *testing.T) {
+	srv, store := station(t, nil)
+	dir, lines := tornRun(t)
+	torn := slices.Concat(lines[0][:len(lines[0])/2], lines[1], lines[2], lines[3], lines[4])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), torn, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NotOpened || res.NoServer || !res.Closed || res.Torn != 1 || res.Sent != 5 {
+		t.Errorf("result %+v", res)
+	}
+	if store.Count() != 5 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+	exitedAfter(t, dir, torn, "0000000006")
+}
