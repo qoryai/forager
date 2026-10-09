@@ -114,6 +114,7 @@ const (
 	linkDiscovery  = "link-discovery.schema.json"
 	linkRunRequest = "link-run-request.schema.json"
 	linkRunAnswer  = "link-run-answer.schema.json"
+	linkReload     = "link-reload-answer.schema.json"
 	linkBatch      = "link-batch.schema.json"
 )
 
@@ -135,10 +136,10 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // TestLinkFixturesValidate pins that every document under fixtures/link passes the
 // schema of the gateway's link its name starts with: the discovery of the local link and
 // of a separate gateway, a run request without a wall and one with a wall and a
-// narrowing, a run answer with a wall, without one and without a policy, and a batch of
-// events without sequence.
+// narrowing, a run answer with a wall, without one and without a policy, a reload
+// answer with and without a policy, and a batch of events without sequence.
 func TestLinkFixturesValidate(t *testing.T) {
-	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkBatch)
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/link") {
 		kind := namedSchema(s, f)
@@ -169,15 +170,16 @@ func TestLinkFixturesValidate(t *testing.T) {
 // interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
 // an expression, a link run request without wall, whose run id is not lower-case or
 // whose narrowing holds a member it does not define, a link run answer without its proxy
-// secret, a link batch whose event carries a sequence or that holds a ping, a link
-// discovery that lists a node or has no heartbeat interval. The longest schema name the
+// secret, a link reload answer with the proxy secret or the certificate authority, a
+// link batch whose event carries a sequence or that holds a ping, a link discovery that
+// lists a node or has no heartbeat interval. The longest schema name the
 // file name starts with is the schema, so run-configuration-variable-value-not-string is
 // held to the run configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
-		linkDiscovery, linkRunRequest, linkRunAnswer, linkBatch)
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]

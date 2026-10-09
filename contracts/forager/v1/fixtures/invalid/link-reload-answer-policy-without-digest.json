@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "policy": {
+    "version": 1,
+    "egress": {
+      "mode": "enforce",
+      "allow": [
+        "api.example",
+        "git.example"
+      ],
+      "deny": [
+        "tracker.example"
+      ]
+    }
+  },
+  "variables": {
+    "NODE_ENV": {
+      "value": "test"
+    }
+  }
+}

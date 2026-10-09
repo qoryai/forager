@@ -1358,8 +1358,8 @@ of `about.details` it sets, must equal the credential's value when the session s
 A label the mapping does not set is ignored: a run's labels come only from the
 credential. A run key opens one run at a gateway. Every request to a separate gateway,
 the run request and every batch, carries a run credential whose `sub` is the run's run
-key; any other is `run_credential_refused`. The gateway refuses a run request in this
-order:
+key, and so does every reload (below); any other is `run_credential_refused`. The
+gateway refuses a run request in this order:
 
 | Status | Code | When |
 |---|---|---|
@@ -1435,9 +1435,37 @@ credential expired with no fresh one; or `run_ended_at_issuer`, the issuer repor
 run credential no longer active. The session stops the runtime as at its time limit and
 records `dev.qory.run.exited` with that code as its `reason`.
 
-**Reload.** The gateway's answers on the link contain the digest headers
-`X-Qory-Configuration` and `X-Qory-Run-Configuration`, unsigned, and the session follows
-the same rule as toward the server (§The server, Delivery and Reload).
+**Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
+reload is a `GET` of the run's configuration by its run id instead,
+`<run.url>/<run_id>`: the path of `run.url`, a slash and the `run_id`, with no query.
+The gateway's answers on the link, the run answer and the reload's among them, contain
+the digest headers `X-Qory-Configuration` and `X-Qory-Run-Configuration`, unsigned, and
+the session follows the rule it follows toward the server (§The server, Delivery and
+Reload): a different run-configuration digest means it fetches the run's configuration
+again and applies it, and the same digest means the policy in force is unchanged. The
+answer is a `200`, `application/json`, with `X-Qory-Run-Configuration` and `ETag`, whose
+body is a `link-reload-answer.schema.json` document: `version`, the policy in force with
+its `digest`, and `variables`, as the run answer has them. It never contains
+`proxy_secret` or `certificate_authority`, which the run answer alone gives, once.
+
+```json
+{"version": 1,
+ "policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["api.example"]}},
+ "digest": "<hex sha256 of the policy as canonical JSON>",
+ "variables": {"NODE_ENV": {"value": "test"}}}
+```
+
+Behind a separate gateway, the reload carries a run credential whose `sub` is the run's
+run key, and any other is `401` `run_credential_refused`; the credential is checked
+first, so a `run_id` that is not its run's, unknown or another run's, is
+`run_credential_refused` too, and no run id can be probed. On the local link the link
+secret authorises it: every holder of the secret is a session of the same user, the
+agent never reaches the socket, and the reload re-sends no secret of the run. A `run_id`
+of a run that has ended is a `410`, with the code of its end at the gateway (above) when
+it ended there, else `run_closed`; on the local link an unknown `run_id` is `400`
+`invalid_request`. Toward the server no reload request names a run: the run
+configuration is fetched by the run's labels, and the server ends a run with `410`
+`run_closed`.
 
 **Agent traffic.** Inside a wall, the relay connects to the gateway's address, on
 loopback on one machine, and between two machines over TLS 1.3 with the same trust as
@@ -1930,7 +1958,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, a run request without a wall and one with a wall and a narrowing, a run answer with a wall, without one and without a policy, and a batch of events without `sequence` | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, a run request without a wall and one with a wall and a narrowing, a run answer with a wall, without one and without a policy, a reload answer with and without a policy, and a batch of events without `sequence` | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
