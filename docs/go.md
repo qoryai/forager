@@ -168,9 +168,12 @@ res, err := session.Run(ctx, session.Spec{
   `Authorization: Bearer <run credential>`, and the session asks for it before each
   request, so a run credential its issuer refreshes in a file is sent from then on. Its
   error is the request's, and must not hold the run credential. A `RemoteGateway`
-  without `Credential` is no run. The run credential is never printed, logged, recorded
-  or contained in an error: a `session.RemoteGateway` prints as its URL, its `CAFile`
-  and its pin.
+  without `Credential` is no run. The run credential is never printed, logged,
+  recorded or contained in an error: a `session.RemoteGateway` prints as its URL, its
+  `CAFile` and its pin.
+- The run credential's file must not sit in a directory a walled run mounts, and an
+  unwalled agent's environment must not carry it. Keeping it out of both is the
+  caller's job, as `qory` does.
 - No access key is involved, and the gateway holds no files on the session's machine, so
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.

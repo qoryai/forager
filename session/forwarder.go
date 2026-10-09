@@ -34,6 +34,10 @@ const dialWait = 10 * time.Second
 type forwarder struct {
 	ln  net.Listener
 	way forwarding
+	// ctx ends when the forwarder is closed, so a dial to the proxy in flight ends
+	// with it.
+	ctx  context.Context
+	stop context.CancelFunc
 
 	mu     sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -83,6 +87,7 @@ func listenForwarding(addr string, way forwarding) (*forwarder, error) {
 		return nil, err
 	}
 	f := &forwarder{ln: ln, way: way, conns: map[net.Conn]struct{}{}}
+	f.ctx, f.stop = context.WithCancel(context.Background())
 	f.wg.Add(1)
 	go f.accept()
 	return f, nil
@@ -167,7 +172,7 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 		c.SetReadDeadline(time.Time{})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), dialWait)
+	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
 	up, err := f.way.dial(ctx)
 	cancel()
 	if err != nil {
@@ -201,8 +206,10 @@ func (f *forwarder) serve(c net.Conn) {
 	<-done
 }
 
-// Close stops listening and ends every connection; it waits for them.
+// Close stops listening, ends every dial in flight and every connection; it waits for
+// them.
 func (f *forwarder) Close() error {
+	f.stop()
 	f.mu.Lock()
 	f.closed = true
 	for c := range f.conns {

@@ -341,8 +341,7 @@ func denied(rec []map[string]any, host string) int {
 
 // TestASessionRunsThroughASeparateGateway is a run without a wall behind a separate
 // gateway, end to end, on a real run credential: discovery, the run request and every
-// batch carry it, read from its file before each request, so the one the issuer
-// refreshes is sent once it is there; the run's labels and details are the
+// batch carry it, read from its file; the run's labels and details are the
 // credential's; the agent's request reaches the gateway's proxy over TLS through the
 // session's forwarder, with the run's proxy secret as its proxy URL's password, and is
 // denied there; and neither the run credential nor the proxy secret is in a record or
@@ -350,16 +349,8 @@ func denied(rec []map[string]any, host string) int {
 func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 	s := startSeparate(t)
 	first := credentialOf("rk-0001")
-	refreshed := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Hour))
-	file, read := credentialFile(t, first)
+	_, read := credentialFile(t, first)
 	r := newSepRun(t, s.remote(read))
-	// Once the run is open, the issuer refreshes the run credential; the first expires
-	// in an hour, so only the gateway's acceptance of the refreshed one shows it was sent.
-	r.sp.OnVariables = func(session.Applied) {
-		if err := os.WriteFile(file, []byte(refreshed+"\n"), 0o600); err != nil {
-			t.Error(err)
-		}
-	}
 	res, err := session.Run(context.Background(), r.sp)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +372,7 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 		t.Errorf("the agent's proxy URL is %s on %s, user %q, a password of %d characters", proxy.Scheme, proxy.Host, proxy.User.Username(), len(password))
 	}
 	for k, v := range env {
-		if strings.Contains(v, first) || strings.Contains(v, refreshed) {
+		if strings.Contains(v, first) {
 			t.Errorf("the agent's %s holds the run credential", k)
 		}
 	}
@@ -404,7 +395,7 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 	if !slices.Equal(types(own), ofTypes(numbered, types(own))) {
 		t.Errorf("the session recorded %v, the gateway numbered %v", types(own), types(numbered))
 	}
-	r.noSecretIn(t, s, res.RunID, first, refreshed, password)
+	r.noSecretIn(t, s, res.RunID, first, password)
 }
 
 // TestTheRefreshedRunCredentialCarriesTheRun pins the refresh: a run whose first run
@@ -725,6 +716,17 @@ func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
 	for _, out := range []string{fmt.Sprint(gw), fmt.Sprintf("%#v", gw), fmt.Sprintf("%+v", &gw), gw.String()} {
 		if !strings.Contains(out, s.url()) || strings.Contains(out, cred) || strings.Contains(out, "0x") {
 			t.Errorf("printed as %s", out)
+		}
+	}
+	// A URL the session refuses prints by its origin alone, nothing after it or before
+	// its host.
+	for raw, want := range map[string]string{
+		"https://user:pw-of-the-url@gateway.example:8443/path?q=query-of-the-url#fragment-of-the-url": "session.RemoteGateway{https://gateway.example:8443}",
+		"gateway.example/path-of-the-url": "session.RemoteGateway{(not a URL)}",
+		"":                                "session.RemoteGateway{(no URL)}",
+	} {
+		if got := (session.RemoteGateway{URL: raw}).String(); got != want {
+			t.Errorf("%q prints as %s", raw, got)
 		}
 	}
 }

@@ -86,14 +86,15 @@ type RemoteGateway struct {
 
 func (RemoteGateway) gateway() {}
 
-// String names the gateway by its URL, without user information, its CAFile and its
-// pin; never the run credential.
+// String names the gateway by its URL's origin, without user information, a path, a
+// query or a fragment, its CAFile and its pin; never the run credential.
 func (g RemoteGateway) String() string {
 	shown := "(no URL)"
 	if g.URL != "" {
-		if u, err := url.Parse(g.URL); err == nil {
-			u.User = nil
-			shown = u.String()
+		// The origin alone: user information, a path, a query or a fragment, which
+		// the gateway's URL never has, could hold what is not to be printed.
+		if u, err := url.Parse(g.URL); err == nil && u.Scheme != "" && u.Host != "" {
+			shown = u.Scheme + "://" + u.Host
 		} else {
 			shown = "(not a URL)"
 		}

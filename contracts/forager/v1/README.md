@@ -1721,7 +1721,10 @@ discovery's `proxy.address`, on loopback on one machine, and between two machine
 TLS 1.3 with the same trust as the link: the system's roots or `session.gateway.ca_file`,
 and the pin when `session.gateway.certificate_sha256` is set. It opens every connection
 with `QORY-RELAY`, a space, the run's proxy secret and a newline, as it does on one
-machine (§Limits). Without a wall, behind a separate gateway, the agent's proxy URL carries the
+machine (§Limits). Behind a wall and a separate gateway, the session's forwarder takes
+the relay's connection, which opens with `QORY-RELAY` and a token the session makes for
+the run, and opens the gateway's one address over TLS with `QORY-RELAY`, a space, the
+run's proxy secret and a newline; the agent's view is the same. Without a wall, behind a separate gateway, the agent's proxy URL carries the
 run's proxy secret as its password, never the run credential; the URL's user name is
 ignored. The run's proxy secret is at least 128 bits from the system's random source,
 made by the gateway for the run; the gateway compares it in constant time, never logs

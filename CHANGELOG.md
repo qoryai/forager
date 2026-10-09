@@ -690,7 +690,8 @@ release may change what an existing document does, and says so under Upgrading.
   gains `Gateway`, an interface: `session.LocalGateway(l link.Local)` from the link
   `(*gateway.Gateway).LocalLink()` hands out, or a `session.RemoteGateway` (Added,
   below); the link's secret stays in the process's memory, and a `session.Gateway`
-  prints and logs by its socket alone. A spec without one, a nil `Gateway`, is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
+  prints and logs by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret. A spec without one, a nil `Gateway`, is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
   `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
