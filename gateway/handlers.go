@@ -66,12 +66,15 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
 // during its hold, or whose run credential the issuer no longer holds
-// active; 409 run_id_used for a run id
+// active, 503 issuer_unreachable when the issuer's introspection endpoint could not be
+// reached, and 502 issuer_answer_invalid when it gave no valid answer; 409 run_id_used
+// for a run id
 // that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
 // that are not the run credential's; the run's refusal when it does not open; else the
 // run answer.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
+	deadline := g.openDeadline()
 	if !mediaType(r, server.LinkContentType) {
 		invalid(w)
 		return
@@ -113,8 +116,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			refuseCredential(w)
 			return
 		}
-		if !id.isActive(r.Context()) {
-			refuseCredential(w)
+		if err := id.checkActive(r.Context()); err != nil {
+			switch {
+			case errors.Is(err, runcredential.ErrIssuerUnreachable):
+				refuse(w, http.StatusServiceUnavailable, event.ReasonIssuerUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
+			case errors.Is(err, runcredential.ErrAnswerInvalid):
+				refuse(w, http.StatusBadGateway, event.ReasonIssuerAnswerInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
+			default:
+				refuseCredential(w)
+			}
 			return
 		}
 	}
@@ -148,7 +158,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context()})
+	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context(), deadline: deadline})
 	if err != nil {
 		if r.Context().Err() != nil {
 			// The session gave up waiting for its answer: the run did not open, and its
@@ -253,7 +263,7 @@ func (g *Gateway) discard(lr *linkRun) {
 // other failure is a 500 internal. Each carries the error's text as its message, which
 // the session returns as its error, the text today's session returned; the gateway
 // itself tells the user nothing of it. A server's 410 is no refusal: it is a failure
-// without a code, so no 410 from apiary crosses the link.
+// without a code, so no 410 crosses the link from here, signed or not.
 func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
@@ -281,13 +291,18 @@ func refuseOpen(w http.ResponseWriter, err error) {
 	refuse(w, status, ref.Code, ref.Names, from, err.Error())
 }
 
-// codeless turns a server's signed 410 to a request the gateway makes as a run opens,
-// whatever its code, into the failure without a code a code-less 410 to that request
-// is, with its text: a server's 410 ends no run and refuses none. Any other error is
-// returned as it is.
+// codeless turns a server's 410 to a request the gateway makes as a run opens, signed
+// or not, whatever its code and whoever the refusal names, into the failure without a
+// code a code-less 410 to that request is, with its text: a server's 410 ends no run
+// and refuses none, so a code-less one is no [*server.AnswerError] either. Any other
+// error is returned as it is.
 func codeless(err error) error {
+	var uncoded *server.AnswerError
+	if errors.As(err, &uncoded) && uncoded.Status == http.StatusGone {
+		return errors.New(uncoded.Error())
+	}
 	var ref *accesskey.Refusal
-	if !errors.As(err, &ref) || ref.From != accesskey.FromApiary || ref.Status != http.StatusGone {
+	if !errors.As(err, &ref) || ref.Status != http.StatusGone {
 		return err
 	}
 	return fmt.Errorf("%s: status %d", ref.Detail, ref.Status)
@@ -429,7 +444,9 @@ func (g *Gateway) hasSessionRun(k runKeyID) bool {
 // refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
 // is the 410, the run credential noted; a run credential with a later exp keeps the run
 // going until then; and an issuer that no longer holds it active ends the run,
-// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+// run_ended_at_issuer, as does one whose introspection endpoint could not be reached,
+// issuer_unreachable, or gave no valid answer, issuer_answer_invalid: each is the 410.
+// It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
@@ -453,7 +470,7 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		return false
 	}
 	lr.renew(id)
-	if !lr.stillActive(r.Context()) {
+	if lr.stillActive(r.Context()) != nil {
 		if code, from, ended := lr.gone(); ended {
 			gone(w, code, from)
 		} else {

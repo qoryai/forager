@@ -44,9 +44,10 @@ type runIdentity struct {
 	Expires time.Time
 
 	// active, when not nil, asks the issuer's introspection endpoint whether the run
-	// credential is still active, its answer kept for cache; nil for an issuer without
-	// one. It holds the run credential, which it never shows.
-	active func(ctx context.Context) bool
+	// credential is still active, its answer kept for cache, as
+	// [runIdentity.checkActive] answers; nil for an issuer without one. It holds the run
+	// credential, which it never shows.
+	active func(ctx context.Context) error
 	cache  time.Duration
 }
 
@@ -71,8 +72,10 @@ type proxyLogin interface {
 	// proxy.New made, and guarded; track, when not nil, is handed the connection before
 	// the proxy is, and returns the connection the proxy serves, which tells the run
 	// when it closes. [errUnserved] answers 500: the login was accepted and no run could
-	// serve it. Any other error refuses the connection with 407; it is never answered,
-	// logged or reported. ctx ends when the connection's time to open is up.
+	// serve it. [errNotOpened] answers the 503 that says to try again, and an
+	// [*openRefused] the 403 with its text. Any other error refuses the connection with
+	// 407; it is never answered, logged or reported. ctx ends when the connection's time
+	// to open is up.
 	login(ctx context.Context, authorization string, first *http.Request) (px *proxy.Proxy, track func(net.Conn) net.Conn, err error)
 }
 
@@ -80,10 +83,29 @@ type proxyLogin interface {
 // opened, or the gateway is closing.
 var errUnserved = errors.New("no run could serve the connection")
 
-// errNotOpened is a run of a client with no session that failed to open without a
-// refusal's code: the connection gets the 503 of [proxyNotOpened], and the next one
-// opens anew.
+// errNotOpened is a run of a client with no session that failed to open with a failure
+// that may pass, or one with neither a code nor a status of Qory Apiary's: the
+// connection gets the 503 of [proxyNotOpened], and the next one opens anew.
 var errNotOpened = errors.New("the gateway could not open the run")
+
+// openRefused is a run of a client with no session that did not open, refused for a
+// reason that does not pass: the connection gets a 403 with the text.
+type openRefused struct{ text string }
+
+func (e *openRefused) Error() string { return e.text }
+
+// answer is the 403 of the refusal, its text the body.
+func (e *openRefused) answer() string {
+	return "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(e.text)) + "\r\nConnection: close\r\n\r\n" + e.text
+}
+
+// The texts of a run the gateway could not open because its issuer's introspection
+// endpoint gave no answer, or none that is valid: the message of a session's 503 and
+// 502, and the body of a client's 403.
+const (
+	issuerUnreachableText   = "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again"
+	issuerAnswerInvalidText = "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer"
+)
 
 // refuseAll is the seam of a gateway that verifies no run credential yet: it refuses
 // every one, so nothing opens on the one address without a verifier.
@@ -411,7 +433,10 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 	first.Body = http.NoBody
 	px, track, err := s.login(first, deadline)
 	if px == nil {
-		if errors.Is(err, errNotOpened) {
+		var refused *openRefused
+		if errors.As(err, &refused) {
+			answerAndLinger(c, refused.answer())
+		} else if errors.Is(err, errNotOpened) {
 			answerAndLinger(c, proxyNotOpened)
 		} else if errors.Is(err, errUnserved) {
 			answerAndLinger(c, proxyUnserved)
@@ -464,8 +489,8 @@ func answerAndLinger(c net.Conn, answer string) {
 }
 
 // login is the proxy of the run a proxy request's login names, and what tracks the
-// connection for it; nil and the refusal when none: [errUnserved], or anything else
-// for 407.
+// connection for it; nil and the refusal when none: [errUnserved], [errNotOpened], an
+// [*openRefused], or anything else for 407.
 func (s *service) login(first *http.Request, deadline time.Time) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	values := first.Header.Values("Proxy-Authorization")
 	if len(values) != 1 {

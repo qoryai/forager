@@ -223,7 +223,11 @@ token=<the run credential>&token_type_hint=access_token
   [RFC 6749 §2.3.1](https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1) asks. The
   gateway reads the secret from `client_secret_file` once, when it starts: the file's
   bytes, less one line ending at their end, and not empty.
-- The gateway waits at most 10 seconds for the whole answer.
+- The gateway tries up to 3 times, 2 seconds each for the whole answer, 1 second and
+  then 2 seconds apart, and starts a try only within 4 seconds of the first. It tries
+  again after a try that got no answer: a transport, TLS or timeout failure, a failed
+  read of the answer, a `5xx` or a `429`. A check therefore ends within about 3 seconds
+  when the endpoint refuses connections at once, and within 5 when every try hangs.
 
 The answer, RFC 7662 §2.2, means active only when all of these hold:
 
@@ -231,16 +235,32 @@ The answer, RFC 7662 §2.2, means active only when all of these hold:
 - the body is at most 65536 bytes, one JSON object that names each member once;
 - its member `active` is the JSON `true`, not the string `"true"` and not `1`.
 
-`{"active": false}` ends the run (`run_ended_at_issuer`). Any other answer, or a failure
-to ask, counts as not active too: the check fails closed. The gateway reads nothing else
-of the answer.
+`{"active": false}` ends the run (`run_ended_at_issuer`), and the gateway holds the run
+key. When every try got no answer, the gateway refuses or ends the run
+`issuer_unreachable`; any other answer, a status other than `200` or a `200` that is not
+one of the above, ends or refuses the run `issuer_answer_invalid`, after one try. Neither
+holds the run key: the next request opens a run as soon as the issuer answers active. The check
+fails closed. The gateway reads nothing else of the answer.
+
+| When the gateway asks | `issuer_unreachable` | `issuer_answer_invalid` |
+|---|---|---|
+| A session's run request | `503`, "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again" | `502`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
+| A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
+| A session's reload or batch | the run ends; `410` `issuer_unreachable` | the run ends; `410` `issuer_answer_invalid` |
+| A client's run, asked again while it has connections | the run ends | the run ends |
+
+A client secret the endpoint refuses, a `401` say, is therefore `issuer_answer_invalid`.
+Each comes only after the run credential's signature and claims verified.
 
 The gateway asks before it opens a run. For a session's run it asks again on each of
 the session's requests; for a run with no session, at most every `cache` while the run
 has connections, or had one since it last asked. It keeps each answer the endpoint
 gives, active or not, for `cache`, by the SHA-256 of the run credential, never by the
 run credential itself, so a refreshed run credential is asked about anew; it keeps at
-most 4096, and none of a failure to ask, which the next request asks again. `cache` defaults to the run's heartbeat interval, at which Qory already
+most 4096, and none of a failure to ask or of an answer that is not valid, which the
+next request asks again. Callers for the same run credential while its tries are in
+flight wait for their end. Traffic already flowing keeps flowing while the gateway
+tries: only the requests that need a fresh check wait. `cache` defaults to the run's heartbeat interval, at which Qory already
 reports a run alive, so an ended run is noticed within one heartbeat.
 
 Neither the run credential nor the client secret appears in the gateway's errors or
@@ -337,8 +357,23 @@ credential's labels and `about.details`, and its policy; then every connection a
 heartbeats. A run refused with a code, say Qory Apiary refuses the run's configuration
 or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
-no event, and its connection gets `503 Service Unavailable` with, as `text/plain`, "the
-gateway could not open the run; try again".
+no event. The gateway tries Qory Apiary's ping and run configuration up to 3 times, 1
+second and then 2 seconds apart, starting a try again only within 6 seconds of the
+login's start, after no answer, a `5xx`, signed or not, with any code or none, or a
+signed `429` `rate_limited`. Its connection gets,
+as `text/plain`:
+
+- `503 Service Unavailable`, "the gateway could not open the run; try again", for a
+  failure that may pass, once the tries are spent, at once for Qory Apiary's `410` to
+  the ping or the run configuration, signed or not, with any code or none, and for a failure
+  with neither a code nor a status of Qory Apiary's;
+- `403 Forbidden`, "the gateway could not open the run: Qory Apiary refused it,
+  \<code\>", for a code of Qory Apiary's answer, `answer_unsigned` among them;
+- `403 Forbidden`, "the gateway could not open the run: the gateway refused it,
+  \<code\>", for a code the gateway decides of the run configuration;
+- `403 Forbidden`, "the gateway could not open the run: Qory Apiary refused it, status
+  \<n\>", for a signed answer of Qory Apiary's, other than a `5xx` or a `410`, with no
+  code.
 
 The run ends, and the gateway writes its `dev.qory.run.exited`:
 
@@ -346,7 +381,10 @@ The run ends, and the gateway writes its `dev.qory.run.exited`:
 - `credential_expired`, at its run credential's latest `exp` with no fresher one;
 - `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
   credential active, or the issuer ended another run of the same run key, which the
-  gateway then holds (The lifetime, above).
+  gateway then holds (The lifetime, above);
+- `issuer_unreachable` or `issuer_answer_invalid`, when the issuer's introspection
+  endpoint could not be reached after the gateway's tries, or gave no valid answer; the
+  gateway holds nothing.
 
 When the gateway stops with the run live, the run ends without its
 `dev.qory.run.exited`, and resending its record with `qory run resend`, through

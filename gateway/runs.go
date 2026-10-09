@@ -116,7 +116,7 @@ type runCred struct {
 	// without introspection, and cache is how long its answer holds.
 	expires time.Time
 	expiry  *time.Timer
-	active  func(context.Context) bool
+	active  func(context.Context) error
 	cache   time.Duration
 }
 
@@ -153,6 +153,15 @@ var (
 	endedAtIssuer     = ending{reason: event.ReasonRunEndedAtIssuer, code: event.ReasonRunEndedAtIssuer, from: accesskey.FromGateway, closed: true}
 )
 
+// issuerUnreachable ends a run on the one address whose issuer's introspection endpoint
+// could not be reached after the tries, and issuerAnswerInvalid one whose endpoint gave
+// no valid answer. Neither holds the run key: the next request opens a run as soon as
+// the issuer answers active.
+var (
+	issuerUnreachable   = ending{reason: event.ReasonIssuerUnreachable, code: event.ReasonIssuerUnreachable, from: accesskey.FromGateway, closed: true}
+	issuerAnswerInvalid = ending{reason: event.ReasonIssuerAnswerInvalid, code: event.ReasonIssuerAnswerInvalid, from: accesskey.FromGateway, closed: true}
+)
+
 // opening is how a run opens: on the one address with the run credential's identity,
 // and with no session, for a client's proxy login.
 type opening struct {
@@ -166,6 +175,73 @@ type opening struct {
 	// request, when not nil, is the context of the session's run request: once it ends,
 	// the session no longer waits for its answer, and the run does not open.
 	request context.Context
+	// deadline is the latest a try of Qory Apiary's ping or run configuration may start
+	// again: [openWindow] after the run request came, or the client's login began.
+	deadline time.Time
+}
+
+// The tries of Qory Apiary's ping and run configuration as a run opens: up to three of
+// each, the second openWaits[0] after the first ends and the third openWaits[1] after
+// the second, and a try starts again only within openWindow of the run request's
+// arrival, or of the client's login's start. A fast answer to the last try therefore
+// arrives by about 6.5 seconds, inside the 10 seconds a session and a client wait.
+var (
+	openWaits  = []time.Duration{time.Second, 2 * time.Second}
+	openWindow = 6 * time.Second
+)
+
+// openDeadline is the deadline of a run's open that starts now.
+func (g *Gateway) openDeadline() time.Time {
+	window := openWindow
+	if g.cfg.openWindow != 0 {
+		window = g.cfg.openWindow
+	}
+	return time.Now().Add(window)
+}
+
+// passing reports whether a failure to ask Qory Apiary as a run opens may pass, and is
+// asked again: no answer, a 5xx, signed or not, and a signed 429 rate_limited. A
+// refusal with any other code, a signed answer with another status and no code, a
+// signed 410 to the ping whatever its code, and a document Forager refuses are final.
+func passing(err error) bool {
+	var document *server.DocumentError
+	var ref *accesskey.Refusal
+	var uncoded *server.AnswerError
+	switch {
+	case errors.As(err, &document):
+		return false
+	case errors.As(err, &ref):
+		return ref.Status >= 500 || (ref.From == accesskey.FromApiary && ref.Code == accesskey.CodeRateLimited)
+	case errors.As(err, &uncoded):
+		return uncoded.Status >= 500
+	case errors.Is(err, server.ErrNotAccepted):
+		// A signed 410 to the ping: the server would record nothing of the run.
+		return false
+	}
+	return true
+}
+
+// tries asks Qory Apiary with ask, again after a failure that may pass, [openWaits]
+// apart, until it answers otherwise, the tries run out, the next would start past
+// deadline, or ctx ends; the last try's error is the result.
+func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() error) error {
+	waits := openWaits
+	if g.cfg.openWaits != nil {
+		waits = g.cfg.openWaits
+	}
+	for n := 0; ; n++ {
+		err := ask()
+		if err == nil || !passing(err) || n >= len(waits) || ctx.Err() != nil || time.Now().Add(waits[n]).After(deadline) {
+			return err
+		}
+		t := time.NewTimer(waits[n])
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		}
+	}
 }
 
 // open opens a run for a request the link accepted: the ping and the run configuration
@@ -256,7 +332,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.mu.Unlock()
 		body, _ := ping.JSON()
 		pingID := event.NewID()
-		if err := g.client.Ping(ask, g.conf.Events.URL, pingID, []byte("["+string(body)+"]")); err != nil {
+		// Each try sends the same delivery id and body, which Qory Apiary deduplicates.
+		batch := []byte("[" + string(body) + "]")
+		if err := g.tries(ask, how.deadline, func() error { return g.client.Ping(ask, g.conf.Events.URL, pingID, batch) }); err != nil {
 			return fail(err)
 		}
 		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, labels, g.report)
@@ -269,8 +347,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The run configuration, when the server names one: its policy, narrowed by
 		// the node's, or the node's own when it has none, and its variables.
 		if g.conf.Run != nil {
-			rc, digest, err := g.client.RunConfiguration(ask, g.conf.Run.URL, labels)
-			if err != nil {
+			var rc *server.RunConfiguration
+			var digest string
+			if err := g.tries(ask, how.deadline, func() (err error) {
+				rc, digest, err = g.client.RunConfiguration(ask, g.conf.Run.URL, labels)
+				return err
+			}); err != nil {
 				return fail(err)
 			}
 			fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
@@ -476,25 +558,53 @@ func (lr *linkRun) renew(id runIdentity) {
 }
 
 // stillActive asks the issuer whether the latest run credential presented for the run
-// is still active, and ends the run, run_ended_at_issuer, when it is not, any answer
-// but active and a failure to ask among it; it reports whether the run goes on. An
-// issuer without introspection is never asked.
-func (lr *linkRun) stillActive(ctx context.Context) bool {
+// is still active, and returns nil when the run goes on. It ends the run otherwise and
+// returns why: issuer_unreachable for [runcredential.ErrIssuerUnreachable],
+// issuer_answer_invalid for [runcredential.ErrAnswerInvalid], and
+// run_ended_at_issuer for any other answer but active. An answer that the run credential
+// is no longer active holds the run key whatever else ended the run meanwhile. A
+// request that went, or a run that ended, while the issuer was asked is the context's
+// error, and the run is left as it is. An issuer without introspection is never asked.
+func (lr *linkRun) stillActive(ctx context.Context) error {
 	lr.mu.Lock()
 	active := lr.cred.active
 	lr.asked = time.Now()
 	lr.mu.Unlock()
-	if active == nil || active(ctx) {
-		return true
+	if active == nil {
+		return nil
+	}
+	err := active(ctx)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errInactive) {
+		// The issuer's end holds the run key even when the run ended otherwise while it
+		// was asked, issuer_unreachable at another request's say, which holds nothing.
+		lr.mu.Lock()
+		key, expires := lr.cred.key, lr.cred.expires
+		lr.mu.Unlock()
+		lr.g.endKey(key, lr.g.heldTo(key, expires))
 	}
 	if ctx.Err() != nil || lr.ctx.Err() != nil {
 		// The request went, or the run ended, while the issuer was asked: no answer,
 		// and this request alone is not served.
-		return false
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return lr.ctx.Err()
 	}
-	lr.g.report(fmt.Sprintf("run %s: the issuer no longer holds its run credential active; the run ends, run_ended_at_issuer", lr.id))
-	lr.end(endedAtIssuer)
-	return false
+	switch {
+	case errors.Is(err, runcredential.ErrIssuerUnreachable):
+		lr.g.report(fmt.Sprintf("run %s: the issuer's introspection endpoint could not be reached; the run ends, issuer_unreachable", lr.id))
+		lr.end(issuerUnreachable)
+	case errors.Is(err, runcredential.ErrAnswerInvalid):
+		lr.g.report(fmt.Sprintf("run %s: %v; the run ends, issuer_answer_invalid", lr.id, err))
+		lr.end(issuerAnswerInvalid)
+	default:
+		lr.g.report(fmt.Sprintf("run %s: the issuer no longer holds its run credential active; the run ends, run_ended_at_issuer", lr.id))
+		lr.end(endedAtIssuer)
+	}
+	return err
 }
 
 // release lets go of what the run holds on the gateway's side: its secret and proxy
