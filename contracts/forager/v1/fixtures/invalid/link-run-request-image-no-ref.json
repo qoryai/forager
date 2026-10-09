@@ -4,14 +4,10 @@
   "wall": true,
   "labels": {
     "forge": "example-forge",
-    "repository": "example-namespace/project",
-    "run_key": "rk-0001"
+    "repository": "example-namespace/project"
   },
   "about": {
-    "title": "Fix the failing build",
-    "details": {
-      "requester": "requester"
-    }
+    "title": "Fix the failing build"
   },
   "passes": [
     "HOME",
@@ -25,18 +21,12 @@
         "name": "base",
         "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
         "runtime": "sysbox-runc"
+      },
+      {
+        "name": "with-docker",
+        "runtime": "sysbox-runc",
+        "docker": true
       }
     ]
-  },
-  "narrowing": {
-    "egress": {
-      "allow": [
-        "api.example",
-        "git.example"
-      ],
-      "deny": [
-        "tracker.example"
-      ]
-    }
   }
 }

@@ -9,5 +9,10 @@
   "about": {
     "kind": "review",
     "title": "Review the parser change"
-  }
+  },
+  "passes": [
+    "HOME",
+    "NODE_ENV",
+    "PATH"
+  ]
 }

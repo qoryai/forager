@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-discovery.schema.json",
   "title": "Link discovery",
-  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events, the heartbeat interval, and where it opens a run. Unsigned: the link's transport authenticates it. It lists no node, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events, the heartbeat interval, where it opens a run, and the gateway's proxy address. Unsigned: the link's transport authenticates it. It lists no node, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "events", "run"],
+  "required": ["version", "events", "run", "proxy"],
   "properties": {
     "version": {
       "description": "The document format. Forager refuses a version it does not read.",
@@ -28,6 +28,20 @@
     "run": {
       "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
       "$ref": "configuration.schema.json#/properties/run"
+    },
+    "proxy": {
+      "description": "The gateway's proxy: the one address every connection of the run's agent traffic goes to, opened with QORY-RELAY and the run's proxy secret. On one machine an address on loopback; behind a separate gateway the gateway's one address.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address"],
+      "properties": {
+        "address": {
+          "description": "host:port, the host a name, an IPv4 address or an IPv6 address in brackets, and a port from 1 to 65535.",
+          "type": "string",
+          "maxLength": 261,
+          "pattern": "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9.-]+):([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        }
+      }
     },
     "node_id": false,
     "apiary_public_key": false,

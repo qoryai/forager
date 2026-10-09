@@ -10,6 +10,9 @@
   "run": {
     "url": "http://localhost/v1/run-configuration"
   },
+  "proxy": {
+    "address": "127.0.0.1:41000"
+  },
   "apiary_public_key": [
     {
       "alg": "ed25519",

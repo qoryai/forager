@@ -199,24 +199,51 @@ release may change what an existing document does, and says so under Upgrading.
   optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's
   public key in base64, and every request carries `Authorization: Bearer` and a run
   credential whose `sub` is the run's run key. Answers on the link are unsigned, and
-  carry the digest headers of a reload. A reload is a `GET` of `<run.url>/<run_id>`,
-  answered with `link-reload-answer.schema.json`, the policy in force, its `digest` and
-  `variables`, never the proxy secret or the certificate authority; on the local link
-  the link secret authorises it. A run opens with a `POST` of
-  `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
-  `labels`, `about` and, behind a separate gateway, a `narrowing` that only narrows;
-  the request is one-shot per `run_id`, and the gateway refuses it with
-  `invalid_request`, `run_credential_refused`, `run_id_used`,
+  carry the digest headers of a reload. A coded refusal on the link is
+  `link-refusal.schema.json`, `error`, `names` and `from`, required, `gateway` or
+  `apiary`, the server's refusal passed on with its code and status; every `410` on the
+  link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
+  `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
+  `placeholders`, `reserved` and `image`, never the proxy secret or the certificate
+  authority; on the local link the link secret authorises it. A run opens with a `POST`
+  of `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
+  `labels`, `about`, `passes`, the names of the variables the run passes a value for,
+  never a value, `images`, the session's `default` and `definitions`, each with `name`,
+  `ref`, `runtime` and `docker`, whose references the gateway never logs or reports
+  since one may carry a registry's credentials, and, behind a separate gateway, a
+  `narrowing` that only narrows; the request is one-shot per `run_id`, and the gateway
+  refuses it with `invalid_request`, `run_credential_refused`, `run_id_used`,
   `target_differs_from_credential` or `differs_from_credential`, the last two naming
-  each member that differs as `<member>=<the run credential's value>`.
+  each member that differs as `<member>=<the run credential's value>`. With `passes`
+  and `images` the gateway decides the run, and each reload, as the session decides it
+  today and in the same order, before it sets anything: the policy in force, what needs
+  a wall, the image, `image_unknown`, the credentials and the tools, and
+  `placeholder_conflict` for a placeholder the run passes a value for, each refused
+  with a `403`, the session's code of `refusal.Decides` and `from: gateway`, while the
+  server's refusals pass through with their own status and `from: apiary`; a refused
+  reload leaves the policy in force. A start without a wall whose policy selects what
+  needs one is `wall_required`, a `403` from `gateway` and a code of the link alone,
+  named `credentials`, `tools`, `paths` or `image=<name>`: the session turns it back into
+  today's error and writes no event for it, so it is not in `refusal.Decides` or in
+  `dev.qory.run.refused`'s codes. On one machine the gateway applies a reload itself and
+  reports a failed one with today's text; a failure without a code, other tools, another
+  image, or an image or credentials that need a wall, never reaches the link, whose
+  reload answers the policy in force with its digest unchanged. The session still checks
+  its own image table and runtime before it sends the request, and leaves out of
+  `passes` a name outside the variable-name grammar.
   The answer, `link-run-answer.schema.json`, has `run_id`, `labels`, the run's labels as
   the gateway holds them, the run credential's behind a separate gateway, `details`, the
   `about.details` keys the run credential decides with its values, the policy in force
-  and its `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is
-  true, its `certificate_authority`; the session's `dev.qory.run.started` contains
-  exactly those labels, and those keys with those values. Discovery on the link is
+  and its `digest`, `variables`, `placeholders`, the variables the agent sees in place of
+  a credential or a tool's secret, `reserved`, the variables the gateway sets and the
+  session must not, `image`, the image the run gets when it has a wall, the run's
+  `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
+  reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
+  wall with a server always; the session's `dev.qory.run.started` contains exactly
+  those labels, and those keys with those values. Discovery on the link is
   `link-discovery.schema.json`, with `events.interval_seconds`, the gateway's heartbeat
-  interval, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
+  interval, `proxy.address`, the gateway's proxy as `host:port`, on loopback on one
+  machine, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
   `link-batch.schema.json`, events without `sequence`, which the gateway numbers. A
   session writes no event the gateway or the run credential decides: the gateway
   refuses a batch, `400` `invalid_request`, nothing of it numbered, with an event of
@@ -256,9 +283,11 @@ release may change what an existing document does, and says so under Upgrading.
   `from`. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
-  the secret as its password. `fixtures/link/` holds the valid documents and
-  `fixtures/invalid/link-*` the refused ones, a run answer without `labels`, and a
-  batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
+  the secret as its password. `fixtures/link/` holds the valid documents, refusals from
+  `gateway` and from `apiary` among them, and `fixtures/invalid/link-*` the refused
+  ones, a discovery without `proxy`, a run request that passes a value with a name or
+  whose image has no `ref`, a run answer without `labels` or whose image has no `ref`, a
+  refusal without `from`, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
   `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
   `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,

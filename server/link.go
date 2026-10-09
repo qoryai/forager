@@ -58,7 +58,8 @@ type LinkDiscovery struct {
 	Version int        `json:"version"`
 	Events  LinkEvents `json:"events"`
 	Run     Endpoint   `json:"run"`
-	// Proxy is nil when the discovery names no proxy address.
+	// Proxy is the gateway's proxy address, which the schema requires: a discovery
+	// without it is refused.
 	Proxy *LinkProxy `json:"proxy,omitempty"`
 }
 
@@ -235,9 +236,10 @@ type LinkReloadAnswer struct {
 // Values are the answer's variables as values by name; nil when it has none.
 func (a *LinkReloadAnswer) Values() map[string]string { return values(a.Variables) }
 
-// LinkRefusal is the body of a coded refusal on the link: the code, the names it
-// concerns, and who refused, "gateway" or "apiary", the server's refusal passed on with
-// its code and status. Without From it is the gateway's.
+// LinkRefusal is the body of a coded refusal on the link,
+// contracts/forager/v1/link-refusal.schema.json: the code, the names it concerns, and
+// who refused, "gateway" or "apiary", the server's refusal passed on with its code and
+// status. A refusal without From is malformed; the client reads it as the gateway's.
 type LinkRefusal struct {
 	Error string   `json:"error"`
 	Names []string `json:"names,omitempty"`

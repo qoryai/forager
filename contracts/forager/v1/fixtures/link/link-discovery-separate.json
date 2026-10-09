@@ -9,5 +9,8 @@
   },
   "run": {
     "url": "https://gateway.example:8443/v1/run-configuration"
+  },
+  "proxy": {
+    "address": "gateway.example:8443"
   }
 }
