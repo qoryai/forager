@@ -85,10 +85,9 @@ record alone (below). The gateway writes the others:
 session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
 `run_ended_at_issuer`; `issuer_unreachable`, the issuer's introspection endpoint could
 not be reached after the gateway's tries; `issuer_answer_invalid`, it gave no valid
-answer; `run_closed` when the server closes a session's run; and sending
-a record again writes `gateway_lost`. When the gateway or the server ends a session's
-run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
-request with a `410` and a code. The session records its own `dev.qory.run.exited` in
+answer; and sending a record again writes `gateway_lost`. When the
+gateway ends a session's run, the gateway writes the run's `dev.qory.run.exited`, and
+answers the session's next request with a `410` and a code. The session records its own `dev.qory.run.exited` in
 `session.jsonl` alone, with the 410's code as its reason, and posts nothing more:
 `credential_expired`, `run_ended_at_issuer`, `issuer_unreachable`,
 `issuer_answer_invalid`, `run_closed` or `session_lost` as the gateway ended the run, and `batch_refused` when the gateway refused a batch of its,

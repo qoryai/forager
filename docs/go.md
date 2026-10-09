@@ -85,8 +85,8 @@ For each run the session, over the gateway's link:
    the gateway, a heartbeat every interval among them;
 5. fetches the run's configuration again whenever the gateway's answers carry a new
    run-configuration digest, and records it in another `dev.qory.run.policy_applied`;
-6. ends the run when the gateway or the server closes it: a `410` on the link, or the
-   gateway's `400` to a batch.
+6. ends the run when the gateway closes it: a `410` on the link, or the gateway's `400`
+   to a batch.
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 Every connection to the proxy opens with the relay's preamble and the run's proxy
@@ -339,14 +339,15 @@ A program that needs code of its own implements the interface.
   `Timeout`.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
-- `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
-  server, or `gateway`, and `ClosedReason` the code of the gateway's `410`, unchanged:
-  `run_closed`, `credential_expired` or `run_ended_at_issuer`; from `gateway`,
-  `issuer_unreachable` and `issuer_answer_invalid` when its issuer's introspection
-  endpoint could not be reached or gave no valid answer, `session_lost` when it heard
-  nothing from the session for 3 heartbeat intervals and `batch_refused` when it
-  refused a batch of the session's. The runtime was stopped as
-  at its time limit.
+- `RunClosed` when the gateway closed the run: `ClosedBy` says who, always `gateway`,
+  and `ClosedReason` the code of the gateway's `410`, unchanged: `run_closed`,
+  `credential_expired` or `run_ended_at_issuer`, `issuer_unreachable` and
+  `issuer_answer_invalid` when its issuer's introspection endpoint could not be reached
+  or gave no valid answer, `session_lost` when it heard nothing
+  from the session for 3 heartbeat intervals, and `batch_refused` when it refused a
+  batch of the session's. The runtime was stopped as at its time limit. A server's
+  `410` closes no run: Qory Apiary records what a run reports and never ends a run it
+  did not start.
 
 What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
 `gateway.Delivery`.
@@ -404,8 +405,9 @@ with `e2e` to check them together.
 - `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, and with
   `Config.Listen` on one address of its own, with the proxy, the credentials and the
   tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
-  and the `Gateway` it returns, `Resend` with its `ResendConfig`, and the types their
-  fields need are the package's whole surface.
+  and the `Gateway` it returns, `Resend` with its `ResendConfig` and its lines of a
+  run that never opened and of torn lines, `ResendNoServer`, `ResendNotOpened` and
+  `ResendTorn`, and the types their fields need are the package's whole surface.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.

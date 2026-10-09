@@ -60,10 +60,15 @@ type control struct {
 	store    *receiver.File
 	received string
 	// refuse, when set, is the status every delivery gets instead of an answer,
-	// unsigned; closed makes every run closed; closeOnFetch closes every run once the
-	// run configuration is fetched.
-	refuse                      atomic.Int32
-	closed, closeOnFetch, limit atomic.Bool
+	// unsigned; closed answers every delivery a signed 410 run_closed, a server's 410
+	// with a code, and stop every new event a signed 410 without a code; closeOnFetch
+	// sets closed once the run configuration is fetched.
+	refuse                            atomic.Int32
+	closed, stop, closeOnFetch, limit atomic.Bool
+	// deliveries counts every request to the events endpoint, the ping's included.
+	deliveries atomic.Int32
+	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
+	goneOnFetch atomic.Bool
 	// drop, when set, closes every delivery's connection unanswered.
 	drop    atomic.Bool
 	fetches atomic.Int32
@@ -95,7 +100,7 @@ func newControl(t *testing.T) *control {
 		},
 		Signer: testSigner,
 		Store:  store,
-		Closed: func(string) bool { return c.closed.Load() },
+		Stop:   func(string) bool { return c.stop.Load() },
 		Admit:  func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(testPin)
@@ -145,8 +150,18 @@ func newControl(t *testing.T) *control {
 			}
 			return
 		}
+		if r.URL.Path == "/v1/events" {
+			c.deliveries.Add(1)
+		}
 		if code := c.refuse.Load(); code != 0 && r.URL.Path == "/v1/events" {
 			w.WriteHeader(int(code))
+			return
+		}
+		if (c.closed.Load() && r.URL.Path == "/v1/events") || (c.goneOnFetch.Load() && r.URL.Path == "/v1/run-configuration") {
+			body := []byte(`{"error":"run_closed"}`)
+			w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
+			w.WriteHeader(http.StatusGone)
+			w.Write(body)
 			return
 		}
 		h.ServeHTTP(w, r)

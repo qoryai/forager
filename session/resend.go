@@ -46,9 +46,9 @@ type ResendResult struct {
 	Sent        int
 	Undelivered int
 	// RunClosed says the run had ended at the gateway: nothing more was sent, and the
-	// events stay in the run directory. ClosedBy says who ended it, "gateway", or
-	// "apiary" when the server closed it, and Reason the code of the gateway's 410, as
-	// [Result.ClosedReason] holds it; batch_refused when the gateway refused a batch.
+	// events stay in the run directory. ClosedBy says who ended it, always "gateway",
+	// and Reason the code of the gateway's 410, as [Result.ClosedReason] holds it;
+	// batch_refused when the gateway refused a batch.
 	RunClosed bool
 	ClosedBy  string
 	Reason    string

@@ -39,12 +39,12 @@ const LocalOrigin = "http://localhost"
 const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway, which
-// the session records as the reason of its dev.qory.run.exited: the server or the
-// gateway closed the run, the run credential expired with no fresh one, its issuer
+// the session records as the reason of its dev.qory.run.exited: the gateway closed
+// the run, the run credential expired with no fresh one, its issuer
 // reports it no longer active or ended another run of its run key, its issuer's
-// introspection endpoint could not be reached or gave no valid answer, the gateway
-// heard nothing from the session for too long, or it refused a batch of the session's.
-// A 410 with another code, or none, is run_closed.
+// introspection endpoint could not be reached or gave no valid answer, the gateway heard
+// nothing from the session for too long, or it refused a batch of the session's. A 410
+// with another code, or none, is run_closed.
 var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonSessionLost, event.ReasonBatchRefused, event.ReasonIssuerUnreachable, event.ReasonIssuerAnswerInvalid}
 
 // CodeInvalidRequest is the gateway's 400 to a request of the link its rules refuse; to

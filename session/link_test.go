@@ -119,8 +119,8 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			"", "", nil, "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them", nil},
 		"wall_required for an image": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "image=with-docker")},
 			"", "", nil, `the policy selects the image "with-docker", which needs a wall: without one the runtime is this machine's process`, nil},
-		"the server's close": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "apiary")},
-			"run_closed", accesskey.FromApiary, nil, "the server closed the run before it started: run_closed (status 410)",
+		"the gateway's run_closed": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "gateway")},
+			"run_closed", accesskey.FromGateway, nil, "the gateway closed the run before it started: run_closed (status 410)",
 			map[string]any{"code": "run_closed", "status": 410.0}},
 		"the gateway's session_lost": {linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
 			"session_lost", accesskey.FromGateway, nil, "the gateway closed the run before it started: session_lost (status 410)",
@@ -290,9 +290,9 @@ func TestADigestThatChangesIsReloaded(t *testing.T) {
 	}
 }
 
-// TestTheRunEndsWhenItIsClosed pins the end of a run from outside: a 410 to a batch
-// from the server or from the gateway, a 410 to a reload, and the gateway's 400 to a
-// batch, which ends the run there. The runtime is stopped as at its time limit, the
+// TestTheRunEndsWhenItIsClosed pins the end of a run at the gateway: the gateway's 410
+// to a batch, a 410 to a reload, and the gateway's 400 to a batch, which ends the run
+// there. The runtime is stopped as at its time limit, the
 // result says who closed it and with what, run.exited with that code as its reason is
 // in the session's record alone, and nothing more is posted.
 func TestTheRunEndsWhenItIsClosed(t *testing.T) {
@@ -300,7 +300,7 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 		batch, reload *linktest.Reply
 		code, from    string
 	}{
-		"the server's 410": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "apiary")}, code: "run_closed", from: "apiary"},
+		"the gateway's run_closed": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "gateway")}, code: "run_closed", from: "gateway"},
 		"the gateway's 410": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
 			code: "credential_expired", from: "gateway"},
 		"a 410 to a reload": {reload: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},

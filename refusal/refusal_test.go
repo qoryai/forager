@@ -28,7 +28,7 @@ func TestDeciders(t *testing.T) {
 		}
 	}
 	if Decides("run_closed") || GatewayDecides("run_closed") {
-		t.Error("run_closed is the server's; want neither to decide it")
+		t.Error("run_closed is the gateway's 410 to a run already ended, no refusal of a run; want neither to decide it")
 	}
 }
 

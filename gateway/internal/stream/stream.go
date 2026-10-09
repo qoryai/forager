@@ -66,8 +66,8 @@ type Sink interface {
 	Close(ctx context.Context) error
 	// Undelivered is the number of events the server did not accept.
 	Undelivered() int
-	// RunClosed says the server closed the run, a signed 410 run_closed.
-	RunClosed() bool
+	// Stopped says the server asked for nothing more, a signed 410.
+	Stopped() bool
 }
 
 var _ Sink = (*sink.Server)(nil)
@@ -174,8 +174,6 @@ type Result struct {
 	// Undelivered is how many events the server did not accept; they are under the
 	// record directory's undelivered/.
 	Undelivered int
-	// RunClosed says the server closed the run, a signed 410 run_closed.
-	RunClosed bool
 }
 
 // Run is the stream of one run. It is safe for concurrent use: every event is numbered
@@ -549,7 +547,7 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.s.cfg.CloseWait)
 		errs = append(errs, srv.Close(flush))
 		cancel()
-		r.result = Result{Undelivered: srv.Undelivered(), RunClosed: srv.RunClosed()}
+		r.result = Result{Undelivered: srv.Undelivered()}
 	}
 	errs = append(errs, rec.Sync(), rec.Close())
 	r.unlock()
