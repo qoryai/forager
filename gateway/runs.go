@@ -239,6 +239,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			if how.request.Err() == nil {
 				return failed(err)
 			}
+			if err == nil {
+				// A run the server closed as it opened fails without an error of its
+				// own: the session's going is the error, so no caller takes the
+				// missing run for one that opened.
+				err = how.request.Err()
+			}
 			lr.release()
 			if derr := st.Discard(g.base); derr != nil {
 				g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
@@ -352,6 +358,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if err := g.proxies.Register(secret, lr.px); err != nil {
 			return fail(err)
 		}
+	}
+	if g.cfg.closesAtOpen != nil && g.cfg.closesAtOpen() {
+		lr.onServerClosed()
 	}
 	lr.mu.Lock()
 	lr.refresh()

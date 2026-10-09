@@ -89,6 +89,9 @@ type Config struct {
 	// clock, when not nil, is the time the gateway refuses a run key by, in place of
 	// the system's. Tests set it.
 	clock func() time.Time
+	// closesAtOpen, when not nil, is asked as a run is about to open: true is a signed
+	// 410 run_closed heard then. Tests set it.
+	closesAtOpen func() bool
 	// opened, when not nil, is called once a run on the one address opened, before the
 	// gateway looks again whether it refuses the run's run key. Tests set it.
 	opened func()

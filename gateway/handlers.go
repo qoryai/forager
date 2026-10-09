@@ -172,6 +172,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		refuseOpen(w, err)
 		return
 	}
+	if lr == nil {
+		// No run and no error, which open never returns: nothing opened, and the run id
+		// is free again.
+		g.mu.Lock()
+		delete(g.used, req.RunID)
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	if id != nil && g.cfg.opened != nil {
 		g.cfg.opened()
 	}
@@ -213,6 +222,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 // of it, what its stream wrote is removed, and then its run id is free again, so a
 // retry of it opens. A run that ended already is left to end as it does.
 func (g *Gateway) discard(lr *linkRun) {
+	if lr == nil {
+		return
+	}
 	g.mu.Lock()
 	lr.mu.Lock()
 	ok := !lr.ended

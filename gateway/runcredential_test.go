@@ -1719,6 +1719,47 @@ func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
 	}
 }
 
+// TestARunTheServerClosesAsItsSessionGivesUp pins a run request whose session has gone
+// when the server's 410 run_closed is heard as the run opens: no run opens, its run id
+// is free again, and the gateway goes on answering, a retry of the run id among it.
+func TestARunTheServerClosesAsItsSessionGivesUp(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	cfg := gateway.Config{Server: c.server()}
+	var closes atomic.Bool
+	closes.Store(true)
+	gateway.SetClosesAtOpen(&cfg, func() bool {
+		if !closes.Load() {
+			return false
+		}
+		// The session gives up first.
+		time.Sleep(time.Second)
+		return true
+	})
+	s := startVerifying(t, cfg, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	runID := event.NewRunID()
+	impatient := s.client(cred)
+	impatient.Timeout = 300 * time.Millisecond
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+	if resp, err := impatient.Post(s.url("/v1/run-configuration"), server.LinkContentType, bytes.NewReader(body)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("answered %d", resp.StatusCode)
+	}
+	eventually(t, "the run's record removed", func() bool {
+		_, err := os.Stat(filepath.Join(s.dir, "runs", runID))
+		return errors.Is(err, fs.ErrNotExist)
+	})
+	closes.Store(false)
+	r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
+	if r.a == nil || r.a.RunID != runID {
+		t.Fatalf("the retry %+v", r.a)
+	}
+	r.post(t, cred, exited(runID))
+	s.close()
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.
