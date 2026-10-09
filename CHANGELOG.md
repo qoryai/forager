@@ -132,7 +132,10 @@ release may change what an existing document does, and says so under Upgrading.
   `events/run.refused.schema.json` lists the four codes and says so of `names`, and
   that a run request the gateway refuses opens no run at the gateway: the session
   records the refusal it received in its own record alone, and nothing reaches the
-  server for it. A session that fails after the run answer and before its process
+  server for it. A gateway's `410` before the runtime starts is recorded the same way,
+  as `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
+  include `session_lost`, `batch_refused`, `credential_expired` and
+  `run_ended_at_issuer`. A session that fails after the run answer and before its process
   starts posts its `dev.qory.run.refused` on the link, and the gateway delivers it;
   `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
