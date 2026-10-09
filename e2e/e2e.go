@@ -43,6 +43,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
@@ -597,6 +598,28 @@ func decoys(workspace string) (string, error) {
 	return bin, nil
 }
 
+// startGateway starts the gateway of a test's runs on this machine, as qory starts one:
+// with cfg, the machine's policy, credentials and tools, and each run's record,
+// events.jsonl, in runs/<run id>, where the session keeps its own. Closing it, with the
+// function it returns or at the test's end, numbers each run's last events.
+func startGateway(t testing.TB, cfg gateway.Config, runs string) (session.Gateway, func()) {
+	t.Helper()
+	cfg.RunDir = func(id string) string { return filepath.Join(runs, id) }
+	g, err := gateway.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeGateway := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := g.Close(ctx); err != nil {
+			t.Errorf("the gateway's close: %v", err)
+		}
+	}
+	t.Cleanup(closeGateway)
+	return session.LocalGateway(g.LocalLink()), closeGateway
+}
+
 // result is one run behind the wall.
 type result struct {
 	res *session.Result
@@ -655,17 +678,17 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
-	policyCreds := []session.PolicyCredential{{Name: "suite"}}
-	creds := []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
+	policyCreds := []gateway.PolicyCredential{{Name: "suite"}}
+	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
 	if len(h.recorders) == 3 {
 		cert, _ := authority()
 		env = append(env, "PROBE_API_KEY_HOST="+h.recorders[0], "PROBE_OAUTH_HOST="+h.recorders[1], "PROBE_OTHER_HOST="+h.recorders[2],
 			recordersCAVar+"="+base64.StdEncoding.EncodeToString(cert.Raw))
 		allow = append(allow, h.recorders...)
-		policyCreds = append(policyCreds, session.PolicyCredential{Name: apiKeyCred}, session.PolicyCredential{Name: oauthCred})
+		policyCreds = append(policyCreds, gateway.PolicyCredential{Name: apiKeyCred}, gateway.PolicyCredential{Name: oauthCred})
 		creds = append(creds,
-			session.Credential{Name: apiKeyCred, Env: apiKeyVar, Hosts: []string{h.recorders[0]}, Scheme: "header", Header: apiKeyHeader, Paths: []string{"/v1/*"}, Placeholders: []string{apiKeyStandIn}},
-			session.Credential{Name: oauthCred, Env: oauthVar, Hosts: []string{h.recorders[1]}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{oauthStandIn}})
+			gateway.Credential{Name: apiKeyCred, Env: apiKeyVar, Hosts: []string{h.recorders[0]}, Scheme: "header", Header: apiKeyHeader, Paths: []string{"/v1/*"}, Placeholders: []string{apiKeyStandIn}},
+			gateway.Credential{Name: oauthCred, Env: oauthVar, Hosts: []string{h.recorders[1]}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{oauthStandIn}})
 	}
 	// With a runtime or a Docker the machine defines the image and the policy selects
 	// it by name; otherwise the image is the machine's default, a reference.
@@ -675,36 +698,43 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		images = []session.Image{{Name: "suite", Ref: o.Image, Runtime: o.Runtime, Docker: o.Docker}}
 		selected = "suite"
 	}
-	res, err := session.Run(ctx, session.Spec{
-		Runtime:     rt,
-		Command:     o.Probe,
-		Args:        []string{modeProbe, "--settings", settings},
-		Env:         env,
-		Dir:         dir,
-		RunsDir:     runs,
-		Interactive: interactive,
-		Stdin:       strings.NewReader(""),
-		Stdout:      &out,
-		Stderr:      &errs,
-		Policy: &session.Policy{Version: 1,
-			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}, toolHost: {toolPaths}}},
+	report := func(l string) {
+		t.Log("report:", l)
+		reportsMu.Lock()
+		reports.WriteString(l + "\n")
+		reportsMu.Unlock()
+	}
+	g, closeGateway := startGateway(t, gateway.Config{
+		Policy: &gateway.Policy{Version: 1,
+			Egress:      gateway.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}, toolHost: {toolPaths}}},
 			Credentials: policyCreds,
-			Tools:       []session.PolicyTool{{Name: "suite-tool"}},
+			Tools:       []gateway.PolicyTool{{Name: "suite-tool"}},
 			Image:       selected},
-		Tools:          []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
-		Credentials:    creds,
+		Tools:       []gateway.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
+		Credentials: creds,
+		Version:     "walltest",
+		Report:      report,
+	}, runs)
+	res, err := session.Run(ctx, session.Spec{
+		Runtime:        rt,
+		Command:        o.Probe,
+		Args:           []string{modeProbe, "--settings", settings},
+		Env:            env,
+		Dir:            dir,
+		RunsDir:        runs,
+		Interactive:    interactive,
+		Stdin:          strings.NewReader(""),
+		Stdout:         &out,
+		Stderr:         &errs,
+		Gateway:        g,
 		Forwarder:      o.Forwarder,
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,
 		ForagerVersion: "walltest",
-		Report: func(l string) {
-			t.Log("report:", l)
-			reportsMu.Lock()
-			reports.WriteString(l + "\n")
-			reportsMu.Unlock()
-		},
+		Report:         report,
 	})
+	closeGateway()
 	if err != nil {
 		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
 	}

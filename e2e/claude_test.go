@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
@@ -114,6 +115,14 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	g, closeGateway := startGateway(t, gateway.Config{
+		Policy: &gateway.Policy{Version: 1,
+			Egress:      gateway.PolicyEgress{Mode: "enforce", Allow: []string{r.host}},
+			Credentials: []gateway.PolicyCredential{{Name: "model"}}},
+		Credentials: []gateway.Credential{{Name: "model", Env: apiKeyVar, Hosts: []string{r.host}, Scheme: c.scheme, Header: c.header, Placeholders: []string{c.standIn}}},
+		Version:     "walltest",
+		Report:      func(l string) { t.Log("report:", l) },
+	}, runs)
 	spec := session.Spec{
 		Runtime: rt,
 		Command: "claude",
@@ -128,12 +137,9 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 			"ANTHROPIC_AUTH_TOKEN=",
 			c.unset + "=",
 		},
-		Dir:     dir,
-		RunsDir: runs,
-		Policy: &session.Policy{Version: 1,
-			Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{r.host}},
-			Credentials: []session.PolicyCredential{{Name: "model"}}},
-		Credentials:    []session.Credential{{Name: "model", Env: apiKeyVar, Hosts: []string{r.host}, Scheme: c.scheme, Header: c.header, Placeholders: []string{c.standIn}}},
+		Dir:            dir,
+		RunsDir:        runs,
+		Gateway:        g,
 		Forwarder:      []string{wall.HelperPath, "forward"},
 		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
 		Image:          r.image,
@@ -172,6 +178,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 	} else {
 		res = r.drive(t, ctx, cancel, spec, &out)
 	}
+	closeGateway()
 	t.Logf("claude answered %q, exit %d; stderr %q", tail(screen(out.String()), 400), res.ExitCode, errs.String())
 	if !strings.Contains(screen(out.String()), recorderAnswer) {
 		t.Errorf("claude printed no %q", recorderAnswer)
