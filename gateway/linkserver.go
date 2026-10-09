@@ -160,7 +160,7 @@ const maxBatch = 2 << 20
 func (g *Gateway) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.Header.Get(server.HeaderContractVersion); v != "" && v != strconv.Itoa(server.Revision) {
-			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway)
+			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway, gatewayText("unsupported_contract_version"))
 			return
 		}
 		switch {
@@ -188,22 +188,46 @@ func (g *Gateway) discover(w http.ResponseWriter) {
 	w.Write(g.discovery)
 }
 
-// refuse answers a coded refusal: the code, its names and who refused.
-func refuse(w http.ResponseWriter, status int, code string, names []string, from string) {
-	b, _ := json.Marshal(server.LinkRefusal{Error: code, Names: names, From: from})
+// linkRefusal is the body of a refusal on the link, link-refusal.schema.json: the code,
+// the names it concerns, the text the user reads of it, and who refused.
+type linkRefusal struct {
+	Error   string   `json:"error"`
+	Names   []string `json:"names,omitempty"`
+	Message string   `json:"message,omitempty"`
+	From    string   `json:"from"`
+}
+
+// refuse answers a coded refusal: the code, its names, who refused, and text, the
+// error's text the session returns, as the message holds it.
+func refuse(w http.ResponseWriter, status int, code string, names []string, from, text string) {
+	b, _ := json.Marshal(linkRefusal{Error: code, Names: names, Message: message(text), From: from})
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(status)
 	w.Write(b)
 }
 
+// gatewayText is the text of a refusal the gateway decides with a code of its own,
+// which no session decided before: the code alone.
+func gatewayText(code string) string { return "the gateway refused the run: " + code }
+
 // invalid answers 400 invalid_request, the gateway's.
 func invalid(w http.ResponseWriter) {
-	refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway)
+	refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, gatewayText(server.CodeInvalidRequest))
 }
 
 // gone answers the 410 of a run that ended at the gateway: its code, and who ended it.
-func gone(w http.ResponseWriter, code, from string) {
-	refuse(w, http.StatusGone, code, nil, from)
+// The server's close of a run that has not started reads as today's session's error
+// then; of one that has, the same without "before it started".
+func gone(w http.ResponseWriter, code, from string, started bool) {
+	text := gatewayText(code)
+	if from == accesskey.FromApiary {
+		detail := "the server closed the run before it started"
+		if started {
+			detail = "the server closed the run"
+		}
+		text = (&accesskey.Refusal{Code: code, Status: http.StatusGone, Detail: detail}).Error()
+	}
+	refuse(w, http.StatusGone, code, nil, from, text)
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

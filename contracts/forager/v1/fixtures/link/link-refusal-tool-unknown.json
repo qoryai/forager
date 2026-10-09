@@ -3,5 +3,6 @@
   "names": [
     "files"
   ],
+  "message": "the policy selects the tool \"files\", which this machine does not define",
   "from": "gateway"
 }

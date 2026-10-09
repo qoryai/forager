@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
@@ -86,7 +87,7 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.used[req.RunID] {
 		g.mu.Unlock()
-		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway)
+		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 		return
 	}
 	g.used[req.RunID] = true
@@ -99,7 +100,7 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of
 				// this machine's before.
-				refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway)
+				refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 				return
 			}
 			g.mu.Lock()
@@ -126,21 +127,18 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 // names, and who refused: the server's with its status, apiary, whatever its code; the
 // gateway's own, gateway, a 403 for a refusal of the run's configuration Forager
 // decides and for a run without a wall whose policy needs one, wall_required. Any
-// other failure is a 500 internal whose message is the error's text, which the
-// session returns as its error, as today's session returned it; the gateway itself
-// tells the user nothing of it.
+// other failure is a 500 internal. Each carries the error's text as its message, which
+// the session returns as its error, the text today's session returned; the gateway
+// itself tells the user nothing of it.
 func refuseOpen(w http.ResponseWriter, err error) {
 	var wall *refusal.NeedsWall
 	if errors.As(err, &wall) {
-		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway)
+		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway, err.Error())
 		return
 	}
 	var ref *accesskey.Refusal
 	if !errors.As(err, &ref) {
-		b, _ := json.Marshal(internalRefusal{Error: codeInternal, Message: messageOf(err), From: accesskey.FromGateway})
-		w.Header().Set("Content-Type", server.LinkContentType)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(b)
+		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, err.Error())
 		return
 	}
 	from := ref.From
@@ -155,32 +153,25 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
-	refuse(w, status, ref.Code, ref.Names, from)
+	refuse(w, status, ref.Code, ref.Names, from, err.Error())
 }
 
 // codeInternal is the code of a run that failed to open for a reason without one.
 const codeInternal = "internal"
 
-// internalRefusal is link-refusal.schema.json's body of a run that failed to open for a
-// reason without a code: the error's text in message.
-type internalRefusal struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
-	From    string `json:"from"`
-}
-
 // maxMessage is the most characters a refusal's message holds.
 const maxMessage = 8192
 
-// messageOf is an error's text as a refusal's message holds it: tab and newline kept,
-// every other control character and DEL a space, at most maxMessage characters.
-func messageOf(err error) string {
+// message is an error's text as a refusal's message holds it: tab and newline kept,
+// every other control character, C0, DEL and C1, a space, at most maxMessage
+// characters.
+func message(text string) string {
 	out := []rune(strings.Map(func(r rune) rune {
-		if (r < 0x20 && r != '\t' && r != '\n') || r == 0x7f {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' {
 			return ' '
 		}
 		return r
-	}, err.Error()))
+	}, text))
 	if len(out) > maxMessage {
 		out = out[:maxMessage]
 	}
@@ -206,7 +197,7 @@ func (g *Gateway) reload(w http.ResponseWriter, runID string) {
 		return
 	}
 	if code, from, ended := lr.gone(); ended {
-		gone(w, code, from)
+		gone(w, code, from, lr.st.Started())
 		return
 	}
 	lr.touch()
@@ -252,7 +243,7 @@ func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
 	lr.batch.Lock()
 	defer lr.batch.Unlock()
 	if code, from, ended := lr.gone(); ended {
-		gone(w, code, from)
+		gone(w, code, from, lr.st.Started())
 		return
 	}
 	lr.touch()
@@ -264,7 +255,7 @@ func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := lr.st.Accept(evs); err != nil {
 		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from)
+			gone(w, code, from, lr.st.Started())
 			return
 		}
 		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %v; the run ends, session_lost", lr.id, err))

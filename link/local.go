@@ -33,8 +33,9 @@ type Local struct {
 	// directory, and the patterns of the tools' socket directories ([ToolDirPrefix])
 	// and of the link's directory ([LinkDirPrefix]).
 	Files []File
-	// Reserved are the names of the variables the gateway sets for a run, which the
-	// session must not set.
+	// Reserved are the names of the variables the machine's credentials are read from:
+	// a walled run that passes one is refused with variable_reserved, and an unwalled
+	// run has its value left out.
 	Reserved []string
 }
 

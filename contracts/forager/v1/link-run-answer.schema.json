@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the variable names the gateway sets, the run's image when it has a wall, the policy_applied members the gateway decides, the run's proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the run's image when it has a wall, the policy_applied members the gateway decides, the run's proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "labels", "applied", "proxy_secret"],
@@ -48,7 +48,7 @@
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
     "reserved": {
-      "description": "The names of the variables the gateway sets for the run, which the session must not set. Absent means none.",
+      "description": "The names of the variables the machine's credentials are read from: a walled run that passes one is refused with variable_reserved, and an unwalled run has its value left out. Absent means none.",
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },

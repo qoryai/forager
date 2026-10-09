@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-refusal.schema.json",
   "title": "Link refusal",
-  "description": "The body of a coded refusal on a gateway's link, application/json, unsigned: the link's transport authenticates it. The code, the names it concerns, who refused, and for a failure without a code the error's text. Every 410 on the link has this body, with the code and the from of the run's end at the gateway. A member Forager does not recognise is ignored.",
+  "description": "The body of a coded refusal on a gateway's link, application/json, unsigned: the link's transport authenticates it. The code, the names it concerns, who refused, and the text the session gives the user as the run's error. Every 410 on the link has this body, with the code and the from of the run's end at the gateway. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["error", "from"],
@@ -17,11 +17,11 @@
       "$ref": "events/run.refused.schema.json#/properties/names"
     },
     "message": {
-      "description": "The error's text of a run that fails to open for a reason without a code, a 500 with the code internal, which the session returns as its error. It may span lines: tab and newline are its only control characters, and DEL is refused. It holds no secret, no run credential and no image reference.",
+      "description": "The text the session gives the user as the run's error, today's text word for word, on every refusal of the link: the 403, 409, 400 and 410, the server's passed on, and the 500 internal of a run that fails to open for a reason without a code. For a refusal of the server's it names Qory Apiary's URL as today. A session that reads none uses the code. It may span lines: tab and newline are its only control characters, and every other C0 control character, DEL and every C1 control character, U+0080 to U+009F, is refused. It holds no secret, no run credential and no image reference.",
       "type": "string",
       "minLength": 1,
       "maxLength": 8192,
-      "pattern": "^[^\u0000-\u0008\u000b-\u001f\u007f]*$"
+      "pattern": "^[^\u0000-\u0008\u000b-\u001f\u007f-\u009f]*$"
     },
     "from": {
       "description": "Who refused: gateway, the gateway itself, or apiary, the server, whose refusal the gateway passes on with its code and status.",

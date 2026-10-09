@@ -303,12 +303,14 @@ func (g *Gateway) reserved() []string {
 	return out
 }
 
-// Close stops taking runs and ends the gateway: each live run's gateway side ends once
-// its session's run.exited is numbered, or when ctx ends, without an exit, which a
-// resend of its record completes as gateway_lost; each run's events are flushed toward
-// the server within the flush's bound, the link's directory is removed and the proxy
-// stops. The Delivery is what the runs came to: their undelivered events, and who
-// closed a run that ended at the gateway. Close again waits for the first.
+// Close stops taking runs and ends the gateway. It is called once the session is over,
+// so it waits for no session: a run still live ends at once, without an exit, which a
+// resend of its record completes as gateway_lost, and lets go of its secret, proxy,
+// tools and credentials. Each run's events are flushed toward the server within
+// [stream.CloseWait] (or the Config's own bound), whatever ctx allows, whose values
+// alone pass on; then the link's directory is removed and the proxy stops. The
+// Delivery is what the runs came to: their undelivered events, and who closed a run
+// that ended at the gateway. Close again waits for the first.
 func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	if g.closing {
@@ -325,12 +327,6 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 		runs = append(runs, lr)
 	}
 	g.mu.Unlock()
-	for _, lr := range runs {
-		select {
-		case <-lr.done:
-		case <-ctx.Done():
-		}
-	}
 	for _, lr := range runs {
 		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	}
