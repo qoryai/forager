@@ -1042,9 +1042,13 @@ release may change what an existing document does, and says so under Upgrading.
   imports to the rules: the core imports no part; the gateway and the wall import the
   core; the session imports the core and the wall, and its tests package `gateway`,
   using only its surface; and only `e2e` imports the session.
-- In CI, a pull request's newer run cancels its older one, and every job that builds
-  caches Go's build cache, each run saving its own. The core and e2e parts, whose tests
-  read what the test cache does not see, test with `-count=1`.
+- In CI, a pull request from this repository's own `next` skips every job, each under a
+  name of its own, `<name> · checked by the push run`, so the required checks come from
+  the push to `next` alone, which tests the pull request's head rather than its merge
+  with the base; a pull request from a fork's `next` runs in full. A pull request's
+  newer run cancels its older one, and every job that builds caches Go's build cache,
+  each run saving its own. The core and e2e parts, whose tests read what the test cache
+  does not see, test with `-count=1`.
 
 #### Fixed
 

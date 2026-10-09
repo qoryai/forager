@@ -11,12 +11,18 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# On a pull request from this repository's own next, every job skips, and under a name of
+# its own, "<name> · checked by the push run", so that no skipped job answers a required
+# check: those come from the push to next, which tests the pull request's head, where the
+# pull request's run would test its merge with the base. A pull request from a fork's
+# next runs in full.
 jobs:
   part:
     # One job for each part of the module: the core (the packages at the root and under
     # internal/), the gateway, the wall, the session, and e2e's static checks. Without
     # Docker, e2e's suite skips here; the two conformance jobs below run it.
-    name: Go tests, ${{ matrix.part }}
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository && 'Go tests · checked by the push run' || 'Go tests' }}, ${{ matrix.part }}
+    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
@@ -111,9 +117,9 @@ jobs:
 
   test:
     # The one check that stands for every part's job above.
-    name: Go tests
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository && 'Go tests · checked by the push run' || 'Go tests' }}
     needs: part
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - name: Every part passed
@@ -122,7 +128,8 @@ jobs:
         run: test "$RESULT" = success
 
   e2e:
-    name: Wall conformance
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository && 'Wall conformance · checked by the push run' || 'Wall conformance' }}
+    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     # On the machine itself, not in a container: the suite needs the docker command and
     # an engine it reaches, and a Linux host is where the hook socket crosses a mount, so
     # this is where an adapter is proven.
@@ -165,7 +172,8 @@ jobs:
         run: go test ./e2e -count=1 -v -run '^TestDockerConforms$'
 
   e2e-docker:
-    name: Wall conformance, a Docker of the agent's own
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository && 'Wall conformance, a Docker of the agent''s own · checked by the push run' || 'Wall conformance, a Docker of the agent''s own' }}
+    if: github.event_name != 'pull_request' || !(github.event.pull_request.head.ref == 'next' && github.event.pull_request.head.repo.full_name == github.repository)
     # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
     # container root is a user of the machine's that is not root. Sysbox is installed on
     # the machine, as a node's owner installs it.
