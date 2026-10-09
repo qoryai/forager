@@ -9,6 +9,7 @@
   "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
   "data": {
     "opened_by": "gateway",
+    "credential": "none",
     "forager_version": "0.6.0",
     "labels": {
       "run_key": "rk-0001"

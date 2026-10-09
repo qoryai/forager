@@ -240,7 +240,7 @@ func (s *service) openSession(t *testing.T, credential string, req server.LinkRu
 	s.mu.Unlock()
 	a, _ := s.openWith(t, credential, req)
 	r := &sessionRun{s: s, credential: credential, a: a}
-	st := started(a.RunID, a.Labels)
+	st := issuerStarted(a.RunID, a.Labels)
 	st["data"].(map[string]any)["about"] = map[string]any{"title": "Fix the failing build", "details": map[string]any{"requester": "example-requester"}}
 	s.postWith(t, credential, st, applied(a.RunID, a.Applied))
 	return r
@@ -349,7 +349,7 @@ func TestASessionsRunOnARunCredential(t *testing.T) {
 	other := credentialFor("rk-0002")
 	s.secrets = append(s.secrets, other)
 	b, _ := s.openWith(t, other, server.LinkRunRequest{})
-	if status, body := (&sessionRun{s: s}).post(t, other, started(b.RunID, b.Labels)); status != http.StatusBadRequest {
+	if status, body := (&sessionRun{s: s}).post(t, other, issuerStarted(b.RunID, b.Labels)); status != http.StatusBadRequest {
 		t.Errorf("a run.started without the run credential's details: %d %s", status, body)
 	}
 	s.close()
@@ -665,7 +665,7 @@ func TestARunWithNoSession(t *testing.T) {
 	}
 	st := rec[1].Data
 	about, _ := st["about"].(map[string]any)
-	if st["opened_by"] != "gateway" || !sameMap(stringMap(st["labels"]), exampleLabels("rk-0001")) || !sameMap(stringMap(about["details"]), map[string]string{"requester": "example-requester"}) || st["runtime"] != nil || st["host"] != nil {
+	if st["opened_by"] != "gateway" || st["credential"] != "issuer" || !sameMap(stringMap(st["labels"]), exampleLabels("rk-0001")) || !sameMap(stringMap(about["details"]), map[string]string{"requester": "example-requester"}) || st["runtime"] != nil || st["host"] != nil {
 		t.Errorf("run.started %v", st)
 	}
 	if rec[2].Data["source"] != "fetched" || rec[2].Data["variables"] != nil {
@@ -1483,4 +1483,23 @@ func TestARefreshedRunCredentialIsOfTheRunsTarget(t *testing.T) {
 	if status, body := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
 		t.Errorf("the run after: %d %s", status, body)
 	}
+}
+
+// TestASessionOnTheOneAddressSaysItsCredentialIsAnIssuers pins the credential of a
+// session's run.started on the one address: the run answer says issuer, and a
+// run.started that says none is a refused batch, the run ending, batch_refused.
+func TestASessionOnTheOneAddressSaysItsCredentialIsAnIssuers(t *testing.T) {
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	a, _ := s.openWith(t, cred, server.LinkRunRequest{})
+	if a.Credential != "issuer" {
+		t.Errorf("the run answer's credential %q", a.Credential)
+	}
+	r := &sessionRun{s: s, credential: cred, a: a}
+	if status, body := r.post(t, cred, started(a.RunID, a.Labels)); status != http.StatusBadRequest {
+		t.Errorf("a run.started that says none: %d %s", status, body)
+	}
+	status, body := r.reload(t, cred, a.RunID)
+	gone(t, "after the refused batch", status, body, "batch_refused")
 }

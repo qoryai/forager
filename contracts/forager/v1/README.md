@@ -732,7 +732,7 @@ The types, one namespace. Forager's own:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `forager_version`, `events`, `contract_version`, `interval_seconds` |
-| `dev.qory.run.started` | the run is open: the runtime is about to start, or a gateway opened the run; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `opened_by`, `forager_version`; opened by a session `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the runtime is about to start, or a gateway opened the run; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `opened_by`, `credential`, `forager_version`; opened by a session `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
@@ -798,6 +798,12 @@ for a run a gateway opened. Such a run's `labels`, `run_key` among them, and
 tools and the path rules its policy selects, as a session's run does; the gateway's
 proxy reads inside HTTPS for them with the gateway's own certificate authority, which
 the clients' machines trust.
+
+**Where the run's credential came from.** `dev.qory.run.started` contains `credential`,
+which the gateway decides: `issuer`, an issuer gave the run its run credential, for a
+session's run behind a separate gateway and every run a gateway opened; `none`, the run
+has no run credential, for a run on the local link. A session copies it from the run
+answer. Nothing else of the issuer is reported: no name, claim, key or lifetime.
 
 **How a run ends.** `dev.qory.run.exited` contains `reason` when the run ended other
 than by the runtime's own exit. The session writes `timeout`, and `run_closed` when the
@@ -1513,6 +1519,7 @@ document:
 ```json
 {"version": 1,
  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+ "credential": "issuer",
  "labels": {"forge": "example-forge", "repository": "example-namespace/project", "run_key": "rk-0001"},
  "details": {"requester": "requester"},
  "policy": {"version": 1,
@@ -1530,6 +1537,10 @@ document:
 ```
 
 - `run_id`, required: the request's, echoed.
+- `credential`, required: where the run's credential came from, as the gateway decides
+  it: `issuer` behind a separate gateway, where an issuer gave the run its run
+  credential, and `none` on the local link. The session's `dev.qory.run.started`
+  contains exactly this.
 - `labels`, required: the run's labels as the gateway holds them: behind a separate
   gateway the run credential's, through the operator's mapping; on the local link the
   run request's. The session's `dev.qory.run.started` contains exactly these labels.
@@ -1614,9 +1625,11 @@ its events:
 
 - has a `subject` that is not the batch's run, the one its first event names;
 - has a type the gateway writes, `dev.qory.ping` or `dev.qory.run.egress`;
-- is a `dev.qory.run.started` whose `opened_by` is not `session`, whose `labels` differ
-  from the run's labels as the gateway holds them, the run credential's behind a
-  separate gateway, or whose `about.details` differ in a key the run credential decides;
+- is a `dev.qory.run.started` whose `opened_by` is not `session`, whose `credential` is
+  not the run's, `issuer` behind a separate gateway and `none` on the local link, whose
+  `labels` differ from the run's labels as the gateway holds them, the run credential's
+  behind a separate gateway, or whose `about.details` differ in a key the run credential
+  decides;
   or is a `dev.qory.run.started` when the run already has one with another id: a run
   has at most one;
 - is an event, by an id the gateway has not numbered, after the run's
@@ -2339,7 +2352,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `session_lost`, `batch_refused`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and the signed `409` `instance_limit` to the ping from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its `credential` `issuer`, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `session_lost`, `batch_refused`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and the signed `409` `instance_limit` to the ping from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |

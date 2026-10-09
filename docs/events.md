@@ -61,7 +61,10 @@ whose session sends nothing for three. The exit status of a run is the runtime's
 around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
 with no session. A run a gateway opened has no process, so its `dev.qory.run.started`
 names no runtime, command or host, and its `dev.qory.run.exited` contains no exit status
-and no state.
+and no state. Its `credential` says where the run's credential came from: `issuer`, an
+issuer gave the run its run credential, for a session's run behind a separate gateway
+and every run a gateway opened; `none` for a run on the local link. The gateway decides
+it and refuses a session's batch whose `dev.qory.run.started` says otherwise.
 
 When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
 `reason`. The session writes `timeout`, and posts it, and `batch_refused`, in its own

@@ -546,6 +546,9 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			if data["opened_by"] != event.OpenedBySession {
 				return "a run.started not opened by the session"
 			}
+			if data["credential"] != lr.credential() {
+				return "a run.started whose credential is not the run's"
+			}
 			if !sameLabels(data["labels"], lr.labels) {
 				return "a run.started whose labels are not the run's"
 			}

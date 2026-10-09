@@ -540,6 +540,11 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("other labels: %+v", d)
 	}
+	// A run.started that says an issuer gave the local link's run its credential.
+	b := h.open(server.LinkRunRequest{Labels: labels})
+	if d := h.post(issuerStarted(b.RunID, labels)); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+		t.Errorf("an issuer's credential on the local link: %+v", d)
+	}
 	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "batch_refused" {
 		t.Errorf("delivery %+v", d)
 	}

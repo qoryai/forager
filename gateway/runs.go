@@ -346,7 +346,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 // members the gateway decides alone. The run has no process, so run.started has none
 // of the members of one.
 func (lr *linkRun) begin() {
-	data := map[string]any{"opened_by": event.OpenedByGateway, "forager_version": lr.g.cfg.Version, "labels": lr.labels}
+	data := map[string]any{"opened_by": event.OpenedByGateway, "credential": lr.credential(), "forager_version": lr.g.cfg.Version, "labels": lr.labels}
 	if len(lr.cred.details) > 0 {
 		data["about"] = map[string]any{"details": lr.cred.details}
 	}
@@ -628,6 +628,7 @@ func (lr *linkRun) end(e ending) {
 type runAnswerDoc struct {
 	Version              int                        `json:"version"`
 	RunID                string                     `json:"run_id"`
+	Credential           string                     `json:"credential"`
 	Labels               map[string]string          `json:"labels"`
 	Policy               json.RawMessage            `json:"policy,omitempty"`
 	Digest               string                     `json:"digest,omitempty"`
@@ -680,11 +681,21 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 		details = lr.cred.details
 	}
 	b, _ := json.Marshal(runAnswerDoc{
-		Version: 1, RunID: lr.id, Labels: lr.labels, Details: details, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
+		Version: 1, RunID: lr.id, Credential: lr.credential(), Labels: lr.labels, Details: details, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	})
 	return b
+}
+
+// credential is where the run's credential came from, the credential of its
+// run.started: an issuer, for a run on the one address, which a run credential opened;
+// none on the local link.
+func (lr *linkRun) credential() string {
+	if lr.cred != nil {
+		return event.CredentialIssuer
+	}
+	return event.CredentialNone
 }
 
 // image is the image the run gets, behind a wall, when it has a reference.

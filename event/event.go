@@ -43,6 +43,15 @@ const (
 	OpenedByGateway = "gateway"
 )
 
+// Where a run's credential came from, the credential of dev.qory.run.started: an
+// issuer gave the run its run credential, a session's run on a gateway's one address
+// and every run a gateway opened; or none, a run on a gateway's local link. Nothing
+// else of the issuer is reported.
+const (
+	CredentialIssuer = "issuer"
+	CredentialNone   = "none"
+)
+
 // The reasons of dev.qory.run.exited, why a run ended other than by the runtime's own
 // exit. The session writes timeout and run_closed, and in its own record the code of the
 // gateway's 410, batch_refused among them; the resend of a record writes gateway_lost;

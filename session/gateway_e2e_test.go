@@ -127,6 +127,9 @@ func TestARunThroughARealGateway(t *testing.T) {
 	if l := data(numbered[0])["labels"].(map[string]any); l["repository"] != "example-namespace/project" {
 		t.Errorf("run.started labels %v", l)
 	}
+	if c := data(numbered[0])["credential"]; c != "none" {
+		t.Errorf("run.started credential %v; want none on the local link", c)
+	}
 	applied := data(numbered[1])
 	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[api.example]" || applied["variables"] == nil {
 		t.Errorf("policy_applied %v", applied)

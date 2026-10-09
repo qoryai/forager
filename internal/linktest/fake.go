@@ -187,7 +187,7 @@ func RunAnswer(req server.LinkRunRequest) map[string]any {
 		labels = map[string]string{}
 	}
 	a := map[string]any{
-		"version": 1, "run_id": req.RunID, "labels": labels, "proxy_secret": ProxySecret,
+		"version": 1, "run_id": req.RunID, "credential": "none", "labels": labels, "proxy_secret": ProxySecret,
 		"applied": map[string]any{"mode": "observe", "allow": []string{}, "deny": []string{}, "source": "none"},
 	}
 	if req.Wall && req.Images != nil && req.Images.Default != "" {

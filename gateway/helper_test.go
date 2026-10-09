@@ -329,8 +329,20 @@ func ev(runID, typ string, data map[string]any) map[string]any {
 	}
 }
 
+// started is the session's run.started of a run on the local link with the labels,
+// its credential none.
 func started(runID string, labels map[string]string) map[string]any {
-	data := map[string]any{"opened_by": "session", "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
+	return startedWith(runID, labels, event.CredentialNone)
+}
+
+// issuerStarted is the session's run.started of a run on the one address with the
+// labels, its credential an issuer's.
+func issuerStarted(runID string, labels map[string]string) map[string]any {
+	return startedWith(runID, labels, event.CredentialIssuer)
+}
+
+func startedWith(runID string, labels map[string]string, credential string) map[string]any {
+	data := map[string]any{"opened_by": "session", "credential": credential, "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
 	if len(labels) > 0 {
 		data["labels"] = labels
 	}

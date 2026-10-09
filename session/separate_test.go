@@ -397,6 +397,9 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 	if about := data(started[0])["about"].(map[string]any); fmt.Sprint(about["details"]) != "map[requester:example-requester]" {
 		t.Errorf("run.started about %v", about)
 	}
+	if c := data(started[0])["credential"]; c != "issuer" {
+		t.Errorf("run.started credential %v; want issuer behind a separate gateway", c)
+	}
 	s.close(t)
 	numbered := s.record(t, res.RunID)
 	if got := types(numbered); len(got) < 3 || got[0] != "dev.qory.run.started" || got[len(got)-1] != "dev.qory.run.exited" {

@@ -5,7 +5,7 @@
   "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the run's image when it has a wall, the policy_applied members the gateway decides, the run's proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "run_id", "labels", "applied", "proxy_secret"],
+  "required": ["version", "run_id", "credential", "labels", "applied", "proxy_secret"],
   "dependentRequired": {
     "policy": ["digest"],
     "digest": ["policy"]
@@ -18,6 +18,10 @@
     "run_id": {
       "description": "The run id of the request, echoed.",
       "$ref": "link-run-request.schema.json#/properties/run_id"
+    },
+    "credential": {
+      "description": "Where the run's credential came from, as the gateway decides it: issuer behind a separate gateway, where an issuer gave the run its run credential; none on the local link. The session's dev.qory.run.started contains exactly this.",
+      "$ref": "events/run.started.schema.json#/properties/credential"
     },
     "labels": {
       "description": "The run's labels as the gateway holds them: the run credential's, through the operator's mapping, behind a separate gateway; the run request's on the local link. The session's dev.qory.run.started contains exactly these.",

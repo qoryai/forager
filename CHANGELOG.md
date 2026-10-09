@@ -18,17 +18,20 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
-- `dev.qory.run.started` requires `opened_by`, and `dev.qory.run.exited` no longer
-  requires `state` and `exit_code`. A receiver reads `opened_by` to tell a session's run
-  from one a gateway opened, which contains neither.
+- `dev.qory.run.started` requires `opened_by` and `credential`, and
+  `dev.qory.run.exited` no longer requires `state` and `exit_code`. A receiver reads
+  `opened_by` to tell a session's run from one a gateway opened, which contains
+  neither, and `credential` to tell a run whose run credential an issuer gave,
+  `issuer`, from one on a gateway's local link, `none`.
 
 #### Added
 
-- `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`, and
+- `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`,
+  `event.CredentialIssuer` and `event.CredentialNone`, the values of `credential`, and
   `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
   `ReasonQuiet`, `ReasonCredentialExpired` and `ReasonRunEndedAtIssuer`, the reasons of
   `dev.qory.run.exited`. The session's `dev.qory.run.started` contains `opened_by`
-  `session`.
+  `session`, and the `credential` of the gateway's run answer.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
@@ -488,8 +491,12 @@ release may change what an existing document does, and says so under Upgrading.
   every import path start with it.
 - Contract `v1` revision 1 is amended in place for a run a gateway opens, with no
   session and no process. `dev.qory.run.started` has `opened_by`, `session` or
-  `gateway`, required; opened by a session it requires what it did, and opened by a
-  gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
+  `gateway`, required, and `credential`, required: `issuer`, an issuer gave the run its
+  run credential, for a session's run behind a separate gateway and every run a
+  gateway opened, and `none` for a run on the local link, which the gateway decides,
+  puts in its run answer, required there too, and holds a session's `run.started` to;
+  nothing else of the issuer is reported. Opened by a session it requires what it did,
+  and opened by a gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
   `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
   version of what opened the run, and `host` is the agent's machine's. A gateway-opened
   run's `labels`, `run_key` among them, and `about.details` come from the run
@@ -508,11 +515,13 @@ release may change what an existing document does, and says so under Upgrading.
   contract no longer says the state is `failed` with each reason; a receiver maps each
   reason to a state of its own.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
-  the fixtures contains `opened_by` `session`, and the four batches under
+  the fixtures contains `opened_by` and `credential`, and the four batches under
   `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
   gateway opened, which ends `quiet`, `fixtures/batch/` its first and last batch and
   the `dev.qory.run.exited` of such a run that ends `gateway_lost`, and
-  `fixtures/invalid/` seven refused `run.started` and `run.exited` events.
+  `fixtures/invalid/` nine refused `run.started` and `run.exited` events, two of them
+  without a `credential` or with one of no kind it names, and a run answer without
+  `credential`.
 
 ### Gateway
 

@@ -317,9 +317,10 @@ only by its proxy secret, and decided under that session's wall and narrowing, s
 client of a run key whose sessions' runs are open opens or joins its own run beside
 them. The gateway reports the run itself, in this order: its ping; then, once it has
 fetched the run's policy from Qory Apiary and decided the run, its
-`dev.qory.run.started`, with `opened_by` `gateway` and the run credential's labels and
-`about.details`, and its policy; then every connection and its heartbeats. A run refused with a code, say Qory Apiary refuses the run's
-configuration or the run selects an image, gets the gateway's `dev.qory.run.refused`
+`dev.qory.run.started`, with `opened_by` `gateway`, `credential` `issuer`, and the run
+credential's labels and `about.details`, and its policy; then every connection and its
+heartbeats. A run refused with a code, say Qory Apiary refuses the run's configuration
+or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
 no event, and its connection gets `503 Service Unavailable` with, as `text/plain`, "the
 gateway could not open the run; try again".

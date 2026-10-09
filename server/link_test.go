@@ -40,7 +40,7 @@ const (
 const discovery = `{"version":1,"events":{"url":"http://localhost/v1/events","types":["*"],"interval_seconds":30},"run":{"url":"http://localhost/v1/run-configuration"},"proxy":{"address":"127.0.0.1:41000"},"later":{"a":1}}`
 
 // runAnswer is a run answer with the members the link adds to the schema's.
-var runAnswer = `{"version":1,"run_id":"` + runID + `","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"details":{"requester":"requester"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
+var runAnswer = `{"version":1,"run_id":"` + runID + `","credential":"none","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"details":{"requester":"requester"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
 
 // reloadAnswer is a reload answer with the members the link adds to the schema's.
 const reloadAnswer = `{"version":1,"policy":{"version":1,"egress":{"mode":"observe"}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"prod"}},"placeholders":[],"reserved":["EXAMPLE_SOURCE_KEY"],"applied":{"mode":"observe","allow":[],"source":"config","digest":"` + policyHex + `"}}`
@@ -427,6 +427,8 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 	for name, body := range map[string]string{
 		"a proxy secret the schema refuses": strings.Replace(runAnswer, proxySecret, bad, 1),
 		"another run id":                    strings.Replace(runAnswer, runID, "0192f0c1-7d4e-7a2b-8c3d-000000000000", 1),
+		"no credential":                     strings.Replace(runAnswer, `"credential":"none",`, "", 1),
+		"a credential of no kind it names":  strings.Replace(runAnswer, `"credential":"none"`, `"credential":"apiary"`, 1),
 		"a placeholder that is no name":     strings.Replace(runAnswer, `"placeholders":["GIT_TOKEN"]`, `"placeholders":["GIT TOKEN `+proxySecret+`"]`, 1),
 		"an image without a reference":      strings.Replace(runAnswer, `"ref":"registry.example/base@sha256:00"`, `"ref":""`, 1),
 		"a member twice":                    strings.Replace(runAnswer, `"version":1,`, `"version":1,"proxy_secret":"`+proxySecret+`",`, 1),

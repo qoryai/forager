@@ -531,8 +531,8 @@ func TestARunOverTheOneAddress(t *testing.T) {
 	if a.ProxySecret == "" || a.ProxySecret == b.ProxySecret || header.Get(server.HeaderConfiguration) == "" || header.Get(server.HeaderRunConfiguration) == "" {
 		t.Fatalf("answers %+v %+v %v", a, b, header)
 	}
-	s.postOver(t, started(a.RunID, a.Labels), applied(a.RunID, a.Applied))
-	s.postWith(t, otherCredential, started(b.RunID, b.Labels), applied(b.RunID, b.Applied))
+	s.postOver(t, issuerStarted(a.RunID, a.Labels), applied(a.RunID, a.Applied))
+	s.postWith(t, otherCredential, issuerStarted(b.RunID, b.Labels), applied(b.RunID, b.Applied))
 	resp, body := do(t, s.client(goodCredential), http.MethodGet, d.Run.URL+"/"+a.RunID, "", "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get(server.HeaderRunConfiguration) != header.Get(server.HeaderRunConfiguration) {
 		t.Errorf("the reload: %d %s", resp.StatusCode, body)
