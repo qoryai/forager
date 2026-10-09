@@ -155,14 +155,6 @@ func (g *Gateway) endKey(k runKeyID, exp time.Time) {
 	}
 }
 
-// keptTo reports whether the refused run keys keep k at least to exp, as this process
-// wrote them.
-func (g *Gateway) keptTo(k runKeyID, exp time.Time) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return !exp.After(g.endedUntil[k])
-}
-
 // spentRun is what a run on the one address leaves once it has ended and its record is
 // flushed: how a later request of the run is answered, until a run credential of it can
 // no longer be accepted.
@@ -173,8 +165,7 @@ type spentRun struct {
 	until      time.Time
 }
 
-// retire lets go of a run on the one address that has ended, its record flushed and,
-// after the issuer's end, its run key kept to exp: the
+// retire lets go of a run on the one address that has ended and its record flushed: the
 // gateway holds no more of it than its [spentRun], until exp plus
 // [runcredential.MaxLeeway], the latest a run credential of that exp is accepted; what
 // it came to joins the gateway's delivery. The spent runs and the refused run keys kept

@@ -1483,6 +1483,38 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 	}
 }
 
+// TestARunWhoseHoldIsNotWrittenIsLetGoOf pins the issuer's end when the refused run
+// keys cannot be written: the failure is reported, the run key is refused all the same,
+// and the run that ended is let go of once its record is flushed.
+func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
+	in := &introspection{}
+	cfg := gateway.Config{Policy: enforce127}
+	gateway.SetKeepSpent(&cfg, time.Millisecond)
+	s := startVerifying(t, cfg, in, 0)
+	first := credentialFor("rk-0001")
+	r := s.openSession(t, first, server.LinkRunRequest{})
+	// The gateway's directory takes no new file, the refused run keys' among them.
+	if err := os.Chmod(s.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+	in.end(first)
+	status, body := r.reload(t, first, r.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	if !s.reported("keeping the run key of a run of the issuer") {
+		t.Error("the failed write was not reported")
+	}
+	eventually(t, "the run let go of", func() bool {
+		runs, _, spent, _ := gateway.Held(s.g)
+		return runs == 0 && spent == 1
+	})
+	later := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, later)
+	if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("a run request of the run key: %d %s", status, body)
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

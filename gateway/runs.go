@@ -615,9 +615,9 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
-		if lr.cred != nil && (!e.blocks() || lr.g.keptTo(key, expires)) {
-			// Flushed, and after the issuer's end its run key kept: the gateway lets go
-			// of it.
+		if lr.cred != nil {
+			// Flushed: the gateway lets go of it. After the issuer's end, the refused run
+			// keys refuse its run key whether or not they could be written.
 			lr.g.retire(lr, key, expires)
 		}
 	}()
