@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the policy in force for the run and its digest, the run's variables, the run's proxy secret, and the run's certificate authority when the run has a wall. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the policy in force for the run and its digest, the run's variables, the run's proxy secret, and the run's certificate authority exactly when the run request's wall is true. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "run_id", "proxy_secret"],
@@ -37,7 +37,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "certificate_authority": {
-      "description": "The certificate of the run's own certificate authority, PEM, when the run has a wall: the certificate the enclosure trusts after the image's own. Never its key, which stays with the gateway.",
+      "description": "The certificate of the run's own certificate authority, PEM: present exactly when the run request's wall is true, absent when it is false. The certificate the enclosure trusts after the image's own; never its key, which stays with the gateway.",
       "type": "string",
       "maxLength": 16384,
       "pattern": "^-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\r?\\n?$"

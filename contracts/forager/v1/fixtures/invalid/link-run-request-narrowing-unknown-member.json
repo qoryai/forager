@@ -1,6 +1,7 @@
 {
   "version": 1,
   "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+  "wall": true,
   "labels": {
     "forge": "example-forge",
     "repository": "example-namespace/project",

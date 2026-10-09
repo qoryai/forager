@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-discovery.schema.json",
   "title": "Link discovery",
-  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events and where it opens a run. Unsigned: the link's transport authenticates it. It lists no node, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events, the heartbeat interval, and where it opens a run. Unsigned: the link's transport authenticates it. It lists no node, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "events", "run"],
@@ -12,8 +12,18 @@
       "const": 1
     },
     "events": {
-      "description": "Where the session posts its batches and which events. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
-      "$ref": "configuration.schema.json#/properties/events"
+      "description": "Where the session posts its batches, which events, and the run's heartbeat interval. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "types", "interval_seconds"],
+      "properties": {
+        "url": {"$ref": "configuration.schema.json#/properties/events/properties/url"},
+        "types": {"$ref": "configuration.schema.json#/properties/events/properties/types"},
+        "interval_seconds": {
+          "description": "The gateway's heartbeat interval, which the ping announces toward the server: the session sends its heartbeats every interval_seconds, and the gateway ends a run whose session sends nothing for 3 × interval_seconds from the run answer, session_lost.",
+          "$ref": "events/ping.schema.json#/properties/interval_seconds"
+        }
+      }
     },
     "run": {
       "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",

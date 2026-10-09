@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-batch.schema.json",
   "title": "Link batch",
-  "description": "The body of one POST of the session to the events URL of its gateway's link, application/cloudevents-batch+json: events of one run, in the session's order, never empty. Each is an event of the contract without sequence: the gateway numbers the run's stream.",
+  "description": "The body of one POST of the session to the events URL of its gateway's link, application/cloudevents-batch+json: events of one run, in the session's order, never empty. Each is an event of the contract without sequence, and none is a ping: the gateway numbers the run's stream and, as the node toward the server, sends the ping.",
   "type": "array",
   "minItems": 1,
   "items": {"$ref": "#/$defs/event"},
   "$defs": {
     "event": {
-      "description": "An event as event.schema.json defines it, with no sequence.",
+      "description": "An event as event.schema.json defines it, with no sequence, and not dev.qory.ping.",
+      "not": {"required": ["type"], "properties": {"type": {"const": "dev.qory.ping"}}},
       "allOf": [
         {"$ref": "cloudevents.schema.json"},
         {

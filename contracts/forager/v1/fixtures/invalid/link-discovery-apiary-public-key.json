@@ -4,7 +4,8 @@
     "url": "http://localhost/v1/events",
     "types": [
       "*"
-    ]
+    ],
+    "interval_seconds": 30
   },
   "run": {
     "url": "http://localhost/v1/run-configuration"

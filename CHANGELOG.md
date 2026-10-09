@@ -117,22 +117,30 @@ release may change what an existing document does, and says so under Upgrading.
   peer is its own user and opens every connection with `QORY-LINK` and the link secret.
   A separate gateway speaks TLS 1.3 alone, with the operator's certificate, which the
   session verifies against the system's roots or `session.gateway.ca_file` and an
-  optional pin of its SubjectPublicKeyInfo, and every request carries
-  `Authorization: Bearer` and the run credential. Answers on the link are unsigned.
-  A run opens with a `POST` of `link-run-request.schema.json`: `run_id`, which the
-  session chooses, `labels`, `about` and, behind a separate gateway, a `narrowing` that
-  only narrows; the gateway refuses it with `invalid_request`, `run_credential_refused`,
-  `run_id_used`, `target_differs_from_credential` or `differs_from_credential`. The
-  answer, `link-run-answer.schema.json`, has `run_id`, the policy in force and its
-  `digest`, `variables`, the run's `proxy_secret` and, with a wall, its
+  optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's
+  public key in base64, and every request carries `Authorization: Bearer` and a run
+  credential whose `sub` is the run's run key. Answers on the link are unsigned, and
+  carry the digest headers of a reload. A run opens with a `POST` of
+  `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
+  `labels`, `about` and, behind a separate gateway, a `narrowing` that only narrows;
+  the gateway refuses it with `invalid_request`, `run_credential_refused`,
+  `run_id_used`, `target_differs_from_credential` or `differs_from_credential`, the
+  last two naming each member that differs as `<member>=<the run credential's value>`.
+  The answer, `link-run-answer.schema.json`, has `run_id`, the policy in force and its
+  `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is true, its
   `certificate_authority`. Discovery on the link is `link-discovery.schema.json`, with
-  no `node_id`, `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`,
-  events without `sequence`, which the gateway numbers. The relay opens its
-  connections with `QORY-RELAY` and the run's proxy secret, and without a wall the
-  agent's proxy URL carries it as its password. `fixtures/link/` holds the valid
-  documents and `fixtures/invalid/link-*` the refused ones. Package `link` has
-  `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`, `LinkDirMode`, `LinkSocketMode`
-  and `BearerScheme`.
+  `events.interval_seconds`, the gateway's heartbeat interval, and no `node_id`,
+  `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`, events without
+  `sequence` and never a ping, which the gateway numbers and sends itself. A session's
+  heartbeats are its run's, and a session silent for 3 × the interval ends the run,
+  `session_lost`. A run that ends at the gateway is a `410` to the session's next
+  request, its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the
+  reason of `dev.qory.run.exited`. The relay opens its connections with `QORY-RELAY`
+  and the run's proxy secret, over TLS 1.3 with the link's trust between two machines,
+  and without a wall the agent's proxy URL carries the secret as its password.
+  `fixtures/link/` holds the valid documents and `fixtures/invalid/link-*` the refused
+  ones. Package `link` has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`,
+  `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
 
 #### Changed
 

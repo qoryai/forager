@@ -5,7 +5,7 @@
   "description": "The body of the session's POST to the run URL of its gateway's link, application/json, which opens a run: the run id the session chose, the run's labels, what the run is about, and behind a separate gateway the session's narrowing of the policy. A member this schema does not define is refused, invalid_request: a member the gateway does not read could be a narrowing it would drop.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "run_id"],
+  "required": ["version", "run_id", "wall"],
   "properties": {
     "version": {
       "description": "The document format. The gateway refuses a version it does not read.",
@@ -16,8 +16,12 @@
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     },
+    "wall": {
+      "description": "Whether the session runs the agent behind a wall. The answer carries the run's certificate_authority exactly when it is true.",
+      "type": "boolean"
+    },
     "labels": {
-      "description": "The run's labels, as dev.qory.run.started contains them. On the local link they are the run's. Behind a separate gateway the run's labels come from the run credential alone: forge and repository must equal the credential's, else target_differs_from_credential; another label the mapping sets must equal the credential's, else differs_from_credential; a label the mapping does not set is ignored.",
+      "description": "The run's labels, as dev.qory.run.started contains them. On the local link they are the run's. Behind a separate gateway the run's labels come from the run credential alone: forge and repository must equal the credential's, else target_differs_from_credential; another label the mapping sets must equal the credential's, else differs_from_credential; a label the mapping does not set is ignored. Each such refusal names every member that differs as <member>=<the run credential's value>, such as labels.repository=example-namespace/project.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "about": {
