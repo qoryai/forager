@@ -83,9 +83,9 @@ type Gateway struct {
 
 // Start starts a gateway: with a server, it fetches the server's configuration
 // document first and calls [Config.Discovered], and a refusal is an
-// [*accesskey.Refusal]; then it makes the local link, a socket in a private directory
-// of its own, and the shared proxy listener on loopback, and serves sessions until
-// Close. It sends nothing more before a session opens a run.
+// [*accesskey.Refusal]; then it makes the local link, served in memory to a session in
+// this process and, unless [Config.NoLinkSocket], on a socket in a private directory of
+// its own, and the shared proxy listener on loopback, and serves sessions until Close. It sends nothing more before a session opens a run.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Listen != "" || cfg.TLS != nil {
 		return nil, errors.New("a separate gateway, with an address and a certificate of its own, is not served yet; the gateway serves its local link alone")
@@ -155,25 +155,16 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		return nil, err
 	}
 	g.secret = secret
-	if g.dir, err = os.MkdirTemp("", link.LinkDirPrefix); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if !ok {
-			os.RemoveAll(g.dir)
+	if !cfg.NoLinkSocket {
+		if err := g.listenLink(); err != nil {
+			return nil, err
 		}
-	}()
-	if err := os.Chmod(g.dir, link.LinkDirMode); err != nil {
-		return nil, err
-	}
-	socket := filepath.Join(g.dir, link.LinkSocketName)
-	if g.ln, err = net.Listen("unix", socket); err != nil {
-		return nil, err
-	}
-	// The listener removes the socket when it closes; the directory goes with Close.
-	if err := os.Chmod(socket, link.LinkSocketMode); err != nil {
-		g.ln.Close()
-		return nil, err
+		defer func() {
+			if !ok {
+				g.ln.Close()
+				os.RemoveAll(g.dir)
+			}
+		}()
 	}
 	var refused sync.Once
 	g.proxies, err = proxy.NewListener("", func(why string) {
@@ -182,7 +173,6 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		refused.Do(func() { report(why) })
 	})
 	if err != nil {
-		g.ln.Close()
 		return nil, err
 	}
 	g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
@@ -203,6 +193,40 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	go g.http.Serve(g.link)
 	ok = true
 	return g, nil
+}
+
+// listenLink makes the link's socket in a private directory of the gateway's. The
+// listener removes the socket when it closes; the directory goes with Close.
+func (g *Gateway) listenLink() error {
+	dir, err := os.MkdirTemp("", link.LinkDirPrefix)
+	if err != nil {
+		return err
+	}
+	socket := filepath.Join(dir, link.LinkSocketName)
+	if err := os.Chmod(dir, link.LinkDirMode); err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	if err := os.Chmod(socket, link.LinkSocketMode); err != nil {
+		ln.Close()
+		os.RemoveAll(dir)
+		return err
+	}
+	g.dir, g.ln = dir, ln
+	return nil
+}
+
+// socket is the link's socket, empty when the gateway made none.
+func (g *Gateway) socket() string {
+	if g.dir == "" {
+		return ""
+	}
+	return filepath.Join(g.dir, link.LinkSocketName)
 }
 
 // newSecret makes the link secret: 32 bytes from the system's random source, in
@@ -232,11 +256,11 @@ func (g *Gateway) Addr() string { return g.proxies.Addr() }
 // LocalLink is what a session in this process needs of the gateway: the way to its link
 // in memory, which a session's client takes in place of the socket, so no other process
 // can stand in for the gateway at the socket's path; the link's socket, for a session
-// in another process, and its secret; the proxy's address, the gateway's own files,
+// in another process, empty with [Config.NoLinkSocket], and its secret; the proxy's address, the gateway's own files,
 // which a walled run must not mount, and the names a walled run must not pass.
 func (g *Gateway) LocalLink() link.Local {
 	return link.Local{
-		Socket:   filepath.Join(g.dir, link.LinkSocketName),
+		Socket:   g.socket(),
 		Secret:   g.secret,
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
@@ -250,7 +274,11 @@ func (g *Gateway) String() string {
 	if g == nil {
 		return "gateway.Gateway(nil)"
 	}
-	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + filepath.Join(g.dir, link.LinkSocketName) + "}"
+	where := g.socket()
+	if where == "" {
+		where = "in memory"
+	}
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.
@@ -371,7 +399,10 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	cancel()
 	g.link.Close()
-	errs = append(errs, g.proxies.Close(), os.RemoveAll(g.dir))
+	errs = append(errs, g.proxies.Close())
+	if g.dir != "" {
+		errs = append(errs, os.RemoveAll(g.dir))
+	}
 	g.cancel()
 	g.closeErr = errors.Join(errs...)
 	close(g.closed)

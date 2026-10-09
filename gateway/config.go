@@ -53,6 +53,12 @@ type Config struct {
 	// link is served yet: Listen must be empty and TLS nil.
 	Listen string
 	TLS    *TLS
+	// NoLinkSocket makes no link socket and no link directory: the gateway's local link
+	// is served in memory alone, to a session in this process, the way
+	// [Gateway.LocalLink] hands out, and no other process can reach it. qory run sets it.
+	// False makes the socket, for a session in another process too. It goes with Listen
+	// as well: a separate gateway's one address, and no socket.
+	NoLinkSocket bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's

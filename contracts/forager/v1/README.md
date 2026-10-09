@@ -1315,7 +1315,8 @@ the socket's path, where another process of the same user could listen in the
 gateway's place, pass the uid check and read the secret. Each connection in memory
 carries the same bytes as one over the socket: `QORY-LINK`, a space, the link secret
 and a newline, then HTTP/1.1, and the gateway checks the preamble as on the socket; its
-peer is the process itself. The socket serves a session in another process.
+peer is the process itself. The socket serves a session in another process; a gateway
+started without one, as `qory run` starts it, serves its link in memory alone.
 
 **A separate gateway.** TLS 1.3 alone: the gateway and the session each refuse an
 earlier version. The gateway serves the operator's certificate and key,
