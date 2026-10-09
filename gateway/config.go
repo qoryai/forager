@@ -6,6 +6,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/runcredential"
 )
 
 // Config is what a gateway is given: the server it is the node toward, the machine's
@@ -49,15 +50,29 @@ type Config struct {
 	// session sends a heartbeat every interval, and the gateway ends a run whose session
 	// sends nothing for three.
 	Heartbeat time.Duration
-	// Listen and TLS are a separate gateway's address and certificate. Only the local
-	// link is served yet: Listen must be empty and TLS nil.
+	// Listen is a separate gateway's one address, host:port, port 0 a port of the
+	// system's choosing: the contract for the sessions of other machines, and the proxy
+	// for their agents and for clients with no session, routed connection by connection.
+	// Empty means the local link alone. Any address but loopback needs TLS; the local
+	// link is served beside it either way, as without it.
 	Listen string
-	TLS    *TLS
+	// TLS is the certificate and key Listen serves, TLS 1.3 alone; nil serves Listen
+	// without TLS, which a loopback address alone may.
+	TLS *TLS
+	// RunCredentials are the issuers whose run credentials open a run on Listen,
+	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
+	// Start checks them as runcredential.Issuers.Check does, reading each key's file
+	// and each introspection client's secret. A run key opens one run at the gateway;
+	// the run keys whose run ended are kept in Dir, so a restart does not reopen them.
+	RunCredentials runcredential.Issuers
+	// Runs is how the gateway keeps the runs of clients with no session.
+	Runs RunsConfig
 	// NoLinkSocket makes no link socket and no link directory: the gateway's local link
 	// is served in memory alone, to a session in this process, the way
 	// [Gateway.LocalLink] hands out, and no other process can reach it. qory run sets it.
-	// False makes the socket, for a session in another process too. It goes with Listen
-	// as well: a separate gateway's one address, and no socket.
+	// False makes the socket, for a session in another process too. With Listen it
+	// serves the one address as without it, for the sessions and clients of other
+	// machines, beside a local link in memory alone and no socket.
 	NoLinkSocket bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
@@ -67,13 +82,34 @@ type Config struct {
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
+	// runAuth and proxyLogin, when not nil, decide the run credentials Listen is given,
+	// in place of the verifier of RunCredentials and the runs of clients with no
+	// session: tests set them.
+	runAuth    runAuth
+	proxyLogin proxyLogin
+	// introspector, when not nil, is the introspection endpoint of an issuer that has
+	// one, in place of runcredential's client of it: tests set it.
+	introspector func(runcredential.Issuer) activeChecker
 }
 
-// TLS is a separate gateway's certificate and key, files in PEM. A separate gateway is
-// not served yet.
+// TLS is the certificate and key a separate gateway serves on its one address, files in
+// PEM: gateway.tls.certificate and gateway.tls.key of qory's configuration.
 type TLS struct {
-	Certificate, Key string
+	// CertFile is the certificate chain, the gateway's own certificate first.
+	CertFile string
+	// KeyFile is the certificate's private key.
+	KeyFile string
 }
+
+// RunsConfig is how the gateway keeps the runs of clients with no session.
+type RunsConfig struct {
+	// Quiet is how long such a run lasts with no connection before it ends, quiet:
+	// gateway.runs.quiet of the operator's forager.yaml; zero means 30 minutes.
+	Quiet time.Duration
+}
+
+// defaultRunsQuiet is [RunsConfig.Quiet] when the config sets none.
+const defaultRunsQuiet = 30 * time.Minute
 
 // Server is the server document, contracts/forager/v1/server.schema.json, as the caller
 // passes it to Forager, with what signs and names every request: the server whose
@@ -144,7 +180,8 @@ type Delivery struct {
 	// says who, "apiary" when the server closed it with a signed 410, "gateway" when the
 	// gateway ended it, and Reason the code of the 410 the session's later requests get:
 	// run_closed from apiary; from the gateway, session_lost when it heard nothing from
-	// the session for 3 heartbeat intervals and batch_refused when it refused a batch.
+	// the session for 3 heartbeat intervals, batch_refused when it refused a batch, and
+	// behind a separate gateway credential_expired or run_ended_at_issuer.
 	RunClosed bool
 	ClosedBy  string
 	Reason    string

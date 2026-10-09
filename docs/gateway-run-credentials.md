@@ -27,14 +27,19 @@ The gateway verifies the run credential, not the run key.
 | `iss` | yes | equals the configured `issuer`, compared as a string |
 | `aud` | yes | a string, or an array of strings, that contains the configured `audience` |
 | `sub` | yes | the run key; it becomes the run's `run_key` label |
-| `exp` | yes | the run credential is refused from `exp` on, give or take the leeway |
+| `exp` | yes | the run credential is refused from `exp` plus the leeway on |
 | `iat` | when `max_lifetime` is set | no later than now plus the leeway |
 | `nbf` | no | when present, no later than now plus the leeway |
 | claims that name the target | as the mapping names them | they make the `repository` label, and the `forge` label when it is not a constant |
 | descriptive claims | as the mapping names them | they go into the run's `about.details`, never into a label |
 
-`exp`, `iat` and `nbf` are NumericDates: seconds since the epoch, a JSON number. The
-leeway is 60 seconds unless the operator sets another.
+`exp`, `iat` and `nbf` are NumericDates: seconds since the epoch, a JSON number, not
+negative and no later than the year 9999. The leeway is 60 seconds unless the operator
+sets another, and at most 5 minutes: the gateway refuses a configuration with a longer
+one, which would keep an expired run credential alive.
+
+The payload is one JSON object in UTF-8 that names each claim once: a payload that names
+a claim twice is refused, so no two readers of it can see different claims.
 
 Every claim the mapping names for a label is a string, and is required: a run credential
 without one is refused, since a run's labels come from the run credential alone. A
@@ -69,30 +74,63 @@ A run credential at its simplest, decoded:
 }
 ```
 
+## The serialisation and the header
+
+The run credential is the JWS compact serialisation
+([RFC 7515 §7.1](https://www.rfc-editor.org/rfc/rfc7515.html#section-7.1)), and the
+gateway reads that one form alone:
+
+- at most 16384 bytes;
+- exactly three parts separated by dots: the header, the payload and the signature, the
+  header and the payload not empty;
+- each part base64url ([RFC 4648 §5](https://www.rfc-editor.org/rfc/rfc4648.html#section-5))
+  without padding: no `=`, no white space, no line break, no byte outside the base64url
+  alphabet, and no bits set beyond a part's last byte.
+
+The header is one JSON object in UTF-8 that names each member once. In it:
+
+- `alg` is required (see the algorithms below);
+- `kid` selects the key (see publishing and rotating keys);
+- `typ` is optional, and when present is `JWT`, compared without regard to case
+  ([RFC 7519 §5.1](https://www.rfc-editor.org/rfc/rfc7519.html#section-5.1)); any other
+  value is refused;
+- `crit` is refused: the gateway understands no extension.
+
+The gateway never follows `jku`, `jwk`, `x5u` or `x5c`: it uses only the keys the operator
+pinned.
+
 ## The algorithms
 
 The issuer signs with one of three algorithms
 ([RFC 7518](https://www.rfc-editor.org/rfc/rfc7518.html),
 [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.html)):
 
-- `RS256`: RSASSA-PKCS1-v1_5 with SHA-256, under an RSA key of at least 2048 bits;
+- `RS256`: RSASSA-PKCS1-v1_5 with SHA-256, under an RSA key of at least 2048 bits; the
+  signature is as long as the key's modulus;
 - `ES256`: ECDSA with SHA-256 under a P-256 key, the signature `R` and `S`, 32 bytes each,
-  not ASN.1;
-- `EdDSA`: under an Ed25519 key. Ed448 is not accepted.
+  64 bytes in all and not ASN.1, each of `R` and `S` in [1, n-1], n the order of P-256.
+  ECDSA accepts two forms of each signature, `S` and n - `S`, so one run credential has
+  two byte forms, and a cache keyed by its bytes, such as introspection's, may hold an
+  entry for each;
+- `EdDSA`: Ed25519 ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html)), a signature
+  of 64 bytes. Ed448 is not accepted.
 
 `none` is refused, and so is every HMAC algorithm: the gateway holds only public keys, so
 no run credential is ever checked as HMAC under one. The header's `alg` must be among the
-issuer's configured algorithms, and equal the algorithm of the key it selects. A `crit`
-header is refused. The gateway never follows `jku`, `jwk`, `x5u` or `x5c`: it uses only
-the keys the operator pinned.
+issuer's configured algorithms, and equal the algorithm of the key it selects. The
+operator's configuration accepts no other algorithm, and no RSA key of fewer than 2048
+bits.
 
 ## Publishing and rotating keys
 
 The issuer publishes its public keys, each with a key id, `kid`. The operator pins them in
 the gateway's configuration, each as a file holding one PEM block of type `PUBLIC KEY`.
 
-- A run credential that carries a `kid` is verified under the pinned key of that `kid`.
+- A run credential that carries a `kid` is verified under the pinned key of that `kid`;
+  a `kid` that no pinned key has is refused, and so is a `kid` when the one key pinned
+  has none.
 - A run credential without a `kid` is accepted only while exactly one key is pinned.
+- With more than one key pinned, every key has a `kid`, each its own.
 - To rotate, the issuer publishes the next key under a new `kid`, the operator pins it
   beside the current one, the issuer signs with it, and the operator removes the old one
   once no run credential signed under it is still live.
@@ -111,25 +149,73 @@ credentials may live with `max_lifetime`: `exp` minus `iat` is then at most that
 run credential without `iat` is refused.
 
 A run credential that expires mid-run is replaced by a fresh one for the same run key,
-and the run goes on. Without one, the run ends at `exp`.
+and the run goes on. Without one, the run ends at `exp`, `credential_expired`: the
+gateway writes its `dev.qory.run.exited`, and a session's later requests get `410`
+with that code. A refreshed run credential with an earlier `exp` does not shorten the
+run.
+
+The leeway, 60 seconds by default and at most 5 minutes, applies to `exp`, `iat` and
+`nbf` alike: a run credential is accepted until `exp` plus the leeway, and its `iat` and
+`nbf` may be up to the leeway ahead of the gateway's clock.
 
 A run credential is bound to its run as well: once its run is closed or has ended, the
-gateway refuses it, not only at `exp`. The gateway keeps each ended run key until its run
-credential's `exp`, so a restart does not reopen it.
+gateway refuses it, not only at `exp`. The gateway keeps each ended run key, by issuer,
+until its run credential's `exp` plus 5 minutes, the longest leeway, in a file of its
+state directory (mode 0600, in a directory only its user writes), so a restart does not
+reopen it: `ended-run-keys.json`. It writes the run key there as soon as its run
+opens, before it answers or relays a byte, so a crash does not reopen it either. So the issuer gives a retry a new run key, and does
+not refresh the run credential of a run key whose run has ended. A second run request
+of a run key whose run is live is refused as well, a retry with the same run id
+included.
 
 ## The introspection endpoint
 
 An issuer may offer an OAuth 2.0 token introspection endpoint
 ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662.html)), so the gateway can ask whether
-a run credential is still active. The gateway:
+a run credential is still active.
 
-- posts the run credential to the configured endpoint, authenticated with the configured
-  client id and a secret it reads from a file;
-- asks before it opens a run, and again at most every `cache` while the run has
-  connections. `cache` defaults to the run's heartbeat interval, at which Qory already
-  reports a run alive, so an ended run is noticed within one heartbeat;
-- goes on with the run on `{"active": true}`, and ends it on `{"active": false}`;
-- fails closed: any other answer, or a failure to ask, counts as not active.
+The request is the one of RFC 7662 §2.1:
+
+```http
+POST /introspect HTTP/1.1
+Host: issuer.example
+Content-Type: application/x-www-form-urlencoded
+Accept: application/json
+Authorization: Basic <base64 of client_id ":" client secret>
+
+token=<the run credential>&token_type_hint=access_token
+```
+
+- The endpoint is an `https` URL, and the gateway reaches it over TLS 1.2 or later,
+  verifying its certificate under the system's roots. It connects directly, through no
+  proxy, and follows no redirect: a redirect is an answer other than `200`.
+- The client authenticates with HTTP Basic
+  ([RFC 7617](https://www.rfc-editor.org/rfc/rfc7617.html)): the configured `client_id`
+  and the secret, each form-encoded as
+  [RFC 6749 §2.3.1](https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1) asks. The
+  gateway reads the secret from `client_secret_file` once, when it starts: the file's
+  bytes, less one line ending at their end, and not empty.
+- The gateway waits at most 10 seconds for the whole answer.
+
+The answer, RFC 7662 §2.2, means active only when all of these hold:
+
+- the status is `200`;
+- the body is at most 65536 bytes, one JSON object that names each member once;
+- its member `active` is the JSON `true`, not the string `"true"` and not `1`.
+
+`{"active": false}` ends the run (`run_ended_at_issuer`). Any other answer, or a failure
+to ask, counts as not active too: the check fails closed. The gateway reads nothing else
+of the answer.
+
+The gateway asks before it opens a run. For a session's run it asks again on each of
+the session's requests; for a run with no session, at most every `cache` while the run
+has connections, or had one since it last asked. It keeps each answer for `cache`, a failure included, by the SHA-256 of
+the run credential, never by the run credential itself, so a refreshed run credential is
+asked about anew. `cache` defaults to the run's heartbeat interval, at which Qory already
+reports a run alive, so an ended run is noticed within one heartbeat.
+
+Neither the run credential nor the client secret appears in the gateway's errors or
+logs.
 
 ## The operator's configuration
 
@@ -178,15 +264,20 @@ holds `requester: example-requester`.
 
 ## How the gateway verifies a run credential
 
-The gateway checks the signature against the pinned keys before it uses any claim. It
-reads `iss` and `kid` from the unverified payload and header only to select the issuer's
-pinned keys, and trusts no claim before the signature verifies. In order:
+The gateway checks the signature against the pinned keys before it reads any claim:
+before the signature verifies, it reads the header alone, and never the payload. In
+order:
 
-1. **Header and keys:** `alg` is among the issuer's algorithms and equals the selected
-   key's; the key is selected by `kid`, or is the one key pinned.
-2. **Signature,** over the exact bytes received.
-3. **Claims:** `exp`, `iat`, `nbf`, `max_lifetime`, `iss`, `aud` and `sub`, as above.
-4. **Scope:** `allow`, from the signed claims, never from the request.
+1. **Serialisation:** the one compact form above.
+2. **Header and keys:** for each issuer, `alg` is among its algorithms and equals the
+   selected key's; the key is selected by `kid`, or is the one key pinned; `typ` and
+   `crit` as above.
+3. **Signature,** under each key the header selected, over the exact bytes received: the
+   header and the payload as they arrived, with the dot between them.
+4. **Claims:** the issuer is the one whose key verified the signature and whose `issuer`
+   equals `iss`; then `exp`, `iat`, `nbf`, `max_lifetime`, `aud` and `sub`, as above.
+5. **Scope:** `allow`, from the signed claims, never from the request.
+6. **Mapping:** the labels and `about.details`, from the signed claims.
 
 ## A client with no session
 
@@ -199,11 +290,36 @@ A proxy login over plain HTTP would carry the run credential in the clear, so th
 gateway's listener for other machines speaks TLS only: the client reaches the gateway as
 an HTTPS proxy, and the login travels inside TLS. A plain listener is allowed on loopback
 alone. A connection without a valid run credential gets
-`407 Proxy Authentication Required` with `Proxy-Authenticate: Basic realm="qory"`.
+`407 Proxy Authentication Required` with `Proxy-Authenticate: Basic realm="qory"` and,
+as `text/plain`, "a valid run credential is required as the proxy password": the same
+answer for every failure.
 
 The first connection with a valid run credential whose run key has no run at the gateway
 opens the run. Every later connection with a run credential for the same run key belongs
-to that run, a refreshed one included.
+to that run, a refreshed one included. The gateway reports the run itself, in this
+order: its ping; then, once it has fetched the run's policy from the control plane and
+decided the run, its `dev.qory.run.started`, with `opened_by` `gateway` and the run
+credential's labels and `about.details`, and its policy; then every connection and its
+heartbeats. A run refused with a code, say the control plane refuses the run's
+configuration or the run selects an image, gets the gateway's `dev.qory.run.refused`
+with that code in place of `dev.qory.run.started`; one that fails without a code gets
+no event. Either way its run key ends.
+
+The run ends, and the gateway writes its `dev.qory.run.exited`:
+
+- `quiet`, once it has had no connection for the operator's quiet time;
+- `credential_expired`, at its run credential's latest `exp` with no fresher one;
+- `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
+  credential active;
+- `run_closed`, when the control plane closes the run.
+
+When the gateway stops with the run live, the run ends without its
+`dev.qory.run.exited`, and resending its record completes it as `gateway_lost`. From any
+end on, its run key's connections get `407`.
+
+For a host the policy holds to paths, the gateway reads inside HTTPS with a
+certificate of its own authority, `authority/ca.pem` in its directory, which the
+operator installs on the clients' machines.
 
 ## A session
 
@@ -242,6 +358,7 @@ The contract publishes known answers under
 [`fixtures/known-answers/run-credentials/`](../contracts/forager/v1/fixtures/known-answers/run-credentials/):
 fixture keys of each algorithm derived from a published seed, two configurations of the
 fixture issuer, and run credentials signed under the keys, each with the outcome it gets
-at a fixed time and, for a refused one, the step that refuses it. These keys are public:
+at a fixed time and, for a refused one, the step that refuses it: the serialisation, the
+header, the signature, the claims, the scope or the mapping. These keys are public:
 anyone can derive their private keys from the seed. Forager refuses them in a
 configuration; never pin them.

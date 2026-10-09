@@ -82,10 +82,11 @@ type Spec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Gateway is the gateway the run speaks to, [LocalGateway]: it holds the run's
-	// proxy, its policy, its credentials and its tools, decides the run's policy and
-	// image, numbers the run's events and is the node toward the server. The session
-	// speaks to it alone, over its link. A run needs one.
+	// Gateway is the gateway the run speaks to, [LocalGateway] on this machine or a
+	// [RemoteGateway] on a machine of its own: it holds the run's proxy, its policy, its
+	// credentials and its tools, decides the run's policy and image, numbers the run's
+	// events and is the node toward the server. The session speaks to it alone, over its
+	// link. A run needs one.
 	Gateway Gateway
 	// Wall, when not nil, encloses the runtime: the command is started inside an
 	// enclosure whose only route out leads to the gateway's proxy, in the image the
@@ -139,8 +140,10 @@ type Spec struct {
 	// Labels are the caller's own names for the run, its key in a queue, a repository, an
 	// issue: sent on the run request, so the gateway asks the server for the run's policy
 	// by them, and reported in run.started, as the gateway's run answer holds them, and
-	// no other event. Forager reads nothing into them. At most MaxLabels; a key is 1 to 64
-	// of a-z, 0-9, underscore, dot and dash, a value at most 256 bytes.
+	// no other event. Behind a [RemoteGateway] the run's labels are the run credential's,
+	// and a label sent here with another value is refused. Forager reads nothing into
+	// them. At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and dash, a
+	// value at most 256 bytes.
 	Labels map[string]string
 	// About is what the run is about, as the caller passed it: the kind of run, a title,
 	// the subjects it works on and details. It is sent on the run request and reported in
@@ -300,8 +303,9 @@ func (e *ended) get() (string, string) {
 // context ending stops the runtime, and so does the run being closed from outside.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
-	if !spec.Gateway.set {
-		return nil, errNoGateway
+	local, remote, err := gatewayOf(spec.Gateway)
+	if err != nil {
+		return nil, err
 	}
 	// runCtx ends when the run is closed from outside, a 410 on the link or the
 	// gateway's 400 to a batch: the start stops, or the runtime is stopped as at its
@@ -398,11 +402,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// discovery, a run request or a reload.
 	var answeredMu sync.Mutex
 	var answered server.Digests
-	k, err := server.NewLocalLink(spec.Gateway.local, accesskey.UserAgent(spec.ForagerVersion), func(d server.Digests) {
+	digests := func(d server.Digests) {
 		answeredMu.Lock()
 		answered = d
 		answeredMu.Unlock()
-	})
+	}
+	var k *server.Link
+	if remote != nil {
+		// A separate gateway: TLS 1.3 to its one address, and the run credential on every
+		// request.
+		k, err = server.NewRemoteLink(remote.URL, server.RemoteTLS{CAFile: remote.CAFile, CertificateSHA256: remote.CertificateSHA256},
+			remote.Credential, accesskey.UserAgent(spec.ForagerVersion), digests)
+	} else {
+		k, err = server.NewLocalLink(local.local, accesskey.UserAgent(spec.ForagerVersion), digests)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +429,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err == nil && disc.Proxy == nil {
 		err = errors.New("the link's discovery names no proxy")
 	}
-	if err == nil && !loopback(disc.Proxy.Address) {
+	// The local link's proxy is on loopback; a separate gateway's is its one address,
+	// which the link's discovery checked.
+	if err == nil && local != nil && !loopback(disc.Proxy.Address) {
 		err = fmt.Errorf("the gateway's discovery names the proxy %q, which is no address on loopback: the local link's proxy is on this machine", disc.Proxy.Address)
 	}
 	if err == nil && disc.Events.IntervalSeconds < 1 {
@@ -531,7 +546,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return fail(err)
 	}
-	reserved := slices.Concat(answer.Reserved, spec.Gateway.local.Reserved)
+	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
 	var authority []byte
 	if spec.Wall != nil && answer.CertificateAuthority != "" {
 		authority = []byte(answer.CertificateAuthority)
@@ -565,7 +580,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(fmt.Errorf("the gateway's proxy secret: %w", err))
 	}
 	var enclosure wall.Enclosure
-	bind, secret := link.Loopback, answer.ProxySecret
+	// relayToken is what the wall's relay opens every connection with: the run's proxy
+	// secret on one machine; behind a separate gateway a secret of this run's forwarder
+	// alone, which the forwarder replaces with the proxy secret inside TLS.
+	bind, secret, relayToken := link.Loopback, answer.ProxySecret, answer.ProxySecret
 	if spec.Wall != nil {
 		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
 			return fail(err)
@@ -583,7 +601,24 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// secret itself, and the forwarder passes on what arrives as it is.
 		bind, secret = enclosure.ProxyAddr(), ""
 	}
-	fwd, err := listenForwarder(bind, disc.Proxy.Address, secret)
+	var fwd *forwarder
+	switch {
+	case remote == nil:
+		fwd, err = listenForwarder(bind, disc.Proxy.Address, secret)
+	case spec.Wall != nil:
+		// Behind a wall and a separate gateway: the relay opens every connection with the
+		// hop secret, and the forwarder, which checks it, opens the connection to the
+		// gateway over TLS with the run's proxy secret.
+		if relayToken, err = newHopSecret(); err != nil {
+			return fail(err)
+		}
+		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, secret: answer.ProxySecret, hop: relayToken})
+	default:
+		// Without a wall, behind a separate gateway: the agent's proxy URL carries the
+		// run's proxy secret as its password, as the contract has it, and the forwarder
+		// on loopback carries each connection to the gateway inside TLS.
+		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, password: answer.ProxySecret})
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -648,7 +683,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders), emptied),
 			CA:    authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: plan.Mounts, Limits: spec.Limits,
-			ProxyToken: answer.ProxySecret,
+			ProxyToken: relayToken,
 		})
 		if err != nil {
 			return fail(err)

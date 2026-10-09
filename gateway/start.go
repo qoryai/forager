@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -38,7 +39,8 @@ const (
 // defaultHeartbeat is the interval when the config names none.
 const defaultHeartbeat = 30 * time.Second
 
-// Gateway is a gateway serving sessions on its local link: it opens each run, decides
+// Gateway is a gateway serving sessions on its local link, and on its one address with
+// [Config.Listen]: it opens each run, decides
 // its connections by its policy through the shared proxy, numbers its events and sends
 // them to the server.
 type Gateway struct {
@@ -46,6 +48,9 @@ type Gateway struct {
 	report   func(string)
 	interval int
 	quiet    time.Duration
+	// runsQuiet is how long a run with no session lasts with no connection,
+	// [RunsConfig.Quiet].
+	runsQuiet time.Duration
 
 	// client, conf and confDigest are the server's, nil without one.
 	client     *server.Client
@@ -57,12 +62,23 @@ type Gateway struct {
 	cancel context.CancelFunc
 
 	dir     string
-	secret  string
+	secret  secretValue
 	ln      net.Listener
 	link    *linkListener
 	http    *http.Server
 	proxies *proxy.Listener
 	stream  *stream.Stream
+	// svc is the gateway's one address, nil without [Config.Listen]; auth and login
+	// decide the run credentials it is given. authority is the gateway's own
+	// certificate authority, kept in its directory, which the proxy of a run with no
+	// session reads inside HTTPS with; nil without Listen.
+	svc       *service
+	auth      runAuth
+	login     proxyLogin
+	authority *proxy.CA
+	// ended are the run keys whose run ended at this gateway, kept in its directory;
+	// nil without Listen.
+	ended *runcredential.Ended
 	// discovery is the link's discovery answer, and discoveryDigest its digest, the
 	// X-Qory-Configuration of every answer.
 	discovery       []byte
@@ -75,6 +91,12 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
+	// keys are the runs on the one address by their run key, live or ended; opening
+	// the run keys whose run is opening, each closed once it opened or failed to; and
+	// endedUntil the latest exp each ended run key was kept to by this process.
+	keys       map[runKeyID]*linkRun
+	opening    map[runKeyID]chan struct{}
+	endedUntil map[runKeyID]time.Time
 
 	closed   chan struct{}
 	delivery Delivery
@@ -85,10 +107,19 @@ type Gateway struct {
 // document first and calls [Config.Discovered], and a refusal is an
 // [*accesskey.Refusal]; then it makes the local link, served in memory to a session in
 // this process and, unless [Config.NoLinkSocket], on a socket in a private directory of
-// its own, and the shared proxy listener on loopback, and serves sessions until Close. It sends nothing more before a session opens a run.
+// its own, the shared proxy listener on loopback, and, with [Config.Listen], its one
+// address, and serves sessions until Close. It sends nothing more before a session
+// opens a run.
+//
+// Start refuses, before anything starts, a Listen that is not host:port, a Listen that
+// is not loopback without TLS, TLS files it cannot read or whose certificate and key do
+// not match, TLS without a Listen, a Listen without RunCredentials or without Dir,
+// where the gateway's own certificate authority and the ended run keys are kept, and
+// RunCredentials whose check fails or whose files it cannot read.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
-	if cfg.Listen != "" || cfg.TLS != nil {
-		return nil, errors.New("a separate gateway, with an address and a certificate of its own, is not served yet; the gateway serves its local link alone")
+	cert, err := checkService(&cfg)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.Dir == "" && cfg.RunDir == nil {
 		return nil, errors.New("the gateway needs a directory, or a record directory for each run")
@@ -122,10 +153,40 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if report == nil {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
-	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{})}
+	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
+		keys: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
+	}
+	g.runsQuiet = cfg.Runs.Quiet
+	if g.runsQuiet == 0 {
+		g.runsQuiet = defaultRunsQuiet
+	}
+	g.auth, g.login = cfg.runAuth, cfg.proxyLogin
+	if cfg.Listen != "" {
+		if g.auth == nil {
+			if g.auth, err = newCredentialVerifier(&cfg, cfg.Heartbeat); err != nil {
+				return nil, err
+			}
+		}
+		if g.login == nil {
+			g.login = clientLogin{g}
+		}
+		// Before the server is asked anything: a gateway that cannot keep its authority
+		// or its ended run keys does not start.
+		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
+			return nil, err
+		}
+		if g.ended, err = runcredential.OpenEnded(cfg.Dir); err != nil {
+			return nil, err
+		}
+	}
+	if g.auth == nil {
+		g.auth = refuseAll{}
+	}
+	if g.login == nil {
+		g.login = refuseAll{}
 	}
 	if cfg.Server != nil {
 		client, err := newClient(cfg.Server, cfg.Version)
@@ -154,7 +215,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	g.secret = secret
+	g.secret = newSecretValue(secret)
 	if !cfg.NoLinkSocket {
 		if err := g.listenLink(); err != nil {
 			return nil, err
@@ -189,7 +250,14 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		uid = *cfg.uid
 	}
 	g.link = newLinkListener(g.ln, secret, uid)
-	g.http = &http.Server{Handler: g.handler(), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
+	if cfg.Listen != "" {
+		if g.svc, err = g.startService(cert); err != nil {
+			g.link.Close()
+			g.proxies.Close()
+			return nil, err
+		}
+	}
+	g.http = &http.Server{Handler: g.handler(localSide), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
 	go g.http.Serve(g.link)
 	ok = true
 	return g, nil
@@ -249,9 +317,15 @@ func newClient(s *Server, version string) (*server.Client, error) {
 	return &server.Client{Config: cfg, Key: s.AccessKey, InstanceID: s.InstanceID, InstanceName: s.InstanceName, UserAgent: accesskey.UserAgent(version)}, nil
 }
 
-// Addr is the address of the gateway's proxy, host:port on loopback: every connection
-// opens with the relay's preamble and a live run's proxy secret.
-func (g *Gateway) Addr() string { return g.proxies.Addr() }
+// Addr is the address of the gateway's proxy, host:port: with [Config.Listen] its one
+// address, as it listens; else on loopback, where every connection opens with the
+// relay's preamble and a live run's proxy secret.
+func (g *Gateway) Addr() string {
+	if g.svc != nil {
+		return g.svc.addr()
+	}
+	return g.proxies.Addr()
+}
 
 // LocalLink is what a session in this process needs of the gateway: the way to its link
 // in memory, which a session's client takes in place of the socket, so no other process
@@ -261,15 +335,15 @@ func (g *Gateway) Addr() string { return g.proxies.Addr() }
 func (g *Gateway) LocalLink() link.Local {
 	return link.Local{
 		Socket:   g.socket(),
-		Secret:   g.secret,
+		Secret:   g.secret.reveal(),
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
 		Reserved: g.reserved(),
 	}.InMemory(g.link.dial)
 }
 
-// String names the gateway by its proxy's address and its link's socket, never its
-// secret.
+// String names the gateway by its proxy's address, its link's socket and its one
+// address when it has one, never a secret.
 func (g *Gateway) String() string {
 	if g == nil {
 		return "gateway.Gateway(nil)"
@@ -278,7 +352,11 @@ func (g *Gateway) String() string {
 	if where == "" {
 		where = "in memory"
 	}
-	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
+	s := "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where
+	if g.svc != nil {
+		s += ", address " + g.svc.addr()
+	}
+	return s + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.
@@ -396,6 +474,9 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	if err := g.http.Shutdown(shut); err != nil {
 		g.http.Close()
+	}
+	if g.svc != nil {
+		errs = append(errs, g.svc.close(shut))
 	}
 	cancel()
 	g.link.Close()

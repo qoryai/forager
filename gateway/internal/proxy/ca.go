@@ -31,8 +31,16 @@ type CA struct {
 // any run, short enough that a leaked certificate is soon nothing.
 const caLife = 7 * 24 * time.Hour
 
+// leafRenew is how long before its end a leaf is made again.
+const leafRenew = 24 * time.Hour
+
 // NewCA makes an authority for the run named.
 func NewCA(runID string) (*CA, error) {
+	return newCA(pkix.Name{CommonName: "qory run " + runID, Organization: []string{"Forager gateway, one run only"}}, caLife)
+}
+
+// newCA makes an authority of the subject, good for life.
+func newCA(subject pkix.Name, life time.Duration) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -44,9 +52,9 @@ func NewCA(runID string) (*CA, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "qory run " + runID, Organization: []string{"Forager gateway, one run only"}},
+		Subject:               subject,
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(caLife),
+		NotAfter:              now.Add(life),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -56,6 +64,11 @@ func NewCA(runID string) (*CA, error) {
 	if err != nil {
 		return nil, err
 	}
+	return caOf(der, key)
+}
+
+// caOf is the authority of the certificate der and its key.
+func caOf(der []byte, key *ecdsa.PrivateKey) (*CA, error) {
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
 		return nil, err
@@ -70,7 +83,10 @@ func (c *CA) PEM() []byte { return c.pem }
 func (c *CA) leaf(host string) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if l, ok := c.leaves[host]; ok {
+	now := time.Now()
+	// A leaf is made again a day before it expires: a gateway's own authority outlives
+	// any one leaf.
+	if l, ok := c.leaves[host]; ok && now.Before(l.Leaf.NotAfter.Add(-leafRenew)) {
 		return l, nil
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -81,12 +97,16 @@ func (c *CA) leaf(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
+	// Never past the authority's own end.
+	notAfter := now.Add(caLife)
+	if notAfter.After(c.cert.NotAfter) {
+		notAfter = c.cert.NotAfter
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(caLife),
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -99,7 +119,11 @@ func (c *CA) leaf(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &tls.Certificate{Certificate: [][]byte{der, c.cert.Raw}, PrivateKey: key}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	l := &tls.Certificate{Certificate: [][]byte{der, c.cert.Raw}, PrivateKey: key, Leaf: parsed}
 	c.leaves[host] = l
 	return l, nil
 }

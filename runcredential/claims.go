@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -17,9 +18,15 @@ import (
 // answers it with [Refused] to a session and with 407 to a client with no session.
 var ErrRefused = errors.New("the gateway refused this run credential")
 
-// refused is a failure of a run credential. Its reason, a constant, is for this
-// package's tests; Error returns [ErrRefused]'s text whatever the reason.
-type refused struct{ reason string }
+// refused is a failure of a run credential. Its step and its reason, constants, are for
+// this package's tests; Error returns [ErrRefused]'s text whatever they are.
+type refused struct {
+	// step is the step of the verification that refused it, as the known answers name
+	// them: serialisation, header, signature, claims, scope or mapping; "" when the
+	// function that refused it is not [Verifier.Verify].
+	step   string
+	reason string
+}
 
 func (r *refused) Error() string { return ErrRefused.Error() }
 
@@ -28,6 +35,18 @@ func (r *refused) Is(target error) bool { return target == ErrRefused }
 
 // refuse is a failure of a run credential for a reason.
 func refuse(reason string) error { return &refused{reason: reason} }
+
+// refuseAt is a failure of a run credential at a step of the verification.
+func refuseAt(step, reason string) error { return &refused{step: step, reason: reason} }
+
+// at sets the step of a failure of a run credential that has none, and returns it.
+func at(step string, err error) error {
+	var r *refused
+	if errors.As(err, &r) && r.step == "" {
+		r.step = step
+	}
+	return err
+}
 
 // Refused is the refusal a gateway answers a session with for any [ErrRefused]: the
 // code run_credential_refused, with no names.
@@ -45,7 +64,9 @@ func Refused() *accesskey.Refusal {
 //   - kid is present and not a string, or names no pinned key;
 //   - kid is absent and the issuer pins more than one key;
 //   - the selected key's alg is not the header's alg;
-//   - crit is present: the gateway understands no extension of RFC 7515 §4.1.11.
+//   - crit is present: the gateway understands no extension of RFC 7515 §4.1.11;
+//   - typ is present and not the string JWT, compared without regard to case (RFC 7519
+//     §5.1).
 //
 // Nothing else of the header selects a key: jku, jwk, x5u and x5c are never followed.
 // The header is read before the signature is verified, so SelectKey only narrows; the
@@ -60,6 +81,11 @@ func (i Issuer) SelectKey(header map[string]any) (int, error) {
 	}
 	if _, ok := header["crit"]; ok {
 		return 0, refuse("crit is present")
+	}
+	if v, present := header["typ"]; present {
+		if typ, ok := v.(string); !ok || !strings.EqualFold(typ, "JWT") {
+			return 0, refuse("typ is not JWT")
+		}
 	}
 	n := -1
 	if v, present := header["kid"]; present {
@@ -97,7 +123,8 @@ const maxNumericDate = 253402300799
 // verification, at now. Every failure is [ErrRefused]:
 //
 //   - the issuer and its audience are not empty, so an Issuer built in Go without
-//     [Issuer.Check] never matches an iss or an aud of "";
+//     [Issuer.Check] never matches an iss or an aud of "", and its leeway is not
+//     negative and at most [MaxLeeway];
 //   - exp is required, a NumericDate, and now is before exp plus the leeway;
 //   - iat, when present, is a NumericDate no later than now plus the leeway;
 //   - nbf, when present, is a NumericDate no later than now plus the leeway (RFC 7519
@@ -118,6 +145,9 @@ func (i Issuer) CheckClaims(claims map[string]any, now time.Time) error {
 		return refuse("the issuer has no audience")
 	}
 	leeway := i.LeewayOrDefault()
+	if leeway < 0 || leeway > MaxLeeway {
+		return refuse("the leeway is outside 0 to MaxLeeway")
+	}
 	exp, ok, err := numericDate(claims, "exp")
 	if err != nil || !ok {
 		return refuse("exp is missing or not a NumericDate")

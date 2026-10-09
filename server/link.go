@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
@@ -280,11 +281,13 @@ func values(vars map[string]Variable) map[string]string {
 // the server on the same paths, unsigned. Its transport authenticates both ends: on the
 // local link, [NewLocalLink], the socket's peer is this process's user, checked before
 // the link secret is written on each connection, and the secret opens every
-// connection. Every URL it requests must have its origin, so nothing it sends leaves
-// the link, and it follows no redirect.
+// connection; behind a separate gateway, [NewRemoteLink], TLS 1.3 verifies the
+// gateway, and the run credential on every request the session. Every URL it requests
+// must have its origin, so nothing it sends leaves the link, and it follows no
+// redirect.
 //
-// A Link never prints the link secret: fmt and log/slog show it by its socket, and no
-// error it returns contains the secret.
+// A Link never prints the link secret or the run credential: fmt and log/slog show it
+// by its socket or its URL, and no error it returns contains either.
 type Link struct {
 	// userAgent is sent as User-Agent.
 	userAgent string
@@ -298,6 +301,12 @@ type Link struct {
 	// uid is the user the local link's socket's peer must be.
 	uid  int
 	http *http.Client
+	// credential, address and tls are a separate gateway's, [NewRemoteLink]: the run
+	// credential, asked for before each request; the one address, host:port; and the
+	// TLS every connection to it is made with. All are empty on the local link.
+	credential func(context.Context) (string, error)
+	address    string
+	tls        *tls.Config
 }
 
 // NewLocalLink returns the client of a gateway's local link. Each connection is the
@@ -430,6 +439,9 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, max int,
 	}
 	if set != nil {
 		set(req.Header)
+	}
+	if err := k.authorize(ctx, req.Header); err != nil {
+		return nil, err
 	}
 	req.Header.Set("User-Agent", k.userAgent)
 	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
@@ -650,7 +662,9 @@ func checkRunMembers(vars map[string]Variable, placeholders, reserved []string, 
 
 // Discover fetches the link's discovery from its well-known path. It refuses a
 // discovery whose events or run URL is not on the link, http://localhost and a path on
-// the local link, and a proxy address that is not host:port.
+// the local link and the gateway's origin and a path behind a separate gateway, and a
+// proxy address that is not host:port, or, behind a separate gateway, not its one
+// address.
 func (k *Link) Discover(ctx context.Context) (*LinkDiscovery, error) {
 	u := k.origin + WellKnown
 	var d LinkDiscovery
@@ -666,6 +680,9 @@ func (k *Link) Discover(ctx context.Context) (*LinkDiscovery, error) {
 	if d.Proxy != nil {
 		if _, port, err := net.SplitHostPort(d.Proxy.Address); err != nil || port == "" {
 			return nil, &DocumentError{"the link's discovery", k.at(u), errors.New("proxy.address is not host:port")}
+		}
+		if err := k.oneAddress(d.Proxy.Address); err != nil {
+			return nil, &DocumentError{"the link's discovery", k.at(u), err}
 		}
 	}
 	return &d, nil

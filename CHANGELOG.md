@@ -186,6 +186,49 @@ release may change what an existing document does, and says so under Upgrading.
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
   and that the run credential never appears in an event, a record or a log.
+- `runcredential.NewVerifier` and `Verifier.Verify` verify a run credential under the
+  issuers a gateway accepts, their keys read once. The serialisation is the strict JWS
+  compact form: at most `runcredential.MaxCredentialBytes`, 16384 bytes, exactly three
+  parts of base64url without padding, white space or another byte, with no bits beyond
+  a part's last byte. The header is one JSON object with each member name once, through
+  `Issuer.SelectKey`. The signature is verified under each key the header selects, over
+  the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5 with SHA-256, `ES256` of exactly
+  64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by Ed25519. The payload is read only
+  after a signature verified, one JSON object with each member name once, and the issuer
+  is the one whose key verified it and whose issuer equals `iss`. Then `CheckClaims`,
+  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the issuer, the run
+  key, `exp`, the claims, the labels and the details. Every failure is
+  `runcredential.ErrRefused`, whose text holds no part of the run credential.
+- `Issuer.SelectKey` refuses a `typ` other than `JWT`, compared without regard to case.
+- `Issuer.Check` refuses a `leeway` above `runcredential.MaxLeeway`, 5 minutes, and
+  `Issuer.CheckClaims` refuses every run credential under such an issuer built in Go.
+  `run-credentials.schema.json` says so.
+- `runcredential.NewIntrospector` and `Introspector.Active` ask an issuer's RFC 7662
+  endpoint whether a run credential is still active: a `POST` over TLS 1.2 or later of
+  the form `token` and `token_type_hint=access_token`, with HTTP Basic as the configured
+  client, the client id and the secret each form-encoded, the secret read once from its
+  file; directly, through no proxy, following no redirect, within
+  `runcredential.IntrospectionTimeout`, 10 seconds. It is active only on status 200 with
+  one JSON object, each member name once, of at most
+  `runcredential.MaxIntrospectionAnswer`, 65536 bytes, whose `active` is the JSON
+  `true`; any other answer, or a failure, is not active. Each answer, a failure
+  included, is kept for the issuer's `cache`, or the heartbeat interval, by the SHA-256
+  of the run credential, and callers for the same run credential share one request. Its
+  errors name neither the run credential nor the secret.
+- `runcredential.OpenEnded` and `runcredential.Ended` keep the ended run keys by issuer
+  in `ended-run-keys.json` of the gateway's state directory, mode 0600, written
+  atomically, in a directory of mode 0700 that only its user writes. Each is kept until
+  its run credential's `exp` plus 5 minutes, the longest leeway, and dropped on open and
+  on `Ended.Add`; `Ended.Has` asks. A file that cannot be read, that others can read or
+  write, or that holds no array `ended` is refused, so a gateway never starts having
+  forgotten an ended run.
+- The known answers of the run credential gain the step `serialisation` and run
+  credentials refused at it (padding, a line feed, a space, four parts, two parts), at
+  the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature
+  (over an altered header; an `ES256` signature of 63 or 65 bytes, with `R` zero or `S`
+  the order) and at the claims (a member name twice, no `exp`, no `aud`), and accepted
+  ones with `typ` `jwt` and without `typ`. `runcredential`'s tests run
+  `Verifier.Verify` on every one.
 - Forager reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
@@ -227,10 +270,13 @@ release may change what an existing document does, and says so under Upgrading.
   never a value, `images`, the session's `default` and `definitions`, each with `name`,
   `ref`, `runtime` and `docker`, whose references the gateway never logs or reports
   since one may carry a registry's credentials, and, behind a separate gateway, a
-  `narrowing` that only narrows; the request is one-shot per `run_id`, and the gateway
-  refuses it with `invalid_request`, `run_credential_refused`, `run_id_used`,
-  `target_differs_from_credential` or `differs_from_credential`, the last two naming
-  each member that differs as `<member>=<the run credential's value>`. With `passes`
+  `narrowing` that only narrows; the request is one-shot per `run_id`. Behind a
+  separate gateway the run credential is decided first, a refused one `401`
+  `run_credential_refused` before the body is read; then the gateway refuses the
+  request in order with `invalid_request`, `run_credential_refused` for a run key that
+  has a run, `run_id_used`, and `target_differs_from_credential` or
+  `differs_from_credential`, the last two naming each member that differs as
+  `<member>=<the run credential's value>`. With `passes`
   and `images` the gateway decides the run, and each reload, as the session decides it
   today and in the same order, before it sets anything: the policy in force, what needs
   a wall, the image, `image_unknown`, the credentials and the tools, and
@@ -331,7 +377,20 @@ release may change what an existing document does, and says so under Upgrading.
   that way alone.
   `link.WriteLinkPreamble` and `link.ReadLinkPreamble` write and read the link's
   preamble, compared in constant time in a read of exactly its length, beside
-  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
+  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`;
+  `link.ReadRelayPreamble` reads the relay's the same way.
+- `server.NewRemoteLink(url, server.RemoteTLS{CAFile, CertificateSHA256}, credential,
+  userAgent, digests)` is the client of a separate gateway's link, with the local
+  link's `Discover`, `OpenRun`, `Reload` and `Deliver` and their refusals: an `https`
+  URL of a host and an optional port alone; TLS 1.3 alone; the system's roots, or the
+  CA file's authorities in their place; the URL's host name; the pin, the SHA-256 of
+  the certificate's DER SubjectPublicKeyInfo in standard base64 with padding, checked
+  after the chain; no proxy of the environment and no redirect; and
+  `Authorization: Bearer` with the run credential, asked for before every request and
+  sent only in the syntax of RFC 6750 §2.1, never in an error or a print. Its discovery
+  must list the gateway's origin alone and name its one address as the proxy.
+  `Link.DialProxy` opens a connection to that address over TLS with the same trust, and
+  `Link.ProxyAddress` names it.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -464,9 +523,84 @@ release may change what an existing document does, and says so under Upgrading.
   session opens on its link resolves the credentials and starts the tools the run's
   policy selects among `gateway.Config`'s `Credentials` and `Tools`. A test in
   `internal/importrules` fails on any other export.
+- `gateway.TLS` is `{CertFile, KeyFile}`, in place of `{Certificate, Key}`, and
+  `gateway.Config` has `Listen`, `TLS`, `RunCredentials` and `Runs`, a `RunsConfig`.
+  `Start` with `Listen` empty serves the local link alone, as before, and refuses a
+  `TLS` without a `Listen`.
+
+#### Added
+
+- `gateway.Config.Listen`, the gateway's one address, served beside the local link.
+  Every connection is routed by its first bytes, after the TLS handshake when there is
+  TLS, within the time and the size the relay's preamble has: `QORY-RELAY` and a run's
+  proxy secret to that run's proxy; a proxy request, `CONNECT` or an absolute-form
+  target, to the proxy of the run its `Proxy-Authorization` names, the password of
+  Basic a live run's proxy secret or else a run credential, and `407` with
+  `Proxy-Authenticate: Basic realm="qory"` without one; anything else to the contract,
+  where every request's `Authorization: Bearer` run credential is decided first and a
+  request without one, or with one refused, is `401` `run_credential_refused` from the
+  gateway, with `WWW-Authenticate: Bearer`.
+- The one address verifies run credentials under the issuers of
+  `gateway.Config.RunCredentials`, their keys pinned. A session's run request there is
+  decided by its run credential: the run's labels and `about.details` are the run
+  credential's, and the run answer carries them; a session's `forge` or `repository`
+  that differs is `403` `target_differs_from_credential`, another label or detail the
+  mapping sets `403` `differs_from_credential`, each naming the run credential's value;
+  its `run.started` must carry the same `about.details`. A run key opens one run at a
+  gateway: a second run request of it, live or ended, is `401`
+  `run_credential_refused`, and the gateway keeps the run key in
+  `ended-run-keys.json` in its directory from the moment its run opens, before the
+  answer, to its latest `exp`, so neither a restart nor a crash reopens it, and a run
+  that fails to open keeps it too. Every later
+  request of the run carries a run credential of its run key, a refreshed one carrying
+  the run to its `exp`; one of another run key is `401`, so no run id can be probed.
+  The run ends at its latest `exp` with no fresher run credential,
+  `credential_expired`, and when the issuer's introspection no longer holds its run
+  credential active, `run_ended_at_issuer`: the gateway writes its
+  `dev.qory.run.exited`, and every later request gets the `410` with that code. A
+  session's narrowing is accepted on the one address and narrows the run's policy, at
+  its start and on each reload; it opens none of the gateway's own addresses, which
+  only the policy before it opens, when it enforces and names the host itself. The local link reaches none of the one address's runs.
+- A client with no session sets the gateway's one address as its HTTPS proxy, its run
+  credential the password of Basic in `Proxy-Authorization`; every failure of its login
+  is the same `407`, with `Proxy-Authenticate: Basic realm="qory"` and the text "a
+  valid run credential is required as the proxy password". The first connection of a
+  run key with no run opens one, of the gateway's own run id, decided as a walled run:
+  the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
+  every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
+  HTTPS with the gateway's own authority. Every later connection of the run key joins
+  the run. The run ends after `Runs.Quiet` with no connection, `quiet`, with
+  `quiet_seconds`; at its `exp`; at the issuer's word; or at the server's `410`; its
+  `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
+  credentials are `407` from then on. A run refused with a code gets the gateway's
+  `dev.qory.run.refused` with that code, right after its ping; one that fails without
+  a code gets no event. Either way its run key ends.
+- A run's end closes every tunnel of its proxy, at both ends, and the connections whose
+  TLS the proxy ends, so no connection relays past the run.
+- `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
+  1.3 alone. A plain listener is allowed on loopback alone. `Start` refuses a `Listen`
+  that is not `host:port`, one that is not loopback without `TLS`, certificate and key
+  files it cannot read or that do not match, and a `Listen` without `RunCredentials` or
+  without `Dir`.
+- The discovery on the one address lists every URL on the origin the session reached,
+  by its `Host`, and `proxy.address` that same address.
+- The proxy of every run served through the one address is guarded, whatever its wall:
+  the machine's own addresses are refused unless the policy's allow list names the
+  host, as for a walled run. A local run's proxy, which may not be guarded, is never
+  reached from the one address.
+- With `Listen`, the gateway keeps a certificate authority of its own in its directory,
+  `authority/ca.pem`, the directory mode `0700` and the file `0600`: made once, reused
+  by every later start, for its proxy to read inside HTTPS for the clients with no
+  session, whose machines trust it. A directory or a file another user may reach is
+  refused.
+- `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
+  30 minutes when zero.
 
 #### Changed
 
+- A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
+  neither `state` nor `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
 - The organization of the run's certificate authority is `Forager gateway, one run
   only`. The gateway's `403` for a link-local address or the machine's own address
@@ -569,11 +703,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- A session speaks to a gateway alone, over the gateway's local link. `session.Spec`
-  gains `Gateway`, made by `session.LocalGateway(l link.Local)` from the link
-  `(*gateway.Gateway).LocalLink()` hands out; the link's secret stays in the process's
-  memory, and a `session.Gateway` prints and logs by its socket alone. A spec without
-  one is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
+- A session speaks to a gateway alone, over the gateway's link. `session.Spec`
+  gains `Gateway`, an interface: `session.LocalGateway(l link.Local)` from the link
+  `(*gateway.Gateway).LocalLink()` hands out, or a `session.RemoteGateway` (Added,
+  below); the link's secret stays in the process's memory, and a `session.Gateway`
+  prints and logs by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret. A spec without one, a nil `Gateway`, is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
   `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
@@ -621,6 +756,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `session.RemoteGateway{URL, CAFile, CertificateSHA256, Credential}`, a separate
+  gateway on a machine of its own. The session reaches its one address over TLS 1.3
+  alone, verifies the chain for the host name of `URL` against the system's roots or,
+  with `CAFile`, that file's authorities alone, and the certificate's public key against
+  `CertificateSHA256` when it is set, and sends `Authorization: Bearer` and the run
+  credential `Credential` returns on every request, asked for again before each one, so
+  a refreshed run credential is picked up. It holds no access key, prints as its URL,
+  its `CAFile` and its pin, never the run credential, and without `Credential` is no
+  run. The discovery's proxy is the gateway's one address, the run request carries the
+  spec's labels and `about` and no narrowing, and `run_credential_refused`,
+  `target_differs_from_credential` and `differs_from_credential` return a
+  `*session.Refusal` with the gateway's message as its text. Agent traffic goes through
+  the session's forwarder to the gateway's one address over TLS with the same trust:
+  without a wall, the agent's proxy URL is the forwarder on loopback with the run's
+  proxy secret as its password, so the agent's environment holds the proxy secret;
+  behind a wall, the relay opens every connection with a token of the run's forwarder
+  alone, `wall.Launch.ProxyToken`, which the forwarder checks and replaces with the
+  run's proxy secret inside TLS, so the proxy secret is in no file of the wall's.
 - `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
   the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
   `gateway`, and with what code, `run_closed`, `credential_expired` or

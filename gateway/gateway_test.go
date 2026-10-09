@@ -28,12 +28,13 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a separate
-// gateway, a heartbeat the discovery cannot announce, no place for the records.
+// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: an address
+// with no issuer of run credentials, a certificate with no address, a heartbeat the
+// discovery cannot announce, no place for the records.
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
-		"an address":                  {Dir: dir, Listen: "127.0.0.1:0"},
+		"an address without issuers":  {Dir: dir, Listen: "127.0.0.1:0"},
 		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
 		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
 		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
@@ -210,6 +211,20 @@ func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
 	for _, out := range outs {
 		if strings.Contains(out, secret) || !strings.Contains(out, h.g.Addr()) {
 			t.Errorf("printed %s", out)
+		}
+	}
+	// A copy of the Gateway, *g, whose print methods are on the pointer, prints its
+	// fields: neither the link secret nor a live run's proxy secret is among what they
+	// show, under a verb that reprints what a field points to either.
+	a := h.open(server.LinkRunRequest{})
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+		if out := gateway.PrintedCopy(h.g, format); strings.Contains(out, secret) || strings.Contains(out, a.ProxySecret) || !strings.Contains(out, "secret") && format == "%+v" {
+			t.Errorf("a copy printed with %s: %s", format, out)
+		}
+	}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		if out := gateway.PrintedSecret(h.g, format); out != "[redacted]" {
+			t.Errorf("the secret's own type printed with %s: %s", format, out)
 		}
 	}
 }
