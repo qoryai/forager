@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,6 +74,8 @@ func (e *endpoint) introspector(t *testing.T, in Introspection, timeout time.Dur
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Short waits, so a test of a failure is not slowed by its tries.
+	c.waits, c.window = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}, 40*time.Millisecond
 	return c
 }
 
@@ -86,50 +89,52 @@ func answering(status int, body string) http.HandlerFunc {
 }
 
 func TestIntrospectionIsActiveOnlyOnActiveTrue(t *testing.T) {
+	invalid, unreachable := ErrAnswerInvalid, ErrIssuerUnreachable
 	for _, c := range []struct {
 		name    string
 		handler http.HandlerFunc
 		active  bool
-		failed  bool // a failure, not an answer of active false
+		want    error // nil for an answer, active or not
 	}{
-		{"active true", answering(200, `{"active": true, "sub": "rk-0001"}`), true, false},
-		{"active true after white space", answering(200, "\n {\"active\":true}\n"), true, false},
-		{"active false", answering(200, `{"active": false}`), false, false},
-		{"active the string true", answering(200, `{"active": "true"}`), false, true},
-		{"active 1", answering(200, `{"active": 1}`), false, true},
-		{"active null", answering(200, `{"active": null}`), false, true},
-		{"no active", answering(200, `{"sub": "rk-0001"}`), false, true},
-		{"active twice", answering(200, `{"active": true, "active": true}`), false, true},
-		{"active false then true", answering(200, `{"active": false, "active": true}`), false, true},
-		{"an array", answering(200, `[{"active": true}]`), false, true},
-		{"not JSON", answering(200, `active: true`), false, true},
-		{"two JSON values", answering(200, `{"active": true} {"active": true}`), false, true},
-		{"empty", answering(200, ``), false, true},
-		{"500", answering(500, `{"active": true}`), false, true},
-		{"201", answering(201, `{"active": true}`), false, true},
-		{"401", answering(401, `{"active": true}`), false, true},
+		{"active true", answering(200, `{"active": true, "sub": "rk-0001"}`), true, nil},
+		{"active true after white space", answering(200, "\n {\"active\":true}\n"), true, nil},
+		{"active false", answering(200, `{"active": false}`), false, nil},
+		{"active the string true", answering(200, `{"active": "true"}`), false, invalid},
+		{"active 1", answering(200, `{"active": 1}`), false, invalid},
+		{"active null", answering(200, `{"active": null}`), false, invalid},
+		{"no active", answering(200, `{"sub": "rk-0001"}`), false, invalid},
+		{"active twice", answering(200, `{"active": true, "active": true}`), false, invalid},
+		{"active false then true", answering(200, `{"active": false, "active": true}`), false, invalid},
+		{"an array", answering(200, `[{"active": true}]`), false, invalid},
+		{"not JSON", answering(200, `active: true`), false, invalid},
+		{"two JSON values", answering(200, `{"active": true} {"active": true}`), false, invalid},
+		{"empty", answering(200, ``), false, invalid},
+		{"500", answering(500, `{"active": true}`), false, unreachable},
+		{"429", answering(429, `{"active": true}`), false, unreachable},
+		{"201", answering(201, `{"active": true}`), false, invalid},
+		{"401", answering(401, `{"active": true}`), false, invalid},
 		{"a redirect", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/elsewhere", http.StatusFound)
-		}, false, true},
+		}, false, invalid},
 		{"a permanent redirect", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/elsewhere", http.StatusPermanentRedirect)
-		}, false, true},
-		{"oversized", answering(200, `{"active": true, "pad": "`+strings.Repeat("a", MaxIntrospectionAnswer)+`"}`), false, true},
-		{"at the size limit", answering(200, `{"active": true, "pad": "`+strings.Repeat("a", MaxIntrospectionAnswer-len(`{"active": true, "pad": ""}`))+`"}`), true, false},
+		}, false, invalid},
+		{"oversized", answering(200, `{"active": true, "pad": "`+strings.Repeat("a", MaxIntrospectionAnswer)+`"}`), false, invalid},
+		{"at the size limit", answering(200, `{"active": true, "pad": "`+strings.Repeat("a", MaxIntrospectionAnswer-len(`{"active": true, "pad": ""}`))+`"}`), true, nil},
 		{"a timeout", func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-r.Context().Done():
 			case <-time.After(2 * time.Second):
 			}
 			answering(200, `{"active": true}`)(w, r)
-		}, false, true},
+		}, false, unreachable},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEndpoint(t, c.handler)
 			in := e.introspector(t, Introspection{}, 300*time.Millisecond)
 			active, err := in.Active(context.Background(), exampleCredential, now)
-			if active != c.active || (err != nil) != c.failed {
-				t.Fatalf("Active = %v, %v; want %v, a failure: %v", active, err, c.active, c.failed)
+			if active != c.active || (err == nil) != (c.want == nil) || (c.want != nil && !errors.Is(err, c.want)) {
+				t.Fatalf("Active = %v, %v; want %v, %v", active, err, c.active, c.want)
 			}
 			if err != nil {
 				for _, s := range []string{exampleCredential, exampleSecret, "c2lnbmF0dXJl", e.srv.URL} {
@@ -252,8 +257,8 @@ func TestIntrospectionCache(t *testing.T) {
 	if active, err := fi.Active(ctx, exampleCredential, now.Add(time.Second)); !active || err != nil {
 		t.Errorf("the next caller after a failure: %v, %v", active, err)
 	}
-	if n := f.asked.Load(); n != 2 {
-		t.Errorf("asked %d times; want twice", n)
+	if n := f.asked.Load(); n != 4 {
+		t.Errorf("asked %d times; want the three tries of the failure and once after", n)
 	}
 }
 
@@ -311,8 +316,8 @@ func TestIntrospectionACallerThatGivesUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	first := make(chan bool)
 	go func() {
-		active, _ := in.Active(ctx, exampleCredential, now)
-		first <- active
+		active, err := in.Active(ctx, exampleCredential, now)
+		first <- active || !errors.Is(err, context.Canceled)
 	}()
 	for e.asked.Load() == 0 {
 		time.Sleep(time.Millisecond)
@@ -324,7 +329,7 @@ func TestIntrospectionACallerThatGivesUp(t *testing.T) {
 	}()
 	cancel()
 	if <-first {
-		t.Error("the caller that gave up is active")
+		t.Error("the caller that gave up is active, or its error is not its context's")
 	}
 	close(release)
 	if !<-second {
@@ -376,8 +381,8 @@ func TestIntrospectionAContextThatEnds(t *testing.T) {
 	in := e.introspector(t, Introspection{}, IntrospectionTimeout)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if active, err := in.Active(ctx, exampleCredential, now); active || err == nil {
-		t.Fatalf("a context that ended: %v, %v", active, err)
+	if active, err := in.Active(ctx, exampleCredential, now); active || !errors.Is(err, context.Canceled) || errors.Is(err, ErrIssuerUnreachable) {
+		t.Fatalf("a context that ended: %v, %v; want its own error", active, err)
 	}
 	if active, err := in.Active(context.Background(), exampleCredential, now); !active || err != nil {
 		t.Errorf("the answer after: %v, %v", active, err)
@@ -429,6 +434,7 @@ func TestIntrospectionRefusesAnUntrustedCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	in.waits, in.window = []time.Duration{time.Millisecond, time.Millisecond}, 10*time.Millisecond
 	if active, err := in.Active(context.Background(), exampleCredential, now); active || err == nil {
 		t.Errorf("an untrusted certificate: %v, %v", active, err)
 	}
@@ -480,5 +486,256 @@ func TestIntrospectionIgnoresTheProxyVariables(t *testing.T) {
 	defer mu.Unlock()
 	if proxied.Load() != 0 || len(dialed) != 1 || dialed[0] != "example.com:"+port || e.asked.Load() != 1 {
 		t.Errorf("dialed %v, the proxy asked %d times, the endpoint %d", dialed, proxied.Load(), e.asked.Load())
+	}
+}
+
+// TestIntrospectionTriesAndTheirWaits pins the tries of one introspection as the
+// gateway makes them: each 2 seconds at most, up to three, 1 second and then 2 seconds
+// apart, a try starting only within 4 seconds of the first.
+func TestIntrospectionTriesAndTheirWaits(t *testing.T) {
+	if IntrospectionTimeout != 2*time.Second || !slices.Equal(introspectionWaits, []time.Duration{time.Second, 2 * time.Second}) || introspectionWindow != 4*time.Second {
+		t.Fatalf("a try's timeout %v, the waits %v, the window %v; want 2s, [1s 2s], 4s", IntrospectionTimeout, introspectionWaits, introspectionWindow)
+	}
+	read := files(map[string][]byte{"s": []byte(exampleSecret)})
+	in, err := NewIntrospector(Introspection{URL: "https://issuer.example/introspect", ClientID: exampleClientID, ClientSecretFile: "s"}, read, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.client.Timeout != 2*time.Second || !slices.Equal(in.waits, introspectionWaits) || in.window != introspectionWindow {
+		t.Errorf("the introspector's timeout %v, waits %v, window %v", in.client.Timeout, in.waits, in.window)
+	}
+}
+
+// failing is an endpoint whose first answers are the failures given, in order, and
+// active true after them: 0 for a connection closed unanswered, else the status.
+func failing(t *testing.T, failures ...int) *endpoint {
+	t.Helper()
+	var n atomic.Int32
+	return newEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		i := int(n.Add(1)) - 1
+		if i >= len(failures) {
+			answering(200, `{"active": true}`)(w, r)
+			return
+		}
+		if failures[i] == 0 {
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				conn.Close()
+			}
+			return
+		}
+		answering(failures[i], ``)(w, r)
+	})
+}
+
+// recordWaits makes the introspector's waits instant, the default waits and window
+// kept, and returns what it waited.
+func recordWaits(in *Introspector) func() []time.Duration {
+	in.waits, in.window = introspectionWaits, introspectionWindow
+	var mu sync.Mutex
+	var waited []time.Duration
+	in.sleep = func(d time.Duration) {
+		mu.Lock()
+		waited = append(waited, d)
+		mu.Unlock()
+	}
+	return func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(waited)
+	}
+}
+
+// TestIntrospectionTriesAgainWithoutAnAnswer pins the tries of a check that gets no
+// answer: a 5xx, a 429 and a connection closed unanswered are each tried again, 1
+// second and then 2 seconds later, and an answer on the third try is the check's.
+func TestIntrospectionTriesAgainWithoutAnAnswer(t *testing.T) {
+	for name, failures := range map[string][]int{
+		"a 503, then no answer": {503, 0},
+		"a 429, then a 500":     {429, 500},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := failing(t, failures...)
+			in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+			waited := recordWaits(in)
+			if active, err := in.Active(context.Background(), exampleCredential, now); !active || err != nil {
+				t.Fatalf("Active = %v, %v; want the third try's answer", active, err)
+			}
+			if n := e.asked.Load(); n != 3 {
+				t.Errorf("asked %d times; want 3", n)
+			}
+			if got := waited(); !slices.Equal(got, []time.Duration{time.Second, 2 * time.Second}) {
+				t.Errorf("waited %v; want [1s 2s]", got)
+			}
+		})
+	}
+}
+
+// TestIntrospectionThatNeverAnswers pins a check whose three tries all get no answer:
+// ErrIssuerUnreachable, kept for no one, so the next caller tries three times again.
+func TestIntrospectionThatNeverAnswers(t *testing.T) {
+	e := newEndpoint(t, answering(503, ``))
+	in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+	waited := recordWaits(in)
+	active, err := in.Active(context.Background(), exampleCredential, now)
+	if active || !errors.Is(err, ErrIssuerUnreachable) || errors.Is(err, ErrAnswerInvalid) {
+		t.Fatalf("Active = %v, %v; want ErrIssuerUnreachable", active, err)
+	}
+	if err.Error() != "the issuer's introspection endpoint could not be reached" {
+		t.Errorf("the error %q", err)
+	}
+	if n := e.asked.Load(); n != 3 {
+		t.Errorf("asked %d times; want 3", n)
+	}
+	if got := waited(); !slices.Equal(got, []time.Duration{time.Second, 2 * time.Second}) {
+		t.Errorf("waited %v; want [1s 2s]", got)
+	}
+	in.Active(context.Background(), exampleCredential, now)
+	if n := e.asked.Load(); n != 6 {
+		t.Errorf("asked %d times after a second check; want 6: the failure is not kept", n)
+	}
+}
+
+// TestIntrospectionWithNoValidAnswer pins an answer that is no valid one: a status other
+// than 200, 5xx and 429 aside, and a 200 too long, not JSON or without a boolean active.
+// Each is tried once, is ErrAnswerInvalid, names the status where it is one, and is kept
+// for no one; active false is tried once too, and kept.
+func TestIntrospectionWithNoValidAnswer(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		handler http.HandlerFunc
+		text    string
+	}{
+		{"302", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/elsewhere", http.StatusFound) }, "the introspection endpoint answered status 302"},
+		{"400", answering(400, `{"error":"invalid_request"}`), "the introspection endpoint answered status 400"},
+		{"401", answering(401, `{"error":"invalid_client"}`), "the introspection endpoint answered status 401"},
+		{"403", answering(403, ``), "the introspection endpoint answered status 403"},
+		{"too long", answering(200, `{"active": true, "pad": "`+strings.Repeat("a", MaxIntrospectionAnswer)+`"}`), "the introspection endpoint answered more than MaxIntrospectionAnswer bytes"},
+		{"not JSON", answering(200, `active: true`), "the introspection endpoint answered other than one JSON object with each member name once"},
+		{"no boolean active", answering(200, `{"active": "yes"}`), "the introspection endpoint answered no boolean active"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEndpoint(t, c.handler)
+			in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+			waited := recordWaits(in)
+			active, err := in.Active(context.Background(), exampleCredential, now)
+			if active || !errors.Is(err, ErrAnswerInvalid) || errors.Is(err, ErrIssuerUnreachable) {
+				t.Fatalf("Active = %v, %v; want ErrAnswerInvalid", active, err)
+			}
+			if err.Error() != c.text {
+				t.Errorf("the error %q; want %q", err, c.text)
+			}
+			if n := e.asked.Load(); n != 1 || len(waited()) != 0 {
+				t.Errorf("asked %d times, waited %v; want once", n, waited())
+			}
+			in.Active(context.Background(), exampleCredential, now)
+			if n := e.asked.Load(); n != 2 {
+				t.Errorf("asked %d times after a second check; want twice: it is not kept", n)
+			}
+		})
+	}
+	e := newEndpoint(t, answering(200, `{"active": false}`))
+	in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+	for range 2 {
+		if active, err := in.Active(context.Background(), exampleCredential, now); active || err != nil {
+			t.Fatalf("active false: %v, %v", active, err)
+		}
+	}
+	if n := e.asked.Load(); n != 1 {
+		t.Errorf("active false: asked %d times; want once, kept", n)
+	}
+}
+
+// TestIntrospectionTheWindow pins the window, at a tenth of the gateway's times: a try
+// starts only within the window of the first's start, so an endpoint that hangs gets two
+// tries, each to its timeout, and one that fails at once three, or two when the third
+// would start past the window.
+func TestIntrospectionTheWindow(t *testing.T) {
+	hang := newEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	in := hang.introspector(t, Introspection{}, 200*time.Millisecond)
+	in.waits, in.window = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}, 400*time.Millisecond
+	start := time.Now()
+	if _, err := in.Active(context.Background(), exampleCredential, now); !errors.Is(err, ErrIssuerUnreachable) {
+		t.Fatalf("a hung endpoint: %v", err)
+	}
+	took := time.Since(start)
+	if n := hang.asked.Load(); n != 2 {
+		t.Errorf("a hung endpoint: asked %d times; want 2", n)
+	}
+	if took < 500*time.Millisecond || took > 1500*time.Millisecond {
+		t.Errorf("a hung endpoint: took %v; want about 0.5s, two tries and the wait between", took)
+	}
+	for _, c := range []struct {
+		window time.Duration
+		tries  int32
+	}{{400 * time.Millisecond, 3}, {250 * time.Millisecond, 2}} {
+		e := newEndpoint(t, answering(503, ``))
+		in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+		in.waits, in.window = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}, c.window
+		in.Active(context.Background(), exampleCredential, now)
+		if n := e.asked.Load(); n != c.tries {
+			t.Errorf("failing at once, a window of %v: asked %d times; want %d", c.window, n, c.tries)
+		}
+	}
+}
+
+// TestIntrospectionTriesOnceForEveryCaller pins one sequence of tries for every caller
+// of the same run credential: those that came during the first try and one that came
+// during a wait between tries all get the third try's answer, of three requests, and a
+// caller whose context ends gets its context's error while the others still get the
+// answer.
+func TestIntrospectionTriesOnceForEveryCaller(t *testing.T) {
+	e := failing(t, 503, 503)
+	in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+	waiting := make(chan struct{})
+	release := make(chan struct{})
+	in.sleep = func(time.Duration) {
+		waiting <- struct{}{}
+		<-release
+	}
+	var wg sync.WaitGroup
+	results := make([]bool, 6)
+	call := func(n int) {
+		defer wg.Done()
+		active, err := in.Active(context.Background(), exampleCredential, now)
+		results[n] = active && err == nil
+	}
+	for n := range 4 {
+		wg.Add(1)
+		go call(n)
+	}
+	gone, cancel := context.WithCancel(context.Background())
+	goneErr := make(chan error, 1)
+	go func() {
+		_, err := in.Active(gone, exampleCredential, now)
+		goneErr <- err
+	}()
+	<-waiting
+	// During the first wait: a late caller, and one that gives up.
+	wg.Add(1)
+	go call(4)
+	cancel()
+	if err := <-goneErr; !errors.Is(err, context.Canceled) {
+		t.Errorf("the caller that gave up: %v; want its context's error", err)
+	}
+	release <- struct{}{}
+	<-waiting
+	// During the second wait, another.
+	wg.Add(1)
+	go call(5)
+	time.Sleep(20 * time.Millisecond)
+	release <- struct{}{}
+	wg.Wait()
+	for n, ok := range results {
+		if !ok {
+			t.Errorf("caller %d: not active", n)
+		}
+	}
+	if n := e.asked.Load(); n != 3 {
+		t.Errorf("asked %d times; want one sequence of 3 tries", n)
 	}
 }
