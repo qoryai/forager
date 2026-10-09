@@ -4,8 +4,8 @@
 // configuration changes of them.
 //
 // It decides and holds; it listens on nothing and starts no process but the tools. The
-// caller drives it: [Decide] the policy in force and the refusals of a run without a
-// wall, [Run.Hold] the credentials and the tools, then the proxy by what the run says
+// caller drives it: [Decide] the policy in force, its image and the refusals of a run
+// without a wall, [Run.Hold] the credentials and the tools, then the proxy by what the run says
 // ([Run.NeedsCA], [Run.Uses], [Run.NodePaths]); on each run configuration the server
 // answers, [Run.Read] and [Run.Reload], whose [Decision] the caller puts on the proxy
 // and then [Run.Commit]s.
@@ -53,10 +53,14 @@ type Config struct {
 	// among them by name.
 	Credentials []Credential
 	Tools       []Tool
+	// Images are the images the run's policy selects among, and the one it starts in
+	// when the policy selects none; they mean something only behind a wall.
+	Images Images
 	// Passes, when not nil, reports whether the run passes a value of its own for the
 	// variable: a placeholder it passes a value for is then placeholder_conflict, at
-	// the start and at every reload, as the session refuses it. Nil passes none, and
-	// the placeholders are the caller's to check, with [Run.Conflict].
+	// the start and at every reload, as the session refuses it. [Passing] makes one of
+	// the names the run passes. Nil passes none, and the placeholders are the caller's
+	// to check, with [Run.Conflict].
 	Passes func(name string) bool
 	// Report receives one line per thing the run reports to its user: a credential's
 	// renewal that failed, a tool's standard error, path rules a reload cannot hold.
@@ -83,9 +87,10 @@ type Run struct {
 	tools  []tool.Definition
 	// node is the node's policy, nil when the run has none.
 	node *policy.Loaded
-	// start is the policy pinned at the start: the run's tools and image are fixed by
-	// it.
+	// start is the policy pinned at the start: the run's tools are fixed by it, and
+	// img is the image it resolved to, fixed too.
 	start  *policy.Loaded
+	img    Image
 	served map[string]string
 	server bool
 	chosen []tool.Chosen
@@ -103,7 +108,10 @@ type Run struct {
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
 // node's policy, the server's run configuration narrowed by it, or none, mode observe.
 // A run without a wall refuses a policy that selects credentials or tools or has path
-// rules, the node's beside a server's included, and one that selects an image.
+// rules, the node's beside a server's included, and one that selects an image. Behind a
+// wall the policy's image is resolved among [Config.Images]: a definition that cannot be
+// one, a name defined twice and a name the machine does not define, image_unknown, are
+// no run.
 func Decide(cfg Config) (*Run, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -142,6 +150,13 @@ func Decide(cfg Config) (*Run, error) {
 	}
 	if pol.Policy.Image != "" && !cfg.Wall {
 		return nil, fmt.Errorf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", pol.Policy.Image)
+	}
+	if cfg.Wall {
+		img, err := cfg.Images.resolve(pol.Policy.Image)
+		if err != nil {
+			return nil, err
+		}
+		r.img = img
 	}
 	r.start, r.pol = pol, pol
 	return r, nil
@@ -250,6 +265,10 @@ func (r *Run) Held() *credential.Held {
 
 // Uses are the held credentials as the proxy sets them.
 func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
+
+// Image is the image the run starts in, resolved among [Config.Images]: zero without a
+// wall, and a Ref alone when the default is a reference.
+func (r *Run) Image() Image { return r.img }
 
 // Chosen are the run's tools, fixed when it starts.
 func (r *Run) Chosen() []tool.Chosen { return r.chosen }
@@ -369,11 +388,9 @@ type Decision struct {
 	Policy *policy.Loaded
 	// Uses are its credentials as the proxy sets them.
 	Uses []proxy.Credential
-	// Image is the image the policy selects; ImageChanged says it is another
-	// selection than the run started with. Whether it resolves to the same image is
-	// the caller's to say, which knows the machine's images.
-	Image        string
-	ImageChanged bool
+	// Image is the image the policy resolves to, the one the run started in: a reload
+	// that resolves to another is refused. Zero without a wall.
+	Image Image
 	// CredentialsChanged says the policy selects other credentials than the one in
 	// force.
 	CredentialsChanged bool
@@ -392,7 +409,9 @@ func (d *Decision) Discard() {
 // that is the one in force is [Decision.Unchanged]. A reload is as strict as a start:
 // what a start refuses, a policy that selects credentials without the run's authority,
 // an image without a wall, a credential that does not resolve, fails the reload, and
-// the policy in force stays; and the run's tools are fixed when it starts. Path rules
+// the policy in force stays; and the run's tools and image are fixed when it starts.
+// The image compared is the one the selection resolves to, so naming the machine's
+// default, or no longer naming it, is no change. Path rules
 // the proxy cannot hold, for want of the run's authority, take their hosts out of the
 // allow list instead, so they are not reached on every path, and the caller's user is
 // told.
@@ -413,8 +432,14 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error
 	if !sameSelection(in.Policy.Tools, r.start.Policy.Tools) {
 		return nil, errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
 	}
-	if !r.cfg.Wall && in.Policy.Image != "" {
-		return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+	if !r.cfg.Wall {
+		if in.Policy.Image != "" {
+			return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+		}
+	} else if next, err := r.cfg.Images.resolve(in.Policy.Image); err != nil {
+		return nil, err
+	} else if next != r.img {
+		return nil, errors.New("the run configuration selects another image than the run started in; a run's image is fixed when it starts")
 	}
 	if !r.terminates {
 		if len(in.Policy.Credentials) > 0 {
@@ -436,7 +461,7 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error
 	}
 	return &Decision{
 		Policy: &in, Uses: ProxyUses(fresh), held: fresh,
-		Image: in.Policy.Image, ImageChanged: in.Policy.Image != r.start.Policy.Image,
+		Image:              r.img,
 		CredentialsChanged: !sameSelection(in.Policy.Credentials, r.Policy().Policy.Credentials),
 	}, nil
 }

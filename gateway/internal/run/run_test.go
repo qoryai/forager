@@ -417,7 +417,7 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Uses) != 1 || d.Uses[0].Name != "model" || d.Policy.Policy.Egress.Paths == nil || !d.CredentialsChanged || d.ImageChanged {
+	if len(d.Uses) != 1 || d.Uses[0].Name != "model" || d.Policy.Policy.Egress.Paths == nil || !d.CredentialsChanged || d.Image != (run.Image{Ref: ""}) {
 		t.Errorf("the decision %+v", d)
 	}
 	r.Commit(d)
@@ -490,33 +490,184 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 	}
 }
 
-// From image_test.go TestARunWhoseImageCannotHoldDoesNotStart (its first case) and
-// TestAReloadKeepsTheRunsImage: an image needs a wall, at the start and at a reload,
-// and a reload says whether it selects another image than the run started with.
-// Whether a selection resolves to the same image is the session's, which knows the
-// machine's images.
-func TestAnImageNeedsAWallAndAReloadSaysWhetherItChanged(t *testing.T) {
-	_, err := run.Decide(run.Config{Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: "with-docker"}})
-	if err == nil || !strings.Contains(err.Error(), `the policy selects the image "with-docker", which needs a wall`) {
-		t.Errorf("an image without a wall: %v", err)
+// images are image_test.go's: the machine's definitions the tests below select among.
+var images = []run.Image{
+	{Name: "base", Ref: "example.com/agent:1"},
+	{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
+}
+
+// From image_test.go TestAnImageDefinitionThatCannotBeOneIsRefused.
+func TestAnImageDefinitionThatCannotBeOneIsRefused(t *testing.T) {
+	if err := (run.Image{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true}).Check(); err != nil {
+		t.Errorf("a whole definition was refused: %v", err)
 	}
-	r := open(t, run.Config{RunID: runID, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"observe"}}`, digest('1'))})
+	for name, img := range map[string]run.Image{
+		"a name in capitals":           {Name: "Base", Ref: "example.com/agent:1"},
+		"a reference as the name":      {Name: "example.com/agent:1", Ref: "example.com/agent:1"},
+		"no name":                      {Ref: "example.com/agent:1"},
+		"no reference":                 {Name: "base"},
+		"a Docker without its runtime": {Name: "with-docker", Ref: "example.com/agent:1-docker", Docker: true},
+	} {
+		if err := img.Check(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// From image_test.go TestTheImageIsTheOneThePolicySelects: the one the policy selects
+// by name, the machine's default by name or by reference when it selects none; and
+// without a wall none is resolved.
+func TestTheImageIsTheOneThePolicySelects(t *testing.T) {
+	for name, c := range map[string]struct {
+		selected, def string
+		want          run.Image
+	}{
+		"selected":               {"with-docker", "base", images[1]},
+		"the default by name":    {"", "base", images[0]},
+		"the default, reference": {"", "example.com/other:2", run.Image{Ref: "example.com/other:2"}},
+	} {
+		r := open(t, run.Config{RunID: runID, Wall: true, Images: run.Images{Default: c.def, Defined: images},
+			Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: c.selected}})
+		if r.Image() != c.want {
+			t.Errorf("%s: %+v, want %+v", name, r.Image(), c.want)
+		}
+	}
+	if r := open(t, run.Config{RunID: runID, Images: run.Images{Default: "base", Defined: images}}); r.Image() != (run.Image{}) {
+		t.Errorf("an image without a wall: %+v", r.Image())
+	}
+}
+
+// From image_test.go TestARunWhoseImageCannotHoldDoesNotStart: an image selected
+// without a wall, an image the machine does not define, a definition that cannot be
+// one, and a name defined twice. Its last case, a default that is no image, is the
+// wall's to refuse: here it resolves to an empty reference.
+func TestARunWhoseImageCannotHoldDoesNotStart(t *testing.T) {
+	cfg := func() run.Config {
+		return run.Config{RunID: runID, Wall: true, Images: run.Images{Default: "base", Defined: slices.Clone(images)},
+			Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: "with-docker"}}
+	}
+	for name, c := range map[string]struct {
+		change func(*run.Config)
+		want   string
+		code   string
+	}{
+		"no wall":                   {func(c *run.Config) { c.Wall = false }, "needs a wall", ""},
+		"an image nobody defined":   {func(c *run.Config) { c.Node.Image = "nobody-defined" }, "does not define", "image_unknown"},
+		"a definition that is none": {func(c *run.Config) { c.Images.Defined = []run.Image{{Name: "with-docker", Ref: "i", Docker: true}} }, "needs a runtime", ""},
+		"a name defined twice":      {func(c *run.Config) { c.Images.Defined = append(c.Images.Defined, images[0]) }, "defined twice", ""},
+	} {
+		c2 := cfg()
+		c.change(&c2)
+		_, err := run.Decide(c2)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+		if code, _ := refusalOf(err); code != c.code {
+			t.Errorf("%s: the code %q, want %q", name, code, c.code)
+		}
+	}
+	c2 := cfg()
+	c2.Node.Image, c2.Images.Default = "", ""
+	if r := open(t, c2); r.Image() != (run.Image{}) {
+		t.Errorf("a default that is no image resolved to %+v", r.Image())
+	}
+}
+
+// From session.go Run: the image is resolved before the credentials are held and the
+// tools chosen, and a credential's placeholder before the tools are chosen, so of two
+// refusals the earlier is the one a run gets, as today.
+func TestTheStartRefusesInTodaysOrder(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
+	cfg := toolConfig()
+	cfg.Credentials = []run.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
+	cfg.Node.Credentials = []run.PolicyCredential{{Name: "model"}}
+	cfg.Node.Egress.Allow = append(cfg.Node.Egress.Allow, "api.model.example")
+	// A tool nobody defined, and a credential's placeholder the run passes a value for.
+	cfg.Tools = nil
+	cfg.Passes = run.Passing([]string{"MODEL_TOKEN", "FILES_KEY"})
+	_, err := run.Open(context.Background(), cfg)
+	if code, names := refusalOf(err); code != "placeholder_conflict" || !slices.Equal(names, []string{"MODEL_TOKEN"}) {
+		t.Errorf("a credential's placeholder and a tool nobody defined: %v", err)
+	}
+	// An image nobody defined, and a credential nobody defined.
+	cfg.Credentials = nil
+	cfg.Node.Image = "nobody-defined"
+	_, err = run.Open(context.Background(), cfg)
+	if code, _ := refusalOf(err); code != "image_unknown" {
+		t.Errorf("an image and a credential nobody defined: %v", err)
+	}
+}
+
+// From image_test.go TestAReloadKeepsTheRunsImage, and the image half of
+// TestAReloadIsAsStrictAsAStart: a run configuration that selects another image fails
+// the reload and the policy in force stays, one that selects the same takes effect;
+// without a wall a reload's image is refused; and the image is compared before the
+// credentials are held.
+func TestAReloadKeepsTheRunsImage(t *testing.T) {
+	withImage := `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"%s]},"image":"%s"}`
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: run.Images{Default: "base", Defined: images},
+		Fetched: served(fmt.Sprintf(withImage, "", "with-docker"), digest('1'))})
+	if r.Image() != images[1] {
+		t.Errorf("the run started in %+v", r.Image())
+	}
+	if _, err := reload(t, r, served(fmt.Sprintf(withImage, "", "base"), digest('2'))); err == nil || !strings.Contains(err.Error(), "another image than the run started in") || !strings.HasSuffix(err.Error(), "the policy in force stays") {
+		t.Errorf("another image: %v", err)
+	}
+	if _, err := reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"base","credentials":[{"name":"nobody-defined"}]}`, digest('2'))); err == nil || !strings.Contains(err.Error(), "another image than the run started in") {
+		t.Errorf("another image and a credential nobody defined: %v", err)
+	}
+	if _, err := reload(t, r, served(fmt.Sprintf(withImage, "", "nobody-defined"), digest('2'))); err == nil || !strings.Contains(err.Error(), "does not define") {
+		t.Errorf("an image nobody defined: %v", err)
+	}
+	d, err := reload(t, r, served(fmt.Sprintf(withImage, `,"git.example.com"`, "with-docker"), digest('3')))
+	if err != nil || d.Image != images[1] || d.Policy.Policy.Image != "with-docker" {
+		t.Fatalf("the same image: %+v, %v", d, err)
+	}
+	r.Commit(d)
+
+	r = open(t, run.Config{RunID: runID, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"observe"}}`, digest('1'))})
 	if _, err := reload(t, r, served(`{"version":1,"egress":{"mode":"observe"},"image":"base"}`, digest('2'))); err == nil || !strings.Contains(err.Error(), `selects the image "base", which needs a wall`) {
 		t.Errorf("a reload's image without a wall: %v", err)
 	}
+}
 
-	withImage := `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"%s]},"image":"%s"}`
-	r = open(t, run.Config{RunID: runID, Wall: true, Server: true, Fetched: served(fmt.Sprintf(withImage, "", "with-docker"), digest('1'))})
-	d, err := reload(t, r, served(fmt.Sprintf(withImage, "", "base"), digest('2')))
-	if err != nil || !d.ImageChanged || d.Image != "base" {
-		t.Errorf("another image: %+v, %v", d, err)
+// From image_test.go TestAReloadComparesTheImageItResolvesTo: naming the machine's
+// default, or no longer naming it, takes effect; another image does not.
+func TestAReloadComparesTheImageItResolvesTo(t *testing.T) {
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: run.Images{Default: "base", Defined: images},
+		Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))})
+	for _, c := range []struct {
+		doc  string
+		d    byte
+		want string
+	}{
+		{`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"base"}`, '2', ""},
+		{`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example.com"]}}`, '3', ""},
+		{`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"with-docker"}`, '4', "another image than the run started in"},
+	} {
+		d, err := reload(t, r, served(c.doc, digest(c.d)))
+		if c.want != "" {
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: %v, want %q", c.doc, err, c.want)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", c.doc, err)
+		}
+		r.Commit(d)
 	}
-	d.Discard()
-	d, err = reload(t, r, served(fmt.Sprintf(withImage, `,"git.example.com"`, "with-docker"), digest('3')))
-	if err != nil || d.ImageChanged || d.Image != "with-docker" {
-		t.Errorf("the same image: %+v, %v", d, err)
+	if r.RunConfiguration() != digest('3') || r.Policy().Policy.Image != "" {
+		t.Errorf("the policy in force %q, image %q", r.RunConfiguration(), r.Policy().Policy.Image)
 	}
-	r.Commit(d)
+}
+
+// From variables.go passes: the names a run passes a value for.
+func TestPassingIsTheNamesTheRunPasses(t *testing.T) {
+	p := run.Passing([]string{"MODEL_TOKEN", "NODE_ENV"})
+	if !p("MODEL_TOKEN") || !p("NODE_ENV") || p("FILES_KEY") || p("MODEL") || run.Passing(nil)("MODEL_TOKEN") {
+		t.Error("Passing does not hold the names it was given, and only those")
+	}
 }
 
 // From session.go Run: the node's path rules beside a server's policy need a wall, and
