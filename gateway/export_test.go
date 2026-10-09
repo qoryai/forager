@@ -205,3 +205,7 @@ func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow
 func EndWords(state, reason string, quietSeconds int) string {
 	return endWords(runEnd{state: state, reason: reason, quietSeconds: quietSeconds})
 }
+
+// ExitWindow is the window of a run whose starter answered at its exit, and the spare of
+// a failed check after any answer there.
+const ExitWindow = exitWindow

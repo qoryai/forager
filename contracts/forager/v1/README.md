@@ -1921,10 +1921,14 @@ non-empty answer's `state` and `reason` into its `dev.qory.run.exited`, beside t
 runtime's own `exit_code`; with `{}`, a refusal or no answer, the runtime's exit decides
 the state, as without the ask, and nothing is added to the record (Events, above, holds
 the session to both). Once the session has written its `dev.qory.run.exited`, no later
-word of the starter's changes it. After the ask's answer, the batch that carries the
-session's `dev.qory.run.exited` is not refused because the run credential could not be
-checked, the endpoint unreachable or its answer not valid: Events, above, decides it
-against the answer. Every other request of the run is checked as before.
+word of the starter's changes it. The run's program has finished once the session
+asks, so from the start of the ask, while it is made and for 30 seconds after its
+answer, a run credential of that run that could not be checked, the endpoint
+unreachable or its answer not valid, does not end it: each request of the run's, a
+heartbeat, a reload or a batch, goes on as if it were checked, and a batch with its
+`dev.qory.run.exited` is decided against the answer (Events, above). After those 30
+seconds, before the ask, and for the run key's other runs, such a check ends the run as
+ever, and an answer that the run credential is no longer active ends it at any time.
 
 An answer of the endpoint that the run credential is no longer active holds the run key,
 as on any request of the run's (§Run credentials), and ends the run key's other live
@@ -1942,9 +1946,9 @@ refuses within the 30 seconds, never with `batch_refused`. When the 30 seconds p
 reason, never with `session_lost`. Within the 30 seconds the answer wins over the run
 credential's `exp`: the run does not end with `credential_expired`, and a request whose
 run credential's `exp` has passed ends the run with the answer's state and reason, and
-gets that `410`. While the gateway
-asks the starter, the ask is the session's request, however long it takes: the run does
-not end with `session_lost` for it.
+gets that `410`. While the gateway asks the starter, the ask is the session's request,
+however long it takes, and so is any request of the session's whose run credential the
+gateway is checking: the run does not end with `session_lost` for it.
 
 On the local link there is no starter to ask: the session never asks it there, so a run
 on one machine never waits at its exit, and the local link answers a `GET` of

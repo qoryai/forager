@@ -792,9 +792,13 @@ release may change what an existing document does, and says so under Upgrading.
   stored, within about 6 seconds; a later ask is decided as a reload, so once the
   starter has ended the run key it is the `410`, and only the first keeps the run from
   being lost; the answer is `{}`, or the starter's `state` and `reason` when it answers
-  `active: false` with an outcome. After the answer, the batch with the session's
-  `dev.qory.run.exited` is not refused for a run credential that could not be checked;
-  every other request is checked as before. The local link answers it
+  `active: false` with an outcome. From the start of the ask, while it is made and for
+  30 seconds after its answer, a run credential of that run that could not be checked
+  does not end it: its heartbeats, reloads and batches go on, and its
+  `dev.qory.run.exited` is decided against the answer; after that, before the ask and
+  for the run key's other runs it ends the run as before. A request whose run
+  credential is being checked counts as the session's, so the run is not lost while
+  the endpoint is slow. The local link answers it
   `400` `invalid_request`. An answer of `active: false` holds the run key and ends the
   run key's other live runs at their next request, and the run that asked may end with
   its own `dev.qory.run.exited` of that answer, or after `{}` one its runtime's exit

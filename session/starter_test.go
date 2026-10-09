@@ -171,13 +171,19 @@ func (st *starter) serve(w http.ResponseWriter, r *http.Request) {
 // runtime's exit.
 func (st *starter) issuer(t *testing.T) func(*runcredential.Issuer) {
 	t.Helper()
+	return st.issuerKeeping(t, time.Hour)
+}
+
+// issuerKeeping is [starter.issuer] with each answer of its endpoint kept for cache.
+func (st *starter) issuerKeeping(t *testing.T, cache time.Duration) func(*runcredential.Issuer) {
+	t.Helper()
 	secret := filepath.Join(t.TempDir(), "introspection-secret")
 	if err := os.WriteFile(secret, []byte("example-client-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hour := runcredential.Duration(time.Hour)
+	kept := runcredential.Duration(cache)
 	return func(i *runcredential.Issuer) {
-		i.Introspection = &runcredential.Introspection{URL: st.srv.URL + "/introspect", ClientID: "example-gateway", ClientSecretFile: secret, Cache: &hour}
+		i.Introspection = &runcredential.Introspection{URL: st.srv.URL + "/introspect", ClientID: "example-gateway", ClientSecretFile: secret, Cache: &kept}
 	}
 }
 
@@ -238,17 +244,22 @@ func TestTheStartersOutcomeAtARealGateway(t *testing.T) {
 // starter gives no outcome: a starter that still holds the run credential active, and
 // one that never answers, which the gateway answers {} within about 6 seconds. The
 // runtime's exit decides: failed for exit status 3, with no reason, in both records.
+// With the endpoint's answer kept for a second, the session's heartbeats every second
+// while the gateway asks, and its run.exited after, find none kept, and the endpoint
+// never answers their checks: the run's program has finished, so none ends the run.
 func TestNoOutcomeAtARealGateway(t *testing.T) {
 	for _, c := range []struct {
 		name, answer string
+		cache        time.Duration
 		least, most  time.Duration
 	}{
-		{"active", `{"active":true}`, 0, 5 * time.Second},
-		{"no answer", hang, 4 * time.Second, 8500 * time.Millisecond},
+		{"active", `{"active":true}`, time.Hour, 0, 5 * time.Second},
+		{"no answer", hang, time.Hour, 4 * time.Second, 8500 * time.Millisecond},
+		{"no answer, kept for a second", hang, time.Second, 4 * time.Second, 30 * time.Second},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := startStarter(t)
-			s := startSeparate(t, st.issuer(t))
+			s := startSeparate(t, st.issuerKeeping(t, c.cache))
 			cred := credentialOf("rk-0001")
 			st.answer(cred, c.answer)
 			r := newSepRun(t, s.remote(fixedCredential(cred)))

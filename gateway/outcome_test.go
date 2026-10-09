@@ -32,6 +32,8 @@ type starter struct {
 	// heldAsked is closed at the first such ask.
 	held, heldAsked chan struct{}
 	heldOnce        sync.Once
+	// slow, when set, is how long every ask but one at a runtime's exit takes.
+	slow time.Duration
 }
 
 type starterAnswer struct {
@@ -71,8 +73,11 @@ func (st *starter) answer(_, credential string, now bool) (runcredential.Answer,
 	} else {
 		st.asks[credential]++
 	}
-	held, asked := st.held, st.heldAsked
+	held, asked, slow := st.held, st.heldAsked, st.slow
 	st.mu.Unlock()
+	if !now {
+		time.Sleep(slow)
+	}
 	if now && held != nil {
 		st.heldOnce.Do(func() { close(asked) })
 		<-held
@@ -1008,14 +1013,16 @@ func TestTheWordsOfARunsEnd(t *testing.T) {
 	}
 }
 
-// TestTheRunExitedAfterTheAskIsSparedAFailedCheck pins the batch of a session's that
-// carries its run.exited after its ask at the exit stored its answer: a run credential
-// that could not be checked then, its endpoint unreachable or its answer not valid, does
-// not end the run, and the exit rule decides the batch against the answer stored. Every
-// other request keeps the check: a batch without a run.exited, and one before the ask,
-// end the run so; and an answer that the run credential is no longer active ends it as
-// the starter said. The starter's answers are not kept, so each request asks it.
-func TestTheRunExitedAfterTheAskIsSparedAFailedCheck(t *testing.T) {
+// TestARunIsSparedAFailedCheckAfterItsExit pins a run credential that could not be
+// checked, its endpoint unreachable or its answer not valid, against the run whose
+// session asked at its runtime's exit: from the start of that ask, while it is made and
+// for the window after its answer, its program has finished, and no request of the run
+// ends it so; a batch, a reload and a batch with its run.exited go on as if it were
+// checked, the run.exited decided against the answer stored. Before the ask, and for
+// the run key's other runs, the check ends the run as ever; an answer that the run
+// credential is no longer active ends it as the starter said. The starter's answers are
+// not kept, so each request asks it.
+func TestARunIsSparedAFailedCheckAfterItsExit(t *testing.T) {
 	unreachable := runcredential.ErrIssuerUnreachable
 	invalid := answerInvalid("the introspection endpoint answered status 500")
 	exited := func(id string) map[string]any {
@@ -1027,16 +1034,19 @@ func TestTheRunExitedAfterTheAskIsSparedAFailedCheck(t *testing.T) {
 		// answer is the starter's after the ask, err its error.
 		answer runcredential.Answer
 		err    error
+		reload bool
 		evs    func(id string) map[string]any
-		// code is the 410's, empty for a 202.
+		// code is the 410's, empty for a request that goes on.
 		code string
 	}{
-		{"its run.exited, no answer", true, runcredential.Answer{}, unreachable, exited, ""},
-		{"its run.exited, no valid answer", true, runcredential.Answer{}, invalid, exited, ""},
-		{"a heartbeat, no answer", true, runcredential.Answer{}, unreachable, heartbeat, "credential_check_unreachable"},
-		{"a heartbeat, no valid answer", true, runcredential.Answer{}, invalid, heartbeat, "credential_check_invalid"},
-		{"its run.exited before the ask", false, runcredential.Answer{}, unreachable, exited, "credential_check_unreachable"},
-		{"its run.exited, the run credential no longer active", true, runcredential.Answer{}, nil, exited, "stopped"},
+		{"its run.exited, no answer", true, runcredential.Answer{}, unreachable, false, exited, ""},
+		{"its run.exited, no valid answer", true, runcredential.Answer{}, invalid, false, exited, ""},
+		{"a heartbeat, no answer", true, runcredential.Answer{}, unreachable, false, heartbeat, ""},
+		{"a heartbeat, no valid answer", true, runcredential.Answer{}, invalid, false, heartbeat, ""},
+		{"a reload, no answer", true, runcredential.Answer{}, unreachable, true, nil, ""},
+		{"a heartbeat before the ask", false, runcredential.Answer{}, unreachable, false, heartbeat, "credential_check_unreachable"},
+		{"its run.exited before the ask", false, runcredential.Answer{}, invalid, false, exited, "credential_check_invalid"},
+		{"its run.exited, the run credential no longer active", true, runcredential.Answer{}, nil, false, exited, "stopped"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newStarter()
@@ -1049,19 +1059,23 @@ func TestTheRunExitedAfterTheAskIsSparedAFailedCheck(t *testing.T) {
 				}
 			}
 			st.set(cred, c.answer, c.err)
-			status, b := r.post(t, cred, c.evs(r.a.RunID))
+			var status int
+			var b []byte
+			if c.reload {
+				status, b = r.reload(t, cred, r.a.RunID)
+			} else {
+				status, b = r.post(t, cred, c.evs(r.a.RunID))
+			}
 			if c.code == "" {
-				if status != http.StatusAccepted {
-					t.Fatalf("the batch: %d %s", status, b)
+				if want := map[bool]int{false: http.StatusAccepted, true: http.StatusOK}[c.reload]; status != want {
+					t.Fatalf("the request: %d %s", status, b)
 				}
 				if got := s.reportsWith("the run ends"); len(got) != 0 {
 					t.Errorf("reports %q", got)
 				}
-				s.close()
-				recordEnds(t, s, r.a.RunID, "succeeded", "", float64(0))
 				return
 			}
-			gone(t, "the batch", status, b, c.code)
+			gone(t, "the request", status, b, c.code)
 			s.close()
 			rec := s.record(r.a.RunID)
 			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != c.code {
@@ -1069,6 +1083,54 @@ func TestTheRunExitedAfterTheAskIsSparedAFailedCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheSpareOfAFailedCheckIsBounded pins how long a run whose session asked at its
+// runtime's exit is spared a run credential that could not be checked: while the ask is
+// made, however long, and for the window after its answer, 30 seconds and here a
+// second; after that the check ends the run as ever. The run key's other run is never
+// spared.
+func TestTheSpareOfAFailedCheckIsBounded(t *testing.T) {
+	if gateway.ExitWindow != 30*time.Second {
+		t.Errorf("the window is %s; want 30s", gateway.ExitWindow)
+	}
+	cfg := gateway.Config{}
+	gateway.SetExitWindow(&cfg, time.Second)
+	st := newStarter()
+	s := startStarting(t, cfg, st, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	other := s.openSession(t, cred, server.LinkRunRequest{})
+	asked, release := st.hold()
+	answered := make(chan string, 1)
+	go func() {
+		_, b, _ := r.outcome(t, cred)
+		answered <- string(b)
+	}()
+	<-asked
+	st.set(cred, runcredential.Answer{}, runcredential.ErrIssuerUnreachable)
+	// While the ask is made: spared.
+	if status, b := r.post(t, cred, heartbeat(r.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("a heartbeat while the ask is made: %d %s", status, b)
+	}
+	close(release)
+	if b := <-answered; b != `{}` {
+		t.Errorf("the ask: %s", b)
+	}
+	answeredAt := time.Now()
+	// Inside the window after the answer: spared.
+	if status, b := r.post(t, cred, heartbeat(r.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("a heartbeat inside the window: %d %s", status, b)
+	}
+	// The run key's other run: not spared.
+	status, b := other.post(t, cred, heartbeat(other.a.RunID))
+	gone(t, "the other run's heartbeat", status, b, "credential_check_unreachable")
+	// Past the window: the check ends the run.
+	time.Sleep(time.Until(answeredAt.Add(1200 * time.Millisecond)))
+	status, b = r.post(t, cred, heartbeat(r.a.RunID))
+	gone(t, "a heartbeat past the window", status, b, "credential_check_unreachable")
+	s.close()
+	recordEnds(t, s, r.a.RunID, "failed", "credential_check_unreachable", float64(-1))
 }
 
 // TestAnExpiredRunCredentialInsideTheWindow pins a request inside a run's window whose
@@ -1095,4 +1157,25 @@ func TestAnExpiredRunCredentialInsideTheWindow(t *testing.T) {
 	}
 	s.close()
 	recordEnds(t, s, r.a.RunID, "failed", "checks_failed", float64(-1))
+}
+
+// TestARunIsNotLostWhileItsRunCredentialIsChecked pins a request of the session's whose
+// run credential the starter is slow to answer, longer than the gateway's quiet period:
+// the request is the session's while it waits, so the run is not lost, and it goes on.
+func TestARunIsNotLostWhileItsRunCredentialIsChecked(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetQuiet(&cfg, 300*time.Millisecond)
+	st := newStarter()
+	s := startStarting(t, cfg, st, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	st.mu.Lock()
+	st.slow = time.Second
+	st.mu.Unlock()
+	if status, b := r.post(t, cred, heartbeat(r.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("a heartbeat checked for a second: %d %s", status, b)
+	}
+	if got := s.reportsWith("sent nothing"); len(got) != 0 {
+		t.Errorf("reports %q", got)
+	}
 }

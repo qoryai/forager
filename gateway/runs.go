@@ -101,6 +101,10 @@ type linkRun struct {
 	exit      *exitAsk
 	window    time.Time
 	windowEnd *time.Timer
+	// checks is how many requests of the session's the starter is being asked of now:
+	// each is the session's request until the starter answers it, however long that
+	// takes.
+	checks int
 	// discarded says the run's session gave up before it had the run answer: the run
 	// ends as if it never opened, [Gateway.discard].
 	discarded bool
@@ -694,17 +698,23 @@ func (lr *linkRun) stillActive(ctx context.Context) error { return lr.checkActiv
 
 // checkActive is [linkRun.stillActive], but with spare a run credential that could not
 // be checked, its endpoint unreachable or its answer not valid, does not end the run:
-// checkActive returns that error as a [*checkFailed], and the caller ends the run with
-// it, [linkRun.failCheck], or does not.
+// checkActive returns that error as a [*checkFailed], and the caller's request goes on
+// as if the run credential were checked.
 func (lr *linkRun) checkActive(ctx context.Context, spare bool) error {
 	lr.mu.Lock()
 	active := lr.cred.active
 	lr.asked = time.Now()
+	if active != nil {
+		lr.checks++
+	}
 	lr.mu.Unlock()
 	if active == nil {
 		return nil
 	}
 	err := active(ctx, false)
+	lr.mu.Lock()
+	lr.checks--
+	lr.mu.Unlock()
 	if err == nil {
 		return nil
 	}
@@ -793,6 +803,8 @@ type exitAsk struct {
 	done          chan struct{}
 	inactive      bool
 	state, reason string
+	// answered is when it was answered, set before done is closed.
+	answered time.Time
 }
 
 // errAnsweredAtExit is [linkRun.stillActive]'s answer for a run whose starter answered
@@ -807,9 +819,27 @@ func (lr *linkRun) askedAtExit() bool {
 	return lr.exit != nil
 }
 
-// answeredAtExit reports whether the session's ask at its runtime's exit has stored its
-// answer.
-func (lr *linkRun) answeredAtExit() bool {
+// exitWindow is how long after the starter's answer at its runtime's exit that the run
+// credential is no longer active the run that asked may still end with its own
+// dev.qory.run.exited; and how long after any answer at the exit a run credential of
+// the run that could not be checked does not end it, [linkRun.sparesCheck].
+const exitWindow = 30 * time.Second
+
+// exitWindow is the gateway's [exitWindow], the one a test sets in its place.
+func (g *Gateway) exitWindow() time.Duration {
+	if g.cfg.exitWindow != 0 {
+		return g.cfg.exitWindow
+	}
+	return exitWindow
+}
+
+// sparesCheck reports whether a run credential of the run that could not be checked,
+// its endpoint unreachable or its answer not valid, leaves the run going: from the
+// start of the session's ask at its runtime's exit, while it is made and for
+// [exitWindow] after its answer. The run's program has finished then, and no run ends
+// as not checked after its program finished. An answer that the run credential is no
+// longer active is not spared.
+func (lr *linkRun) sparesCheck() bool {
 	lr.mu.Lock()
 	x := lr.exit
 	lr.mu.Unlock()
@@ -818,16 +848,11 @@ func (lr *linkRun) answeredAtExit() bool {
 	}
 	select {
 	case <-x.done:
-		return true
+		return time.Since(x.answered) < lr.g.exitWindow()
 	default:
-		return false
+		return true
 	}
 }
-
-// exitWindow is how long after the starter's answer at its runtime's exit that the run
-// credential is no longer active the run that asked may still end with its own
-// dev.qory.run.exited.
-const exitWindow = 30 * time.Second
 
 // ending is how the run ends when its window closes, or a request of it the window does
 // not take comes: as its starter said, cancelled and stopped when it gave no outcome.
@@ -896,6 +921,7 @@ func (lr *linkRun) askAtExit(ctx context.Context) (x *exitAsk, first bool) {
 // introspection is not asked.
 func (lr *linkRun) answerAtExit(x *exitAsk, active func(context.Context, bool) error) {
 	defer close(x.done)
+	defer func() { x.answered = time.Now() }()
 	if active == nil {
 		return
 	}
@@ -903,10 +929,7 @@ func (lr *linkRun) answerAtExit(x *exitAsk, active func(context.Context, bool) e
 	if err := active(lr.g.base, true); !errors.As(err, &in) {
 		return
 	}
-	window := exitWindow
-	if lr.g.cfg.exitWindow != 0 {
-		window = lr.g.cfg.exitWindow
-	}
+	window := lr.g.exitWindow()
 	// The run that asked is ending before the run key is held, so the hold ends none of
 	// its requests but as its window says.
 	lr.mu.Lock()
@@ -962,7 +985,8 @@ func (lr *linkRun) touch() {
 
 // watch ends the run when its session has asked nothing of it for the quiet time, and
 // otherwise looks again when that time would be up. The session's ask at its runtime's
-// exit is a request until the starter answers it, however long that takes.
+// exit, and a request whose run credential the starter is asked of, is a request until
+// the starter answers it, however long that takes.
 func (lr *linkRun) watch() {
 	lr.mu.Lock()
 	if lr.ended {
@@ -977,6 +1001,12 @@ func (lr *linkRun) watch() {
 			lr.mu.Unlock()
 			return
 		}
+	}
+	if lr.checks > 0 {
+		// A request of the session's waits for the starter's answer.
+		lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		lr.mu.Unlock()
+		return
 	}
 	if idle := time.Since(lr.last); idle < lr.g.quiet {
 		lr.timer = time.AfterFunc(lr.g.quiet-idle, lr.watch)
