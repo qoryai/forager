@@ -37,14 +37,14 @@ The gateway reports to the server; the session never speaks to it. A
 
 1. fetches the server's configuration document when it starts, with a signed `GET` of
    `/.well-known/qory-configuration`;
-2. for each run a session asks it for, fetches the run configuration when the document
-   contains one, with every label of the run as its query. Its `security_policy`,
-   narrowed by the node's policy, is the run's policy. Its `variables` are the server's
-   variables for the run. The gateway answers the session's run request with what
-   follows of them;
-3. posts the events the document selects to the URL it defines, signed, after a ping
-   that announces the heartbeat interval: the session's, which it receives on its
-   link and numbers, and its own.
+2. for each run a session asks it for, pings first: the ping announces the heartbeat
+   interval and opens the run at the server, which decides `instance_limit` there;
+3. then fetches the run configuration when the document contains one, with every label
+   of the run as its query. Its `security_policy`, narrowed by the node's policy, is
+   the run's policy. Its `variables` are the server's variables for the run. The
+   gateway answers the session's run request with what follows of them;
+4. posts the events the document selects to the URL it defines, signed: the
+   session's, which it receives on its link and numbers, and its own.
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the

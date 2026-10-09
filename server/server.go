@@ -108,7 +108,8 @@ func (e *Error) Unwrap() error { return e.Err }
 // that fetching again gets the same, which a transport failure or another status does
 // not.
 type DocumentError struct {
-	// What is the document's kind and URL the URL it was fetched from.
+	// What is the document's kind and URL the URL it was fetched from; on the gateway's
+	// local link, whose URLs name no place a user knows, "at the gateway".
 	What, URL string
 	Err       error
 }

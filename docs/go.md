@@ -44,7 +44,6 @@ g, err := gateway.Start(ctx, gateway.Config{
 if err != nil {                                   // no gateway, no run
 	return err
 }
-defer g.Close(ctx)                                // delivers the runs' last events
 rt, err := catalog.Lookup("claude", "")           // a runtime by its name, see below
 res, err := session.Run(ctx, session.Spec{
 	Runtime:   rt,
@@ -53,6 +52,7 @@ res, err := session.Run(ctx, session.Spec{
 	Gateway:   session.LocalGateway(g.LocalLink()), // the link's secret stays in this process
 	Forwarder: []string{exe, "forward"},          // the hook command, see below
 })
+g.Close(ctx)                                      // delivers the runs' last events, before the exit
 if err != nil {                                   // the run did not start
 	return err
 }
@@ -248,7 +248,8 @@ holds the imports to these rules:
   `gateway` too, to run a session against a real one, and `internal/linktest`, a fake
   gateway's link.
 - Only `e2e` imports `session`, and it imports every part.
-- No part imports the core's `internal/` packages, or another part's.
+- No part imports the core's `internal/` packages, or another part's. The fake gateway
+  of `internal/linktest` is for tests alone.
 
 **Documents select; releases add.** A policy, a server document and a descriptor select
 among what the binary does. They never add to it. New behaviour arrives only in a

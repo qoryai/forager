@@ -242,10 +242,11 @@ func (g *Gateway) LocalLink() link.Local {
 
 // files are the gateway's own files, each with the phrase a refused mount names it by:
 // the directories of the machine's credentials' and tools' programs and the
-// credentials' files, the pattern of the tools' socket directories, then the link's
-// directory and the pattern of every gateway's, the gateway's directory, and where the
-// runs' records are. The first ones come in the order a session checked them in before
-// the gateway was apart from it, so a mount that holds several is refused as it was.
+// credentials' files, and the pattern of the tools' socket directories, in the order a
+// session checked them in before the gateway was apart from it; then, Kept, the
+// directories the gateway keeps: the link's directory and the pattern of every
+// gateway's, the gateway's directory, and where the runs' records are, which a session
+// checks with its run directories, after its own files and the wall's.
 func (g *Gateway) files() []link.File {
 	var out []link.File
 	for _, c := range g.cfg.Credentials {
@@ -267,19 +268,19 @@ func (g *Gateway) files() []link.File {
 	}
 	out = append(out,
 		link.File{Path: tool.SocketDirs(), What: "where the tools' sockets are made"},
-		link.File{Path: g.dir, What: "the gateway's link directory"},
-		link.File{Path: filepath.Join(os.TempDir(), link.LinkDirPrefix+"*"), What: "where the gateways' links are made"})
+		link.File{Path: g.dir, What: "the gateway's link directory", Kept: true},
+		link.File{Path: filepath.Join(os.TempDir(), link.LinkDirPrefix+"*"), What: "where the gateways' links are made", Kept: true})
 	if g.cfg.Dir != "" {
-		out = append(out, link.File{Path: g.cfg.Dir, What: "the gateway's directory"})
+		out = append(out, link.File{Path: g.cfg.Dir, What: "the gateway's directory", Kept: true})
 	}
 	if g.cfg.RunDir != nil {
 		// The directory the record directories are made in, named by the record
 		// directory of a run id no run has.
 		const none = "00000000-0000-0000-0000-000000000000"
 		if dir := g.cfg.RunDir(none); filepath.Base(dir) == none {
-			out = append(out, link.File{Path: filepath.Dir(dir), What: "where the run directories are kept"})
+			out = append(out, link.File{Path: filepath.Dir(dir), What: "where the run directories are kept", Kept: true})
 		} else if dir != "" {
-			out = append(out, link.File{Path: dir, What: "where the run directories are kept"})
+			out = append(out, link.File{Path: dir, What: "where the run directories are kept", Kept: true})
 		}
 	}
 	var unique []link.File

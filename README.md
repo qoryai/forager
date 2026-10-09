@@ -161,7 +161,6 @@ g, err := gateway.Start(ctx, gateway.Config{
 if err != nil {
 	return err
 }
-defer g.Close(ctx)                                // delivers the runs' last events
 rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
 if err != nil {
 	return err
@@ -173,6 +172,7 @@ res, err := session.Run(ctx, session.Spec{
 	Gateway:   session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })
+g.Close(ctx)                                      // delivers the runs' last events, before the exit
 if err != nil {                                   // the run did not start
 	return err
 }

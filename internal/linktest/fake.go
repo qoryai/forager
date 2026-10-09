@@ -46,6 +46,7 @@ type Fake struct {
 	mu sync.Mutex
 	// interval is the heartbeat interval the discovery announces, in seconds.
 	interval  int
+	proxyAddr string
 	runDigest string
 	digests   []string
 	onRun     func(server.LinkRunRequest) Reply
@@ -84,6 +85,14 @@ func (f *Fake) Local() link.Local {
 
 // ProxyAddr is the fake proxy's address, which the discovery names.
 func (f *Fake) ProxyAddr() string { return f.proxy.Addr().String() }
+
+// SetDiscoveryProxy sets the proxy address the discovery names, in place of the fake
+// proxy's own.
+func (f *Fake) SetDiscoveryProxy(addr string) {
+	f.mu.Lock()
+	f.proxyAddr = addr
+	f.mu.Unlock()
+}
 
 // SetInterval sets the heartbeat interval the discovery announces, in seconds.
 func (f *Fake) SetInterval(seconds int) {
@@ -214,11 +223,15 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	var reply Reply
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
+		proxy := f.ProxyAddr()
+		if f.proxyAddr != "" {
+			proxy = f.proxyAddr
+		}
 		reply = Reply{Status: 200, Body: map[string]any{
 			"version": 1,
 			"events":  map[string]any{"url": server.LocalOrigin + EventsPath, "types": []string{"*"}, "interval_seconds": f.interval},
 			"run":     map[string]any{"url": server.LocalOrigin + RunPath},
-			"proxy":   map[string]any{"address": f.ProxyAddr()},
+			"proxy":   map[string]any{"address": proxy},
 		}}
 	case r.Method == http.MethodPost && r.URL.Path == RunPath:
 		var req server.LinkRunRequest

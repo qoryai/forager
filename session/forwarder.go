@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -34,6 +35,11 @@ type forwarder struct {
 // proxy address. A non-empty secret is written in the relay's preamble at the start of
 // every connection.
 func listenForwarder(addr, target, secret string) (*forwarder, error) {
+	if secret != "" {
+		if err := link.CheckSecret(secret); err != nil {
+			return nil, fmt.Errorf("the gateway's proxy secret: %w", err)
+		}
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err

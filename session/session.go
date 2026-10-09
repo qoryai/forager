@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
@@ -410,11 +413,19 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err == nil && disc.Proxy == nil {
 		err = errors.New("the link's discovery names no proxy")
 	}
+	if err == nil && !loopback(disc.Proxy.Address) {
+		err = fmt.Errorf("the gateway's discovery names the proxy %q, which is no address on loopback: the local link's proxy is on this machine", disc.Proxy.Address)
+	}
 	if err == nil && disc.Events.IntervalSeconds < 1 {
 		err = errors.New("the link's discovery names no heartbeat interval")
 	}
 	if err != nil {
 		return nil, err
+	}
+	// A run id that has a record is no run, as it always was: the run's stream, which
+	// the gateway writes beside the session's record, is checked first.
+	if _, err := os.Lstat(filepath.Join(dir, sink.EventsFile)); err == nil {
+		return nil, &fs.PathError{Op: "open", Path: filepath.Join(dir, sink.EventsFile), Err: syscall.EEXIST}
 	}
 	discovered := time.Now()
 	interval := time.Duration(disc.Events.IntervalSeconds) * time.Second
@@ -545,6 +556,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The wall comes before the forwarder, because it says where the forwarder must
 	// listen, and goes after everything else, because the forwarder outlives the last
 	// connection.
+	// The proxy secret opens every connection to the gateway's proxy, written by the
+	// forwarder or by the wall's relay: one no preamble carries is no run.
+	if err := link.CheckSecret(answer.ProxySecret); err != nil {
+		return fail(fmt.Errorf("the gateway's proxy secret: %w", err))
+	}
 	var enclosure wall.Enclosure
 	bind, secret := link.Loopback, answer.ProxySecret
 	if spec.Wall != nil {
@@ -993,3 +1009,14 @@ func hostname() string {
 // ErrNotStarted wraps a failure to start the program, so a caller tells it from the
 // runtime's own failure.
 var ErrNotStarted = errors.New("the runtime did not start")
+
+// loopback reports whether addr is host:port with an IP address on loopback as its
+// host.
+func loopback(addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
