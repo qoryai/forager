@@ -110,7 +110,7 @@ func TestAServersStopEndsNoRun(t *testing.T) {
 	if d := h.post(logged(runID)); d.Status != http.StatusAccepted {
 		t.Errorf("the batch the server answers 410: %+v", d)
 	}
-	eventually(t, "the stop's report", func() bool { return h.reported(stopLine) })
+	eventually(t, "the server's 410", func() bool { return stopped(h, runID) })
 	sent := c.deliveries.Load()
 	for range 3 {
 		if d := h.post(heartbeat(runID)); d.Status != http.StatusAccepted || d.End != "" {
@@ -156,7 +156,7 @@ func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	if d := h.post(started(runID, nil), applied(runID, a.Applied)); d.Status != http.StatusAccepted {
 		t.Errorf("the run.started: %+v", d)
 	}
-	eventually(t, "the stop's report", func() bool { return h.reported(stopLine) })
+	eventually(t, "the server's 410", func() bool { return stopped(h, runID) })
 	if d := h.post(heartbeat(runID)); d.Status != http.StatusAccepted || d.End != "" {
 		t.Errorf("a batch after the server's 410: %+v", d)
 	}
@@ -173,6 +173,15 @@ func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	if got := types(c.lines(t)); !slices.Equal(got, []string{event.Ping}) {
 		t.Errorf("the server holds %v", got)
 	}
+	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
+		t.Errorf("reports %q", got)
+	}
+}
+
+// stopped reports whether the run's record is marked stopped: the server answered 410.
+func stopped(h *harness, runID string) bool {
+	b, _ := os.ReadFile(filepath.Join(h.dir, "runs", runID, "delivered.log"))
+	return slices.Contains(strings.Split(string(b), "\n"), "stopped")
 }
 
 // TestASigned410ToThePingIsNoRun pins a server's signed 410 to the ping, with
