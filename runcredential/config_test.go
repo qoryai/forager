@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"path"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +71,8 @@ func pkixPEM(t *testing.T, pub any) []byte {
 func d(v time.Duration) *Duration { x := Duration(v); return &x }
 
 // issuer is the neutral example issuer with one RS256 key, rs256.pem, without a kid.
+// The tests' rs256.pem, es256.pem and eddsa.pem are keys made for each run of the
+// tests ([testKeys]), since Check refuses the published fixture keys.
 func issuer() Issuer {
 	return Issuer{
 		Issuer:     exampleIssuer,
@@ -86,16 +89,48 @@ func issuer() Issuer {
 	}
 }
 
-func fixtureKeys(t *testing.T) map[string][]byte {
-	return map[string][]byte{
-		"rs256.pem": knownFile(t, "rs256.pem"),
-		"es256.pem": knownFile(t, "es256.pem"),
-		"eddsa.pem": knownFile(t, "eddsa.pem"),
+// madeKeys are the PEM files of the keys made for this run of the tests, once.
+var madeKeys = sync.OnceValues(func() (map[string][]byte, error) {
+	r, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
 	}
+	e, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	ed, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]byte{}
+	for name, pub := range map[string]any{"rs256.pem": &r.PublicKey, "es256.pem": &e.PublicKey, "eddsa.pem": ed} {
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = pemOf("PUBLIC KEY", der)
+	}
+	return out, nil
+})
+
+// testKeys are rs256.pem, es256.pem and eddsa.pem, keys made for this run of the
+// tests, in a map of their own.
+func testKeys(t *testing.T) map[string][]byte {
+	t.Helper()
+	m, err := madeKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]byte{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func TestParseReadsTheFixtures(t *testing.T) {
-	keys := fixtureKeys(t)
+	keys := testKeys(t)
 	read := files(map[string][]byte{
 		"/etc/qory/issuer-k1.pem": keys["rs256.pem"],
 		"/etc/qory/issuer-k2.pem": keys["es256.pem"],
@@ -161,7 +196,7 @@ func TestParseRefusesTheInvalidFixtures(t *testing.T) {
 }
 
 func TestIssuerCheck(t *testing.T) {
-	keys := fixtureKeys(t)
+	keys := testKeys(t)
 	small, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +227,12 @@ func TestIssuerCheck(t *testing.T) {
 	keys["certificate.pem"] = pemOf("CERTIFICATE", certDER)
 	keys["pkcs1.pem"] = pemOf("RSA PUBLIC KEY", x509.MarshalPKCS1PublicKey(&small.PublicKey))
 	keys["two-blocks.pem"] = append(append([]byte{}, keys["es256.pem"]...), keys["es256.pem"]...)
+	keys["leading-text.pem"] = append([]byte("an example key\n"), keys["es256.pem"]...)
+	keys["leading-space.pem"] = append([]byte(" \t\r\n"), keys["es256.pem"]...)
+	keys["trailing-space.pem"] = append(append([]byte{}, keys["es256.pem"]...), " \t\r\n"...)
+	keys["trailing-text.pem"] = append(append([]byte{}, keys["es256.pem"]...), "an example key\n"...)
+	keys["malformed-before.pem"] = append([]byte("-----BEGIN PRIVATE KEY-----\nnot base64\n-----END PRIVATE KEY-----\n"), keys["es256.pem"]...)
+	keys["malformed.pem"] = []byte("-----BEGIN PUBLIC KEY-----\nnot base64\n-----END PUBLIC KEY-----\n")
 	keys["headers.pem"] = pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Headers: map[string]string{"Proc-Type": "4,ENCRYPTED"}, Bytes: []byte{1}})
 	keys["not-pem.pem"] = []byte("not a key")
 	read := files(keys)
@@ -262,6 +303,27 @@ func TestIssuerCheck(t *testing.T) {
 			i.Algorithms = []string{ES256}
 			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "two-blocks.pem"}}
 		}, "more than one PEM block"},
+		{"text before the PEM block", func(i *Issuer) {
+			i.Algorithms = []string{ES256}
+			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "leading-text.pem"}}
+		}, "more than white space before its PEM block"},
+		{"white space before the PEM block", func(i *Issuer) {
+			i.Algorithms = []string{ES256}
+			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "leading-space.pem"}}
+		}, ""},
+		{"white space after the PEM block", func(i *Issuer) {
+			i.Algorithms = []string{ES256}
+			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "trailing-space.pem"}}
+		}, ""},
+		{"text after the PEM block", func(i *Issuer) {
+			i.Algorithms = []string{ES256}
+			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "trailing-text.pem"}}
+		}, "more than white space after its PEM block"},
+		{"a malformed PRIVATE KEY block before the PEM block", func(i *Issuer) {
+			i.Algorithms = []string{ES256}
+			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "malformed-before.pem"}}
+		}, "more than one PEM block"},
+		{"a malformed PEM block", func(i *Issuer) { i.Keys[0].PublicKeyFile = "malformed.pem" }, "no PEM block that can be read"},
 		{"PEM headers", func(i *Issuer) { i.Keys[0].PublicKeyFile = "headers.pem" }, "headers"},
 		{"not PEM", func(i *Issuer) { i.Keys[0].PublicKeyFile = "not-pem.pem" }, "no PEM block"},
 		{"a negative leeway", func(i *Issuer) { i.Leeway = d(-time.Second) }, "negative"},
@@ -295,6 +357,12 @@ func TestIssuerCheck(t *testing.T) {
 			i.DetailMapping = map[string]Claim{"a b": {Claim: "requester"}}
 		}, "details key"},
 		{"a details key without a claim", func(i *Issuer) { i.DetailMapping = map[string]Claim{"requester": {}} }, "names no claim"},
+		{"a details key with =", func(i *Issuer) {
+			i.DetailMapping = map[string]Claim{"a=b": {Claim: "requester"}}
+		}, "control character or ="},
+		{"a details key that is =", func(i *Issuer) {
+			i.DetailMapping = map[string]Claim{"=": {Claim: "requester"}}
+		}, "control character or ="},
 		{"introspection over http", func(i *Issuer) {
 			i.Introspection = &Introspection{URL: "http://issuer.example/introspect", ClientID: "example-gateway", ClientSecretFile: "secret"}
 		}, "introspection"},
@@ -327,8 +395,61 @@ func TestIssuerCheck(t *testing.T) {
 	}
 }
 
+// TestCheckRefusesTheFixtureKeys pins that Check refuses each published fixture key,
+// whose private key anyone can derive from the seed, naming the file and never what it
+// holds, also in another PEM wrapping; and that the known-answer tests' path accepts
+// them.
+func TestCheckRefusesTheFixtureKeys(t *testing.T) {
+	keys := map[string][]byte{}
+	for _, name := range []string{"rs256.pem", "es256.pem", "eddsa.pem"} {
+		keys["/etc/qory/"+name] = knownFile(t, name)
+		block, _ := pem.Decode(knownFile(t, name))
+		keys["/etc/qory/rewrapped-"+name] = append([]byte("\n"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: block.Bytes})...)
+	}
+	read := files(keys)
+	for _, c := range []struct{ alg, file string }{
+		{RS256, "rs256.pem"}, {ES256, "es256.pem"}, {EdDSA, "eddsa.pem"}, {EdDSA, "rewrapped-eddsa.pem"},
+	} {
+		i := issuer()
+		i.Algorithms = []string{c.alg}
+		i.Keys = []Key{{Alg: c.alg, PublicKeyFile: "/etc/qory/" + c.file}}
+		err := i.Check(read)
+		if err == nil || !strings.Contains(err.Error(), "a published fixture key") || !strings.Contains(err.Error(), "/etc/qory/"+c.file) {
+			t.Errorf("%s: Check: %v; want a published fixture key refused by its file", c.file, err)
+		} else if strings.Contains(err.Error(), "BEGIN") || strings.Contains(err.Error(), "MI") {
+			t.Errorf("%s: the error quotes the key: %v", c.file, err)
+		}
+		if err := (Issuers{i}).Check(read); err == nil {
+			t.Errorf("%s: Issuers.Check accepts it", c.file)
+		}
+		if _, err := i.Keys[0].PublicKey(read); err == nil {
+			t.Errorf("%s: PublicKey accepts it", c.file)
+		}
+		if err := (Issuers{i}).check(read, true); err != nil {
+			t.Errorf("%s: the known answers' path refuses it: %v", c.file, err)
+		}
+	}
+}
+
+// TestParseRefusesADetailsKeyWithEquals pins that the schema refuses a details key that
+// holds =, since a refusal names a key as about.details.<key>=<value>.
+func TestParseRefusesADetailsKeyWithEquals(t *testing.T) {
+	doc := `[{"issuer": "https://issuer.example", "audience": "qory-gateway", "algorithms": ["RS256"],
+	  "keys": [{"alg": "RS256", "public_key_file": "k.pem"}],
+	  "labels": {"forge": {"value": "example-forge"}, "repository": {"claim": "project"}, "run_key": {"claim": "sub"}},
+	  "details": {%s: {"claim": "requester"}}}]`
+	if _, err := Parse("d.json", []byte(strings.Replace(doc, "%s", `"requester"`, 1))); err != nil {
+		t.Fatalf("a details key without =: %v", err)
+	}
+	for _, key := range []string{`"a=b"`, `"="`, `"requester="`} {
+		if _, err := Parse("d.json", []byte(strings.Replace(doc, "%s", key, 1))); err == nil {
+			t.Errorf("Parse accepts the details key %s", key)
+		}
+	}
+}
+
 func TestIssuersCheck(t *testing.T) {
-	read := files(fixtureKeys(t))
+	read := files(testKeys(t))
 	if err := (Issuers{issuer()}).Check(read); err != nil {
 		t.Errorf("one issuer: %v", err)
 	}

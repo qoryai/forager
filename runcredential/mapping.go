@@ -30,9 +30,10 @@ func (i Issuer) Allowed(claims map[string]any) bool {
 //     with join;
 //   - run_key is the claim sub.
 //
-// Each claim the mapping names is a non-empty string; a claim of repository's claims
-// holds no join, so two different targets never make one repository; and the labels
-// pass [server.CheckLabels]. Every failure is [ErrRefused].
+// Each claim the mapping names is a non-empty string with no control character, as a
+// value of details is ([Issuer.Details]); a claim of repository's claims holds no
+// join, so two different targets never make one repository; and the labels pass
+// [server.CheckLabels]. Every failure is [ErrRefused].
 func (i Issuer) Labels(claims map[string]any) (map[string]string, error) {
 	forge, err := i.LabelMapping.Forge.value(claims)
 	if err != nil {
@@ -80,11 +81,14 @@ func (s Source) value(claims map[string]any) (string, error) {
 	return "", refuse("the mapping names no source")
 }
 
-// claimString is a claim that is a non-empty string.
+// claimString is a claim of a label: a non-empty string with no control character.
 func claimString(claims map[string]any, name string) (string, error) {
 	v, ok := claims[name].(string)
 	if !ok || v == "" {
 		return "", refuse("a claim the mapping names is missing or not a string")
+	}
+	if !plain(v) {
+		return "", refuse("a claim of labels is not UTF-8 or holds a control character")
 	}
 	return v, nil
 }

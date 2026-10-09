@@ -1520,22 +1520,27 @@ The public package `runcredential` holds the rules beyond the schema:
 
 - `Issuers.Check` and `Issuer.Check`: no two issuers are the same; every key's `alg` is
   among the issuer's algorithms; with more than one key, every key has a `kid`, and no
-  two the same; and each `public_key_file` is one PEM block of type `PUBLIC KEY` of the
-  key its `alg` needs: RSA of at least 2048 bits for `RS256`, P-256 for `ES256`, Ed25519
-  for `EdDSA`, which passes the checks of an Ed25519 public key.
+  two the same; each `public_key_file` is one PEM block of type `PUBLIC KEY`, with
+  nothing but white space around it, of the key its `alg` needs: RSA of at least 2048
+  bits for `RS256`, P-256 for `ES256`, Ed25519 for `EdDSA`, which passes the checks of an
+  Ed25519 public key; no key is one of the published fixture keys of the known answers,
+  whose private keys anyone can derive; and no `details` key holds `=`, since a refusal
+  names a key as `about.details.<key>=<value>`.
 - `Issuer.SelectKey`, the header: `alg` is among the issuer's algorithms, never `none` or
   an HMAC algorithm, and equals the selected key's; the key is selected by `kid`, and a
   run credential without one is accepted only while one key is pinned; `crit` is refused.
 - `Issuer.CheckClaims`, the claims of a run credential whose signature is verified:
   `exp` required and after now less the leeway; `iat` and `nbf`, when present, no later
   than now plus the leeway; `exp - iat` at most `max_lifetime` when it is set, which then
-  requires `iat`; `iss` the issuer; `aud`, a string or an array, containing the audience;
-  `sub` present.
+  requires `iat`; `iss` the issuer; `aud`, a string or an array, containing the audience,
+  which is never empty; `sub` present.
 - `Issuer.Allowed`, the scope; `Issuer.Labels`, the labels `forge`, `repository` and
   `run_key`, which come from the run credential alone; `Issuer.Details`, the
-  `about.details` keys it decides, those whose claims it carries; and `Compare`, which refuses a session that sends
-  `forge` or `repository` with another value with `target_differs_from_credential`, and
-  any other key the mapping sets with `differs_from_credential`.
+  `about.details` keys it decides, those whose claims it carries; each claim either
+  reads is a string with no control character; and `Compare`, which refuses a session
+  that sends `forge` or `repository` with another value with
+  `target_differs_from_credential`, and any other key the mapping sets with
+  `differs_from_credential`.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run
@@ -2026,7 +2031,7 @@ the option experimental.
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
-| `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture issuer's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture issuer; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's), the signature (over an altered payload), the claims (`aud` and `iss` another's, expired, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string); an accepted one without `requester` leaves that key of `about.details` to the session | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, check the header, the claims, the scope and the mapping of each, and verify each signature |
+| `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture issuer's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture issuer; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's), the signature (over an altered payload), the claims (`aud` and `iss` another's, expired, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string, a `project` with a control character); an accepted one without `requester` leaves that key of `about.details` to the session. The keys are public: Forager refuses each in a configuration, and they are never pinned | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, check each against the header, the claims, the scope and the mapping up to the step that refuses it, and verify the signature of each that reaches the signature step |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 After a change to a batch's body, Forager's module signs the batches under

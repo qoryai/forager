@@ -96,6 +96,8 @@ const maxNumericDate = 253402300799
 // already verified under the key [Issuer.SelectKey] selected, step 3 of the
 // verification, at now. Every failure is [ErrRefused]:
 //
+//   - the issuer's audience is not empty, so an Issuer built in Go without
+//     [Issuer.Check] never matches an aud of "";
 //   - exp is required, a NumericDate, and now is before exp plus the leeway;
 //   - iat, when present, is a NumericDate no later than now plus the leeway;
 //   - nbf, when present, is a NumericDate no later than now plus the leeway (RFC 7519
@@ -109,6 +111,9 @@ const maxNumericDate = 253402300799
 // A NumericDate is a JSON number of seconds since the epoch, not negative, at most the
 // year 9999: a float64, a json.Number, an int or an int64 as a JSON decoder gives it.
 func (i Issuer) CheckClaims(claims map[string]any, now time.Time) error {
+	if i.Audience == "" {
+		return refuse("the issuer has no audience")
+	}
 	leeway := i.LeewayOrDefault()
 	exp, ok, err := numericDate(claims, "exp")
 	if err != nil || !ok {

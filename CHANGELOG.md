@@ -141,33 +141,40 @@ release may change what an existing document does, and says so under Upgrading.
   `leeway`, 60 s by default; `max_lifetime`; the scope `allow`; `labels`, `forge` a
   constant or a claim, `repository` the claims that name the target joined with `join`,
   a claim or a constant, and `run_key` always `sub`; `details`, the `about.details` keys
-  the run credential decides; and `introspection`, an RFC 7662 endpoint with its client
+  the run credential decides, a key without `=`, since a refusal names a key as
+  `about.details.<key>=<value>`; and `introspection`, an RFC 7662 endpoint with its client
   and a `cache` that defaults to the run's heartbeat interval. `fixtures/run-credentials/`
   holds two accepted documents and `fixtures/invalid/` the refused ones.
 - The public package `runcredential` is the run credential of the contract. `Parse`
   reads the document against the schema, refusing a member it does not define;
   `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the issuer's
-  algorithms, two keys without a `kid` or with the same one, the same issuer twice, and a
-  `public_key_file` that is not one PEM block of type `PUBLIC KEY` of its key type: RSA of
-  at least 2048 bits, P-256, or Ed25519 that passes the checks of an Ed25519 public key.
+  algorithms, two keys without a `kid` or with the same one, the same issuer twice, a
+  `details` key that holds `=`, and a `public_key_file` that is not one PEM block of type
+  `PUBLIC KEY`, with nothing but white space around it, of its key type: RSA of at least
+  2048 bits, P-256, or Ed25519 that passes the checks of an Ed25519 public key.
   Over a run credential: `Issuer.SelectKey` selects the pinned key by `kid` and `alg`,
   without a `kid` only while one key is pinned, and refuses `crit`; `Issuer.CheckClaims`
   checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
-  of a run credential whose signature is verified, at a given time; `Issuer.Allowed` is
-  the scope; `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label
-  limits, refusing a label claim the run credential does not carry; `Issuer.Details`
+  of a run credential whose signature is verified, at a given time, and refuses every one
+  for an issuer without an audience; `Issuer.Allowed` is the scope; `Issuer.Labels` makes
+  `forge`, `repository` and `run_key`, within the label limits and with no control
+  character, refusing a label claim the run credential does not carry; `Issuer.Details`
   makes the `about.details` keys whose claims it carries, leaving the others to the
   session; and `Compare` returns `target_differs_from_credential` or
   `differs_from_credential` for what a session sends with another value, with each
   member and the run credential's value as names. Every failure of a run credential is
   `runcredential.ErrRefused`, one text that names no claim, and `runcredential.Refused`
   is its `run_credential_refused`.
+- `runcredential.Key.PublicKey`, and so `Issuer.Check`, refuses the three published
+  fixture keys of the known answers, `rs256.pem`, `es256.pem` and `eddsa.pem`, whose
+  private keys anyone can derive from the published seed, naming the file and never the
+  key.
 - `fixtures/known-answers/run-credentials/` holds the fixture issuer's keys, RSA 2048,
   P-256 and Ed25519, derived from a published seed, two configurations of the issuer, and
   run credentials signed under the keys, accepted ones per algorithm and refused ones,
   each with its outcome at a fixed time and the step that refuses it. `go generate
-  ./runcredential` writes them with Go's standard library, and `go test ./...` fails while
-  they differ.
+  ./runcredential` writes them with Go's standard library, and `runcredential`'s list of
+  the fixture keys it refuses, and `go test ./...` fails while they differ.
 - `docs/gateway-run-credentials.md` says how an issuer integrates with the Qory gateway:
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
