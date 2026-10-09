@@ -1,6 +1,6 @@
 // Package knownanswers writes the known answers of the run credential, the files of
-// contracts/forager/v1/fixtures/known-answers/run-credentials: the fixture issuer's
-// keys, derived from a published seed, two configurations of the fixture issuer, and
+// contracts/forager/v1/fixtures/known-answers/run-credentials: the fixture starter's
+// keys, derived from a published seed, two configurations of the fixture starter, and
 // run credentials signed under the keys, each with its outcome at a fixed now. It also
 // writes runcredential/fixturekeys.go, the fixture keys' SubjectPublicKeyInfo, which
 // package runcredential refuses outside its known-answer tests.
@@ -35,7 +35,7 @@ import (
 // signed fixtures of the contract are replayed at.
 const Now = 1700000000
 
-// Seed is the fixture issuer's seed, bytes 193 to 224.
+// Seed is the fixture starter's seed, bytes 193 to 224.
 func Seed() []byte {
 	s := make([]byte, 32)
 	for n := range s {
@@ -80,14 +80,14 @@ func prime(seed []byte, label string) *big.Int {
 	}
 }
 
-// Keys are the fixture issuer's private keys.
+// Keys are the fixture starter's private keys.
 type Keys struct {
 	RSA     *rsa.PrivateKey
 	ECDSA   *ecdsa.PrivateKey
 	Ed25519 ed25519.PrivateKey
 }
 
-// DeriveKeys derives the fixture issuer's keys from the seed:
+// DeriveKeys derives the fixture starter's keys from the seed:
 //
 //   - RSA: p is prime(seed, "rs256-p"), q is prime(seed, "rs256-q"), e is 65537, d is
 //     the inverse of e modulo lcm(p-1, q-1), so the modulus has 2048 bits;
@@ -127,7 +127,7 @@ func DeriveKeys(seed []byte) (*Keys, error) {
 	return &Keys{RSA: rk, ECDSA: ek, Ed25519: ed25519.NewKeyFromSeed(derive(seed, "eddsa", 0))}, nil
 }
 
-// FixtureKeys are the DER SubjectPublicKeyInfo of the fixture issuer's public keys, in
+// FixtureKeys are the DER SubjectPublicKeyInfo of the fixture starter's public keys, in
 // the order rs256.pem, es256.pem, eddsa.pem.
 func FixtureKeys() ([][]byte, error) {
 	k, err := DeriveKeys(Seed())
@@ -175,13 +175,13 @@ func PEM(pub crypto.PublicKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 }
 
-// The fixture issuer.
+// The fixture starter: Issuer is its "issuer" key, the iss of its run credentials.
 const (
 	Issuer   = "https://issuer.example"
 	Audience = "qory-gateway"
 )
 
-// configuration is a run credentials document of the fixture issuer with the keys
+// configuration is a run credentials document of the fixture starter with the keys
 // given, its public_key_file names relative to the directory of the known answers.
 func configuration(algorithms []string, keys []map[string]string) []map[string]any {
 	return []map[string]any{{
@@ -461,7 +461,7 @@ func Files() (map[string][]byte, error) {
 		Note: "signed over the claims of rs256, sent with project other-project: every step but the signature accepts it"})
 
 	keysDoc := map[string]any{
-		"note": "The fixture issuer, " + Issuer + ", and its keys, derived from the seed, bytes 193 to 224, in base64url. " +
+		"note": "The fixture starter, " + Issuer + ", and its keys, derived from the seed, bytes 193 to 224, in base64url. " +
 			"RSA: p is the first prime at or above the 1024-bit number SHA-256(seed || \"rs256-p\" || 0x00) || ... || SHA-256(seed || \"rs256-p\" || 0x03) with its two highest bits and its lowest bit set, searched upward in steps of two, with p - 1 not a multiple of 65537; q the same with \"rs256-q\"; e is 65537. " +
 			"ECDSA on P-256: the private scalar is SHA-256(seed || \"es256\" || 0x00), big endian. " +
 			"Ed25519: the key's seed is SHA-256(seed || \"eddsa\" || 0x00). " +
@@ -474,7 +474,7 @@ func Files() (map[string][]byte, error) {
 		},
 	}
 	index := map[string]any{
-		"note": "Run credentials of the fixture issuer, each with its outcome at now, under the configuration named, a file beside this one. " +
+		"note": "Run credentials of the fixture starter, each with its outcome at now, under the configuration named, a file beside this one. " +
 			"refused_at is the step that refuses one: serialisation, anything but exactly three parts of base64url without padding, white space or a byte outside its alphabet; header, a header that is not one JSON object with each member name once, a crit, a typ other than JWT, compared without regard to case, and the alg and the key the header selects; signature, over the exact bytes received, an ES256 signature exactly 64 bytes with R and S each in [1, n-1]; claims, a payload that is not one JSON object with each member name once, the time, iss, aud and sub; scope, allow; mapping, a claim the labels or details name that is present and not a string, or that holds a control character. " +
 			"A details claim the credential does not carry leaves that key undecided, and the session's value stands; a label claim it does not carry refuses it. " +
 			"A credential refused at a later step passes every earlier one, and an accepted one passes every step, the signature included, with the labels and details listed. " +

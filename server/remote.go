@@ -97,7 +97,7 @@ var errCredentialShape = errors.New("the run credential is not in the syntax of 
 // or fragment. Every connection is TLS 1.3 alone, verified as trust says
 // ([RemoteTLS]); no proxy of the environment is used, and no redirect is followed.
 // Every request carries Authorization: Bearer and the run credential credential
-// returns, which is asked for again before each request, so a run credential its issuer
+// returns, which is asked for again before each request, so a run credential its starter
 // refreshes is sent from then on. A credential that fails, or that is not a Bearer
 // token, sends nothing. The run credential is never printed, logged or contained in an
 // error the link returns; the error credential returns is passed on, and must not hold

@@ -55,14 +55,14 @@ func Refused() *accesskey.Refusal {
 }
 
 // SelectKey selects the pinned key a run credential's protected header names, step 1
-// of the verification, and returns its index in the issuer's keys. The header is the
+// of the verification, and returns its index in the starter's keys. The header is the
 // decoded JSON object of the JWS protected header. It is refused, as [ErrRefused],
 // when:
 //
-//   - alg is not a string, or not among the issuer's algorithms (none and every HMAC
+//   - alg is not a string, or not among the starter's algorithms (none and every HMAC
 //     algorithm never are);
 //   - kid is present and not a string, or names no pinned key;
-//   - kid is absent and the issuer pins more than one key;
+//   - kid is absent and the starter pins more than one key;
 //   - the selected key's alg is not the header's alg;
 //   - crit is present: the gateway understands no extension of RFC 7515 §4.1.11;
 //   - typ is present and not the string JWT, compared without regard to case (RFC 7519
@@ -122,7 +122,7 @@ const maxNumericDate = 253402300799
 // already verified under the key [Issuer.SelectKey] selected, step 3 of the
 // verification, at now. Every failure is [ErrRefused]:
 //
-//   - the issuer and its audience are not empty, so an Issuer built in Go without
+//   - the "issuer" key and the audience are not empty, so an Issuer built in Go without
 //     [Issuer.Check] never matches an iss or an aud of "", and its leeway is not
 //     negative and at most [MaxLeeway];
 //   - exp is required, a NumericDate, and now is before exp plus the leeway;
@@ -131,7 +131,7 @@ const maxNumericDate = 253402300799
 //     §4.1.5);
 //   - when max_lifetime is set, iat is required and exp minus iat is at most
 //     max_lifetime;
-//   - iss is a string equal to the issuer;
+//   - iss is a string equal to the "issuer" key;
 //   - aud is a string equal to the audience, or an array of strings that contains it;
 //   - sub, the run key, is a non-empty string.
 //
@@ -139,7 +139,7 @@ const maxNumericDate = 253402300799
 // year 9999: a float64, a json.Number, an int or an int64 as a JSON decoder gives it.
 func (i Issuer) CheckClaims(claims map[string]any, now time.Time) error {
 	if i.Issuer == "" {
-		return refuse("the starter's issuer is empty")
+		return refuse(`the starter has no "issuer" key`)
 	}
 	if i.Audience == "" {
 		return refuse("the starter has no audience")

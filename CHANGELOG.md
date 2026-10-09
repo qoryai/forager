@@ -185,7 +185,7 @@ release may change what an existing document does, and says so under Upgrading.
   `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
   before it contacts the server, and an `About` it refuses is no run.
 - Contract `v1` revision 1, amended in place, gains the refusals of a gateway that
-  verifies a run credential, the one an issuer gives a run: `run_credential_refused`,
+  verifies a run credential, the one the run's starter gives it: `run_credential_refused`,
   one opaque answer for every failure of the run credential and for a run key that
   already opened a run at this gateway, with no names; `target_differs_from_credential`,
   a session whose label `forge` or `repository` differs from the run credential's;
@@ -215,8 +215,9 @@ release may change what an existing document does, and says so under Upgrading.
   `refused-differs-from-credential.json`, the `dev.qory.run.refused` a session records
   when a gateway refuses its run request, in the shape of a batch.
 - Contract `v1` revision 1, amended in place, gains `run-credentials.schema.json`: the
-  issuers of run credentials a gateway accepts, the list under `gateway.run_credentials`
-  of the operator's `forager.yaml`. Per issuer: `issuer`, an https URL; `audience`,
+  run starters a gateway accepts run credentials from, the run's starter being the `iss`
+  of its run credentials, the list under `gateway.run_credentials` of the operator's
+  `forager.yaml`. Per starter: `issuer`, an https URL; `audience`,
   required; `algorithms` among `RS256`, `ES256` and `EdDSA`, never `none` or an HMAC
   algorithm; the pinned `keys`, each with its `alg`, a `public_key_file` and a `kid`;
   `leeway`, 60 s by default; `max_lifetime`; the scope `allow`; `labels`, `forge` a
@@ -228,8 +229,8 @@ release may change what an existing document does, and says so under Upgrading.
   holds two accepted documents and `fixtures/invalid/` the refused ones.
 - The public package `runcredential` is the run credential of the contract. `Parse`
   reads the document against the schema, refusing a member it does not define;
-  `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the issuer's
-  algorithms, two keys without a `kid` or with the same one, the same issuer twice, a
+  `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the starter's
+  algorithms, two keys without a `kid` or with the same one, the same `issuer` twice, a
   `details` key that holds `=`, a constant label value or a `join` with a control
   character, and a `public_key_file` that is not one PEM block of type `PUBLIC KEY`, with
   nothing but white space around it, of its key type: RSA of at least 2048 bits, P-256,
@@ -238,7 +239,7 @@ release may change what an existing document does, and says so under Upgrading.
   without a `kid` only while one key is pinned, and refuses `crit`; `Issuer.CheckClaims`
   checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
   of a run credential whose signature is verified, at a given time, and refuses every one
-  for an issuer whose issuer or audience is empty; `Issuer.Allowed` is the scope;
+  for a starter whose `issuer` or audience is empty; `Issuer.Allowed` is the scope;
   `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label limits and
   with no control character, refusing a label claim the run credential does not carry;
   `Issuer.Details` makes the `about.details` keys whose claims it carries, leaving the
@@ -251,36 +252,36 @@ release may change what an existing document does, and says so under Upgrading.
   fixture keys of the known answers, `rs256.pem`, `es256.pem` and `eddsa.pem`, whose
   private keys anyone can derive from the published seed, naming the file and never the
   key.
-- `fixtures/known-answers/run-credentials/` holds the fixture issuer's keys, RSA 2048,
-  P-256 and Ed25519, derived from a published seed, two configurations of the issuer, and
+- `fixtures/known-answers/run-credentials/` holds the fixture starter's keys, RSA 2048,
+  P-256 and Ed25519, derived from a published seed, two configurations of the starter, and
   run credentials signed under the keys, accepted ones per algorithm and refused ones,
   each with its outcome at a fixed time and the step that refuses it. `go generate
   ./runcredential` writes them with Go's standard library, and `runcredential`'s list of
   the fixture keys it refuses, and `go test ./...` fails while they differ.
-- `docs/gateway-run-credentials.md` says how an issuer integrates with the Qory gateway:
+- `docs/gateway-run-credentials.md` says how a run's starter works with the Qory gateway:
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
   and that the run credential never appears in an event, a record or a log.
 - `runcredential.NewVerifier` and `Verifier.Verify` verify a run credential under the
-  issuers a gateway accepts, their keys read once. The serialisation is the strict JWS
+  starters a gateway accepts, their keys read once. The serialisation is the strict JWS
   compact form: at most `runcredential.MaxCredentialBytes`, 16384 bytes, exactly three
   parts of base64url without padding, white space or another byte, with no bits beyond
   a part's last byte. The header is one JSON object with each member name once, through
   `Issuer.SelectKey`. The signature is verified under each key the header selects, over
   the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5 with SHA-256, `ES256` of exactly
   64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by Ed25519. The payload is read only
-  after a signature verified, one JSON object with each member name once, and the issuer
-  is the one whose key verified it and whose issuer equals `iss`. Then `CheckClaims`,
-  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the issuer, the run
+  after a signature verified, one JSON object with each member name once, and the starter
+  is the one whose key verified it and whose `issuer` equals `iss`. Then `CheckClaims`,
+  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the starter, the run
   key, `exp`, the claims, the labels and the details. Every failure is
   `runcredential.ErrRefused`, whose text holds no part of the run credential.
   `Verifier.VerifyExpired` verifies, with every step of `Verify`, a run credential
   `Verify` refuses only because its `exp` passed, less than `MaxLeeway` before.
 - `Issuer.SelectKey` refuses a `typ` other than `JWT`, compared without regard to case.
 - `Issuer.Check` refuses a `leeway` above `runcredential.MaxLeeway`, 5 minutes, and
-  `Issuer.CheckClaims` refuses every run credential under such an issuer built in Go.
+  `Issuer.CheckClaims` refuses every run credential under such a starter built in Go.
   `run-credentials.schema.json` says so.
-- `runcredential.NewIntrospector` and `Introspector.Active` ask an issuer's RFC 7662
+- `runcredential.NewIntrospector` and `Introspector.Active` ask a starter's RFC 7662
   endpoint whether a run credential is still active: a `POST` over TLS 1.2 or later of
   the form `token` and `token_type_hint=access_token`, with HTTP Basic as the configured
   client, the client id and the secret each form-encoded, the secret read once from its
@@ -295,7 +296,7 @@ release may change what an existing document does, and says so under Upgrading.
   not a valid one is tried once and wraps `runcredential.ErrAnswerInvalid`, naming its
   status, "the introspection endpoint answered status 401" say. A caller whose context
   ends gets its context's error. Each answer the endpoint gives,
-  active or not, is kept for the issuer's `cache`, or the heartbeat interval, by the
+  active or not, is kept for the starter's `cache`, or the heartbeat interval, by the
   SHA-256 of the run credential, at most `runcredential.MaxIntrospectionAnswers`, 4096,
   the one that lapses first going when it is full; a failure is kept for no one, and the
   next caller asks again. Callers for the same run credential share one request, which
@@ -310,7 +311,7 @@ release may change what an existing document does, and says so under Upgrading.
   reserved codes is dropped; neither makes the answer invalid. `Introspector.AnswerNow`
   asks past the answer kept and shares no call in flight, and keeps its answer.
 - `runcredential.OpenEnded` and `runcredential.Ended` keep the run keys a gateway
-  refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
+  refuses, by starter, in `ended-run-keys.json` of the gateway's state directory, mode
   0600, written atomically, in a directory of mode 0700 that only its user writes. Each
   is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
   dropped on open and on `Ended.Add`; `Ended.Has` asks, and `Ended.Written` whether the
@@ -441,7 +442,8 @@ release may change what an existing document does, and says so under Upgrading.
   ends its run at the gateway: the gateway writes `dev.qory.run.exited`, `failed` with
   `batch_refused`, refuses the run's proxy secret and answers
   the session's further requests with a `410` `batch_refused`; the session stops the
-  runtime and records `dev.qory.run.exited` with `batch_refused` in its own record alone.
+  runtime and writes its own `dev.qory.run.exited`, `failed` with `batch_refused`, as the
+  gateway's, in its own record and never posted.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
   `dev.qory.run.egress`, every one after a reload's switch held until the session's
@@ -457,9 +459,9 @@ release may change what an existing document does, and says so under Upgrading.
   `credential_check_unreachable` or `credential_check_invalid`, it writes the run's
   `dev.qory.run.exited` itself, with the state of that end and `-1`, and delivers it
   toward the server. It answers the session's next request and every one after it with
-  a `410`, whose code the session records as the reason of its own
-  `dev.qory.run.exited`, in its own record alone, posting nothing more: from `gateway`
-  `credential_expired`, `stopped`,
+  a `410`, and the session writes its own `dev.qory.run.exited`, with the state and the
+  reason that `410` gives, as the gateway's, in its own record and never posted, and
+  posts nothing more. The `410`'s code is, from `gateway`, `credential_expired`, `stopped`,
   `credential_check_unreachable`, `credential_check_invalid`, `session_lost` after a silent
   session, or `batch_refused` after a refused batch. Every `410` on the link carries `from`, and the gateway's own `410`
   `run_closed` to a request of a run already ended is unchanged. A server's signed
@@ -632,8 +634,8 @@ release may change what an existing document does, and says so under Upgrading.
   session was silent, `batch_refused`, the gateway refused a batch of its, `quiet`,
   `credential_expired` and `stopped`, which the gateway writes, beside
   `timeout`, `run_closed` and `gateway_lost`; when the gateway ends a session's run it
-  writes the run's `dev.qory.run.exited`, and the session records the reason of the
-  gateway's `410` in its own record alone. `quiet_seconds`, the quiet period the gateway applied, is present
+  writes the run's `dev.qory.run.exited`, and the session writes its own, with the state
+  and the reason of the gateway's `410`, in its own record and never posted. `quiet_seconds`, the quiet period the gateway applied, is present
   with `quiet` alone. `exit_code` is optional: a session's run contains it, `-1` with
   `gateway_lost` and in every `dev.qory.run.exited` the gateway writes for it,
   `session_lost` included, and a run a gateway opened none, `gateway_lost` included.
@@ -690,7 +692,7 @@ release may change what an existing document does, and says so under Upgrading.
   where every request's `Authorization: Bearer` run credential is decided first and a
   request without one, or with one refused, is `401` `run_credential_refused` from the
   gateway, with `WWW-Authenticate: Bearer`.
-- The one address verifies run credentials under the issuers of
+- The one address verifies run credentials under the run starters of
   `gateway.Config.RunCredentials`, their keys pinned. A session's run request there is
   decided by its run credential: the run's labels and `about.details` are the run
   credential's, and the run answer carries them; a session's `forge` or `repository`
@@ -755,17 +757,21 @@ release may change what an existing document does, and says so under Upgrading.
   HTTPS with the gateway's own authority. Every later connection of the run key joins
   the run while it is open; a client has at most one open run per run key, and never
   joins a session's run, which only its proxy secret reaches. The run ends after
-  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or at
-  the starter's word, which the gateway asks at each connection and, once per heartbeat
-  interval in which nothing asked of the run credential, of a run with no traffic too,
-  so it learns the starter's end within about one interval and the answer's `cache`; its
-  `dev.qory.run.exited` holds its `state` and no `exit_code`.
+  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or when
+  the starter says it has ended. The gateway asks the starter at each connection. It
+  also asks about a run with no traffic, once in each heartbeat interval in which nothing
+  else asked about its run credential, so it learns of the starter's end within about
+  one heartbeat interval plus the answer's `cache`. The run's `dev.qory.run.exited` holds
+  its `state` and no `exit_code`. An idle client run is now asked too, so a starter's
+  introspection endpoint that cannot be reached while the run is idle ends it `failed`
+  with `credential_check_unreachable`, and one that gives no valid answer ends it
+  `failed` with `credential_check_invalid`; before, an idle client run was never asked.
   A run that ended is never opened again: the next connection of its run key opens a
   new run, of a new run id. A run refused with a code gets the gateway's
   `dev.qory.run.refused` with that code, right after its ping; one that fails without
   a code gets no event. Its connection gets a `503` with the text "the gateway could not
-  open the run; try again" for a failure that may pass, the issuer's endpoint
-  unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
+  open the run; try again" for a failure that may pass, the starter's introspection
+  endpoint unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
   signed `429` `rate_limited`, once the tries are spent, among it, at once for Qory
   Apiary's `410` to the ping or the run configuration, signed or not, with any code or
   none,
@@ -776,7 +782,7 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway refused it, \<code\>" for one the gateway decides, "the gateway could not
   open the run: Qory Apiary refused it, status \<n\>" for a signed answer, other than a
   `5xx` or a `410`, with no code,
-  and "the run did not start: its run credential could not be checked". A connection that would join a run whose issuer's endpoint could not
+  and "the run did not start: its run credential could not be checked". A connection that would join a run whose starter's endpoint could not
   be reached, or gave no valid answer, ends the run and gets the same `503` or `403`. A refusal's answer is written in
   full, the connection's writing side closed and what the client still sends read
   briefly before it closes, so no reset takes the answer's place.
@@ -823,12 +829,12 @@ release may change what an existing document does, and says so under Upgrading.
   run ends: <state>[, <reason words>]`: "its session sent nothing for 1m30s; the run
   ends: failed", "its run credential is no longer valid; the run ends: failed, checks
   failed", "its run credential could not be checked: the introspection endpoint could
-  not be reached; the run ends: failed". No line or message a person reads says
-  "issuer": the configuration's errors say "the starter", `run_credentials: the starter
-  https://issuer.example appears twice` say, and the server's signed `410` is "the
+  not be reached; the run ends: failed". Every line and message a person reads calls
+  the run's starter "the starter": the configuration's errors say so, `run_credentials:
+  the starter https://issuer.example appears twice` say, and the server's signed `410` is "the
   server wants no more events of this run; the run goes on".
 - Once a run of the one address has ended and its record is flushed, and after the
-  issuer's end its run key is kept, the gateway holds only how a later request of the
+  starter's end its run key is kept, the gateway holds only how a later request of the
   run is answered, until a run credential of it can no longer be accepted. A gateway's own authority keeps at
   most 1024 hosts' certificates, the least recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
