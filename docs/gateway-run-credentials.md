@@ -360,7 +360,9 @@ when the latest `exp` of a run credential presented for the run passes first. Th
 gateway asks the issuer's introspection endpoint at the session's requests, so
 `run_ended_at_issuer` ends the run while they reach the gateway. When the gateway itself
 stops, resending its record completes the run as `gateway_lost`. While the session lives,
-the run ends with its runtime's own exit.
+the run normally ends with its runtime's own exit; the gateway can also end it, with
+`credential_expired`, `run_ended_at_issuer`, or `batch_refused` after it refused a batch
+of the session's, and the session then records that code.
 
 qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
 leaves it out too, whatever brought it, a variable of the run's among them. Any other

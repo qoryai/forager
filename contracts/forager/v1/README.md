@@ -1709,8 +1709,11 @@ earlier, with `credential_expired`, when the latest `exp` of a run credential pr
 for it passes first. The gateway asks the issuer's introspection at the session's
 requests, so `run_ended_at_issuer` ends the run while they reach it. When the gateway
 itself stops, its resend writes the run's `dev.qory.run.exited` with `gateway_lost`
-(§The server). While the session lives, the run ends with its runtime's own exit, as any
-session's run does.
+(§The server). While the session lives, the run normally ends with its runtime's own
+exit; the gateway can also end it, with `credential_expired`, `run_ended_at_issuer`, or
+`batch_refused` after it refused a batch of the session's, its record saying
+`session_lost`, and the session records that code (The end of a run at the gateway,
+above).
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
 reload is a `GET` of the run's configuration by its run id instead,
