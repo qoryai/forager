@@ -98,6 +98,14 @@ func rel(module, path string) (string, bool) {
 // may import, and no part's code: a fake gateway's link.
 func testFixture(rel string) bool { return rel == "internal/linktest" }
 
+// gatewayTestImport reports whether package gateway's tests may import the package at
+// to, which its code may not: a session and its wall, so a real session runs against a
+// real gateway serving its one address, with the gateway's own test seam deciding the
+// run credentials, as a session test may start a real gateway.
+func gatewayTestImport(from, to string) bool {
+	return from == "gateway" && (to == "session" || to == "wall")
+}
+
 func TestThePartsImportWhatTheRulesAllow(t *testing.T) {
 	module, pkgs := list(t)
 	if len(pkgs) == 0 {
@@ -115,7 +123,7 @@ func TestThePartsImportWhatTheRulesAllow(t *testing.T) {
 				continue
 			}
 			seen[to] = true
-			if testFixture(to) && !slices.Contains(p.Imports, imp) {
+			if (testFixture(to) || gatewayTestImport(from, to)) && !slices.Contains(p.Imports, imp) {
 				continue
 			}
 			if !allowed(from, to) {
@@ -161,6 +169,20 @@ func TestTheRulesHoldTheirCases(t *testing.T) {
 	} {
 		if got := allowed(c.from, c.to); got != c.ok {
 			t.Errorf("allowed(%q, %q) = %v, want %v", c.from, c.to, got, c.ok)
+		}
+	}
+	for _, c := range []struct {
+		from, to string
+		ok       bool
+	}{
+		{"gateway", "session", true},
+		{"gateway", "wall", true},
+		{"gateway", "session/runtimes", false},
+		{"gateway/internal/proxy", "session", false},
+		{"wall", "session", false},
+	} {
+		if got := gatewayTestImport(c.from, c.to); got != c.ok {
+			t.Errorf("gatewayTestImport(%q, %q) = %v, want %v", c.from, c.to, got, c.ok)
 		}
 	}
 }

@@ -35,7 +35,7 @@ func posted(g *linktest.Fake) []string { return types(g.Events()) }
 // an error before a run directory is made.
 func TestARunWithoutAGatewayIsNone(t *testing.T) {
 	sp := spec(t)
-	sp.Gateway = session.Gateway{}
+	sp.Gateway = nil
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "no gateway") {
 		t.Errorf("a run without a gateway: %v", err)
 	}
