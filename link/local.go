@@ -32,10 +32,18 @@ type Local struct {
 	// credential files, the directories of its adapter and tool programs, its state
 	// directory, and the patterns of the tools' socket directories ([ToolDirPrefix])
 	// and of the link's directory ([LinkDirPrefix]).
-	Files []string
+	Files []File
 	// Reserved are the names of the variables the gateway sets for a run, which the
 	// session must not set.
 	Reserved []string
+}
+
+// File is one of the gateway's own files: its path, or a pattern of paths, and what it
+// is, the phrase a refused mount names it by, such as "the file the credential model is
+// read from".
+type File struct {
+	Path string
+	What string
 }
 
 // redacted is what Local's Secret is shown as when it is set.
@@ -47,7 +55,7 @@ type shown struct {
 	Socket   string
 	Secret   string
 	Proxy    string
-	Files    []string
+	Files    []File
 	Reserved []string
 }
 

@@ -185,11 +185,13 @@ func foragerFiles(spec Spec) []foragerFile {
 	for _, p := range spec.ForagerFiles {
 		out = append(out, foragerFile{p, "one of Forager's files"})
 	}
-	// The gateway's own files: its credential files, the directories of its adapter
-	// and tool programs, its state directory and the patterns of its private
-	// directories, which it hands the session with its link.
-	for _, p := range spec.Gateway.files() {
-		out = append(out, foragerFile{p, "one of the gateway's files"})
+	// The gateway's own files, which it hands the session with its link, each with what
+	// it is: the directories of its credentials' and tools' programs, its credentials'
+	// files, the pattern of its tools' socket directories, its own directories and where
+	// the runs' records are. They come in the order they were checked in before the
+	// gateway was apart from the session, so a mount refused today says what it said.
+	for _, f := range spec.Gateway.files() {
+		out = append(out, foragerFile{f.Path, f.What})
 	}
 	// The private directory of a tool's socket is made when the tool starts, in the
 	// system's temporary directory; a mount that contains its pattern would contain it.

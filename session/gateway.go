@@ -30,8 +30,9 @@ func LocalGateway(l link.Local) Gateway {
 	return Gateway{local: l, set: true}
 }
 
-// files are the gateway's own files, which a walled run must not mount.
-func (g Gateway) files() []string { return g.local.Files }
+// files are the gateway's own files, which a walled run must not mount, each with what
+// it is.
+func (g Gateway) files() []link.File { return g.local.Files }
 
 // errNoGateway is a spec without a gateway.
 var errNoGateway = errors.New("the run has no gateway: a session speaks only to a gateway, session.LocalGateway")

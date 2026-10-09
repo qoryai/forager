@@ -28,7 +28,7 @@ func TestLocalNeverPrintsItsSecret(t *testing.T) {
 		Socket:   "/tmp/qory-link-1/sock",
 		Secret:   secret,
 		Proxy:    "127.0.0.1:41000",
-		Files:    []string{"/home/user/.config/qory", "/tmp/qory-tool-*"},
+		Files:    []link.File{{Path: "/home/user/.config/qory", What: "the gateway's directory"}, {Path: "/tmp/qory-tool-*", What: "where the tools' sockets are made"}},
 		Reserved: []string{"QORY_RUN_SOCKET"},
 	}
 	var outs []string
@@ -65,7 +65,7 @@ func TestLocalNeverPrintsItsSecret(t *testing.T) {
 	if got := fmt.Sprintf("%+v", l); !strings.Contains(got, "Socket:/tmp/qory-link-1/sock") || !strings.Contains(got, "Secret:[redacted]") || !strings.Contains(got, "Proxy:127.0.0.1:41000") {
 		t.Errorf("%%+v: %s", got)
 	}
-	if got, want := fmt.Sprintf("%#v", l), `link.Local{Socket:"/tmp/qory-link-1/sock", Secret:"[redacted]", Proxy:"127.0.0.1:41000", Files:[]string{"/home/user/.config/qory", "/tmp/qory-tool-*"}, Reserved:[]string{"QORY_RUN_SOCKET"}}`; got != want {
+	if got, want := fmt.Sprintf("%#v", l), `link.Local{Socket:"/tmp/qory-link-1/sock", Secret:"[redacted]", Proxy:"127.0.0.1:41000", Files:[]link.File{link.File{Path:"/home/user/.config/qory", What:"the gateway's directory"}, link.File{Path:"/tmp/qory-tool-*", What:"where the tools' sockets are made"}}, Reserved:[]string{"QORY_RUN_SOCKET"}}`; got != want {
 		t.Errorf("%%#v:\n got %s\nwant %s", got, want)
 	}
 	if b, _ := json.Marshal(l); !strings.Contains(string(b), `"Secret":"[redacted]"`) || !strings.Contains(string(b), `"Socket":"/tmp/qory-link-1/sock"`) {

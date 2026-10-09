@@ -815,6 +815,8 @@ func refused(err error, fail, quit func(error) (*Result, error), own func(string
 		if r.Code == refusal.WallRequired {
 			return quit(&refusal.NeedsWall{Names: r.Names})
 		}
+		// The refusal is told as one of the gateway's, never by the link's own URL.
+		r.Detail = "the gateway"
 		data := map[string]any{"code": r.Code}
 		if len(r.Names) > 0 {
 			data["names"] = r.Names

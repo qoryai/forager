@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"github.com/qoryai/forager/gateway"
 	"os"
 	"path/filepath"
 	"slices"
@@ -245,36 +246,54 @@ func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 	}
 }
 
-// TestAMountOfTheGatewaysFilesIsNoRun pins that the files the gateway hands out with
-// its link, the directories of its programs among them, are Forager's files, and that
-// a mount that contains the system's temporary directory contains the private
-// directories the gateway's tools' sockets are made in, whatever the run's tools.
+// TestAMountOfTheGatewaysFilesIsNoRun pins that the files a gateway hands out with its
+// link are Forager's files, refused in the words a run was always refused in: the
+// directory of a tool's program and the one a link to it leads to, the file a
+// credential is read from, and, in a mount that contains the system's temporary
+// directory, the private directories the tools' sockets are made in, whatever the
+// gateway's tools.
 func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
-	libexec := filepath.Join(t.TempDir(), "libexec")
-	if err := os.MkdirAll(libexec, 0o755); err != nil {
+	bin, libexec, creds := filepath.Join(t.TempDir(), "bin"), filepath.Join(t.TempDir(), "libexec"), filepath.Join(t.TempDir(), "creds")
+	for _, d := range []string{bin, libexec, creds} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(libexec, "files-tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sp, g := specGateway(t, "FAKE_EXIT=0")
-	l := g.Local()
-	l.Files = []string{libexec}
-	sp.Gateway = session.LocalGateway(l)
+	if err := os.Symlink(filepath.Join(libexec, "files-tool"), filepath.Join(bin, "files-tool")); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(creds, "model.key")
+	if err := os.WriteFile(key, []byte("a-credential-of-the-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	for _, mount := range []string{filepath.Dir(libexec), libexec} {
-		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: mount}}
-		r := mountRefusal(t, runErr(sp))
-		if r.Names[0] != mount || r.Names[1] != libexec || !strings.Contains(r.Detail, "one of the gateway's files") {
-			t.Errorf("mount %s: names %q, detail %q", mount, r.Names, r.Detail)
+	startGateway(t, &sp, gateway.Config{
+		Tools:       []gateway.Tool{{Name: "files", Command: []string{filepath.Join(bin, "files-tool")}, Serves: []string{"files.tools.internal"}}},
+		Credentials: []gateway.Credential{{Name: "model", File: key, Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
+	})
+	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
+	for _, c := range []struct{ mount, detail string }{
+		{filepath.Dir(bin), "the mount " + filepath.Dir(bin) + " contains " + bin + ", the directory of the tool files's program"},
+		{libexec, "the mount " + libexec + " is " + real(libexec) + ", the directory of the tool files's program"},
+		{creds, "the mount " + creds + " contains " + key + ", the file the credential model is read from"},
+	} {
+		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: c.mount}}
+		if r := mountRefusal(t, runErr(sp)); r.Names[0] != c.mount || r.Detail != c.detail {
+			t.Errorf("mount %s: names %q, detail\n %q\nwant\n %q", c.mount, r.Names, r.Detail, c.detail)
 		}
 	}
 
-	sp.Gateway = session.LocalGateway(g.Local())
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	startGateway(t, &sp, gateway.Config{})
 	sp.Mounts = []wall.Mount{{Path: os.TempDir()}}
-	r := mountRefusal(t, runErr(sp))
-	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
-	}
-	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
-		t.Errorf("the gateway got %d connections", n)
+	want := "the mount " + os.TempDir() + " contains " + filepath.Join(os.TempDir(), "qory-tool-*") + ", where the tools' sockets are made"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != os.TempDir() || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
 	}
 }
 

@@ -106,12 +106,12 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 		refused map[string]any
 	}{
 		"placeholder_conflict": {linktest.Reply{Status: 403, Body: linktest.Refusal("placeholder_conflict", "gateway", "MODEL_TOKEN")},
-			"placeholder_conflict", accesskey.FromGateway, []string{"MODEL_TOKEN"}, "placeholder_conflict (status 403): MODEL_TOKEN",
+			"placeholder_conflict", accesskey.FromGateway, []string{"MODEL_TOKEN"}, "the gateway: placeholder_conflict (status 403): MODEL_TOKEN",
 			map[string]any{"code": "placeholder_conflict", "names": []any{"MODEL_TOKEN"}}},
 		"run_id_used": {linktest.Reply{Status: 409, Body: linktest.Refusal("run_id_used", "gateway")},
-			"run_id_used", accesskey.FromGateway, nil, "run_id_used (status 409)", map[string]any{"code": "run_id_used"}},
+			"run_id_used", accesskey.FromGateway, nil, "the gateway: run_id_used (status 409)", map[string]any{"code": "run_id_used"}},
 		"the server's instance_limit": {linktest.Reply{Status: 409, Body: linktest.Refusal("instance_limit", "apiary")},
-			"instance_limit", accesskey.FromApiary, nil, "instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
+			"instance_limit", accesskey.FromApiary, nil, "the gateway: instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
 		"wall_required for credentials": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "credentials", "paths")},
 			"", "", nil, "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them", nil},
 		"wall_required for an image": {linktest.Reply{Status: 403, Body: linktest.Refusal("wall_required", "gateway", "image=with-docker")},
@@ -140,7 +140,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			if c.code == "" && errors.As(err, &r) {
 				t.Errorf("a refusal %v, want an error that is none", r)
 			}
-			if c.code == "" && err.Error() != c.text {
+			if (c.code == "" || c.code != "run_closed") && err.Error() != c.text {
 				t.Errorf("%q, want exactly %q", err, c.text)
 			}
 			evs := events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)})
