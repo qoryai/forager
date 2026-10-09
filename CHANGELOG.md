@@ -16,8 +16,20 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
+- `dev.qory.run.started` requires `opened_by`, and `dev.qory.run.exited` no longer
+  requires `state` and `exit_code`. A receiver reads `opened_by` to tell a session's run
+  from one a gateway opened, which contains neither.
 
 #### Added
+
+- `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`, and
+  `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
+  `ReasonQuiet`, `ReasonCredentialExpired` and `ReasonRunEndedAtIssuer`, the reasons of
+  `dev.qory.run.exited`. The session's `dev.qory.run.started` contains `opened_by`
+  `session`.
+- `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
+  `fixtures/signed/` again under the fixture access key secret, after a change to a
+  body; the same test without the flag checks them.
 
 - `dev.qory.run.policy_applied` reports `variables`, one entry per name, sorted: `name`,
   `from`, the source whose value the run applies, `fixed`, `apiary`, `run`, `machine`,
@@ -188,6 +200,25 @@ release may change what an existing document does, and says so under Upgrading.
   over their new bodies.
   The module is `github.com/qoryai/forager`, so `go get github.com/qoryai/forager` and
   every import path start with it.
+- Contract `v1` revision 1 is amended in place for a run a gateway opens, with no
+  session and no process. `dev.qory.run.started` has `opened_by`, `session` or
+  `gateway`, required; opened by a session it requires what it did, and opened by a
+  gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
+  `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
+  version of what opened the run, and `host` is the agent's machine's. A gateway-opened
+  run's `labels`, `run_key` among them, and `about.details` come from the run
+  credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, `quiet`,
+  `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
+  `timeout`, `run_closed` and `gateway_lost`; `quiet_seconds`, the quiet period the
+  gateway applied, is present with `quiet` alone. `state` and `exit_code` are optional:
+  a session's run contains both, `failed` and `-1` with `gateway_lost` and
+  `session_lost`, and a run a gateway opened neither. The contract no longer says the
+  state is `failed` with each reason; a receiver maps each reason to a state of its own.
+  The README's events table, §The events and §Fixtures say so. Every `run.started` in
+  the fixtures contains `opened_by` `session`, and the four batches under
+  `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
+  gateway opened, which ends `quiet`, `fixtures/batch/` its first and last batch, and
+  `fixtures/invalid/` seven refused `run.started` and `run.exited` events.
 
 ### Gateway
 

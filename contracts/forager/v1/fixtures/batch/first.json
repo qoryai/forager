@@ -9,6 +9,7 @@
     "sequence": "0000000002",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
     "data": {
+      "opened_by": "session",
       "runtime": "claude",
       "runtime_version": "2.1.273",
       "command": "claude",

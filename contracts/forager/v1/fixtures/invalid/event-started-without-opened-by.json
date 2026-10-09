@@ -1,26 +1,22 @@
 {
   "specversion": "1.0",
-  "id": "7e1c0000-0000-7000-8000-000000000099",
+  "id": "7e1c0000-0000-7000-8000-300000000002",
   "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
   "type": "dev.qory.run.started",
   "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
-  "time": "2026-09-16T12:00:00.120Z",
-  "sequence": "2",
+  "time": "2026-10-09T10:00:00.100Z",
+  "sequence": "0000000002",
   "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
   "data": {
-    "opened_by": "session",
     "runtime": "claude",
-    "runtime_version": "2.1.273",
     "command": "claude",
     "args": [
-      "--settings",
-      "/home/dev/.cache/qory/homes/app/claude/settings.json",
-      "--setting-sources",
-      "user"
+      "-p",
+      "Reply pong"
     ],
     "dir": "/home/dev/app",
-    "interactive": true,
-    "forager_version": "0.1.0",
+    "interactive": false,
+    "forager_version": "0.7.0",
     "host": "dev-laptop"
   }
 }

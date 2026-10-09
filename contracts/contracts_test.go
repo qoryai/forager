@@ -5,9 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -156,7 +159,10 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // TestRecordedRunValidates pins the recorded run directory: every line of events.jsonl
 // is an event of the contract, the sequence starts at one and is contiguous, every event
 // names the same run in source and subject, the run starts with ping or run.started and
-// ends with run.exited, and output.log is the concatenation of the run.log chunks.
+// ends with run.exited, and output.log is the concatenation of the run.log chunks. What
+// the schema cannot state, since run.exited does not contain opened_by, is pinned here: a
+// session's run.exited contains state and exit_code, and a run a gateway opened has no
+// process, so its run.exited contains neither and neither output nor a resize is recorded.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -178,6 +184,7 @@ func TestRecordedRunValidates(t *testing.T) {
 			t.Fatalf("%s: no events", dir)
 		}
 		var log []byte
+		openedBy := ""
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -190,6 +197,21 @@ func TestRecordedRunValidates(t *testing.T) {
 			if m["subject"] != run.Name() || m["source"] != "urn:qory:run:"+run.Name() {
 				t.Errorf("%s: line %d: subject %v and source %v do not name the directory",
 					dir, i+1, m["subject"], m["source"])
+			}
+			typ, _ := m["type"].(string)
+			d, _ := m["data"].(map[string]any)
+			switch {
+			case typ == "dev.qory.run.started":
+				openedBy, _ = d["opened_by"].(string)
+			case typ == "dev.qory.run.exited":
+				_, state := d["state"]
+				_, code := d["exit_code"]
+				if want := openedBy == "session"; state != want || code != want {
+					t.Errorf("%s: line %d: a run opened by %q exits with state %v and exit_code %v",
+						dir, i+1, openedBy, d["state"], d["exit_code"])
+				}
+			case openedBy == "gateway" && (typ == "dev.qory.run.log" || typ == "dev.qory.run.resized"):
+				t.Errorf("%s: line %d: %s in a run a gateway opened, which has no process", dir, i+1, typ)
 			}
 			if m["type"] == "dev.qory.run.log" {
 				chunk, err := base64Decode(m["data"].(map[string]any)["bytes"].(string))
@@ -349,8 +371,14 @@ func TestBatchFixturesValidate(t *testing.T) {
 // signature is the Ed25519 one under the fixture access key secret over the request
 // string, its lines the domain, the access key id and the instance id as the headers
 // contain them, the method, the target, then the timestamp on a GET or the raw body on
-// a POST, so the published signatures cannot drift from the fixtures they sign.
+// a POST, so the published signatures cannot drift from the fixtures they sign. Under
+// -update-signed it signs the batches again instead (signBatches), after a change to a
+// body; the command is updateSignedCommand.
 func TestSignedFixtures(t *testing.T) {
+	if *updateSigned {
+		signBatches(t)
+		return
+	}
 	s := compile(t, "batch.schema.json")
 	var keys struct {
 		AccessKey struct {
@@ -425,7 +453,7 @@ func TestSignedFixtures(t *testing.T) {
 				t.Errorf("%s: header %s, which the contract does not define", f, name)
 			}
 		}
-		lines := []string{"qory-request-ed25519-v1", accessKeyID, instanceID, method, target}
+		var last string
 		switch method {
 		case "POST":
 			body, ok := m["body"].(string)
@@ -447,15 +475,16 @@ func TestSignedFixtures(t *testing.T) {
 			if err := s["batch.schema.json"].Validate(batch); err != nil {
 				t.Errorf("%s: body: %v", f, err)
 			}
-			lines = append(lines, body)
+			last = body
 		case "GET":
 			if m["body"] != nil {
 				t.Errorf("%s: a GET carries no body", f)
 			}
-			lines = append(lines, value("X-Qory-Timestamp", true))
+			last = value("X-Qory-Timestamp", true)
 		}
+		request := requestString(accessKeyID, instanceID, method, target, last)
 		sig, err := base64.RawURLEncoding.Strict().DecodeString(signature)
-		valid := err == nil && ed25519.Verify(pub, []byte(strings.Join(lines, "\n")), sig)
+		valid := err == nil && ed25519.Verify(pub, []byte(request), sig)
 		// A request a receiver verifies is signed under the fixture key: every one but a
 		// header sent twice, refused before verification, and the 401s, one of which
 		// is a correct signature over a stale timestamp.
@@ -466,7 +495,8 @@ func TestSignedFixtures(t *testing.T) {
 			}
 		case status == "401":
 		case !valid:
-			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s", f, strings.Join(lines, "\n"))
+			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s\n"+
+				"after a change to a batch's body, sign the batches again: %s", f, request, updateSignedCommand)
 		}
 		if status[0] == '2' && (accessKeyID != "ak_f1xt0re000000000" || instanceID != keys.AccessKey.InstanceID) {
 			t.Errorf("%s: accepted as %s, %s; want the fixture access key and instance", f, accessKeyID, instanceID)
@@ -476,6 +506,90 @@ func TestSignedFixtures(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("no signed fixture expects %s", want)
 		}
+	}
+}
+
+// requestString is the request string a request's signature covers: the domain, the access
+// key id and the instance id as the headers contain them, the method, the target, then the
+// timestamp of a GET or the raw body of a POST, one per line.
+func requestString(accessKeyID, instanceID, method, target, last string) string {
+	return strings.Join([]string{"qory-request-ed25519-v1", accessKeyID, instanceID, method, target, last}, "\n")
+}
+
+var updateSigned = flag.Bool("update-signed", false,
+	"sign the batches under fixtures/signed again, over their bodies as they are, and write them")
+
+// updateSignedCommand signs the batches under fixtures/signed again and checks them.
+const updateSignedCommand = "go test ./contracts -run TestSignedFixtures -update-signed && " +
+	"go test ./contracts -run TestSignedFixtures"
+
+// signedWith names the batches under fixtures/signed that carry another's signature, the
+// one that one's body is signed with: batch-tampered is batch-valid with one byte of the
+// body changed after signing.
+var signedWith = map[string]string{"batch-tampered.json": "batch-valid.json"}
+
+// signatureHeader is the signature's member in a signed fixture, as the files write it.
+var signatureHeader = regexp.MustCompile(`("X-Qory-Signature-Ed25519": )"[^"]*"`)
+
+// signBatches writes the signature of every POST under fixtures/signed again: under the
+// fixture access key secret over its own request string, its access key id and instance id
+// as its headers contain them and its body as it is, or the signature of the batch that
+// signedWith names. A GET is left as it is: its signature covers a timestamp and no body,
+// and one of them is wrong on purpose. The files are read from and written to the source
+// directory, so the embedded copy this test binary holds is the old one; the command run
+// again without -update-signed checks the new ones.
+func signBatches(t *testing.T) {
+	priv := loadKeys(t).accessKey(t)
+	dir := path.Join("forager", contracts.Version)
+	source := func(f string) ([]byte, map[string]any) {
+		b, err := os.ReadFile(path.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := contracts.Decode(f, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ := doc.(map[string]any)
+		return b, m
+	}
+	signature := map[string]string{}
+	for _, f := range files(t, "fixtures/signed") {
+		_, m := source(f)
+		if m["method"] != "POST" || signedWith[path.Base(f)] != "" {
+			continue
+		}
+		headers, _ := m["headers"].(map[string]any)
+		accessKeyID, _ := headers["X-Qory-Access-Key-Id"].(string)
+		instanceID, _ := headers["X-Qory-Instance-Id"].(string)
+		target, _ := m["target"].(string)
+		body, _ := m["body"].(string)
+		sig := ed25519.Sign(priv, []byte(requestString(accessKeyID, instanceID, "POST", target, body)))
+		signature[path.Base(f)] = base64.RawURLEncoding.EncodeToString(sig)
+	}
+	for _, f := range files(t, "fixtures/signed") {
+		sig, ok := signature[path.Base(f)]
+		if from := signedWith[path.Base(f)]; from != "" {
+			sig, ok = signature[from]
+			if !ok {
+				t.Fatalf("%s carries the signature of %s, which is no signed batch", f, from)
+			}
+		}
+		if !ok {
+			continue
+		}
+		b, _ := source(f)
+		if n := len(signatureHeader.FindAll(b, -1)); n != 1 {
+			t.Fatalf("%s: %d X-Qory-Signature-Ed25519 members; want one", f, n)
+		}
+		out := signatureHeader.ReplaceAll(b, []byte(`${1}"`+sig+`"`))
+		if string(out) == string(b) {
+			continue
+		}
+		if err := os.WriteFile(path.Join(dir, f), out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: signed again", f)
 	}
 }
 

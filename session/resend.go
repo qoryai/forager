@@ -217,7 +217,7 @@ func closeRecord(file, runID string, lines *[]recorded) (bool, error) {
 	if end, err := time.Parse(time.RFC3339Nano, last.Time); err == nil && !started.IsZero() && end.After(started) {
 		ran = end.Sub(started).Milliseconds()
 	}
-	ev := event.NewEmitterAfter(runID, seq, nil).Make(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": "gateway_lost", "duration_ms": ran})
+	ev := event.NewEmitterAfter(runID, seq, nil).Make(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": event.ReasonGatewayLost, "duration_ms": ran})
 	line, err := ev.JSON()
 	if err != nil {
 		return false, err
