@@ -90,8 +90,17 @@ type introspectionFunc struct {
 	cache  time.Duration
 }
 
-func (f introspectionFunc) Active(_ context.Context, credential string, _ time.Time) (bool, error) {
-	return f.active(f.issuer, credential), nil
+// Active asks active, and as runcredential's client does, a caller whose context ends
+// first gets no answer, an error, while the ask goes on.
+func (f introspectionFunc) Active(ctx context.Context, credential string, _ time.Time) (bool, error) {
+	answer := make(chan bool, 1)
+	go func() { answer <- f.active(f.issuer, credential) }()
+	select {
+	case ok := <-answer:
+		return ok, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func (f introspectionFunc) Cache() time.Duration { return f.cache }

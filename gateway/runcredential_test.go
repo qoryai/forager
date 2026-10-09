@@ -1362,3 +1362,31 @@ func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
 		t.Errorf("runs %v", got)
 	}
 }
+
+// TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
+// run run_ended_at_issuer: a request that goes while the issuer is still being asked
+// gets no answer, and the run goes on, its later requests answered as before.
+func TestARequestThatGoesWhileTheIssuerIsAsked(t *testing.T) {
+	in := &introspection{}
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, in, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	h := in.hold(cred)
+	impatient := s.client(cred)
+	impatient.Timeout = 200 * time.Millisecond
+	if resp, err := impatient.Get(s.url("/v1/run-configuration/" + r.a.RunID)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("the request that went: %d", resp.StatusCode)
+	}
+	<-h.asked
+	close(h.release)
+	if status, body := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
+		t.Errorf("after the request that went: %d %s", status, body)
+	}
+	s.close()
+	for _, l := range s.record(r.a.RunID) {
+		if l.Type == event.RunExited {
+			t.Errorf("the run ended: %v", l.Data)
+		}
+	}
+}
