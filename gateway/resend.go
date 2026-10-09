@@ -73,3 +73,22 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 // ErrRunning says a run's record is still held: by an open run of a gateway's, or by
 // the run's session.
 var ErrRunning = stream.ErrRunning
+
+// Three of the lines Resend passes to ResendConfig.Report: those of a record that is
+// not sent since its run never opened at the server, and that of lines of a record
+// that are not whole events. A caller that reports Delivery.NotOpened itself may leave
+// out ResendNotOpened and ResendNoServer.
+const (
+	// ResendTorn is reported when lines of the record hold bytes that are no whole
+	// event, a write the gateway did not finish, which are skipped: a format of their
+	// count, %d, and the record's path, %s, its events.jsonl.
+	ResendTorn = stream.ResendTorn
+	// ResendNoServer is reported when the record holds no ping and there is no
+	// delivered.log, of a run that had no server, and it is sent to one: the Delivery is
+	// NotOpened and nothing is sent.
+	ResendNoServer = stream.ResendNoServer
+	// ResendNotOpened is reported when the record holds a ping and there is no
+	// delivered.log, of a run whose ping the server never accepted: the Delivery is
+	// NotOpened and nothing is sent.
+	ResendNotOpened = stream.ResendNotOpened
+)

@@ -15,6 +15,18 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
+// Three of the lines Resend reports, which package gateway exports as its own: those of
+// a record not sent since its run never opened, and that of torn lines.
+const (
+	// ResendTorn is reported when lines of the record hold bytes that are no whole
+	// event: a format of their count and the record's path.
+	ResendTorn = "%d lines of %s are not whole events and are not sent"
+	// ResendNoServer is reported when NoServer is set.
+	ResendNoServer = "the run had no server; nothing is sent"
+	// ResendNotOpened is reported when NotOpened is set and NoServer is not.
+	ResendNotOpened = "the server never accepted the run's ping; nothing is sent"
+)
+
 // ResendConfig is what sending one run's record again is given.
 type ResendConfig struct {
 	// Dir is the run's record directory; its name is the run id.
@@ -109,7 +121,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		return nil, err
 	}
 	if res.Torn = rec.torn; res.Torn > 0 {
-		cfg.Report(fmt.Sprintf("%d lines of %s are not whole events and are not sent", res.Torn, file))
+		cfg.Report(fmt.Sprintf(ResendTorn, res.Torn, file))
 	}
 	if res.NotOpened, res.NoServer, err = notOpened(cfg.Dir, rec); err != nil {
 		return nil, err
@@ -120,9 +132,9 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	}
 	if res.NotOpened {
 		if res.NoServer {
-			cfg.Report("the run had no server; nothing is sent")
+			cfg.Report(ResendNoServer)
 		} else {
-			cfg.Report("the server never accepted the run's ping; nothing is sent")
+			cfg.Report(ResendNotOpened)
 		}
 		return res, nil
 	}
