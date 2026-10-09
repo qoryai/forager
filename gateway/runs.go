@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -190,6 +191,19 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			// reaches the record alone, as today's session records it.
 			st.Emit(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
 			err = &accesskey.Refusal{Code: accesskey.CodeRunClosed, Status: 410, Detail: "the server closed the run before it started", From: accesskey.FromApiary}
+		} else if ref := (*accesskey.Refusal)(nil); how.client && errors.As(err, &ref) && ref.Code != "" {
+			// No session tells of a run with no session that did not open: the gateway
+			// does, its dev.qory.run.refused right after the ping, with the refusal's
+			// code, as the session writes one of its own. A failure without a code is
+			// told to no one but the operator, as the session's is.
+			data := map[string]any{"code": ref.Code}
+			if len(ref.Names) > 0 {
+				data["names"] = ref.Names
+			}
+			if ref.From == accesskey.FromApiary && ref.Status != 0 {
+				data["status"] = ref.Status
+			}
+			st.Emit(event.RunRefused, data)
 		}
 		if _, cerr := st.Close(g.base); cerr != nil {
 			g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, cerr))
@@ -262,7 +276,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own
 		// addresses are not its to reach: an enclosure, or another machine.
-		lr.px.Guard(pol.Policy.Egress.Allow)
+		// The names are the policy's own, never a session's narrowing's, which only
+		// narrows: a narrowing opens none of this machine's addresses.
+		lr.px.Guard(r.GuardNames())
 	}
 	// The node's path rules, beside a server's: fixed for the run, so a reload that
 	// brings a server's policy is narrowed by them as the start is.
@@ -383,15 +399,23 @@ func (lr *linkRun) expire() {
 // latest one presented from now on.
 func (lr *linkRun) renew(id runIdentity) {
 	lr.mu.Lock()
-	defer lr.mu.Unlock()
 	if lr.ended {
+		lr.mu.Unlock()
 		return
 	}
-	if id.Expires.After(lr.cred.expires) {
+	later := id.Expires.After(lr.cred.expires)
+	if later {
 		lr.cred.expires = id.Expires
 	}
 	if id.active != nil {
 		lr.cred.active, lr.cred.cache = id.active, id.cache
+	}
+	key := lr.cred.key
+	lr.mu.Unlock()
+	if later {
+		// Kept to the later exp at once, so a crash past the earlier one does not
+		// reopen the run key.
+		lr.g.endKey(key, id.Expires)
 	}
 }
 
@@ -742,7 +766,7 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	// numbered first, as today's session switched the policy and wrote its event in one
 	// step under its record's lock.
 	hold := lr.st.Hold()
-	refused := lr.px.SetPolicy(in.Mode, in.Allow, in.Deny, in.Paths, d.Uses)
+	refused := lr.px.SetPolicyOpening(in.Mode, in.Allow, in.Deny, d.Guard, in.Paths, d.Uses)
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()

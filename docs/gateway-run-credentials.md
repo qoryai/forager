@@ -162,7 +162,8 @@ A run credential is bound to its run as well: once its run is closed or has ende
 gateway refuses it, not only at `exp`. The gateway keeps each ended run key, by issuer,
 until its run credential's `exp` plus 5 minutes, the longest leeway, in a file of its
 state directory (mode 0600, in a directory only its user writes), so a restart does not
-reopen it: `ended-run-keys.json`. So the issuer gives a retry a new run key, and does
+reopen it: `ended-run-keys.json`. It writes the run key there as soon as its run
+opens, before it answers or relays a byte, so a crash does not reopen it either. So the issuer gives a retry a new run key, and does
 not refresh the run credential of a run key whose run has ended. A second run request
 of a run key whose run is live is refused as well, a retry with the same run id
 included.
@@ -289,16 +290,31 @@ A proxy login over plain HTTP would carry the run credential in the clear, so th
 gateway's listener for other machines speaks TLS only: the client reaches the gateway as
 an HTTPS proxy, and the login travels inside TLS. A plain listener is allowed on loopback
 alone. A connection without a valid run credential gets
-`407 Proxy Authentication Required` with `Proxy-Authenticate: Basic realm="qory"`.
+`407 Proxy Authentication Required` with `Proxy-Authenticate: Basic realm="qory"` and,
+as `text/plain`, "a valid run credential is required as the proxy password": the same
+answer for every failure.
 
 The first connection with a valid run credential whose run key has no run at the gateway
 opens the run. Every later connection with a run credential for the same run key belongs
-to that run, a refreshed one included. The gateway reports the run itself: its
-`dev.qory.run.started`, with `opened_by` `gateway` and the run credential's labels and
-`about.details`, its policy, every connection and its heartbeats. The run ends once it
-has had no connection for the operator's quiet time, `quiet`, at its run credential's
-`exp`, or when the issuer no longer holds the run credential active; from then on its
-run key's connections get `407`.
+to that run, a refreshed one included. The gateway reports the run itself, in this
+order: its ping; then, once it has fetched the run's policy from the control plane and
+decided the run, its `dev.qory.run.started`, with `opened_by` `gateway` and the run
+credential's labels and `about.details`, and its policy; then every connection and its
+heartbeats. A run that cannot open, say the control plane refuses the run's
+configuration or the run selects an image, gets `dev.qory.run.refused` with the
+refusal's code in place of `dev.qory.run.started`, and its run key is ended at once.
+
+The run ends, and the gateway writes its `dev.qory.run.exited`:
+
+- `quiet`, once it has had no connection for the operator's quiet time;
+- `credential_expired`, at its run credential's latest `exp` with no fresher one;
+- `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
+  credential active;
+- `run_closed`, when the control plane closes the run.
+
+When the gateway stops with the run live, the run ends without its
+`dev.qory.run.exited`, and resending its record completes it as `gateway_lost`. From any
+end on, its run key's connections get `407`.
 
 For a host the policy holds to paths, the gateway reads inside HTTPS with a
 certificate of its own authority, `authority/ca.pem` in its directory, which the

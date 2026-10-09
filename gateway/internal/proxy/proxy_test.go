@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -868,5 +869,84 @@ func TestNodePathsNarrowThePolicysPaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCloseClosesEveryTunnel pins Close: a tunnel the proxy relays is closed at both
+// ends, the client's and the upstream's, and one it terminates at the client's, so no
+// tunnel outlives its run.
+func TestCloseClosesEveryTunnel(t *testing.T) {
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	upstreamClosed := make(chan struct{})
+	go func() {
+		c, err := upstream.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(30 * time.Second))
+		io.Copy(io.Discard, c)
+		close(upstreamClosed)
+	}()
+	tlsOrigin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer tlsOrigin.Close()
+	_, tlsPort, _ := net.SplitHostPort(tlsOrigin.Listener.Addr().String())
+	p, err := proxy.Listen("", policy.Observe, nil, nil, func(proxy.Decision) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := proxy.NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(tlsOrigin.Certificate())
+	p.TrustUpstream(roots)
+	p.Terminate(ca, nil, map[string][]string{"localhost": {"/*"}}, nil)
+	open := func(target string) net.Conn {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(10 * time.Second))
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+		line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+			t.Fatalf("CONNECT %s: %q %v", target, line, err)
+		}
+		return c
+	}
+	relayed := open(upstream.Addr().String())
+	defer relayed.Close()
+	terminated := open("localhost:" + tlsPort)
+	defer terminated.Close()
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	inner := tls.Client(terminated, &tls.Config{RootCAs: trusted, ServerName: "localhost"})
+	if err := inner.Handshake(); err != nil {
+		t.Fatalf("the terminated tunnel's handshake: %v", err)
+	}
+	p.Close()
+	// Closed, not timed out: a deadline would end the reads too.
+	closed := func(c net.Conn) bool {
+		c.SetDeadline(time.Now().Add(3 * time.Second))
+		_, err := c.Read(make([]byte, 1))
+		var ne net.Error
+		return err != nil && !(errors.As(err, &ne) && ne.Timeout())
+	}
+	if !closed(relayed) {
+		t.Error("the relayed tunnel is open at the client after Close")
+	}
+	select {
+	case <-upstreamClosed:
+	case <-time.After(3 * time.Second):
+		t.Error("the relayed tunnel is open at the upstream after Close")
+	}
+	if !closed(inner) {
+		t.Error("the terminated tunnel is open after Close")
 	}
 }

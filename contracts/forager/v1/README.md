@@ -1315,7 +1315,8 @@ the socket's path, where another process of the same user could listen in the
 gateway's place, pass the uid check and read the secret. Each connection in memory
 carries the same bytes as one over the socket: `QORY-LINK`, a space, the link secret
 and a newline, then HTTP/1.1, and the gateway checks the preamble as on the socket; its
-peer is the process itself. The socket serves a session in another process.
+peer is the process itself. The socket serves a session in another process; a gateway
+started without one, as `qory run` starts it, serves its link in memory alone.
 
 **A separate gateway.** TLS 1.3 alone: the gateway and the session each refuse an
 earlier version. The gateway serves the operator's certificate and key,
@@ -1439,13 +1440,16 @@ value when the session sends it. A label the session leaves out is the credentia
 a label the mapping does not set is ignored: a run's labels come only from the
 credential. A run key opens one run at a gateway. Every request to a separate gateway,
 the run request and every batch, carries a run credential whose `sub` is the run's run
-key, and so does every reload (below); any other is `run_credential_refused`. The
-gateway refuses a run request in this order:
+key, and so does every reload (below); any other is `run_credential_refused`. Behind a
+separate gateway, the gateway decides the run credential first: a run request without
+one, or with one the verifier refuses, is `401` `run_credential_refused` before its body
+is read, so no body is parsed for a request that is not authenticated. It then refuses
+a run request in this order:
 
 | Status | Code | When |
 |---|---|---|
 | `400` | `invalid_request` | a body the schema refuses: a `run_id` not in the canonical lower-case form, labels or `about` outside their rules, a member the schema does not define; and a `narrowing` on the local link |
-| `401` | `run_credential_refused` | behind a separate gateway, every failure of the run credential, and a run key that already has a run at this gateway, live or ended. One opaque code, with no names, and `WWW-Authenticate: Bearer` |
+| `401` | `run_credential_refused` | behind a separate gateway, a run key that already has a run at this gateway, live or ended, and a run credential the issuer's introspection does not hold active. One opaque code, with no names, and `WWW-Authenticate: Bearer`, as for every failure of the run credential |
 | `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
 | `403` | `target_differs_from_credential` | behind a separate gateway, a `forge` or `repository` that differs from the credential's |
 | `403` | `differs_from_credential` | behind a separate gateway, another label or key of `about.details` the mapping sets, sent with another value |

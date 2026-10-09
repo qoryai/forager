@@ -67,6 +67,13 @@ type Config struct {
 	RunCredentials runcredential.Issuers
 	// Runs is how the gateway keeps the runs of clients with no session.
 	Runs RunsConfig
+	// NoLinkSocket makes no link socket and no link directory: the gateway's local link
+	// is served in memory alone, to a session in this process, the way
+	// [Gateway.LocalLink] hands out, and no other process can reach it. qory run sets it.
+	// False makes the socket, for a session in another process too. With Listen it
+	// serves the one address as without it, for the sessions and clients of other
+	// machines, beside a local link in memory alone and no socket.
+	NoLinkSocket bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's

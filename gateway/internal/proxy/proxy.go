@@ -138,6 +138,11 @@ type Proxy struct {
 	// each, so a reload can close what the new policy denies.
 	tmu     sync.Mutex
 	tunnels map[*tunnel]struct{}
+	// shut says Close has closed the tunnels: one tracked after is closed at once.
+	shut bool
+	// stopped ends with Close, and with it the requests a terminated tunnel sends on.
+	stopped context.Context
+	stop    context.CancelFunc
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -199,6 +204,7 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 		return nil, err
 	}
 	p := &Proxy{observe: observe, tunnels: map[*tunnel]struct{}{}}
+	p.stopped, p.stop = context.WithCancel(context.Background())
 	p.rules.Store(&rules{mode: mode, allow: allow, deny: deny})
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
@@ -256,8 +262,23 @@ func (p *Proxy) Env() []string {
 	return link.ProxyEnv(p.URL())
 }
 
-// Close stops the listener and every tunnel.
+// Close stops the listener and every tunnel: both ends of each connection the proxy
+// relays, and the client's end of each it terminates, with the requests it sends on
+// for it. A tunnel the proxy would track after Close is closed at once.
 func (p *Proxy) Close() error {
+	p.tmu.Lock()
+	p.shut = true
+	open := make([]*tunnel, 0, len(p.tunnels))
+	for t := range p.tunnels {
+		open = append(open, t)
+	}
+	p.tmu.Unlock()
+	p.stop()
+	for _, t := range open {
+		for _, c := range t.conns {
+			c.Close()
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err := p.srv.Shutdown(ctx)
@@ -321,9 +342,17 @@ func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
 // another one now, or none, is closed as well and not recorded, since nothing was
 // denied: the next connection carries what the new policy selects.
 func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
+	return p.SetPolicyOpening(mode, allow, deny, allow, paths, creds)
+}
+
+// SetPolicyOpening is [Proxy.SetPolicy] with the guard's names apart from the allow
+// list: names, the entries of the policy's own allow list before a session narrowed
+// it, which alone open this machine's addresses when the proxy is guarded, and only
+// for a host the allow list allows as well.
+func (p *Proxy) SetPolicyOpening(mode policy.Mode, allow, deny, names []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	r := &rules{mode: mode, allow: allow, deny: deny}
 	if p.guarded.Load() {
-		r.opened = opened(allow)
+		r.opened = opened(names)
 	}
 	before := p.term.Load()
 	var after *terminator
@@ -360,12 +389,21 @@ func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[stri
 	return refused
 }
 
-// track remembers an open connection until untrack.
+// track remembers an open connection until untrack; after Close, it closes its ends
+// instead.
 func (p *Proxy) track(d Decision, terminated bool, conns ...net.Conn) *tunnel {
 	t := &tunnel{d: d, conns: conns, terminated: terminated}
 	p.tmu.Lock()
-	p.tunnels[t] = struct{}{}
+	shut := p.shut
+	if !shut {
+		p.tunnels[t] = struct{}{}
+	}
 	p.tmu.Unlock()
+	if shut {
+		for _, c := range conns {
+			c.Close()
+		}
+	}
 	return t
 }
 
@@ -570,7 +608,12 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 			client.Close()
 			return
 		}
-		p.term.Load().serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
+		// Past the hijack, the request's context is not the tunnel's: the tunnel lasts
+		// until either end closes it, or Close.
+		ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+		defer cancel()
+		defer context.AfterFunc(p.stopped, cancel)()
+		p.term.Load().serve(ctx, client, d, net.JoinHostPort(host, portText))
 		return
 	}
 	upstream, err := p.dial(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(host, portText))

@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -10,6 +11,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"github.com/qoryai/forager/link"
 	"io"
 	"net"
 	"net/http"
@@ -486,6 +489,12 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 	if code, _, err := get(s.relayOver(r.a.ProxySecret), o.URL); err != nil || code != http.StatusOK {
 		t.Errorf("the relay before the end: %d %v", code, err)
 	}
+	host := strings.TrimPrefix(o.URL, "http://")
+	tunnel := s.relayTunnel(t, r.a.ProxySecret, host)
+	defer tunnel.Close()
+	if !tunnelOpen(tunnel, host) {
+		t.Fatal("the relay's tunnel does not relay")
+	}
 	eventually(t, "credential_expired", func() bool {
 		status, _ := r.reload(t, refreshed, r.a.RunID)
 		return status == http.StatusGone
@@ -496,6 +505,9 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 	gone(t, "a reload after the end", status, body, "credential_expired")
 	if _, _, err := get(s.relayOver(r.a.ProxySecret), o.URL); err == nil {
 		t.Error("the proxy secret of an ended run was served")
+	}
+	if tunnelOpen(tunnel, host) {
+		t.Error("the relay's tunnel relays after credential_expired")
 	}
 	s.close()
 	rec := s.record(r.a.RunID)
@@ -601,6 +613,7 @@ func runsIn(t *testing.T, dir string) []string {
 func TestARunWithNoSession(t *testing.T) {
 	o := origin(t)
 	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
 	s := startVerifying(t, gateway.Config{Server: c.server(), Policy: enforce127, Heartbeat: time.Second, Runs: gateway.RunsConfig{Quiet: 2 * time.Second}}, nil, 0)
 	cred := credentialFor("rk-0001")
 	bad := mint(otherKey(), "rk-0001", time.Now().Add(time.Hour), nil)
@@ -614,9 +627,10 @@ func TestARunWithNoSession(t *testing.T) {
 		"an empty password": "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:")) + "\r\n\r\n",
 	} {
 		resp, conn, _ := s.proxyRequest(t, head)
+		b, _ := io.ReadAll(resp.Body)
 		conn.Close()
-		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` {
-			t.Errorf("%s: %d", name, resp.StatusCode)
+		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` || string(b) != "a valid run credential is required as the proxy password" {
+			t.Errorf("%s: %d %q", name, resp.StatusCode, b)
 		}
 	}
 	if got := runsIn(t, s.dir); len(got) != 0 {
@@ -624,6 +638,12 @@ func TestARunWithNoSession(t *testing.T) {
 	}
 	if status, body, err := get(s.clientWith(cred), o.URL); err != nil || status != http.StatusOK || body != "ok" {
 		t.Fatalf("the first connection: %d %q %v", status, body, err)
+	}
+	c.mu.Lock()
+	asked := c.labels
+	c.mu.Unlock()
+	if !sameMap(asked, exampleLabels("rk-0001")) {
+		t.Errorf("the server was asked for the run configuration by %v", asked)
 	}
 	refreshed := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
 	s.secrets = append(s.secrets, refreshed)
@@ -658,7 +678,7 @@ func TestARunWithNoSession(t *testing.T) {
 	if st["opened_by"] != "gateway" || !sameMap(stringMap(st["labels"]), exampleLabels("rk-0001")) || !sameMap(stringMap(about["details"]), map[string]string{"requester": "example-requester"}) || st["runtime"] != nil || st["host"] != nil {
 		t.Errorf("run.started %v", st)
 	}
-	if rec[2].Data["source"] != "config" || rec[2].Data["variables"] != nil {
+	if rec[2].Data["source"] != "fetched" || rec[2].Data["variables"] != nil {
 		t.Errorf("policy_applied %v", rec[2].Data)
 	}
 	if rec[3].Data["host"] != "127.0.0.1" || rec[3].Data["decision"] != "allowed" || rec[4].Data["host"] != "denied.example" || rec[4].Data["decision"] != "denied" {
@@ -716,7 +736,9 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 		t.Fatalf("the tunnel: %d", resp.StatusCode)
 	}
 	defer tunnel.Close()
-	tunnel.SetDeadline(time.Now().Add(10 * time.Second))
+	if !tunnelOpen(tunnel, host) {
+		t.Fatal("the tunnel does not relay")
+	}
 	if status, _, err := get(s.clientWith(ending), o.URL); err != nil || status != http.StatusOK {
 		t.Fatalf("the other run: %d %v", status, err)
 	}
@@ -742,6 +764,13 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 		}
 		return expired != "" && ended != ""
 	})
+	// Neither tunnel outlives its run.
+	if tunnelOpen(tunnel, host) {
+		t.Error("the tunnel relays after credential_expired")
+	}
+	if tunnelOpen(held, host) {
+		t.Error("the tunnel relays after run_ended_at_issuer")
+	}
 	for name, credential := range map[string]string{"credential_expired": mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), "run_ended_at_issuer": ending} {
 		s.secrets = append(s.secrets, credential)
 		resp, conn, _ := s.proxyRequest(t, login(credential))
@@ -855,4 +884,219 @@ func TestARunWithNoSessionReloads(t *testing.T) {
 		t.Errorf("no denied egress after the new policy_applied: %v", types(rec))
 	}
 	validEvents(t, rec)
+}
+
+// relayTunnel is a CONNECT tunnel to host through a session's run's relay on the one
+// address, the run's proxy secret its preamble.
+func (s *service) relayTunnel(t *testing.T, secret, host string) net.Conn {
+	t.Helper()
+	c := s.dial(t)
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	io.WriteString(c, link.Preamble(link.RelayPreamble, secret)+"CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
+	r := bufio.NewReader(c)
+	resp, err := http.ReadResponse(r, nil)
+	if err != nil || resp.StatusCode != http.StatusOK || r.Buffered() > 0 {
+		c.Close()
+		t.Fatalf("the relay's CONNECT: %v %v", resp, err)
+	}
+	return c
+}
+
+// tunnelOpen reports whether a tunnel to the origin at host still relays: a request
+// sent through it is answered. A tunnel the gateway closed answers nothing; one that
+// only times out would be open, and is reported so.
+func tunnelOpen(c net.Conn, host string) bool {
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.WriteString(c, "GET / HTTP/1.1\r\nHost: "+host+"\r\n\r\n"); err != nil {
+		return false
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		var ne net.Error
+		return errors.As(err, &ne) && ne.Timeout()
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return true
+}
+
+// TestANarrowingOpensNoneOfTheMachinesAddresses pins the guard of a session's run on
+// the one address under its narrowing: a narrowing's allow that names the gateway's
+// own address opens it under no policy and under an observe policy, at the start and
+// after a reload alike; only a policy that enforces and names the host itself does.
+func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
+	o := origin(t)
+	narrowing := &server.LinkNarrowing{Egress: server.LinkNarrowingEgress{Allow: []string{"127.0.0.1"}}}
+	denied := func(what string, s *service, r *sessionRun) {
+		t.Helper()
+		if status, _, err := get(s.relayOver(r.a.ProxySecret), o.URL); err != nil || status != http.StatusForbidden {
+			t.Errorf("%s: the gateway's own address answered %d %v", what, status, err)
+		}
+	}
+	for name, pol := range map[string]*gateway.Policy{
+		"no policy": nil,
+		"observe":   {Version: 1, Egress: gateway.PolicyEgress{Mode: "observe"}},
+	} {
+		s := startVerifying(t, gateway.Config{Policy: pol}, nil, 0)
+		denied(name, s, s.openSession(t, credentialFor("rk-0001"), server.LinkRunRequest{Narrowing: narrowing}))
+	}
+	// A reload to another observe policy opens nothing either.
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{Narrowing: narrowing})
+	denied("at the start", s, r)
+	c.serve(`{"version":1,"egress":{"mode":"observe","deny":["tracker.example"]}}`, 'b')
+	eventually(t, "the reload", func() bool {
+		r.post(t, cred, heartbeat(r.a.RunID))
+		_, b := r.reload(t, cred, r.a.RunID)
+		return bytes.Contains(b, []byte("tracker.example"))
+	})
+	denied("after the reload", s, r)
+	// A policy that enforces and names the host itself opens it.
+	named := startVerifying(t, gateway.Config{Policy: enforce127}, nil, 0)
+	nr := named.openSession(t, credentialFor("rk-0001"), server.LinkRunRequest{Narrowing: narrowing})
+	if status, _, err := get(named.relayOver(nr.a.ProxySecret), o.URL); err != nil || status != http.StatusOK {
+		t.Errorf("a host the policy names itself: %d %v", status, err)
+	}
+}
+
+// TestACrashKeepsTheRunKey pins the run key kept from the moment its run opens: a
+// gateway started on the directory of another that is still running, as after a
+// crash that left no end behind, refuses the run key of a session's live run, 401,
+// and of a client's, 407; and a session's run that fails to open after its record
+// exists keeps its run key too.
+func TestACrashKeepsTheRunKey(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	dir := t.TempDir()
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	first := startVerifying(t, gateway.Config{Dir: dir, Server: c.server()}, nil, 0)
+	session, client := credentialFor("rk-0001"), credentialFor("rk-0002")
+	r := first.openSession(t, session, server.LinkRunRequest{})
+	// A refreshed run credential keeps the run key to its later exp at once.
+	later := time.Now().Add(3 * time.Hour)
+	refreshed := mint(issuerKey(), "rk-0001", later, nil)
+	first.secrets = append(first.secrets, refreshed)
+	if status, b := r.post(t, refreshed, heartbeat(r.a.RunID)); status != http.StatusAccepted {
+		t.Fatalf("a batch with a refreshed run credential: %d %s", status, b)
+	}
+	var kept struct {
+		Ended []struct {
+			RunKey string `json:"run_key"`
+			Until  int64
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
+	json.Unmarshal(b, &kept)
+	if len(kept.Ended) != 1 || kept.Ended[0].RunKey != "rk-0001" || kept.Ended[0].Until < later.Unix() {
+		t.Errorf("the ended run keys of a live run: %s", b)
+	}
+	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+client)) + "\r\n\r\n"
+	resp, tunnel, _ := first.proxyRequest(t, login)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the client's run: %d", resp.StatusCode)
+	}
+	defer tunnel.Close()
+	// The first is not closed: a crash.
+	second := startVerifying(t, gateway.Config{Dir: dir, Server: c.server()}, nil, 0)
+	second.secrets = append(second.secrets, session, client)
+	if status, b := second.tryOpenWith(t, session, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("the session's run key: %d %s", status, b)
+	}
+	resp, conn, _ := second.proxyRequest(t, login)
+	conn.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("the client's run key: %d", resp.StatusCode)
+	}
+	// A run whose record exists and that fails to open keeps its run key.
+	c.serve(`{"version":1,"egress":{"mode":"bogus"}}`, 'b')
+	failing := credentialFor("rk-0003")
+	second.secrets = append(second.secrets, failing)
+	if status, b := second.tryOpenWith(t, failing, server.LinkRunRequest{}); status != http.StatusForbidden || refusalOf(b)["error"] != "run_configuration_invalid" {
+		t.Fatalf("the failing run: %d %s", status, b)
+	}
+	if status, b := second.tryOpenWith(t, failing, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("the failed run's run key: %d %s", status, b)
+	}
+}
+
+// TestARunWithNoSessionThatDoesNotOpen pins a run with no session the gateway cannot
+// open: its record, and what the server receives, hold the ping and then
+// dev.qory.run.refused with the refusal's code; the client's connection is refused;
+// and the run key is ended, so a second connection with the same run credential is
+// 407 and opens no second run.
+func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]},"image":"example-image"}`, 'a')
+	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+cred)) + "\r\n\r\n"
+	resp, conn, _ := s.proxyRequest(t, login)
+	conn.Close()
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusProxyAuthRequired {
+		t.Errorf("the first connection: %d", resp.StatusCode)
+	}
+	resp, conn, _ = s.proxyRequest(t, login)
+	conn.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("the second connection: %d", resp.StatusCode)
+	}
+	ids := runsIn(t, s.dir)
+	if len(ids) != 1 {
+		t.Fatalf("runs %v", ids)
+	}
+	rec := s.record(ids[0])
+	if got := types(rec); !slices.Equal(got, []string{event.Ping, event.RunRefused}) || rec[1].Data["code"] != "image_unknown" {
+		t.Errorf("record %v %v", got, rec[len(rec)-1].Data)
+	}
+	validEvents(t, rec)
+	eventually(t, "the server's run.refused", func() bool {
+		var got []string
+		for _, l := range c.lines(t) {
+			if l.Subject == ids[0] {
+				got = append(got, l.Type)
+			}
+		}
+		return slices.Equal(got, []string{event.Ping, event.RunRefused})
+	})
+	s.close()
+	noSecretIn(t, s.dir, cred)
+}
+
+// TestNoLinkSocketWithTheOneAddress pins Config.NoLinkSocket beside Listen: the
+// gateway serves the one address over TLS, a session's run on its run credential going
+// as without it, and makes no link directory and no socket; its local link is in
+// memory alone.
+func TestNoLinkSocketWithTheOneAddress(t *testing.T) {
+	tmp, err := os.MkdirTemp("/tmp", "qt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
+	s := startVerifying(t, gateway.Config{NoLinkSocket: true}, nil, 0)
+	if l := s.g.LocalLink(); l.Socket != "" || !l.IsInMemory() {
+		t.Errorf("local %+v", l)
+	}
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	if status, b := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
+		t.Errorf("the reload: %d %s", status, b)
+	}
+	if status, b := r.post(t, cred, exited(r.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("the run.exited: %d %s", status, b)
+	}
+	if m, _ := filepath.Glob(filepath.Join(tmp, link.LinkDirPrefix+"*")); len(m) != 0 {
+		t.Errorf("link directories %v", m)
+	}
+	s.close()
+	if got := types(s.record(r.a.RunID)); !slices.Equal(got, []string{event.RunStarted, event.PolicyApplied, event.RunExited}) {
+		t.Errorf("record %v", got)
+	}
 }

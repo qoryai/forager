@@ -394,3 +394,51 @@ func TestARunIDWithARecordIsNoRun(t *testing.T) {
 		t.Errorf("%v, want %q", err, want)
 	}
 }
+
+// TestARunThroughAGatewayWithNoLinkSocket is a run end to end through a gateway that
+// makes no link socket, as qory run starts it: the session reaches it in memory alone,
+// the run goes as through one with a socket, and no link directory is ever made.
+func TestARunThroughAGatewayWithNoLinkSocket(t *testing.T) {
+	// A short one, as the session's own sockets' paths are bounded.
+	tmp, err := os.MkdirTemp("/tmp", "qt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
+	links := func() []string {
+		m, _ := filepath.Glob(filepath.Join(tmp, "qory-link-*"))
+		return m
+	}
+	sp := spec(t, "FAKE_DENIED_URL=http://denied.invalid/a", "FAKE_EXIT=0")
+	// The spec's own fake gateway has its link; the real one makes none beside it.
+	before := links()
+	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second, NoLinkSocket: true,
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
+	if l := rg.g.LocalLink(); l.Socket != "" || !l.IsInMemory() {
+		t.Fatalf("the gateway's link: socket %q, in memory %v", l.Socket, l.IsInMemory())
+	}
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := links(); !slices.Equal(got, before) {
+		t.Errorf("link directories during the run %v, the fake's %v", got, before)
+	}
+	if d := rg.close(t); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	if res.ExitCode != 0 || res.State != "succeeded" || res.Undelivered != 0 {
+		t.Errorf("result %+v", res)
+	}
+	numbered := record(t, res)
+	if got := types(numbered); len(got) < 4 || got[0] != "dev.qory.run.started" || got[len(got)-1] != "dev.qory.run.exited" {
+		t.Fatalf("the gateway's record %v", got)
+	}
+	if egress := ofType(numbered, "dev.qory.run.egress"); len(egress) != 1 || data(egress[0])["decision"] != "denied" {
+		t.Errorf("run.egress %v", egress)
+	}
+	if got := links(); !slices.Equal(got, before) {
+		t.Errorf("link directories after Close %v, the fake's %v", got, before)
+	}
+}

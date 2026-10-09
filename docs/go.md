@@ -26,6 +26,9 @@ The module is a library with two entry points: the gateway and the session.
   [`gateway.Config`](../gateway/config.go): the machine's policy, its credentials and
   tools, the server it reports to, and where each run's record goes. The gateway holds
   all of it: the proxy, the policy, the credentials, the tools and the access key.
+  `gateway.Config.NoLinkSocket` makes no link socket and no link directory: the link is
+  served in memory alone, to a session in the gateway's process, as `qory run` starts
+  it; without it the socket serves a session in another process too.
 - It then builds a [`session.Spec`](../session/session.go): the program to start, and
   how, and the gateway it speaks to, `session.LocalGateway(g.LocalLink())`. The session
   holds no policy, no credential and no server. It speaks to the gateway alone, over the
@@ -121,7 +124,8 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
   zero.
 - `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
   `authority/ca.pem`, which the machines of the clients with no session trust, and the
-  run keys whose runs ended, `ended-run-keys.json`, so a restart does not reopen them.
+  run key of each run from the moment it opens, `ended-run-keys.json`, so neither a
+  restart nor a crash reopens it.
 
 A run of the one address ends as a local run does, and also at its run credential's
 `exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
@@ -238,10 +242,12 @@ A program that needs code of its own implements the interface.
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a machine of its own (see
   [the session behind a separate gateway](#the-session-behind-a-separate-gateway)). The session reaches
-  that gateway in the process's memory, never by its socket's path, which serves a
-  session in another process. The link's secret stays in the process's memory: a
-  `session.Gateway` is printed and logged by its socket alone, and a
-  `*gateway.Gateway` by its proxy's address and its socket. A nil `Gateway` is no run. The server the run reports to and the node's
+  a gateway of its own process in memory, never by its socket's path, which serves a
+  session in another process, and which a gateway started with `NoLinkSocket` does not
+  make. The link's secret stays in the process's memory: a `session.Gateway` is printed
+  and logged by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret, and a `*gateway.Gateway` by its proxy's address and its socket. A nil
+  `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).

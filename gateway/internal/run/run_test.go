@@ -784,3 +784,31 @@ func TestASessionsNarrowingOnlyNarrows(t *testing.T) {
 		t.Errorf("without a narrowing: %s", r.Policy().Source)
 	}
 }
+
+// TestANarrowingOpensNoneOfTheMachinesAddresses pins the guard's names under a
+// session's narrowing: those of the policy before it, and only when that policy
+// enforces. Under observe, or no policy, a narrowing's allow opens nothing; under
+// enforce, a narrowed entry the policy does not name itself opens nothing either, the
+// policy's own names being the only ones; and without a narrowing the names are the
+// allow list's, as today.
+func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
+	loaded := func(mode policy.Mode, allow ...string) *policy.Loaded {
+		return &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: mode, Allow: allow}}, Source: "config"}
+	}
+	narrowing := &run.Narrowing{Allow: []string{"127.0.0.1", "api.example"}}
+	for name, c := range map[string]struct {
+		pol  *policy.Loaded
+		n    *run.Narrowing
+		want []string
+	}{
+		"no policy":                      {policy.None(), narrowing, nil},
+		"observe":                        {loaded(policy.Observe, "127.0.0.1"), narrowing, nil},
+		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1", "*.example"}},
+		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, []string{"*.example"}},
+		"no narrowing, observe":          {loaded(policy.Observe, "127.0.0.1"), nil, []string{"127.0.0.1"}},
+	} {
+		if got := run.GuardNames(c.pol, c.n); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
