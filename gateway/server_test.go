@@ -456,3 +456,54 @@ func TestCloseAndResend(t *testing.T) {
 		t.Error("a resend of no record")
 	}
 }
+
+// TestResendReadsOnPastATornLine pins a resend of a record with a line the gateway did
+// not finish in its middle: the part of an event it holds is skipped, and every whole
+// event after it reaches the server, in sequence order, then gateway_lost, numbered
+// after the highest sequence.
+func TestResendReadsOnPastATornLine(t *testing.T) {
+	c := newControl(t)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetCloseWait(&cfg, 300*time.Millisecond)
+	h := start(t, cfg)
+	a := h.open(server.LinkRunRequest{})
+	c.refuse.Store(http.StatusServiceUnavailable)
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), logged(a.RunID), logged(a.RunID))
+	if _, err := h.g.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c.refuse.Store(0)
+	file := filepath.Join(h.dir, "runs", a.RunID, "events.jsonl")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	if want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunLog}; !slices.Equal(types(h.record(a.RunID)), want) {
+		t.Fatalf("the record %v", types(h.record(a.RunID)))
+	}
+	// The first log's write did not finish, and the second's went on in its line.
+	torn := lines[0] + lines[1] + lines[2] + lines[3][:len(lines[3])/2] + lines[4]
+	if err := os.WriteFile(file, []byte(torn), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Dir(file)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Completed || r.Sent != 4 || r.Undelivered != 0 {
+		t.Errorf("resend %+v", r)
+	}
+	var got []string
+	for _, l := range c.lines(t) {
+		got = append(got, l.Type+" "+l.Sequence)
+	}
+	want := []string{event.Ping + " 0000000001", event.RunStarted + " 0000000002", event.PolicyApplied + " 0000000003", event.RunLog + " 0000000005", event.RunExited + " 0000000006"}
+	if !slices.Equal(got, want) {
+		t.Errorf("the server has %v, want %v", got, want)
+	}
+	after, _ := os.ReadFile(file)
+	if !strings.HasPrefix(string(after), torn) {
+		t.Error("the record was changed before its end")
+	}
+}

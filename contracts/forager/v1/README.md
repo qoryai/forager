@@ -1249,11 +1249,16 @@ and the sequence of every event in it, and the one word `stopped` for a signed 4
 the session is gone however it went. Sending a run again is the job's last step, whatever
 happens before it: refused while the lock is held; then what the run's wall leaves
 behind is removed, by the run's label; a record that has `dev.qory.run.started` and no
-`dev.qory.run.exited` gets one, numbered on from the last event, with `state: failed`,
-`exit_code: -1` and `reason: gateway_lost`, the gateway having been lost before the run's
-exit was recorded; and every event the server's filter selects
+`dev.qory.run.exited` gets one, numbered on from the highest sequence, with
+`state: failed`, `exit_code: -1` and `reason: gateway_lost`, the gateway having been lost
+before the run's exit was recorded; and every event the server's filter selects
 that no accepted batch contained is posted, in order, in batches cut the same way, until
-the server accepts them or Forager stops retrying. The resend fetches the
+the server accepts them or Forager stops retrying. A line of `events.jsonl` that holds
+no whole event, a write Forager did not finish, on a full disk, is skipped, and every
+whole event after it is read and sent, one the next write put on the same line
+included. A last line without its newline is made a line before
+`dev.qory.run.exited` follows it: one that holds a whole event gets its newline, and one
+that holds none is cut off. Nothing else of the file is changed. The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
 `undelivered/` again. A receiver sees some events twice when Forager dies between an

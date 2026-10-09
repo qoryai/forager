@@ -1,12 +1,14 @@
 package stream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -259,5 +261,130 @@ func TestResendReportsARunClosed(t *testing.T) {
 	}
 	if rec := readRecord(t, dir); len(rec) != 4 {
 		t.Errorf("the record: %v", types(rec))
+	}
+}
+
+// tornRun leaves the record of a lost run whose ping the server accepted: the ping,
+// run.started and three logs, and no run.exited. It returns the directory and the
+// record's lines, each with its newline.
+func tornRun(t *testing.T) (string, [][]byte) {
+	t.Helper()
+	s := New(Config{Dir: t.TempDir()})
+	r, err := s.Open(event.NewRunID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Ping(map[string]any{})
+	evs := []event.Event{sessionEvent(r.ID(), event.RunStarted, map[string]any{})}
+	for range 3 {
+		evs = append(evs, sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}))
+	}
+	r.Accept(evs)
+	r.Close(context.Background())
+	if err := os.WriteFile(filepath.Join(r.Dir(), sink.DeliveredFile), []byte("ping-delivery 0000000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.Dir(), bytes.SplitAfter(b, []byte("\n"))[:5]
+}
+
+// exitedAfter checks that the record is before, then one line, run.exited with the
+// sequence want, and returns that event.
+func exitedAfter(t *testing.T, dir string, before []byte, want string) event.Event {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(dir, sink.EventsFile))
+	rest, ok := bytes.CutPrefix(b, before)
+	if !ok {
+		t.Fatalf("the record was changed before its end:\n%s", b)
+	}
+	evs := parseLines(t, string(rest))
+	if len(evs) != 1 || evs[0].Type != event.RunExited || evs[0].Sequence != want || !strings.HasSuffix(string(rest), "\n") {
+		t.Fatalf("the record ends %q", rest)
+	}
+	return evs[0]
+}
+
+// TestResendReadsOnPastATornLine pins a line the gateway did not finish, in the middle
+// of the record: the part of the event it holds is skipped, and so are a line that is
+// no JSON and one with no sequence, but every whole event after them is read and sent,
+// the one the next write put on the same line too; they stay in the file, which
+// gateway_lost follows, numbered after the highest sequence.
+func TestResendReadsOnPastATornLine(t *testing.T) {
+	srv, store := station(t, nil)
+	dir, lines := tornRun(t)
+	id := func(line []byte) string {
+		var ev event.Event
+		json.Unmarshal(line, &ev)
+		return ev.ID
+	}
+	torn := slices.Concat(lines[0], lines[1], lines[2][:len(lines[2])/2], lines[3],
+		[]byte("not an event\n"), []byte(`{"type":"`+event.RunLog+`","id":"no-sequence"}`+"\n"), lines[4])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), torn, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var told []int
+	reportTorn = func(n int, _ string) string { told = append(told, n); return "torn" }
+	defer func() { reportTorn = nil }()
+	var reports []string
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 3 || res.Sent != 4 || res.Undelivered != 0 {
+		t.Errorf("result %+v", res)
+	}
+	if !slices.Equal(told, []int{3}) || !slices.Contains(reports, "torn") {
+		t.Errorf("told %v, reports %q", told, reports)
+	}
+	exited := exitedAfter(t, dir, torn, "0000000006")
+	for _, want := range []string{id(lines[1]), id(lines[3]), id(lines[4]), exited.ID} {
+		if !store.Seen(want) {
+			t.Errorf("the receiver has no %s", want)
+		}
+	}
+	if store.Count() != 4 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+}
+
+// TestResendEndsATornLastLine pins a last line the gateway did not finish: one that
+// holds a whole event, only its newline missing, or bytes that are none and then a
+// whole event, keeps it, and gets its newline before gateway_lost; one that holds no
+// whole event is cut off. Nothing before it is changed.
+func TestResendEndsATornLastLine(t *testing.T) {
+	for name, tc := range map[string]struct {
+		last   func(line []byte) []byte
+		kept   bool
+		torn   int
+		exited string
+	}{
+		"a whole event without its newline":  {func(l []byte) []byte { return bytes.TrimSuffix(l, []byte("\n")) }, true, 1, "0000000006"},
+		"part of an event, then a whole one": {func(l []byte) []byte { return slices.Concat(l[:len(l)/3], bytes.TrimSuffix(l, []byte("\n"))) }, true, 2, "0000000006"},
+		"part of an event":                   {func(l []byte) []byte { return l[:len(l)/2] }, false, 2, "0000000005"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, lines := tornRun(t)
+			// A torn line in the middle too: the end is found past it.
+			head := slices.Concat(lines[0], lines[1], lines[2][:len(lines[2])/2], []byte("\n"), lines[3])
+			tail := tc.last(lines[4])
+			if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), slices.Concat(head, tail), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Resend(context.Background(), ResendConfig{Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.Closed || res.Torn != tc.torn {
+				t.Errorf("result %+v", res)
+			}
+			before := head
+			if tc.kept {
+				before = slices.Concat(head, tail, []byte("\n"))
+			}
+			exitedAfter(t, dir, before, tc.exited)
+		})
 	}
 }

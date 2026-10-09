@@ -650,6 +650,17 @@ release may change what an existing document does, and says so under Upgrading.
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
   gateway: the path could be read two ways".
 
+#### Fixed
+
+- `gateway.Resend` reads on past a line of `events.jsonl` that holds no whole event, a
+  write the gateway did not finish, on a full disk: it skips those bytes, and keeps and
+  sends every whole event after them, one the next write put on the same line too.
+  Before, it cut the file at that line, and every event after it was lost. A last line
+  without its newline that holds a whole event is kept, and gets its newline before
+  `gateway_lost` follows it; one that holds none is cut off, as before. `gateway_lost`
+  is numbered after the highest sequence of the whole events, and the file is changed
+  only when `gateway_lost` is added.
+
 ### Wall
 
 #### Upgrading

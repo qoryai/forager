@@ -28,10 +28,12 @@ type ResendConfig struct {
 // [ErrRunning] and left as it is; a record with run.started and no run.exited gets
 // one, with the reason gateway_lost, Completed; then every event the server wants that
 // no accepted batch contained is posted, in order and in the run's own batches, until
-// the server accepts it or ctx ends. A server that said stop during the run is sent
-// nothing. A refusal of the server's, at its discovery, is an [*accesskey.Refusal] with
-// its From, Code and Names. A server that closes the run now, a signed 410 run_closed,
-// is RunClosed, from apiary: the events stay in the directory.
+// the server accepts it or ctx ends. A line of the record that holds no whole event, a
+// write the gateway did not finish, is skipped, and every event after it is sent. A
+// server that said stop during the run is sent nothing. A refusal of the server's, at
+// its discovery, is an [*accesskey.Refusal] with its From, Code and Names. A server
+// that closes the run now, a signed 410 run_closed, is RunClosed, from apiary: the
+// events stay in the directory.
 func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if cfg.Version == "" {
 		cfg.Version = "dev"
