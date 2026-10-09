@@ -559,6 +559,21 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 	return r.result, errors.Join(errs...)
 }
 
+// Discard closes the run's stream as [Run.Close] does, then removes what the stream
+// wrote under the run's record directory, events.jsonl, the delivery state and its
+// lock, and the directory itself when nothing else is left in it, so the run id opens
+// again: a run that never opened.
+func (r *Run) Discard(ctx context.Context) error {
+	_, err := r.Close(ctx)
+	errs := []error{err}
+	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, lockFile} {
+		errs = append(errs, os.RemoveAll(filepath.Join(r.dir, name)))
+	}
+	// Left in place when it holds anything else, a session's own files on one machine.
+	os.Remove(r.dir)
+	return errors.Join(errs...)
+}
+
 // DecodeBatch reads a link batch, a JSON array of the session's events, keeping each
 // event's data as the session encoded it, so the record holds the bytes it would have
 // written itself. It checks the shape alone; the link checks the schema.

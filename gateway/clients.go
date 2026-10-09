@@ -33,8 +33,8 @@ type clientLogin struct{ g *Gateway }
 // again. A client has at most one open run per run key, and never joins a session's
 // run, which only its proxy secret reaches: a run key with sessions' runs open opens or
 // joins its client's run beside them. Every failure of the run credential is refused,
-// 407, and so is a run key the gateway refuses after the issuer's end, until the latest
-// exp presented. A run refused with a code is [errUnserved], and one that fails to open
+// 407, and so is a run key the gateway refuses after the issuer's end, during its hold.
+// A run refused with a code is [errUnserved], and one that fails to open
 // without a code [errNotOpened].
 func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	g := c.g
@@ -134,14 +134,18 @@ func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 	if err != nil {
 		return nil, err
 	}
+	if g.cfg.opened != nil {
+		g.cfg.opened()
+	}
 	k := keyOf(id)
 	g.mu.Lock()
+	g.runs[lr.id] = lr
 	if g.blocked(k) {
+		// Among the runs, so Close waits for its record.
 		g.mu.Unlock()
 		lr.end(endedAtIssuer)
 		return nil, errKeyRefused
 	}
-	g.runs[lr.id] = lr
 	g.clientRuns[k] = lr
 	g.mu.Unlock()
 	lr.arm()
@@ -154,10 +158,13 @@ var errKeyRefused = errors.New("the gateway refuses the run key")
 
 // join is a later connection of the run's run key: the run takes it, once its run
 // credential extends the run and the issuer, when asked, holds it active; an issuer
-// that does not ends the run, and the connection is refused, 407, as is one of a run key
-// the gateway refuses. A run that has ended takes none, [errRunEnded].
+// that does not ends the run, and the connection is refused, 407. A run key the gateway
+// refuses after the issuer's end of another of its runs ends the run too,
+// run_ended_at_issuer, and the connection is refused, 407. A run that has ended takes
+// none, [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	if lr.g.blocked(keyOf(id)) {
+		lr.end(endedAtIssuer)
 		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}

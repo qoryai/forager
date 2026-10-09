@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,9 @@ type Ended struct {
 
 	mu      sync.Mutex
 	entries map[endedKey]time.Time
+	// written are the entries as the file last held them: read at open, and each write
+	// that succeeded.
+	written map[endedKey]time.Time
 }
 
 // endedKey is a run key of an issuer.
@@ -49,11 +53,11 @@ type endedEntry struct {
 
 // OpenEnded opens the ended run keys of the state directory dir. It makes dir, mode
 // 0700, when it does not exist, and refuses one that is not a directory of this user's
-// that only this user writes. It reads [EndedFile] when it exists, a regular file that
-// others can neither read nor write, holding the array ended, and
-// refuses one it cannot read, so a gateway never starts having forgotten a run key it
-// refuses;
-// the entries past their time are dropped, and the file is written again without them.
+// that only this user writes, and one this process cannot create a file in. It reads
+// [EndedFile] when it exists, a regular file that others can neither read nor write,
+// holding the array ended, and refuses one it cannot read, so a gateway never starts
+// having forgotten a run key it refuses; the entries past their time are dropped, and
+// the file is written again without them.
 func OpenEnded(dir string) (*Ended, error) {
 	return openEnded(dir, time.Now)
 }
@@ -76,7 +80,15 @@ func openEnded(dir string, clock func() time.Time) (*Ended, error) {
 	case info.Mode().Perm()&0o022 != 0:
 		return nil, fmt.Errorf("the ended run keys: %s is writable by others than its owner", dir)
 	}
-	e := &Ended{path: filepath.Join(dir, EndedFile), clock: clock, entries: map[endedKey]time.Time{}}
+	// The file is written beside itself and renamed over, so a directory this process
+	// cannot create a file in could never keep a run key: probed as the write does.
+	probe, err := os.CreateTemp(dir, EndedFile+".*")
+	if err != nil {
+		return nil, fmt.Errorf("the ended run keys: %s cannot be written: %w", dir, err)
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+	e := &Ended{path: filepath.Join(dir, EndedFile), clock: clock, entries: map[endedKey]time.Time{}, written: map[endedKey]time.Time{}}
 	fi, err := os.Lstat(e.path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -108,6 +120,7 @@ func openEnded(dir string, clock func() time.Time) (*Ended, error) {
 	}
 	n := len(e.entries)
 	e.prune(clock())
+	maps.Copy(e.written, e.entries)
 	if len(e.entries) != n {
 		if err := e.write(); err != nil {
 			return nil, err
@@ -121,6 +134,16 @@ func (e *Ended) Has(issuer, runKey string, now time.Time) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	until, ok := e.entries[endedKey{issuer, runKey}]
+	return ok && now.Before(until)
+}
+
+// Written reports whether the file, as it was last read or written, refuses the run
+// key of the issuer at now: whether a gateway started on it would, though a later
+// [Ended.Add] failed to write.
+func (e *Ended) Written(issuer, runKey string, now time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	until, ok := e.written[endedKey{issuer, runKey}]
 	return ok && now.Before(until)
 }
 
@@ -203,6 +226,7 @@ func (e *Ended) write() error {
 		return fmt.Errorf("the ended run keys: %w", err)
 	}
 	ok = true
+	e.written = maps.Clone(e.entries)
 	if d, err := os.Open(dir); err == nil {
 		d.Sync()
 		d.Close()

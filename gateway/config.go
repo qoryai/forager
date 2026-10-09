@@ -83,9 +83,18 @@ type Config struct {
 	// keepSpent, when not zero, replaces runcredential.MaxLeeway as how long past its
 	// exp the gateway keeps what an ended run of the one address left. Tests set it.
 	keepSpent time.Duration
+	// keepRetry, when not zero, replaces keepRetry as how often the gateway writes the
+	// refused run keys again while a write of them has failed. Tests set it.
+	keepRetry time.Duration
 	// clock, when not nil, is the time the gateway refuses a run key by, in place of
 	// the system's. Tests set it.
 	clock func() time.Time
+	// closesAtOpen, when not nil, is asked as a run is about to open: true is a signed
+	// 410 run_closed heard then. Tests set it.
+	closesAtOpen func() bool
+	// opened, when not nil, is called once a run on the one address opened, before the
+	// gateway looks again whether it refuses the run's run key. Tests set it.
+	opened func()
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int

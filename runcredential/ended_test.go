@@ -110,6 +110,50 @@ func TestEndedAddKeepsTheLaterTimeAndPrunes(t *testing.T) {
 	}
 }
 
+func TestEndedWrittenIsWhatTheFileHolds(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a directory of mode 0500")
+	}
+	dir := t.TempDir()
+	e, err := openEnded(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	soon, late := now.Add(time.Minute), now.Add(time.Hour)
+	if err := e.Add(exampleIssuer, "rk-0001", soon); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := e.Add(exampleIssuer, "rk-0001", late); err == nil {
+		t.Fatal("a write to a directory of mode 0500")
+	}
+	if err := e.Add(exampleIssuer, "rk-0002", late); err == nil {
+		t.Fatal("a write to a directory of mode 0500")
+	}
+	past := soon.Add(MaxLeeway + time.Second)
+	switch {
+	case !e.Has(exampleIssuer, "rk-0001", past) || !e.Has(exampleIssuer, "rk-0002", now):
+		t.Error("an Add that failed to write is not kept in memory")
+	case !e.Written(exampleIssuer, "rk-0001", now):
+		t.Error("the run key written once is not the file's")
+	case e.Written(exampleIssuer, "rk-0001", past):
+		t.Error("the file holds the extension that failed to write")
+	case e.Written(exampleIssuer, "rk-0002", now):
+		t.Error("the file holds a run key never written")
+	}
+	os.Chmod(dir, 0o700)
+	reopened, err := openEnded(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.Written(exampleIssuer, "rk-0001", now) || reopened.Written(exampleIssuer, "rk-0002", now) {
+		t.Error("the file as read at open")
+	}
+}
+
 func TestOpenEndedRefuses(t *testing.T) {
 	// A directory others may write.
 	open := t.TempDir()

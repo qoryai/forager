@@ -118,6 +118,6 @@ branch adds the release's section to `CHANGELOG.md`, `[X.Y.Z] - YYYY-MM-DD` with
 the tag lands and a compare link at the foot of the file; a fix that goes to `main`
 outside a release branch goes under `[Unreleased]` until the next one. Anything a person
 upgrading has to do stands under Upgrading in the section. The module is a library: a tag
-is what `qory` pins, and the control plane's CI pins the same tag for the fixtures.
+is what `qory` pins, and Qory Apiary's CI pins the same tag for the fixtures.
 
 Commit messages say what changed and why it was needed, in the imperative.

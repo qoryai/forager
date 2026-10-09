@@ -29,9 +29,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`,
   `event.CredentialIssuer` and `event.CredentialNone`, the values of `credential`, and
   `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
-  `ReasonQuiet`, `ReasonCredentialExpired` and `ReasonRunEndedAtIssuer`, the reasons of
-  `dev.qory.run.exited`. The session's `dev.qory.run.started` contains `opened_by`
-  `session`, and the `credential` of the gateway's run answer.
+  `ReasonQuiet`, `ReasonCredentialExpired`, `ReasonRunEndedAtIssuer` and
+  `ReasonBatchRefused`, the reasons of `dev.qory.run.exited`; `batch_refused` is the
+  gateway's `410` to a session whose batch it refused, and the reason the session
+  records in its own record after it. The session's `dev.qory.run.started` contains
+  `opened_by` `session`, and the `credential` of the gateway's run answer.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
@@ -230,9 +232,12 @@ release may change what an existing document does, and says so under Upgrading.
   refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
   0600, written atomically, in a directory of mode 0700 that only its user writes. Each
   is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
-  dropped on open and on `Ended.Add`; `Ended.Has` asks. A file that cannot be read, that others can read or
-  write, or that holds no array `ended` is refused, so a gateway never starts having
-  forgotten a run key it refuses.
+  dropped on open and on `Ended.Add`; `Ended.Has` asks, and `Ended.Written` whether the
+  file, as last read or written, refuses a run key, which a failed write leaves out. A
+  file that cannot be read, that others can read or write, or that holds no array
+  `ended` is refused, so a gateway never starts having forgotten a run key it refuses,
+  and so is a directory it cannot create a file in, "the ended run keys: <directory>
+  cannot be written: <error>", so a gateway never starts unable to keep one.
 - The known answers of the run credential gain the step `serialisation` and run
   credentials refused at it (padding, a line feed, a space, four parts, two parts), at
   the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature
@@ -584,13 +589,23 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`, and every later request gets the `410` with that code, a
   reload or a batch even with a run credential whose `exp` passed less than 5 minutes
   before, which reaches nothing else. After
-  the issuer's end, the gateway refuses the run key until its `exp` plus
-  `runcredential.MaxLeeway`, 5 minutes, a session's run request `401`
-  `run_credential_refused` and a client's connection `407`; a run credential for a
-  refused run key presented during the hold is refused and extends the hold to its own
-  `exp`, and the hold lapses after the latest `exp` presented, plus 5 minutes. The
-  gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart
-  refuses them too. A
+  the issuer's end, the gateway refuses every request of a run of the run key until the
+  latest `exp` of the run credentials of the key the gateway still holds, and of any
+  presented during the hold, plus `runcredential.MaxLeeway`, 5 minutes: those of the run
+  key's live runs, and of its ended runs whose record is not yet flushed. During the
+  hold, a session's run request is `401` `run_credential_refused`, a reload or a batch
+  of a session's run of the run key that is still live the run's `410`
+  `run_ended_at_issuer`, which ends the run, and a client's connection `407`, which ends
+  the client's run of the run key it would join, `run_ended_at_issuer`; the discovery is
+  answered to a run credential of the run key as to any, and opens nothing; a run
+  credential for a refused run key presented during the hold, verified, is refused and
+  extends the hold to its own `exp`, and one that fails verification extends nothing.
+  The gateway keeps these run keys in `ended-run-keys.json` in its directory, so a
+  restart refuses them too; a write of it that fails is reported once, the run key's
+  requests are refused all the same while the gateway runs, and the file is written
+  again on each refused request of the run key, every 5 seconds, and once more at Close,
+  until a write succeeds; the write that succeeds again is reported, and at Close, when
+  the write still fails, how many run keys a restart would not refuse. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
   only the policy before it opens, when it enforces and names the host itself. Its
@@ -645,6 +660,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A run request whose session gives up waiting for its run answer, ten seconds, opens
+  no run: once its connection goes, the gateway asks Qory Apiary nothing more for it,
+  the ping and the run configuration among it, and removes what it recorded of the
+  run, so the same `run_id` sent again opens the run instead of `run_id_used`. Before,
+  the run opened and ended `session_lost` after three heartbeat intervals. A session
+  that goes while the run answer is on its way may still leave such a run.
 - A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
   neither `state` nor `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.

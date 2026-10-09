@@ -65,7 +65,7 @@ func mediaType(r *http.Request, want string) bool {
 // openRun answers a run request: 400 invalid_request for a body the schema refuses and
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
-// until the latest exp presented, or whose run credential the issuer no longer holds
+// during its hold, or whose run credential the issuer no longer holds
 // active; 409 run_id_used for a run id
 // that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
@@ -118,6 +118,10 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Context().Err() != nil {
+		// The session gave up waiting for its answer: no run opens.
+		return
+	}
 	// keyRefused reports, under the gateway's lock, whether the issuer ended a run of
 	// the run key since it was asked.
 	keyRefused := func() bool { return id != nil && g.blocked(keyOf(*id)) }
@@ -144,8 +148,16 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id})
+	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context()})
 	if err != nil {
+		if r.Context().Err() != nil {
+			// The session gave up waiting for its answer: the run did not open, and its
+			// run id is free for a retry.
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+			return
+		}
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of
@@ -160,16 +172,34 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		refuseOpen(w, err)
 		return
 	}
+	if lr == nil {
+		// No run and no error, which open never returns: nothing opened, and the run id
+		// is free again.
+		g.mu.Lock()
+		delete(g.used, req.RunID)
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if id != nil && g.cfg.opened != nil {
+		g.cfg.opened()
+	}
+	if r.Context().Err() != nil {
+		// The session gave up as the run opened.
+		g.discard(lr)
+		return
+	}
 	g.mu.Lock()
+	g.runs[lr.id] = lr
 	if keyRefused() {
-		// The issuer ended a run of the run key while this one opened: it ends at once.
+		// The issuer ended a run of the run key while this one opened: it ends at once,
+		// among the runs, so Close waits for its record.
 		g.mu.Unlock()
 		lr.end(endedAtIssuer)
 		g.presented(*id)
 		refuseCredential(w)
 		return
 	}
-	g.runs[lr.id] = lr
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
@@ -178,7 +208,42 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, answer.reveal())
+	if r.Context().Err() != nil {
+		// The answer is not sent whole before the handler returns: a session that has
+		// gone now never has it.
+		g.discard(lr)
+		return
+	}
 	lr.arm()
+}
+
+// discard lets go of a run that opened whose session gave up before it had the run
+// answer, as if it never opened: it leaves the runs and ends with nothing more written
+// of it, what its stream wrote is removed, and then its run id is free again, so a
+// retry of it opens. A run that ended already is left to end as it does.
+func (g *Gateway) discard(lr *linkRun) {
+	if lr == nil {
+		return
+	}
+	g.mu.Lock()
+	lr.mu.Lock()
+	ok := !lr.ended
+	if ok {
+		lr.discarded = true
+		if g.runs[lr.id] == lr {
+			delete(g.runs, lr.id)
+		}
+	}
+	lr.mu.Unlock()
+	g.mu.Unlock()
+	if !ok {
+		return
+	}
+	lr.end(sessionGone)
+	<-lr.done
+	g.mu.Lock()
+	delete(g.used, lr.id)
+	g.mu.Unlock()
 }
 
 // refuseOpen answers a run that did not open. A refusal passes on with its code and
@@ -307,6 +372,7 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 // and otherwise 401 run_credential_refused. Nothing more is served for it.
 func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) {
 	k := keyOf(id)
+	g.keepAgainFor(k)
 	g.mu.Lock()
 	lr := g.runs[runID]
 	g.mu.Unlock()
@@ -345,12 +411,25 @@ func (g *Gateway) hasSessionRun(k runKeyID) bool {
 
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
-// against its run key when the gateway refuses it; a run credential with a later exp
-// keeps the run going until then; and an issuer that no longer holds it active ends the
-// run, run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+// against its run key when the gateway refuses it; a run of a run key the gateway
+// refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
+// is the 410, the run credential noted; a run credential with a later exp keeps the run
+// going until then; and an issuer that no longer holds it active ends the run,
+// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
+		gone(w, code, from, lr.st.Started())
+		return false
+	}
+	if lr.g.blocked(keyOf(id)) {
+		// The issuer ended a run of the run key: every request of a run of it is
+		// refused, the run request, a reload, a batch, a client's proxy login and its
+		// join, and a live run of it is served no more. The discovery is answered, and
+		// opens nothing.
+		lr.end(endedAtIssuer)
+		lr.g.presented(id)
+		code, from, _ := lr.gone()
 		gone(w, code, from, lr.st.Started())
 		return false
 	}

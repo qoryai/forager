@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,6 +67,10 @@ type control struct {
 	// drop, when set, closes every delivery's connection unanswered.
 	drop    atomic.Bool
 	fetches atomic.Int32
+	// slowEvents and slowFetch, when not zero, are how long every delivery and every
+	// fetch of a run configuration wait before they are taken; one whose client goes
+	// first is not taken.
+	slowEvents, slowFetch atomic.Int64
 
 	mu     sync.Mutex
 	run    []byte
@@ -108,6 +113,20 @@ func newControl(t *testing.T) *control {
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slow := c.slowEvents.Load()
+		if r.URL.Path == "/v1/run-configuration" {
+			slow = c.slowFetch.Load()
+		}
+		if slow != 0 {
+			// The body read first, so a client that goes is seen to.
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			select {
+			case <-time.After(time.Duration(slow)):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if r.URL.Path == "/v1/run-configuration" {
 			c.fetches.Add(1)
 			if c.closeOnFetch.Load() {

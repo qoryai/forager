@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/qoryai/forager/event"
@@ -101,8 +102,9 @@ func (id runIdentity) isActive(ctx context.Context) bool {
 
 // The gateway tracks run keys and does not require them to be unique; each period of
 // activity is a run. It refuses a run key only after the issuer's end of a run of it:
-// after run_ended_at_issuer, the gateway refuses the run key until the latest exp
-// presented for it. Those run keys are kept in the gateway's directory, so a restart
+// after run_ended_at_issuer, the gateway refuses the run key until the latest exp of
+// the run credentials of the run key it still holds, and of any presented during the
+// hold. Those run keys are kept in the gateway's directory, so a restart
 // refuses them too.
 
 // blocked reports whether the gateway refuses the run key, after the issuer's end.
@@ -123,44 +125,166 @@ func (g *Gateway) now() time.Time {
 // key: the issuer's end.
 func (e ending) blocks() bool { return e.code == event.ReasonRunEndedAtIssuer }
 
+// keepRetry is how often the gateway writes the refused run keys again while a write
+// of them has failed.
+const keepRetry = 5 * time.Second
+
 // holdKey keeps a run key among the refused run keys, in the gateway's directory,
 // until exp, so that neither this gateway nor another started on its directory, after
-// a crash as after a stop, opens a run of it before then.
-func (g *Gateway) holdKey(k runKeyID, exp time.Time) error {
+// a crash as after a stop, opens a run of it before then. The gateway refuses the run
+// key in this process whether or not the write succeeds. A run key whose write failed
+// is written again by each later hold of it, and every [keepRetry] until a write
+// succeeds, which holds every run key refused in memory, and is reported; a gateway that
+// is closing leaves the last try to Close, which reports the run keys still not written. first reports a failure for a run key whose write had
+// not failed since the last that succeeded.
+func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	if g.ended == nil {
-		return nil
+		return false, nil
 	}
+	g.keeping.Lock()
+	defer g.keeping.Unlock()
 	g.mu.Lock()
-	held := !exp.After(g.endedUntil[k])
+	_, unkept := g.unkept[k]
+	held := !unkept && !exp.After(g.endedUntil[k])
 	g.mu.Unlock()
 	if held {
-		return nil
+		return false, nil
 	}
-	if err := g.ended.Add(k.issuer, k.runKey, exp); err != nil {
-		return err
-	}
+	err = g.ended.Add(k.issuer, k.runKey, exp)
 	g.mu.Lock()
+	if err != nil {
+		defer g.mu.Unlock()
+		if exp.After(g.unkept[k]) {
+			g.unkept[k] = exp
+		}
+		if g.keepTimer == nil && !g.closing {
+			every := keepRetry
+			if g.cfg.keepRetry != 0 {
+				every = g.cfg.keepRetry
+			}
+			g.keepTimer = time.AfterFunc(every, g.keepAgain)
+		}
+		return !unkept, err
+	}
 	if exp.After(g.endedUntil[k]) {
 		g.endedUntil[k] = exp
 	}
+	// The file now holds every run key refused in memory, those whose write failed
+	// among them: when there were any, the write recovered.
+	recovered := len(g.unkept) > 0
+	for uk, until := range g.unkept {
+		if until.After(g.endedUntil[uk]) {
+			g.endedUntil[uk] = until
+		}
+		delete(g.unkept, uk)
+	}
+	if g.keepTimer != nil {
+		g.keepTimer.Stop()
+		g.keepTimer = nil
+	}
 	g.mu.Unlock()
-	return nil
+	if recovered {
+		g.report(fmt.Sprintf("the run keys the issuer ended are written to %s again", g.endedPath()))
+	}
+	return false, nil
 }
 
-// endKey is [Gateway.holdKey], a failure reported, the run key's issuer and nothing of
-// the run credential. The gateway refuses the run key in this process either way.
-func (g *Gateway) endKey(k runKeyID, exp time.Time) {
-	if err := g.holdKey(k, exp); err != nil {
-		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
+// endedPath is the file of the refused run keys, in the gateway's directory.
+func (g *Gateway) endedPath() string { return filepath.Join(g.cfg.Dir, runcredential.EndedFile) }
+
+// unkeptKey is a run key whose write failed and that the gateway still refuses, and the
+// exp it is to be kept to; ok is false when there is none. Those the gateway no longer
+// refuses need no write, and are dropped. Under the gateway's lock.
+func (g *Gateway) unkeptKey() (k runKeyID, exp time.Time, ok bool) {
+	for uk, until := range g.unkept {
+		if !g.blocked(uk) {
+			delete(g.unkept, uk)
+			continue
+		}
+		k, exp, ok = uk, until, true
+	}
+	return k, exp, ok
+}
+
+// keepAgain writes the refused run keys again, every [keepRetry] while a write of them
+// has failed. The failure is not reported again.
+func (g *Gateway) keepAgain() {
+	g.mu.Lock()
+	g.keepTimer = nil
+	k, exp, ok := g.unkeptKey()
+	closing := g.closing
+	g.mu.Unlock()
+	if ok && !closing {
+		g.holdKey(k, exp)
 	}
 }
 
-// keptTo reports whether the refused run keys keep k at least to exp, as this process
-// wrote them.
-func (g *Gateway) keptTo(k runKeyID, exp time.Time) bool {
+// keepAgainFor writes the refused run keys again when the write of the run key's had
+// failed: a request of it that is refused. The failure is not reported again.
+func (g *Gateway) keepAgainFor(k runKeyID) {
+	g.mu.Lock()
+	exp, ok := g.unkept[k]
+	g.mu.Unlock()
+	if ok {
+		g.holdKey(k, exp)
+	}
+}
+
+// keepOnClose stops the retries and writes the refused run keys once more, for a
+// gateway that is closing, when a write of them has failed. It returns how many run
+// keys refused in memory a restart would not refuse: those the file does not hold, or
+// no longer at now. A run key the file holds, whose later extension alone failed to
+// write, a restart still refuses, until the exp written last, and is not counted.
+func (g *Gateway) keepOnClose() int {
+	g.mu.Lock()
+	if g.keepTimer != nil {
+		g.keepTimer.Stop()
+		g.keepTimer = nil
+	}
+	k, exp, ok := g.unkeptKey()
+	g.mu.Unlock()
+	if ok {
+		g.holdKey(k, exp)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return !exp.After(g.endedUntil[k])
+	g.unkeptKey()
+	n := 0
+	for k := range g.unkept {
+		if !g.ended.Written(k.issuer, k.runKey, g.now()) {
+			n++
+		}
+	}
+	return n
+}
+
+// heldTo is the latest of exp and the exps of the run credentials of the run key the
+// gateway still holds: those of its runs, live and ended, that it has not let go of.
+// What a run it let go of was presented, it no longer remembers. Not under the lock of
+// any run.
+func (g *Gateway) heldTo(k runKeyID, exp time.Time) time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, lr := range g.runs {
+		if lr.cred == nil || lr.cred.key != k {
+			continue
+		}
+		lr.mu.Lock()
+		if lr.cred.expires.After(exp) {
+			exp = lr.cred.expires
+		}
+		lr.mu.Unlock()
+	}
+	return exp
+}
+
+// endKey is [Gateway.holdKey], a run key's first failure reported, the run key's issuer
+// and nothing of the run credential; its retries are not. The gateway refuses the run
+// key in this process either way.
+func (g *Gateway) endKey(k runKeyID, exp time.Time) {
+	if first, err := g.holdKey(k, exp); first {
+		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
+	}
 }
 
 // spentRun is what a run on the one address leaves once it has ended and its record is
@@ -173,8 +297,7 @@ type spentRun struct {
 	until      time.Time
 }
 
-// retire lets go of a run on the one address that has ended, its record flushed and,
-// after the issuer's end, its run key kept to exp: the
+// retire lets go of a run on the one address that has ended and its record flushed: the
 // gateway holds no more of it than its [spentRun], until exp plus
 // [runcredential.MaxLeeway], the latest a run credential of that exp is accepted; what
 // it came to joins the gateway's delivery. The spent runs and the refused run keys kept
@@ -231,7 +354,7 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 
 // presented notes a run credential presented for a run key the gateway refuses: it is
 // refused, and extends the refusal to its own exp, so the refusal lapses only after the
-// latest exp presented. A run key the gateway does not refuse is left as it is.
+// latest exp held or presented. A run key the gateway does not refuse is left as it is.
 func (g *Gateway) presented(id runIdentity) {
 	if k := keyOf(id); g.blocked(k) {
 		g.endKey(k, id.Expires)

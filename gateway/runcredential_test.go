@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"github.com/qoryai/forager/link"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1363,6 +1364,494 @@ func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
 	// Three sessions' runs and one client's: nothing opened in flight.
 	if got := runsIn(t, s.dir); len(got) != 4 {
 		t.Errorf("runs %v", got)
+	}
+}
+
+// TestTheIssuersEndRefusesTheRunKeysLiveRuns pins the issuer's end against the run
+// key's other runs that are live: a reload or a batch of a session's run of it gets the
+// run's 410, run_ended_at_issuer, though the issuer holds that run's own run credential
+// active, and the run ends; a client's run of it refuses its next connection, 407, and
+// ends too.
+func TestTheIssuersEndRefusesTheRunKeysLiveRuns(t *testing.T) {
+	o := origin(t)
+	in := &introspection{}
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, in, 0)
+	first := mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+	second := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, first, second)
+	a := s.openSession(t, first, server.LinkRunRequest{})
+	b := s.openSession(t, second, server.LinkRunRequest{})
+	reloaded := s.openSession(t, second, server.LinkRunRequest{})
+	if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusOK {
+		t.Fatalf("the client's run: %d %v", status, err)
+	}
+	var client string
+	for _, id := range runsIn(t, s.dir) {
+		if id != a.a.RunID && id != b.a.RunID && id != reloaded.a.RunID {
+			client = id
+		}
+	}
+	in.end(first)
+	status, body := a.reload(t, first, a.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+
+	status, body = b.post(t, second, heartbeat(b.a.RunID))
+	gone(t, "a batch of another run of the run key", status, body, "run_ended_at_issuer")
+	status, body = reloaded.reload(t, second, reloaded.a.RunID)
+	gone(t, "a reload of another run of the run key", status, body, "run_ended_at_issuer")
+	status, body = b.reload(t, second, b.a.RunID)
+	gone(t, "a later reload", status, body, "run_ended_at_issuer")
+	if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+		t.Errorf("a client's connection after the end: %d %v", status, err)
+	}
+	s.close()
+	for _, id := range []string{b.a.RunID, reloaded.a.RunID, client} {
+		rec := s.record(id)
+		if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+			t.Errorf("run %s: the record ends %+v", id, last)
+		}
+	}
+}
+
+// TestCloseWaitsForARunEndedAsItOpened pins a run that opened while the issuer ended
+// another run of its run key: it ends at once, and Close waits for its record as for
+// every run, what it left undelivered in the Delivery.
+func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
+	o := origin(t)
+	for _, client := range []bool{false, true} {
+		c := newControl(t)
+		in := &introspection{}
+		cfg := gateway.Config{Server: c.server(), Policy: enforce127}
+		gateway.SetCloseWait(&cfg, 2*time.Second)
+		var armed atomic.Bool
+		var s *service
+		var first string
+		var a *sessionRun
+		gateway.SetOpened(&cfg, func() {
+			if !armed.CompareAndSwap(true, false) {
+				return
+			}
+			// The issuer ends the other run as this one opens; once that run is let go
+			// of, the server takes nothing more.
+			in.end(first)
+			status, body := a.reload(t, first, a.a.RunID)
+			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+			eventually(t, "the ended run let go of", func() bool {
+				runs, _, _, _ := gateway.Held(s.g)
+				return runs == 0
+			})
+			c.refuse.Store(http.StatusServiceUnavailable)
+		})
+		s = startVerifying(t, cfg, in, 0)
+		first = mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+		second := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, first, second)
+		a = s.openSession(t, first, server.LinkRunRequest{})
+		armed.Store(true)
+		if client {
+			if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+				t.Errorf("a client's connection: %d %v", status, err)
+			}
+		} else if status, body := s.tryOpenWith(t, second, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a session's run request: %d %s", status, body)
+		}
+		if armed.Load() {
+			t.Fatal("no run opened")
+		}
+		runs := runsIn(t, s.dir)
+		if len(runs) != 2 {
+			t.Fatalf("runs %v", runs)
+		}
+		ended := runs[0]
+		if ended == a.a.RunID {
+			ended = runs[1]
+		}
+		d := s.close()
+		rec := s.record(ended)
+		if client {
+			// The client's run started: its record ends with its exit, undelivered.
+			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+				t.Errorf("the client's run: the record ends %+v", last)
+			}
+			if d.Undelivered == 0 {
+				t.Errorf("delivery %+v", d)
+			}
+		} else if got := types(rec); !slices.Equal(got, []string{event.Ping}) {
+			// A session's run: its ping, which the server took as it opened, and nothing
+			// after.
+			t.Errorf("the session's run: the record %v", got)
+		}
+	}
+}
+
+// TestARunWhoseHoldIsNotWrittenIsLetGoOf pins the issuer's end when the refused run
+// keys cannot be written: the failure is reported, the run key is refused all the same,
+// and the run that ended is let go of once its record is flushed.
+func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
+	in := &introspection{}
+	cfg := gateway.Config{Policy: enforce127}
+	gateway.SetKeepSpent(&cfg, time.Millisecond)
+	s := startVerifying(t, cfg, in, 0)
+	first := credentialFor("rk-0001")
+	r := s.openSession(t, first, server.LinkRunRequest{})
+	// The gateway's directory takes no new file, the refused run keys' among them.
+	if err := os.Chmod(s.dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+	in.end(first)
+	status, body := r.reload(t, first, r.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	if !s.reported("keeping the run key of a run of the issuer") {
+		t.Error("the failed write was not reported")
+	}
+	eventually(t, "the run let go of", func() bool {
+		runs, _, spent, _ := gateway.Held(s.g)
+		return runs == 0 && spent == 1
+	})
+	later := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, later)
+	if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("a run request of the run key: %d %s", status, body)
+	}
+}
+
+// TestTheHoldRunsToTheLatestExpHeld pins the hold's length: after the issuer's end of
+// a run of a run key, the gateway refuses the run key until the latest exp of the run
+// credentials of the key it still holds, a live run's later exp among them, not the
+// ended run's own.
+func TestTheHoldRunsToTheLatestExpHeld(t *testing.T) {
+	in := &introspection{}
+	var ahead atomic.Int64
+	cfg := gateway.Config{Policy: enforce127}
+	gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
+	s := startVerifying(t, cfg, in, 0)
+	now := time.Now()
+	first := mint(issuerKey(), "rk-0001", now.Add(time.Hour), nil)
+	second := mint(issuerKey(), "rk-0001", now.Add(2*time.Hour), nil)
+	probe := mint(issuerKey(), "rk-0001", now.Add(time.Hour+time.Minute), nil)
+	s.secrets = append(s.secrets, first, second, probe)
+	ended := s.openSession(t, first, server.LinkRunRequest{})
+	s.openSession(t, second, server.LinkRunRequest{})
+	in.end(first)
+	status, body := ended.reload(t, first, ended.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	// Past the ended run's exp and its leeway, the live run's later exp holds the run
+	// key; the probe's own exp is earlier, so it extends nothing.
+	ahead.Store(int64(time.Hour + 10*time.Minute))
+	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("past the ended run's exp: %d %s", status, body)
+	}
+	// Past the later exp and its leeway, the run key opens a new run.
+	ahead.Store(int64(2*time.Hour + 10*time.Minute))
+	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
+		t.Errorf("past the latest exp held: %d %s", status, body)
+	}
+}
+
+// TestAHoldThatFailsToWrite pins a write of the refused run keys that fails: the
+// failure is reported once, the run key is refused all the same, and the write is tried
+// again until it succeeds, on each refused request of the run key, every keepRetry, and
+// once more at Close; a write that recovers is reported, and so is a Close that still
+// cannot write them, with how many run keys a restart would not refuse.
+func TestAHoldThatFailsToWrite(t *testing.T) {
+	kept := func(dir string) bool {
+		b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
+		return err == nil && strings.Contains(string(b), `"rk-0001"`)
+	}
+	// failing starts a gateway whose directory takes no new file once a run of rk-0001
+	// is open, and ends that run at the issuer.
+	failing := func(retry time.Duration) *service {
+		t.Helper()
+		in := &introspection{}
+		cfg := gateway.Config{Policy: enforce127}
+		gateway.SetKeepRetry(&cfg, retry)
+		s := startVerifying(t, cfg, in, 0)
+		first := credentialFor("rk-0001")
+		r := s.openSession(t, first, server.LinkRunRequest{})
+		if err := os.Chmod(s.dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		in.end(first)
+		status, body := r.reload(t, first, r.a.RunID)
+		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		return s
+	}
+	refused := func(s *service) {
+		t.Helper()
+		later := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, later)
+		if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a run request of the run key: %d %s", status, body)
+		}
+	}
+	const line = "keeping the run key of a run of the issuer"
+	recovered := func(s *service) {
+		t.Helper()
+		want := "the run keys the issuer ended are written to " + filepath.Join(s.dir, runcredential.EndedFile) + " again"
+		if got := s.reportsWith("are written to"); len(got) != 1 || got[0] != want {
+			t.Errorf("the recovery reported %q, want %q", got, want)
+		}
+	}
+
+	// Each refused request of the run key tries again.
+	s := failing(time.Hour)
+	refused(s)
+	refused(s)
+	if n := len(s.reportsWith(line)); n != 1 {
+		t.Errorf("the failure reported %d times", n)
+	}
+	if kept(s.dir) {
+		t.Fatal("kept while the directory takes no new file")
+	}
+	os.Chmod(s.dir, 0o700)
+	if s.reported("are written to") {
+		t.Error("a recovery reported while the write fails")
+	}
+	refused(s)
+	if !kept(s.dir) {
+		t.Error("a refused request did not write the run key")
+	}
+	recovered(s)
+
+	// Every keepRetry, with no request.
+	s = failing(20 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	if n := len(s.reportsWith(line)); n != 1 {
+		t.Errorf("the failure reported %d times as it was retried", n)
+	}
+	refused(s)
+	os.Chmod(s.dir, 0o700)
+	eventually(t, "the run key written again", func() bool { return kept(s.dir) })
+	eventually(t, "the recovery reported", func() bool { return s.reported("are written to") })
+	recovered(s)
+
+	// Once more at Close.
+	s = failing(time.Hour)
+	os.Chmod(s.dir, 0o700)
+	if kept(s.dir) {
+		t.Fatal("kept before Close")
+	}
+	s.close()
+	if !kept(s.dir) {
+		t.Error("Close did not write the run key")
+	}
+	recovered(s)
+	if s.reported("closing with") {
+		t.Error("a Close that wrote the run keys reported them not written")
+	}
+
+	// A Close that still cannot write them.
+	s = failing(time.Hour)
+	s.close()
+	want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+	if got := s.reportsWith("closing with"); len(got) != 1 || got[0] != want {
+		t.Errorf("Close reported %q, want %q", got, want)
+	}
+}
+
+// TestARunWhoseSessionGaveUpDoesNotOpen pins a run request whose session gives up
+// waiting for its answer, while Qory Apiary is slow on the ping or on the run
+// configuration, or as the run opens: no run opens, Qory Apiary's events hold nothing of
+// it but what it took before the session gave up, the ping when the ping was taken, and
+// a retry of the same run id opens the run.
+func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
+	for _, slowAt := range []string{"ping", "fetch", "open"} {
+		c := newControl(t)
+		c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+		cfg := gateway.Config{Server: c.server()}
+		var slowOpen atomic.Bool
+		gateway.SetOpened(&cfg, func() {
+			if slowOpen.Load() {
+				time.Sleep(time.Second)
+			}
+		})
+		s := startVerifying(t, cfg, nil, 0)
+		cred := credentialFor("rk-0001")
+		s.secrets = append(s.secrets, cred)
+		runID := event.NewRunID()
+		want := []string{event.Ping}
+		switch slowAt {
+		case "ping":
+			c.slowEvents.Store(int64(5 * time.Second))
+			want = nil
+		case "fetch":
+			c.slowFetch.Store(int64(5 * time.Second))
+		case "open":
+			slowOpen.Store(true)
+		}
+		impatient := s.client(cred)
+		impatient.Timeout = 300 * time.Millisecond
+		body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+		if resp, err := impatient.Post(s.url("/v1/run-configuration"), server.LinkContentType, bytes.NewReader(body)); err == nil {
+			resp.Body.Close()
+			t.Fatalf("slow at the %s: answered %d", slowAt, resp.StatusCode)
+		}
+		eventually(t, "the run's record removed", func() bool {
+			_, err := os.Stat(filepath.Join(s.dir, "runs", runID))
+			return errors.Is(err, fs.ErrNotExist)
+		})
+		if runs, _, spent, _ := gateway.Held(s.g); runs != 0 || spent != 0 {
+			t.Errorf("slow at the %s: runs %d, spent %d", slowAt, runs, spent)
+		}
+		var got []string
+		for _, l := range c.lines(t) {
+			if l.Subject == runID {
+				got = append(got, l.Type)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("slow at the %s: Qory Apiary's events of the run %v", slowAt, got)
+		}
+		c.slowEvents.Store(0)
+		c.slowFetch.Store(0)
+		slowOpen.Store(false)
+		r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
+		if r.a == nil || r.a.RunID != runID {
+			t.Fatalf("slow at the %s: the retry %+v", slowAt, r.a)
+		}
+		if status, b := r.reload(t, cred, runID); status != http.StatusOK {
+			t.Errorf("slow at the %s: a reload of the retry: %d %s", slowAt, status, b)
+		}
+		r.post(t, cred, exited(runID))
+		s.close()
+	}
+}
+
+// TestARunTheServerClosesAsItsSessionGivesUp pins a run request whose session has gone
+// when the server's 410 run_closed is heard as the run opens: no run opens, its run id
+// is free again, and the gateway goes on answering, a retry of the run id among it.
+func TestARunTheServerClosesAsItsSessionGivesUp(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	cfg := gateway.Config{Server: c.server()}
+	var closes atomic.Bool
+	closes.Store(true)
+	gateway.SetClosesAtOpen(&cfg, func() bool {
+		if !closes.Load() {
+			return false
+		}
+		// The session gives up first.
+		time.Sleep(time.Second)
+		return true
+	})
+	s := startVerifying(t, cfg, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	runID := event.NewRunID()
+	impatient := s.client(cred)
+	impatient.Timeout = 300 * time.Millisecond
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+	if resp, err := impatient.Post(s.url("/v1/run-configuration"), server.LinkContentType, bytes.NewReader(body)); err == nil {
+		resp.Body.Close()
+		t.Fatalf("answered %d", resp.StatusCode)
+	}
+	eventually(t, "the run's record removed", func() bool {
+		_, err := os.Stat(filepath.Join(s.dir, "runs", runID))
+		return errors.Is(err, fs.ErrNotExist)
+	})
+	closes.Store(false)
+	r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
+	if r.a == nil || r.a.RunID != runID {
+		t.Fatalf("the retry %+v", r.a)
+	}
+	r.post(t, cred, exited(runID))
+	s.close()
+}
+
+// TestAStateDirectoryThatCannotBeWritten pins Start against a state directory it
+// cannot create a file in, though it holds the gateway's authority already: no gateway,
+// since it could never keep a run key the issuer ended.
+func TestAStateDirectoryThatCannotBeWritten(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a directory of mode 0500")
+	}
+	dir := t.TempDir()
+	certFile, keyFile, _ := testCertificate(t, t.TempDir())
+	cfg := gateway.Config{Dir: dir, Listen: "127.0.0.1:0", RunCredentials: realIssuers(t, false), TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}}
+	g, err := gateway.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "authority", "ca.pem")); err != nil {
+		t.Fatalf("the authority: %v", err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	g, err = gateway.Start(context.Background(), cfg)
+	if err == nil {
+		g.Close(context.Background())
+		t.Fatal("a gateway started on a directory it cannot write")
+	}
+	if want := "the ended run keys: " + dir + " cannot be written: "; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("Start: %v, want %q and the OS error", err, want)
+	}
+}
+
+// TestCloseCountsTheRunKeysARestartWouldNotRefuse pins the count of Close's report
+// when the refused run keys still cannot be written: a run key the file never held
+// counts; one the file holds, whose later extension alone failed to write, a restart
+// still refuses, and does not count. With only such a run key, Close reports nothing.
+func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
+	for _, neverWritten := range []bool{true, false} {
+		in := &introspection{}
+		cfg := gateway.Config{Policy: enforce127}
+		gateway.SetKeepRetry(&cfg, time.Hour)
+		s := startVerifying(t, cfg, in, 0)
+		end := func(k string) {
+			t.Helper()
+			first := mint(issuerKey(), k, time.Now().Add(time.Hour), nil)
+			r := s.openSession(t, first, server.LinkRunRequest{})
+			in.end(first)
+			status, body := r.reload(t, first, r.a.RunID)
+			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		}
+		// Written once, while the directory takes new files.
+		end("rk-0002")
+		var never string
+		var neverRun *sessionRun
+		if neverWritten {
+			never = mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+			s.secrets = append(s.secrets, never)
+			neverRun = s.openSession(t, never, server.LinkRunRequest{})
+		}
+		if err := os.Chmod(s.dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		// Its extension to a later exp fails to write.
+		later := mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, later)
+		if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a run request of the run key written once: %d %s", status, body)
+		}
+		if neverWritten {
+			// The issuer ends a run of a run key the file never holds.
+			in.end(never)
+			status, body := neverRun.reload(t, never, neverRun.a.RunID)
+			gone(t, "the issuer's end of the run key never written", status, body, "run_ended_at_issuer")
+		}
+		if !s.reported("keeping the run key of a run of the issuer") {
+			t.Fatal("no write failed")
+		}
+		s.close()
+		got := s.reportsWith("closing with")
+		if !neverWritten {
+			if len(got) != 0 {
+				t.Errorf("Close reported %q with only an extension unwritten", got)
+			}
+			continue
+		}
+		want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("Close reported %q, want %q", got, want)
+		}
 	}
 }
 

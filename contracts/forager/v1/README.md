@@ -815,7 +815,9 @@ session for 3 × its heartbeat interval, or the gateway refused a batch of the s
 gateway's quiet period, which `quiet_seconds` contains; `credential_expired`, the run
 credential's `exp` passed with no fresh credential for the same run key;
 `run_ended_at_issuer`, the issuer's introspection endpoint answered that the run
-credential is no longer active; and `run_closed` when the server closes a session's run
+credential is no longer active, or the issuer ended another run of the same run key,
+which the gateway then holds (§Run credentials); and `run_closed` when the server closes
+a session's run
 on the link. On a session's run the session records, in its own record alone, the code of the
 gateway's `410` as its reason: the same reason after `credential_expired`,
 `run_ended_at_issuer`, the server's `run_closed` and the gateway's `session_lost` from
@@ -907,7 +909,7 @@ and `undelivered/` toward the server. The session's machine holds `session.jsonl
 
 Neither holds the run credential.
 
-`fixtures/run/<id>/` are such directories, recorded. The control plane's CI replays them.
+`fixtures/run/<id>/` are such directories, recorded. Qory Apiary's CI replays them.
 
 ## The server
 
@@ -1496,6 +1498,15 @@ The names of `target_differs_from_credential` and of `differs_from_credential` a
 other, the member being `labels.<key>` or `about.details.<key>`:
 `labels.repository=example-namespace/project`, for one.
 
+A session waits ten seconds for its run answer, as for any answer on the link. A run
+request whose session gives up opens no run: once its connection goes, the gateway asks
+the server nothing more for it, the ping and the run configuration among it, opens no
+run, and removes what it recorded of the run, so the same `run_id` sent again is a new
+run request, not `run_id_used`. A ping the server took before then stays the server's.
+A session that goes in the moment between the gateway's last look and the answer's
+arrival may leave a run open, which ends `session_lost` as any run whose session sends
+nothing does.
+
 With `passes` and `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in
 force, from the node's policy and the run configuration, `run_configuration_invalid` for
@@ -1621,7 +1632,8 @@ event, what is held comes right before the run's final event. For a run with no 
 the gateway writes `dev.qory.run.policy_applied` itself. The session
 keeps its own file record of its own events, numbered as today (§The record files): that
 record is the session's, not the run's stream. The gateway keeps the record of what it
-sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The
+sent, which `qory run resend` sends again through `gateway.Resend` (§The server, After
+Forager stops unexpectedly). The
 gateway answers a batch as the server does, unsigned: a `2xx` is accepted. Behind a
 separate gateway, a batch is of the run its first event's `subject` names, which must be
 a run of the run credential's run key: any other, or none, is `401`
@@ -1688,9 +1700,10 @@ The gateway writes `dev.qory.run.heartbeat` only for a run with no session. When
 session sends nothing for 3 × `interval_seconds`, counted from the run answer and again
 from each request of the session's, the gateway ends the run with
 `dev.qory.run.exited`, `reason: session_lost`, and answers the session's later requests
-with a `410` `session_lost` (The end of a run at the gateway, below). When the gateway stops, the server
-receives no events from it, and the gateway's resend when it starts again writes
-`dev.qory.run.exited` with `reason: gateway_lost`.
+with a `410` `session_lost` (The end of a run at the gateway, below). When the gateway
+stops, the server receives no events from it; when `qory run resend` sends the run's
+record again, through `gateway.Resend`, the resend writes `dev.qory.run.exited` with
+`reason: gateway_lost`.
 
 **The end of a run at the gateway.** When the gateway ends a session's run, with
 `session_lost`, `credential_expired`, `run_ended_at_issuer` or the server's
@@ -1710,7 +1723,7 @@ when the gateway ended the run itself, and the code says why:
 |---|---|---|
 | `run_closed` | `apiary` | the server closed the run |
 | `credential_expired` | `gateway` | the run credential expired with no fresh one |
-| `run_ended_at_issuer` | `gateway` | the issuer reports the run credential no longer active |
+| `run_ended_at_issuer` | `gateway` | the issuer reports the run credential no longer active, or ended another run of the same run key, which the gateway holds (§Run credentials) |
 | `session_lost` | `gateway` | the session was silent for 3 × the heartbeat interval (Heartbeats and liveness, above); the gateway's record says `session_lost` |
 | `batch_refused` | `gateway` | the gateway refused a batch of the session's (Events, above); the gateway's record says `session_lost` |
 | `run_closed` | `gateway` | the run had already ended otherwise: after the session's own final event, or when the gateway stops |
@@ -1725,14 +1738,15 @@ nothing from the session for 3 × `interval_seconds` (Heartbeats and liveness, a
 earlier, with `credential_expired`, when the latest `exp` of a run credential presented
 for it passes first. The gateway asks the issuer's introspection at the session's
 requests, so `run_ended_at_issuer` ends the run while they reach it. When the gateway
-itself stops, its resend writes the run's `dev.qory.run.exited` with `gateway_lost`
-(§The server). While the session lives, the run normally ends with its runtime's own
-exit; the gateway can also end it, with `credential_expired`, `run_ended_at_issuer`, or
-`batch_refused` after it refused a batch of the session's, its record saying
-`session_lost`, and the session records that code (The end of a run at the gateway,
-above).
+itself stops, `qory run resend` sending the run's record again, through
+`gateway.Resend`, writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
+While the session lives, the run normally ends with its runtime's own exit; the gateway
+can also end it, with `credential_expired`, `run_ended_at_issuer`, or `batch_refused`
+after it refused a batch of the session's, its record saying `session_lost`, and the
+session records that code (The end of a run at the gateway, above).
 
-**Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
+**Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
+unless its session gave up before the run opened (above). A
 reload is a `GET` of the run's configuration by its run id instead,
 `<run.url>/<run_id>`: the path of `run.url`, a slash and the `run_id`, with no query.
 The gateway's answers on the link, the run answer and the reload's among them, contain
@@ -1862,7 +1876,9 @@ The public package `runcredential` holds the rules beyond the schema:
   by the SHA-256 of the run credential, at most 4096 of them; a failure is not kept.
 - `OpenEnded` and `Ended`, the run keys a gateway refuses after the issuer's end, by
   issuer, in a file of the gateway's state directory, each kept until the latest `exp`
-  presented for it plus 5 minutes, so a restart refuses them too.
+  added for it plus 5 minutes, so a restart refuses them too. `OpenEnded` refuses a
+  state directory it cannot create a file in, so the gateway does not start on one;
+  `Ended.Written` reports whether the file, as last read or written, refuses a run key.
 
 **The runs of a run key.** The gateway tracks run keys and does not require them to be
 unique; each period of activity is a run, of its own run id, with the run key as its
@@ -1886,17 +1902,32 @@ client has at most one open run per run key. A client never joins a session's ru
 session's run is reached only by its proxy secret, and decided under that session's wall
 and narrowing, so a client of a run key whose sessions' runs are open opens or joins its
 own run beside them. A run with no session ends with `quiet`, `credential_expired` or
-`run_ended_at_issuer`, or `gateway_lost` when its record is resent (§The events, How a
-run ends). A client's run that fails to open without a refusal's code is answered
-`503 Service Unavailable`, `Content-Type: text/plain; charset=utf-8`, with the body
+`run_ended_at_issuer`, or `gateway_lost` when `qory run resend` sends its record again,
+through `gateway.Resend` (§The events, How a run ends). A client's run that fails to
+open without a refusal's code is answered `503 Service Unavailable`,
+`Content-Type: text/plain; charset=utf-8`, with the body
 "the gateway could not open the run; try again"; one refused with a code gets the
 gateway's `dev.qory.run.refused` with that code, after its ping.
 
-After the issuer's end, `run_ended_at_issuer`, the gateway refuses the run key until its
-`exp` plus 5 minutes, the longest leeway: a session's run request is `401`
-`run_credential_refused`, and a client's connection `407`. A run credential for a
-refused run key presented during the hold is refused and extends the hold to its own
-`exp`; the hold lapses after the latest `exp` presented, plus 5 minutes.
+After the issuer's end, `run_ended_at_issuer`, the gateway holds the run key, refusing
+every request of a run of it, until the latest `exp` of the run credentials of the key
+the gateway still holds, and of any presented during the hold, plus 5 minutes, the
+longest leeway. The run credentials it still holds are those of the run key's runs that
+are live, and of those that ended whose record is not yet flushed; it keeps no `exp` of
+a run once its record is flushed. During the hold, a session's run request is `401`
+`run_credential_refused`; a reload or a batch of a session's run of the run key that is
+still live is the run's `410` `run_ended_at_issuer`, and the run ends; and a client's
+connection is `407`, and the client's run of the run key it would join ends,
+`run_ended_at_issuer`. The discovery is answered to a run credential of the run key as
+to any, and opens nothing. A run credential for a refused run key presented during the
+hold, its signature and claims verified, is refused and extends the hold to its own
+`exp`; a request whose run credential fails verification extends nothing. The gateway
+keeps the refused run keys in its state directory, so a restart refuses them too. When
+that write fails, the gateway reports it once and holds the run key all the same while
+it runs; it writes them again on each refused request of the run key, every 5 seconds,
+and once more at Close, until a write succeeds. It reports the write that succeeds
+again, and at Close, when the write still fails, how many run keys a restart would not
+refuse.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run
