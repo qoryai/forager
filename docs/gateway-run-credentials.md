@@ -289,8 +289,8 @@ optional:
   `dev.qory.run.exited`.
 - `qory_reason`: a code, `^[a-z][a-z0-9_]{0,63}$`, the `reason` of the run's
   `dev.qory.run.exited`, carried as given: `all_checks_passed`, `checks_failed` or
-  `no_longer_needed`, say. The pattern is anchored at both ends; outside JSON Schema,
-  use `\A…\z`.
+  `no_longer_needed`, say. The pattern is anchored at both ends; a receiver in
+  another language anchors to the absolute end, such as `\z` (`\Z` in Python's `re`).
 
 RFC 7662 §2.2 lets an implementation add service-specific members of its own to the
 answer. These are not registered under §3.1, so the `qory_` prefix keeps them clear of

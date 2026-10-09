@@ -241,6 +241,12 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 	}
 }
 
+// beyondLinkSchema marks a refused fixture under fixtures/invalid whose rule only the
+// gateway checks, which its schema accepts: a session's dev.qory.run.exited with no
+// outcome answer whose state is not the runtime's exit's, cancelled with no reason or
+// succeeded with an exit status other than 0.
+const beyondLinkSchema = "-beyond-schema-"
+
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
 // schema its name starts with: a policy that widens, a server without its access key id
 // or its pin or with a secret, a configuration without events, a ping whose interval is
@@ -268,12 +274,6 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
-// beyondLinkSchema marks a refused fixture under fixtures/invalid whose rule only the
-// gateway checks, which its schema accepts: a session's dev.qory.run.exited with no
-// outcome answer whose state is not the runtime's exit's, cancelled with no reason or
-// succeeded with an exit status other than 0.
-const beyondLinkSchema = "-beyond-schema-"
-
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",

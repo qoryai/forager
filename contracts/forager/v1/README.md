@@ -818,7 +818,8 @@ outcome has that outcome (§Run credentials, How a run's starter says how it end
 `reason` says why the run ended, when it ended other than by the runtime's own exit, or
 gives the reason the run's starter gave. It is an open code: a lower-case letter, then
 lower-case letters, digits and `_`, up to 64 characters, `^[a-z][a-z0-9_]{0,63}$`.
-The pattern is anchored at both ends; a receiver in another language uses `\A…\z`.
+The pattern is anchored at both ends; a receiver in another language anchors to the
+absolute end, such as `\z` (`\Z` in Python's `re`).
 Forager's own codes are reserved: `timeout`, `quiet`, `credential_expired`, `stopped`,
 `session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable`,
 `credential_check_invalid` and `run_closed`; and so are three old names, which Forager
