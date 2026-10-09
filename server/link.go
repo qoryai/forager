@@ -159,8 +159,9 @@ type LinkRunAnswer struct {
 	// Placeholders are the variables the agent sees in place of a credential or a
 	// tool's secret.
 	Placeholders []string `json:"placeholders,omitempty"`
-	// Reserved are the names of the variables the gateway sets for the run, which the
-	// session must not set.
+	// Reserved are the names of the variables the machine's credentials are read from:
+	// a walled run that passes one is refused with variable_reserved, and an unwalled
+	// run has its value left out.
 	Reserved []string `json:"reserved,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`

@@ -1342,9 +1342,11 @@ or with `wall_required`, each a `403` from `gateway`, and so a reload behind a s
 gateway. A run that fails to open for a reason without a code is a `500` from `gateway`
 with the code `internal` and `message`, the error's text:
 `{"error": "internal", "message": "…", "from": "gateway"}`. `message` is up to 8192
-characters and may span lines, tab and newline its only control characters; it holds no
-secret, no run credential and no image reference. Every `410` on the link has this body (The end of
-a run at the gateway, below). A redirect is not followed.
+characters and may span lines: tab and newline are its only control characters, and
+every other C0 control character, DEL and every C1 control character, U+0080 to U+009F,
+is refused. It holds no secret, no run credential and no image reference. Every `410` on
+the link has this body (The end of a run at the gateway, below). A redirect is not
+followed.
 
 **Discovery.** `GET /.well-known/qory-configuration`, answered with a
 `link-discovery.schema.json` document: `version`, `events`, `run` and `proxy`, each

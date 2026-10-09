@@ -203,11 +203,12 @@ release may change what an existing document does, and says so under Upgrading.
   `link-refusal.schema.json`, `error`, `names`, `from`, required, `gateway` or
   `apiary`, the server's refusal passed on with its code and status, and `message`, the
   error's text of a `500` `internal`, up to 8192 characters that may span lines, tab
-  and newline its only control characters, which holds no secret, run credential or
-  image reference; every `410` on the link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
-  `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
-  `placeholders`, `reserved`, `image` and `applied`, never the proxy secret or the certificate
-  authority; on the local link the link secret authorises it. A run opens with a `POST`
+  and newline its only control characters, with no other C0 control character, no DEL
+  and no C1 control character, which holds no secret, run credential or image
+  reference; every `410` on the link is one. A reload is a `GET` of
+  `<run.url>/<run_id>`, answered with `link-reload-answer.schema.json`, the policy in
+  force, its `digest`, `variables`, `placeholders`, `reserved`, `image` and `applied`,
+  never the proxy secret or the certificate authority; on the local link the link secret authorises it. A run opens with a `POST`
   of `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
   `labels`, `about`, `passes`, the names of the variables the run passes a value for,
   never a value, `images`, the session's `default` and `definitions`, each with `name`,
@@ -296,7 +297,8 @@ release may change what an existing document does, and says so under Upgrading.
   ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
-  `from` or with a control character other than tab and newline in its `message`, and
+  `from` or with a control character other than tab and newline in its `message`, a
+  C1 one among them, and
   a batch with a
   `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
   `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
