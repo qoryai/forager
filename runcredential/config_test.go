@@ -339,6 +339,16 @@ func TestIssuerCheck(t *testing.T) {
 			i.LabelMapping.Forge = Source{Value: "example-forge", Claim: "forge"}
 		}, "forge: give exactly one"},
 		{"a forge of 257 bytes", func(i *Issuer) { i.LabelMapping.Forge = Source{Value: strings.Repeat("a", 257)} }, "256 bytes"},
+		{"a forge constant with a line feed", func(i *Issuer) { i.LabelMapping.Forge = Source{Value: "example\nforge"} }, "forge: the value holds a control character"},
+		{"a repository constant with U+2028", func(i *Issuer) {
+			i.LabelMapping.Repository = Source{Value: "example-namespace\u2028project"}
+		}, "repository: the value holds a control character"},
+		{"a repository constant with U+0085", func(i *Issuer) {
+			i.LabelMapping.Repository = Source{Value: "example\u0085project"}
+		}, "repository: the value holds a control character"},
+		{"a join with a tab", func(i *Issuer) { i.LabelMapping.Repository.Join = "\t" }, "repository: the join is not UTF-8 or holds a control character"},
+		{"a join with DEL", func(i *Issuer) { i.LabelMapping.Repository.Join = "/\x7f" }, "repository: the join is not UTF-8 or holds a control character"},
+		{"a join that is not UTF-8", func(i *Issuer) { i.LabelMapping.Repository.Join = "\xff" }, "repository: the join is not UTF-8 or holds a control character"},
 		{"repository claims without join", func(i *Issuer) { i.LabelMapping.Repository.Join = "" }, "without a join"},
 		{"repository join without claims", func(i *Issuer) {
 			i.LabelMapping.Repository = Source{Claim: "project", Join: "/"}

@@ -261,8 +261,9 @@ func (l Issuers) check(read ReadFile, fixtures bool) error {
 //     positive when they are set;
 //   - the scope, the labels and the details are well formed: forge is a constant or a
 //     claim, repository a constant, a claim, or claims with a join, run_key the claim
-//     sub, a constant a label value of 1 to 256 bytes of UTF-8, and a details key 1 to
-//     64 bytes with no control character and no =, since a refusal names a key as
+//     sub, a constant a label value of 1 to 256 bytes of UTF-8 with no control
+//     character, a join UTF-8 with no control character, and a details key 1 to 64
+//     bytes with no control character and no =, since a refusal names a key as
 //     about.details.<key>=<value>;
 //   - the introspection endpoint is https, with a client id and a secret's file. The
 //     secret is not read here.
@@ -377,6 +378,9 @@ func (s Source) check(claims bool) error {
 		if err := server.CheckLabels(map[string]string{"value": s.Value}); err != nil {
 			return fmt.Errorf("the value is longer than 256 bytes or not UTF-8")
 		}
+		if !plain(s.Value) {
+			return fmt.Errorf("the value holds a control character")
+		}
 	}
 	if s.Claim != "" {
 		n++
@@ -393,6 +397,9 @@ func (s Source) check(claims bool) error {
 		}
 		if s.Join == "" {
 			return fmt.Errorf("claims without a join")
+		}
+		if !plain(s.Join) {
+			return fmt.Errorf("the join is not UTF-8 or holds a control character")
 		}
 	} else if s.Join != "" {
 		return fmt.Errorf("a join without claims")

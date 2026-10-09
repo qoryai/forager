@@ -149,18 +149,19 @@ release may change what an existing document does, and says so under Upgrading.
   reads the document against the schema, refusing a member it does not define;
   `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the issuer's
   algorithms, two keys without a `kid` or with the same one, the same issuer twice, a
-  `details` key that holds `=`, and a `public_key_file` that is not one PEM block of type
-  `PUBLIC KEY`, with nothing but white space around it, of its key type: RSA of at least
-  2048 bits, P-256, or Ed25519 that passes the checks of an Ed25519 public key.
+  `details` key that holds `=`, a constant label value or a `join` with a control
+  character, and a `public_key_file` that is not one PEM block of type `PUBLIC KEY`, with
+  nothing but white space around it, of its key type: RSA of at least 2048 bits, P-256,
+  or Ed25519 that passes the checks of an Ed25519 public key.
   Over a run credential: `Issuer.SelectKey` selects the pinned key by `kid` and `alg`,
   without a `kid` only while one key is pinned, and refuses `crit`; `Issuer.CheckClaims`
   checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
   of a run credential whose signature is verified, at a given time, and refuses every one
-  for an issuer without an audience; `Issuer.Allowed` is the scope; `Issuer.Labels` makes
-  `forge`, `repository` and `run_key`, within the label limits and with no control
-  character, refusing a label claim the run credential does not carry; `Issuer.Details`
-  makes the `about.details` keys whose claims it carries, leaving the others to the
-  session; and `Compare` returns `target_differs_from_credential` or
+  for an issuer whose issuer or audience is empty; `Issuer.Allowed` is the scope;
+  `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label limits and
+  with no control character, refusing a label claim the run credential does not carry;
+  `Issuer.Details` makes the `about.details` keys whose claims it carries, leaving the
+  others to the session; and `Compare` returns `target_differs_from_credential` or
   `differs_from_credential` for what a session sends with another value, with each
   member and the run credential's value as names. Every failure of a run credential is
   `runcredential.ErrRefused`, one text that names no claim, and `runcredential.Refused`

@@ -1532,8 +1532,8 @@ The public package `runcredential` holds the rules beyond the schema:
 - `Issuer.CheckClaims`, the claims of a run credential whose signature is verified:
   `exp` required and after now less the leeway; `iat` and `nbf`, when present, no later
   than now plus the leeway; `exp - iat` at most `max_lifetime` when it is set, which then
-  requires `iat`; `iss` the issuer; `aud`, a string or an array, containing the audience,
-  which is never empty; `sub` present.
+  requires `iat`; `iss` the issuer, which is never empty; `aud`, a string or an array,
+  containing the audience, which is never empty; `sub` present.
 - `Issuer.Allowed`, the scope; `Issuer.Labels`, the labels `forge`, `repository` and
   `run_key`, which come from the run credential alone; `Issuer.Details`, the
   `about.details` keys it decides, those whose claims it carries; each claim either
