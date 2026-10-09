@@ -764,8 +764,9 @@ type outcomeAnswerDoc struct {
 // when it accepts it. With the starter's outcome at the exit, outcome and reason, its
 // state and its reason are those; with none, the runtime's exit decides: succeeded with
 // exit_code 0 and failed with any other exit status or a signal, both with no reason, or
-// cancelled with timeout, its time limit. The gateway writes the event of every other
-// end itself.
+// cancelled with timeout, its time limit, or with interrupted, its stop from where it
+// was started, whatever its exit status or signal. The gateway writes the event of
+// every other end itself.
 func exitRule(data map[string]any, outcome, reason string) string {
 	state, _ := data["state"].(string)
 	given, hasReason := data["reason"]
@@ -779,9 +780,9 @@ func exitRule(data map[string]any, outcome, reason string) string {
 	code, hasCode := data["exit_code"].(float64)
 	_, signalled := data["signal"]
 	switch {
-	case hasReason && why == event.ReasonTimeout:
+	case hasReason && (why == event.ReasonTimeout || why == event.ReasonInterrupted):
 		if state != event.StateCancelled {
-			return "a run.exited timeout that is not cancelled"
+			return "a run.exited " + why + " that is not cancelled"
 		}
 	case hasReason:
 		return "a run.exited with a reason the gateway decides"

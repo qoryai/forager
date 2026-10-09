@@ -402,6 +402,16 @@ func TestARunEndingAsItsStarterSaid(t *testing.T) {
 				return []map[string]any{exitedWith(id, map[string]any{"state": "succeeded", "exit_code": 0})}
 			}, status: http.StatusAccepted}},
 			sessionEnd: map[string]any{"state": "succeeded"}},
+		{name: "its own run.exited interrupted, no outcome",
+			steps: []step{{evs: func(id string) []map[string]any {
+				return []map[string]any{exitedWith(id, map[string]any{"state": "cancelled", "exit_code": 130, "reason": "interrupted"})}
+			}, status: http.StatusAccepted}},
+			sessionEnd: map[string]any{"state": "cancelled", "reason": "interrupted"}},
+		{name: "a run.exited interrupted, an outcome given", outcome: "failed", reason: "checks_failed",
+			steps: []step{{evs: func(id string) []map[string]any {
+				return []map[string]any{exitedWith(id, map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "interrupted"})}
+			}}},
+			state: "failed", endReason: "checks_failed", words: "checks failed"},
 		{name: "a run.exited of the runtime's exit, an outcome given", outcome: "succeeded", reason: "all_checks_passed",
 			steps: []step{{evs: func(id string) []map[string]any {
 				return []map[string]any{exitedWith(id, map[string]any{"state": "failed", "exit_code": 1})}
@@ -915,8 +925,9 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 
 // TestTheRunExitedTheRuntimesExitDecides pins a session's dev.qory.run.exited with no
 // outcome from the starter: succeeded with exit_code 0, failed with any other exit
-// status or a signal, both with no reason, and cancelled with timeout are taken; any
-// other is refused, and the run ends failed, batch_refused, its reason in the report.
+// status or a signal, both with no reason, and cancelled with timeout or with
+// interrupted, whatever the exit status or the signal, are taken; any other is refused,
+// and the run ends failed, batch_refused, its reason in the report.
 func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
 	h := start(t, gateway.Config{})
 	for _, c := range []struct {
@@ -927,6 +938,11 @@ func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
 		{map[string]any{"state": "failed", "exit_code": 1}, ""},
 		{map[string]any{"state": "failed", "exit_code": -1, "signal": "SIGKILL"}, ""},
 		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGTERM", "reason": "timeout"}, ""},
+		{map[string]any{"state": "cancelled", "exit_code": 0, "reason": "interrupted"}, ""},
+		{map[string]any{"state": "cancelled", "exit_code": 130, "reason": "interrupted"}, ""},
+		{map[string]any{"state": "cancelled", "exit_code": -1, "signal": "SIGKILL", "reason": "interrupted"}, ""},
+		{map[string]any{"state": "failed", "exit_code": 130, "reason": "interrupted"}, "one link-batch.schema.json refuses"},
+		{map[string]any{"state": "succeeded", "exit_code": 0, "reason": "interrupted"}, "one link-batch.schema.json refuses"},
 		{map[string]any{"state": "failed", "exit_code": 0}, "a run.exited failed whose runtime exited 0"},
 		{map[string]any{"state": "succeeded", "exit_code": 1}, "a run.exited succeeded whose runtime did not exit 0"},
 		{map[string]any{"state": "succeeded", "exit_code": -1, "signal": "SIGTERM"}, "a run.exited succeeded whose runtime did not exit 0"},
