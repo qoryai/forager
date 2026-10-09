@@ -175,7 +175,10 @@ already in use is refused, `run_id_used`.
 
 After the issuer's end, `run_ended_at_issuer` (below), the gateway refuses the run key
 until its `exp` plus 5 minutes, the longest leeway: a session's run request is `401`
-`run_credential_refused`, and a client's connection `407`. A run credential for a
+`run_credential_refused`; a reload or a batch of a session's run of the run key that is
+still live is the run's `410` `run_ended_at_issuer`, and the run ends; and a client's
+connection is `407`, and the client's run of the run key it would join ends,
+`run_ended_at_issuer`. A run credential for a
 refused run key presented during the hold is refused and extends the hold to its own
 `exp`; the hold lapses after the latest `exp` presented, plus 5 minutes, the longest
 leeway. The gateway keeps these run keys,

@@ -1366,6 +1366,52 @@ func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
 	}
 }
 
+// TestTheIssuersEndRefusesTheRunKeysLiveRuns pins the issuer's end against the run
+// key's other runs that are live: a reload or a batch of a session's run of it gets the
+// run's 410, run_ended_at_issuer, though the issuer holds that run's own run credential
+// active, and the run ends; a client's run of it refuses its next connection, 407, and
+// ends too.
+func TestTheIssuersEndRefusesTheRunKeysLiveRuns(t *testing.T) {
+	o := origin(t)
+	in := &introspection{}
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, in, 0)
+	first := mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+	second := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, first, second)
+	a := s.openSession(t, first, server.LinkRunRequest{})
+	b := s.openSession(t, second, server.LinkRunRequest{})
+	reloaded := s.openSession(t, second, server.LinkRunRequest{})
+	if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusOK {
+		t.Fatalf("the client's run: %d %v", status, err)
+	}
+	var client string
+	for _, id := range runsIn(t, s.dir) {
+		if id != a.a.RunID && id != b.a.RunID && id != reloaded.a.RunID {
+			client = id
+		}
+	}
+	in.end(first)
+	status, body := a.reload(t, first, a.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+
+	status, body = b.post(t, second, heartbeat(b.a.RunID))
+	gone(t, "a batch of another run of the run key", status, body, "run_ended_at_issuer")
+	status, body = reloaded.reload(t, second, reloaded.a.RunID)
+	gone(t, "a reload of another run of the run key", status, body, "run_ended_at_issuer")
+	status, body = b.reload(t, second, b.a.RunID)
+	gone(t, "a later reload", status, body, "run_ended_at_issuer")
+	if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+		t.Errorf("a client's connection after the end: %d %v", status, err)
+	}
+	s.close()
+	for _, id := range []string{b.a.RunID, reloaded.a.RunID, client} {
+		rec := s.record(id)
+		if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+			t.Errorf("run %s: the record ends %+v", id, last)
+		}
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

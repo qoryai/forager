@@ -345,12 +345,23 @@ func (g *Gateway) hasSessionRun(k runKeyID) bool {
 
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
-// against its run key when the gateway refuses it; a run credential with a later exp
-// keeps the run going until then; and an issuer that no longer holds it active ends the
-// run, run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+// against its run key when the gateway refuses it; a run of a run key the gateway
+// refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
+// is the 410, the run credential noted; a run credential with a later exp keeps the run
+// going until then; and an issuer that no longer holds it active ends the run,
+// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
+		gone(w, code, from, lr.st.Started())
+		return false
+	}
+	if lr.g.blocked(keyOf(id)) {
+		// The issuer ended a run of the run key: every request of it is refused, and
+		// a live run of it is served no more.
+		lr.end(endedAtIssuer)
+		lr.g.presented(id)
+		code, from, _ := lr.gone()
 		gone(w, code, from, lr.st.Started())
 		return false
 	}

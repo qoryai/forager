@@ -581,7 +581,10 @@ release may change what an existing document does, and says so under Upgrading.
   before, which reaches nothing else. After
   the issuer's end, the gateway refuses the run key until its `exp` plus
   `runcredential.MaxLeeway`, 5 minutes, a session's run request `401`
-  `run_credential_refused` and a client's connection `407`; a run credential for a
+  `run_credential_refused`, a reload or a batch of a session's run of the run key that
+  is still live the run's `410` `run_ended_at_issuer`, which ends the run, and a
+  client's connection `407`, which ends the client's run of the run key it would join,
+  `run_ended_at_issuer`; a run credential for a
   refused run key presented during the hold is refused and extends the hold to its own
   `exp`, and the hold lapses after the latest `exp` presented, plus 5 minutes. The
   gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart

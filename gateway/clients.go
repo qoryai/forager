@@ -154,10 +154,13 @@ var errKeyRefused = errors.New("the gateway refuses the run key")
 
 // join is a later connection of the run's run key: the run takes it, once its run
 // credential extends the run and the issuer, when asked, holds it active; an issuer
-// that does not ends the run, and the connection is refused, 407, as is one of a run key
-// the gateway refuses. A run that has ended takes none, [errRunEnded].
+// that does not ends the run, and the connection is refused, 407. A run key the gateway
+// refuses after the issuer's end of another of its runs ends the run too,
+// run_ended_at_issuer, and the connection is refused, 407. A run that has ended takes
+// none, [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	if lr.g.blocked(keyOf(id)) {
+		lr.end(endedAtIssuer)
 		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
