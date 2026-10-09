@@ -714,6 +714,7 @@ func (g *Gateway) outcome(s *side, w http.ResponseWriter, r *http.Request, runID
 		// The session gave up before the starter answered.
 		return
 	}
+	lr.touch()
 	if end, ended := lr.gone(); ended {
 		gone(w, end)
 		return

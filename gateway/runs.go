@@ -864,12 +864,22 @@ func (lr *linkRun) touch() {
 }
 
 // watch ends the run when its session has asked nothing of it for the quiet time, and
-// otherwise looks again when that time would be up.
+// otherwise looks again when that time would be up. The session's ask at its runtime's
+// exit is a request until the starter answers it, however long that takes.
 func (lr *linkRun) watch() {
 	lr.mu.Lock()
 	if lr.ended {
 		lr.mu.Unlock()
 		return
+	}
+	if lr.exit != nil {
+		select {
+		case <-lr.exit.done:
+		default:
+			lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+			lr.mu.Unlock()
+			return
+		}
 	}
 	if idle := time.Since(lr.last); idle < lr.g.quiet {
 		lr.timer = time.AfterFunc(lr.g.quiet-idle, lr.watch)

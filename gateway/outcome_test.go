@@ -731,8 +731,12 @@ func TestTheLinkRefusesARunExitedBeyondItsSchema(t *testing.T) {
 		if d := h.post(evs...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "batch_refused" {
 			t.Errorf("%s: %+v", name, d)
 		}
+		eventually(t, name+": the record's end", func() bool {
+			rec := h.record(a.RunID)
+			return rec[len(rec)-1].Type == event.RunExited
+		})
 		rec := h.record(a.RunID)
-		if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["state"] != "failed" || last.Data["reason"] != "batch_refused" {
+		if last := rec[len(rec)-1]; last.Data["state"] != "failed" || last.Data["reason"] != "batch_refused" {
 			t.Errorf("%s: the record ends %+v", name, last)
 		}
 	}
@@ -777,5 +781,35 @@ func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
 		if !h.reported(line) {
 			t.Errorf("%v: not reported: %s", c.data, line)
 		}
+	}
+}
+
+// TestARunIsNotLostWhileItsStarterIsAsked pins the ask at a runtime's exit against the
+// gateway's quiet period: while the starter is asked, longer than the session may send
+// nothing, the run is not lost, and the session's run.exited after the answer is taken.
+func TestARunIsNotLostWhileItsStarterIsAsked(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetQuiet(&cfg, 300*time.Millisecond)
+	st := newStarter()
+	s := startStarting(t, cfg, st, time.Hour)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	asked, release := st.hold()
+	answered := make(chan []byte, 1)
+	go func() {
+		_, b, _ := r.outcome(t, cred)
+		answered <- b
+	}()
+	<-asked
+	time.Sleep(time.Second)
+	close(release)
+	if b := <-answered; string(b) != `{}` {
+		t.Errorf("the ask: %s", b)
+	}
+	if status, b := r.post(t, cred, exitedWith(r.a.RunID, map[string]any{"state": "succeeded", "exit_code": 0})); status != http.StatusAccepted {
+		t.Errorf("the run.exited after the answer: %d %s", status, b)
+	}
+	if got := s.reportsWith("sent nothing"); len(got) != 0 {
+		t.Errorf("reports %q", got)
 	}
 }
