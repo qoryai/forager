@@ -351,8 +351,8 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 // unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
 // instance_limit to the ping is instance_limit, and a signed 410 run_closed to a
 // delivery closes the run while a signed 410 without that code stops the deliveries
-// alone. A 401 that carries a signature is unauthorized all the same. A signed code is
-// From apiary; an unauthorized is From none.
+// alone. A 401 that carries a signature is unauthorized all the same. A signed code and
+// an unauthorized are From apiary; an answer_unsigned is From none.
 func TestRefusalsAreCoded(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -364,9 +364,13 @@ func TestRefusalsAreCoded(t *testing.T) {
 	v.status, v.code = 401, "unauthorized"
 	for _, sign := range []string{"none", ""} {
 		v.sign = sign
-		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized || from(err) != "" {
+		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized || from(err) != accesskey.FromApiary {
 			t.Errorf("ping on 401 signed %q: %v", sign, err)
 		}
+	}
+	v.status, v.code, v.sign = 409, "instance_limit", "none"
+	if err := c.Ping(context.Background(), events, "d2u", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned || from(err) != "" {
+		t.Errorf("ping on an unsigned 409: %v, from %q", err, from(err))
 	}
 	v.sign = ""
 	v.status, v.code = 500, ""

@@ -407,12 +407,13 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 }
 
 // refusal is the error of an answer at run start that is not the one wanted: a 401 is
-// unauthorized; an answer that did not verify is answer_unsigned; a signed answer is
-// the code its body contains, or, without one, an error naming its status.
+// unauthorized, the server's refusal though unsigned; an answer that did not verify is
+// answer_unsigned, which Forager decides; a signed answer is the code its body
+// contains, or, without one, an error naming its status.
 func (a *answer) refusal(what string) error {
 	switch {
 	case a.status == http.StatusUnauthorized:
-		return &accesskey.Refusal{Code: accesskey.CodeUnauthorized, Status: a.status, Detail: what}
+		return &accesskey.Refusal{Code: accesskey.CodeUnauthorized, Status: a.status, Detail: what, From: accesskey.FromApiary}
 	case !a.signed:
 		return &accesskey.Refusal{Code: accesskey.CodeAnswerUnsigned, Status: a.status, Detail: what}
 	}

@@ -219,8 +219,10 @@ release may change what an existing document does, and says so under Upgrading.
   preamble, compared in constant time in a read of exactly its length, beside
   `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
-  server's signed answer, `accesskey.FromGateway` for one a gateway decides, made by
-  `refusal.ByGateway`, and empty for a session's own; its text is unchanged.
+  server's signed answer and for its `401` `unauthorized` at run start,
+  `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
+  empty for one Forager decides, `answer_unsigned` or `apiary_public_key_missing`; its
+  text is unchanged.
 
 #### Changed
 

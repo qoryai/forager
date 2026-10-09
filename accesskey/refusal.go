@@ -47,9 +47,10 @@ type Refusal struct {
 	// a secret.
 	Detail string
 	// From says who refused, as the gateway's link reports it: [FromApiary] for a code
-	// read from the server's signed answer, [FromGateway] for one a gateway decides. It
-	// is empty for a refusal a session decides, and for one decided about an answer,
-	// answer_unsigned say. Error does not show it.
+	// read from the server's signed answer and for the server's 401 at run start,
+	// unsigned as every 401 is; [FromGateway] for one a gateway decides. It is empty for
+	// a refusal Forager decides, answer_unsigned or apiary_public_key_missing say, and
+	// for a session's own. Error does not show it.
 	From string
 }
 
@@ -57,8 +58,9 @@ type Refusal struct {
 const (
 	// FromGateway is a refusal a gateway decides.
 	FromGateway = "gateway"
-	// FromApiary is a refusal of Qory Apiary's, the server's, read from its signed
-	// answer; a gateway passes it on with its code and status.
+	// FromApiary is a refusal of Qory Apiary's, the server's: a code read from its
+	// signed answer, or its 401 at run start; a gateway passes it on with its code and
+	// status.
 	FromApiary = "apiary"
 )
 
