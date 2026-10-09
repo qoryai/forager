@@ -17,6 +17,11 @@
 // A refusal that means no run is an [*accesskey.Refusal] with its code: unauthorized
 // for a 401, answer_unsigned for an answer that does not verify, and the server's own
 // code from a signed answer's body, instance_limit or rate_limited say.
+//
+// A [Link] is the session's client of its gateway's link, the same protocol on the same
+// paths, unsigned: the transport authenticates both ends. It is the one place an
+// unsigned answer is read, and only an answer that came over the link: a [Client]
+// never reads one.
 package server
 
 import (
@@ -539,24 +544,50 @@ type Delivery struct {
 	// Signed says the answer verified under the pin. An answer that did not is no
 	// answer: it is retried, and nothing else of it is read.
 	Signed bool
-	// Code is the refusal code a signed answer's body contains, empty when none.
+	// Link says the answer came over the gateway's link, where answers are unsigned and
+	// the link's transport authenticates them: a [Link] sets it, and it is never set
+	// toward the server, where Signed alone decides.
+	Link bool
+	// Code is the refusal code a signed answer's body contains, or an answer's on the
+	// link, empty when none.
 	Code string
-	// Digests are the digests a signed answer contains.
+	// End is, on the link, the end of the run at the gateway this answer says, one of
+	// [EndCodes]: a 410's code, and run_closed for a batch the gateway refused
+	// invalid_request. Empty for any other answer, and always toward the server.
+	End string
+	// From is, on the link, who ended or refused: [accesskey.FromApiary] when the
+	// body says so, else [accesskey.FromGateway]. Empty toward the server.
+	From string
+	// Digests are the digests a signed answer, or an answer on the link, contains.
 	Digests Digests
 }
 
-// Accepted reports whether the server accepted the batch: a signed 2xx.
-func (d Delivery) Accepted() bool { return d.Signed && d.Status >= 200 && d.Status < 300 }
+// Authentic reports whether the answer is one to read: signed under the pin toward the
+// server, or an answer on the gateway's link.
+func (d Delivery) Authentic() bool { return d.Signed || d.Link }
 
-// Closed reports whether the server closed the run: a signed 410 run_closed. The run
-// ends, as at its time limit, and nothing further is sent.
+// Accepted reports whether the server accepted the batch: a signed 2xx, or a 2xx on
+// the link.
+func (d Delivery) Accepted() bool { return d.Authentic() && d.Status >= 200 && d.Status < 300 }
+
+// Closed reports whether the server closed the run: a signed 410 run_closed; on the
+// link, an answer with an End. The run ends, as at its time limit, and nothing further
+// is sent.
 func (d Delivery) Closed() bool {
+	if d.Link {
+		return d.End != ""
+	}
 	return d.Signed && d.Status == http.StatusGone && d.Code == accesskey.CodeRunClosed
 }
 
-// Stop reports whether the server wants nothing more for the run: a signed 410. Its
-// events go on to the file sink alone.
-func (d Delivery) Stop() bool { return d.Signed && d.Status == http.StatusGone }
+// Stop reports whether the server wants nothing more for the run: a signed 410, or on
+// the link an answer with an End. Its events go on to the file sink alone.
+func (d Delivery) Stop() bool {
+	if d.Link {
+		return d.End != ""
+	}
+	return d.Signed && d.Status == http.StatusGone
+}
 
 // Deliver posts one body to the events URL as the delivery with the given id, with the
 // run's run configuration digest when it holds one, and returns what the server

@@ -3,8 +3,9 @@
 //
 // A [Sink] takes the events of one run in sequence order and is closed once at the
 // end. [File] writes events.jsonl and output.log in the run directory and never loses
-// an event. [Server] batches, signs and posts to the server's events endpoint without
-// ever delaying the session: writes go into a bounded queue, a worker delivers with
+// an event. [Server] batches, signs and posts to the server's events endpoint, or posts
+// the session's events to its gateway's link, through a [Deliverer], without ever
+// delaying the session: writes go into a bounded queue, a worker delivers with
 // retries, and what the server does not accept by the time the run ends is spooled as
 // batch files and counted. [Writer] prints the same line events.jsonl gets to a stream the caller
 // owns, standard output say. [Multi] fans one write out to several sinks.
