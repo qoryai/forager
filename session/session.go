@@ -698,7 +698,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	start := time.Now()
 	started := map[string]any{
-		"runtime": rt.Name(), "command": command, "args": args,
+		"opened_by": event.OpenedBySession, "runtime": rt.Name(), "command": command, "args": args,
 		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
 	}
 	if v := rt.Version(); v != "" {
@@ -908,9 +908,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	switch {
 	case closed:
-		exited["reason"] = accesskey.CodeRunClosed
+		exited["reason"] = event.ReasonRunClosed
 	case timedOut:
-		exited["reason"] = "timeout"
+		exited["reason"] = event.ReasonTimeout
 		spec.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 	}
 	write(event.RunExited, exited)

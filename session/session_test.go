@@ -430,6 +430,9 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	if len(evs) < 8 || evs[0]["type"] != "dev.qory.run.started" || evs[1]["type"] != "dev.qory.run.policy_applied" || evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
 		t.Fatalf("event order: %v", types(evs))
 	}
+	if started := data(evs[0]); started["opened_by"] != "session" {
+		t.Errorf("run.started opened_by %v; want session", started["opened_by"])
+	}
 	applied := data(evs[1])
 	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1 api.anthropic.com]" || fmt.Sprint(applied["harness_hosts"]) != "[127.0.0.1 registry.npmjs.org]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] == nil || applied["declared"] != nil || applied["url"] != nil {
 		t.Errorf("policy_applied %v", applied)

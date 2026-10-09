@@ -724,13 +724,13 @@ The types, one namespace. Forager's own:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `forager_version`, `events`, `contract_version`, `interval_seconds` |
-| `dev.qory.run.started` | the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `forager_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the runtime is about to start, or a gateway opened the run; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after the ping, heartbeats aside | `opened_by`, `forager_version`; opened by a session `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` from the accepted ping until the final event, or from `dev.qory.run.started` when the run has no server; `elapsed_seconds` counts since the ping, or since `dev.qory.run.started` when the run has no server | `elapsed_seconds`, `interval_seconds` |
-| `dev.qory.run.exited` | the runtime exited; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
+| `dev.qory.run.exited` | the run ended: the runtime exited, or the run ended without one; the result and the last event, as `dev.qory.run.refused` is the last of a refused run | `state` and `exit_code` on a session's run, `signal`, `reason`, `quiet_seconds` when `reason` is `quiet`, `duration_ms` |
 | `dev.qory.run.refused` | the server closed the run before it started, with a signed `410` `run_closed`; in place of `dev.qory.run.started`, the first event after the ping, heartbeats aside, and the last, recorded in the file sink alone | `code`, `run_closed`, and `status`, `410` |
 
 The session's, produced by a descriptor from what the runtime reports:
@@ -776,6 +776,30 @@ output, contains neither. The schema of each type, under `events/`, defines whic
 are required and what each contains. Values are copied from the runtime unchanged:
 `input` and `response` have the tool's own shape, `error` is display text, and the
 enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
+
+**What opened the run.** `dev.qory.run.started` contains `opened_by`. `session`: a
+Forager session around a runtime opened the run, and the event contains `runtime`,
+`command`, `args`, `dir` and `interactive`, and the members the table lists with them.
+`gateway`: a gateway opened the run, on a run credential a client presented through its
+proxy, with no session. The run has no process, so the event contains none of
+`runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `terminal`,
+`host`, `wall` and `image`, and the run's `dev.qory.run.exited` contains no `exit_code`
+and no `state`. `forager_version` is the version of what opened the run: the gateway's
+for a run a gateway opened. Such a run's `labels`, `run_key` among them, and
+`about.details` come from the run credential's mapping.
+
+**How a run ends.** `dev.qory.run.exited` contains `reason` when the run ended other
+than by the runtime's own exit. The session writes `timeout` and `run_closed`
+(§Sequence), and the resend of a record writes `gateway_lost` (§The server). The gateway
+writes the others: `session_lost`, the gateway heard nothing from the session for 3 ×
+its heartbeat interval; `quiet`, a run with no session had no connection for the
+gateway's quiet period, which `quiet_seconds` contains; `credential_expired`, the run
+credential's `exp` passed with no fresh credential for the same run key; and
+`run_ended_at_issuer`, the issuer's introspection endpoint answered that the run
+credential is no longer active. A session's run always contains `state` and
+`exit_code`; with `gateway_lost` and `session_lost` they are `failed` and `-1`, since no
+exit status was recorded. Beyond that the contract fixes no state per reason: a receiver
+maps each reason to a state of its own.
 
 `dev.qory.run.policy_applied` records where the policy comes from: `source` is `none`,
 `config` or `fetched`; `url` is where the run configuration was fetched from, and
@@ -1706,14 +1730,19 @@ the option experimental.
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
-| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started, and the `dev.qory.run.refused` of a run a gateway refused with `differs_from_credential`, each name a member and the run credential's value | `batch.schema.json` |
+| `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started, the `dev.qory.run.refused` of a run a gateway refused with `differs_from_credential`, each name a member and the run credential's value, and the first and the last batch of a run a gateway opened, `gateway-first.json` and `gateway-quiet.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
-| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
+| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
+
+After a change to a batch's body, Forager's module signs the batches under
+`fixtures/signed/` again, under the fixture access key secret, with
+`go test ./contracts -run TestSignedFixtures -update-signed`; the same test without the
+flag checks them.
 
 Every fixture is synthetic. No host name of anyone's infrastructure, no real secret, no
 recorded session of anyone's work.

@@ -2,6 +2,7 @@ package event_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -36,6 +37,29 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	}
 	if e.Sequence() != 2 {
 		t.Errorf("sequence %d, want 2", e.Sequence())
+	}
+}
+
+// TestReasonsAndOpenersAreTheContracts pins the constants of run.exited's reason and
+// run.started's opened_by to the enums of their schemas, in the schemas' order.
+func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
+	for _, c := range []struct {
+		schema, member string
+		want           []string
+	}{
+		{"events/run.exited.schema.json", "reason", []string{event.ReasonTimeout, event.ReasonRunClosed,
+			event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet,
+			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer}},
+		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
+	} {
+		doc, err := contracts.Document(c.schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member := doc.(map[string]any)["properties"].(map[string]any)[c.member].(map[string]any)
+		if got := fmt.Sprint(member["enum"]); got != fmt.Sprint(c.want) {
+			t.Errorf("%s %s: the schema's enum is %s; the constants are %v", c.schema, c.member, got, c.want)
+		}
 	}
 }
 

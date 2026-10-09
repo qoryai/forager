@@ -35,15 +35,26 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | Type                          | When                                                    |
 | ----------------------------- | ------------------------------------------------------- |
 | `dev.qory.ping`               | Before the runtime starts, with a server only           |
-| `dev.qory.run.started`        | The runtime is about to start                           |
+| `dev.qory.run.started`        | The run is open: the runtime is about to start          |
 | `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect       |
 | `dev.qory.run.log`            | One per chunk of output                                 |
 | `dev.qory.run.resized`        | The pseudo-terminal was resized                         |
 | `dev.qory.run.egress`         | One per connection, or per request on a terminated host |
 | `dev.qory.run.heartbeat`      | Every 30 seconds while the runtime runs                 |
-| `dev.qory.run.exited`         | The runtime exited: the result, the last event          |
+| `dev.qory.run.exited`         | The run ended: the result, the last event               |
 
 Forager heartbeats while the session runs. The exit status of a run is the runtime's.
+
+`dev.qory.run.started` says what opened the run, in `opened_by`: `session` for a run
+around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
+with no session. A run a gateway opened has no process, so its `dev.qory.run.started`
+names no runtime, command or host, and its `dev.qory.run.exited` contains no exit status
+and no state.
+
+When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
+`reason`. The session writes `timeout` and `run_closed`, and sending a record again
+writes `gateway_lost`. The gateway writes `session_lost`, `quiet`, `credential_expired`
+and `run_ended_at_issuer`. The contract describes each.
 
 ## The session's events
 

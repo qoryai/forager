@@ -36,6 +36,26 @@ const (
 	RunRefused    = "dev.qory.run.refused"
 )
 
+// What opened a run, the opened_by of dev.qory.run.started: a session around a runtime,
+// or a gateway on a run credential, with no session and no process.
+const (
+	OpenedBySession = "session"
+	OpenedByGateway = "gateway"
+)
+
+// The reasons of dev.qory.run.exited, why a run ended other than by the runtime's own
+// exit. The session writes timeout and run_closed, and the resend of a record writes
+// gateway_lost; the gateway writes the others.
+const (
+	ReasonTimeout           = "timeout"
+	ReasonRunClosed         = "run_closed"
+	ReasonGatewayLost       = "gateway_lost"
+	ReasonSessionLost       = "session_lost"
+	ReasonQuiet             = "quiet"
+	ReasonCredentialExpired = "credential_expired"
+	ReasonRunEndedAtIssuer  = "run_ended_at_issuer"
+)
+
 // Prefix is what every type of the contract starts with; a descriptor's session types
 // carry it too.
 const Prefix = "dev.qory."
