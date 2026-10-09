@@ -149,7 +149,10 @@ credentials may live with `max_lifetime`: `exp` minus `iat` is then at most that
 run credential without `iat` is refused.
 
 A run credential that expires mid-run is replaced by a fresh one for the same run key,
-and the run goes on. Without one, the run ends at `exp`.
+and the run goes on. Without one, the run ends at `exp`, `credential_expired`: the
+gateway writes its `dev.qory.run.exited`, and a session's later requests get `410`
+with that code. A refreshed run credential with an earlier `exp` does not shorten the
+run.
 
 The leeway, 60 seconds by default and at most 5 minutes, applies to `exp`, `iat` and
 `nbf` alike: a run credential is accepted until `exp` plus the leeway, and its `iat` and
@@ -159,8 +162,10 @@ A run credential is bound to its run as well: once its run is closed or has ende
 gateway refuses it, not only at `exp`. The gateway keeps each ended run key, by issuer,
 until its run credential's `exp` plus 5 minutes, the longest leeway, in a file of its
 state directory (mode 0600, in a directory only its user writes), so a restart does not
-reopen it. So the issuer gives a retry a new run key, and does not refresh the run
-credential of a run key whose run has ended.
+reopen it: `ended-run-keys.json`. So the issuer gives a retry a new run key, and does
+not refresh the run credential of a run key whose run has ended. A second run request
+of a run key whose run is live is refused as well, a retry with the same run id
+included.
 
 ## The introspection endpoint
 
@@ -201,8 +206,9 @@ The answer, RFC 7662 §2.2, means active only when all of these hold:
 to ask, counts as not active too: the check fails closed. The gateway reads nothing else
 of the answer.
 
-The gateway asks before it opens a run, and again at most every `cache` while the run
-has connections. It keeps each answer for `cache`, a failure included, by the SHA-256 of
+The gateway asks before it opens a run. For a session's run it asks again on each of
+the session's requests; for a run with no session, at most every `cache` while the run
+has connections, or had one since it last asked. It keeps each answer for `cache`, a failure included, by the SHA-256 of
 the run credential, never by the run credential itself, so a refreshed run credential is
 asked about anew. `cache` defaults to the run's heartbeat interval, at which Qory already
 reports a run alive, so an ended run is noticed within one heartbeat.
@@ -287,7 +293,16 @@ alone. A connection without a valid run credential gets
 
 The first connection with a valid run credential whose run key has no run at the gateway
 opens the run. Every later connection with a run credential for the same run key belongs
-to that run, a refreshed one included.
+to that run, a refreshed one included. The gateway reports the run itself: its
+`dev.qory.run.started`, with `opened_by` `gateway` and the run credential's labels and
+`about.details`, its policy, every connection and its heartbeats. The run ends once it
+has had no connection for the operator's quiet time, `quiet`, at its run credential's
+`exp`, or when the issuer no longer holds the run credential active; from then on its
+run key's connections get `407`.
+
+For a host the policy holds to paths, the gateway reads inside HTTPS with a
+certificate of its own authority, `authority/ca.pem` in its directory, which the
+operator installs on the clients' machines.
 
 ## A session
 
