@@ -13,5 +13,10 @@
   "image": {
     "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f"
   },
+  "applied": {
+    "mode": "observe",
+    "allow": [],
+    "source": "none"
+  },
   "proxy_secret": "fixture-proxy-secret-0000000000000000000003"
 }
