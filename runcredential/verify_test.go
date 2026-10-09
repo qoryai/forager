@@ -384,3 +384,59 @@ func TestVerifyReadsNoClaimBeforeTheSignature(t *testing.T) {
 		refusedAt(t, got, err, "signature", cred)
 	}
 }
+
+// TestVerifyExpired pins the verification of a run credential whose exp has passed:
+// accepted only past exp plus the leeway, when Verify refuses it, and before exp plus
+// MaxLeeway, every other step as Verify's; and refused as ErrRefused otherwise, a
+// signature that does not verify and a claim Verify refuses among them.
+func TestVerifyExpired(t *testing.T) {
+	k := keysForSigning(t)
+	v := verifierOf(t, k, issuer())
+	hRS := map[string]any{"alg": RS256, "typ": "JWT"}
+	cred := k.jws(t, hRS, validClaims())
+	exp := time.Unix(now.Unix()+600, 0)
+	past := exp.Add(DefaultLeeway + time.Second)
+	if _, err := v.Verify(cred, past); err == nil {
+		t.Fatal("Verify accepts the expired run credential")
+	}
+	got, err := v.VerifyExpired(cred, past)
+	if err != nil {
+		t.Fatalf("VerifyExpired: %v (%s)", err, reason(t, err))
+	}
+	if got.Issuer != exampleIssuer || got.RunKey != "rk-0001" || !got.Expires.Equal(exp) || got.Labels[LabelRepository] != "example-namespace/project" {
+		t.Errorf("VerifyExpired = %+v", got)
+	}
+	for name, at := range map[string]time.Time{
+		"before exp":            now,
+		"within the leeway":     exp.Add(DefaultLeeway - time.Second),
+		"at exp plus MaxLeeway": exp.Add(MaxLeeway),
+		"long after exp":        exp.Add(time.Hour),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := v.VerifyExpired(cred, at)
+			refusedAt(t, got, err, "claims", cred)
+		})
+	}
+	parts := strings.Split(cred, ".")
+	forged := parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString([]byte("not the signature"))
+	got, err = v.VerifyExpired(forged, past)
+	refusedAt(t, got, err, "signature", forged)
+	c := validClaims()
+	c["aud"] = "another-audience"
+	other := k.jws(t, hRS, c)
+	got, err = v.VerifyExpired(other, past)
+	refusedAt(t, got, err, "claims", other)
+	c = validClaims()
+	c["namespace"] = "another-namespace"
+	scoped := k.jws(t, hRS, c)
+	got, err = v.VerifyExpired(scoped, past)
+	refusedAt(t, got, err, "scope", scoped)
+
+	// With no leeway, from exp on.
+	none := Duration(0)
+	i := issuer()
+	i.Leeway = &none
+	if _, err := verifierOf(t, k, i).VerifyExpired(cred, exp); err != nil {
+		t.Errorf("no leeway, at exp: %v (%s)", err, reason(t, err))
+	}
+}

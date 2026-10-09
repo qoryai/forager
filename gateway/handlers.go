@@ -276,6 +276,10 @@ func (g *Gateway) localRun(runID string) *linkRun {
 func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
 	id, ok := identityOf(r.Context())
 	if !ok {
+		if late, ok := expiredOf(r.Context()); ok {
+			g.endedRun(w, late, runID)
+			return nil, late
+		}
 		refuseCredential(w)
 		return nil, id
 	}
@@ -296,6 +300,29 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 	g.presented(id)
 	refuseCredential(w)
 	return nil, id
+}
+
+// endedRun answers a request whose run credential's exp has passed: the 410 of the
+// session's run of the run id, of its run key, when it has ended, live or let go of,
+// and otherwise 401 run_credential_refused. Nothing more is served for it.
+func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) {
+	k := keyOf(id)
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	switch {
+	case lr != nil:
+		if code, from, ended := lr.gone(); ended && lr.cred != nil && !lr.client && lr.cred.key == k {
+			gone(w, code, from, lr.st.Started())
+			return
+		}
+	default:
+		if sp, spent := g.spentOf(runID); spent && sp.key == k {
+			gone(w, sp.code, sp.from, sp.started)
+			return
+		}
+	}
+	refuseCredential(w)
 }
 
 // hasSessionRun reports whether the run key has a session's run at this gateway, live,
@@ -392,10 +419,13 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		// Before the body is read: a run credential whose run key has no session's run
 		// here reaches nothing.
 		id, ok := identityOf(r.Context())
-		if !ok || !g.hasSessionRun(keyOf(id)) {
-			if ok {
-				g.presented(id)
-			}
+		late, expired := expiredOf(r.Context())
+		switch {
+		case ok && !g.hasSessionRun(keyOf(id)):
+			g.presented(id)
+			refuseCredential(w)
+			return
+		case !ok && (!expired || !g.hasSessionRun(keyOf(late))):
 			refuseCredential(w)
 			return
 		}

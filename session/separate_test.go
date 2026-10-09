@@ -124,7 +124,7 @@ type separate struct {
 // startSeparate starts a gateway on 127.0.0.1 over TLS, under an authority of the test's
 // own, whose certificate names 127.0.0.1 alone, with the example issuer and a policy
 // that allows api.example alone.
-func startSeparate(t *testing.T) *separate {
+func startSeparate(t *testing.T, issuers ...func(*runcredential.Issuer)) *separate {
 	t.Helper()
 	certDir := t.TempDir()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -158,9 +158,13 @@ func startSeparate(t *testing.T) *separate {
 			t.Fatal(err)
 		}
 	}
+	runCredentials := sepIssuers(t)
+	for _, f := range issuers {
+		f(&runCredentials[0])
+	}
 	g, err := gateway.Start(context.Background(), gateway.Config{
 		Version: "test", Heartbeat: time.Second, Dir: s.dir,
-		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, RunCredentials: sepIssuers(t),
+		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, RunCredentials: runCredentials,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}},
 		Report: func(l string) {
 			t.Log("the gateway reported:", l)
@@ -451,6 +455,30 @@ func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 	rec := s.record(t, res.RunID)
 	if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "credential_expired" {
 		t.Errorf("the gateway's record ends %v", last)
+	}
+	r.noSecretIn(t, s, res.RunID, cred)
+}
+
+// TestARunCredentialThatExpiresWithNoLeewayEndsTheRun pins credential_expired end to
+// end under an issuer with no leeway, whose run credential the gateway no longer
+// accepts from its exp on: the session's next request after the end still gets the
+// 410 credential_expired, and the session stops as at any other end of the gateway's.
+func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
+	none := runcredential.Duration(0)
+	s := startSeparate(t, func(i *runcredential.Issuer) { i.Leeway = &none })
+	cred := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Second))
+	r := newSepRun(t, s.remote(fixedCredential(cred)))
+	r.sp.Args = []string{"-c", "sleep 30"}
+	start := time.Now()
+	res, err := session.Run(context.Background(), r.sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != "credential_expired" || res.State != "failed" || time.Since(start) > 20*time.Second {
+		t.Errorf("result %+v after %s", res, time.Since(start))
+	}
+	if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" {
+		t.Errorf("the session's run.exited %v", exited)
 	}
 	r.noSecretIn(t, s, res.RunID, cred)
 }

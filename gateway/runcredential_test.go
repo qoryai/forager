@@ -189,7 +189,9 @@ func startVerifying(t *testing.T, cfg gateway.Config, in *introspection, cache t
 	t.Helper()
 	s := &service{}
 	cfg.Listen = "127.0.0.1:0"
-	cfg.RunCredentials = realIssuers(t, in != nil)
+	if cfg.RunCredentials == nil {
+		cfg.RunCredentials = realIssuers(t, in != nil)
+	}
 	if in != nil {
 		in.inactive, in.asked = map[string]bool{}, map[string]int{}
 		gateway.SetIntrospector(&cfg, in.active, cache)
@@ -1387,6 +1389,51 @@ func TestARequestThatGoesWhileTheIssuerIsAsked(t *testing.T) {
 	for _, l := range s.record(r.a.RunID) {
 		if l.Type == event.RunExited {
 			t.Errorf("the run ended: %v", l.Data)
+		}
+	}
+}
+
+// TestAnExpiredRunCredentialLearnsItsRunsEnd pins a run credential whose exp has
+// passed, under an issuer with no leeway: a reload or a batch of its run that has ended
+// gets the 410 of that end, credential_expired; of a run that is live, or of another
+// run key's, or with any other request, the discovery and a run request among them, it
+// is 401 run_credential_refused, and nothing is served.
+func TestAnExpiredRunCredentialLearnsItsRunsEnd(t *testing.T) {
+	issuers := realIssuers(t, false)
+	none := runcredential.Duration(0)
+	issuers[0].Leeway = &none
+	s := startVerifying(t, gateway.Config{RunCredentials: issuers, Policy: enforce127}, nil, 0)
+	short := mint(issuerKey(), "rk-0001", time.Now().Add(1500*time.Millisecond), nil)
+	r := s.openSession(t, short, server.LinkRunRequest{})
+	long := mint(issuerKey(), "rk-0002", time.Now().Add(time.Hour), nil)
+	other := s.openSession(t, long, server.LinkRunRequest{})
+	laterExp := time.Now().Add(1500 * time.Millisecond)
+	later := mint(issuerKey(), "rk-0001", laterExp, nil)
+	live := s.openSession(t, later, server.LinkRunRequest{})
+	if status, body := live.post(t, mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), heartbeat(live.a.RunID)); status != http.StatusAccepted {
+		t.Fatalf("a refreshed run credential of the live run: %d %s", status, body)
+	}
+	eventually(t, "credential_expired", func() bool {
+		rec := s.record(r.a.RunID)
+		return rec[len(rec)-1].Type == event.RunExited
+	})
+	time.Sleep(time.Until(laterExp.Add(time.Second)))
+	status, body := r.reload(t, short, r.a.RunID)
+	gone(t, "a reload", status, body, "credential_expired")
+	status, body = r.post(t, short, heartbeat(r.a.RunID))
+	gone(t, "a batch", status, body, "credential_expired")
+	for name, req := range map[string]func() (int, []byte){
+		"a reload of the live run":      func() (int, []byte) { return live.reload(t, later, live.a.RunID) },
+		"a batch of the live run":       func() (int, []byte) { return live.post(t, later, heartbeat(live.a.RunID)) },
+		"a reload of another run key's": func() (int, []byte) { return other.reload(t, short, other.a.RunID) },
+		"a run request":                 func() (int, []byte) { return s.tryOpenWith(t, short, server.LinkRunRequest{}) },
+		"the discovery": func() (int, []byte) {
+			resp, b := do(t, s.client(short), http.MethodGet, s.url(server.WellKnown), "", "")
+			return resp.StatusCode, b
+		},
+	} {
+		if status, body := req(); status != http.StatusUnauthorized || refusalOf(body)["error"] != "run_credential_refused" {
+			t.Errorf("%s: %d %s", name, status, body)
 		}
 	}
 }

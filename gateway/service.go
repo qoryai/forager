@@ -100,6 +100,28 @@ func (refuseAll) login(context.Context, string, *http.Request) (*proxy.Proxy, fu
 // identityKey is the key of a request's [runIdentity] in its context.
 type identityKey struct{}
 
+// expiredKey is the key of the [runIdentity] of a request whose run credential's exp
+// has passed, in its context: the run it was for, which the request learns the end of
+// and is never served.
+type expiredKey struct{}
+
+// expiredOf is the run of an expired run credential a reload or a batch carried.
+func expiredOf(ctx context.Context) (runIdentity, bool) {
+	id, ok := ctx.Value(expiredKey{}).(runIdentity)
+	return id, ok
+}
+
+// expiredAuth is a [runAuth] that also verifies a run credential whose exp has passed.
+type expiredAuth interface {
+	authenticateExpired(credential string) (runIdentity, error)
+}
+
+// answersAnEnd reports whether a request is one that a run which has ended answers with
+// its end, the 410: a reload or a batch.
+func answersAnEnd(r *http.Request) bool {
+	return (r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/")) || (r.Method == http.MethodPost && r.URL.Path == eventsPath)
+}
+
 // identityOf is the run of the run credential a request on the one address carried,
 // when it came there.
 func identityOf(ctx context.Context) (runIdentity, bool) {
@@ -507,12 +529,23 @@ func (g *Gateway) serviceHandler(s *side) http.Handler {
 			refuseCredential(w)
 			return
 		}
+		key := any(identityKey{})
 		id, err := g.auth.authenticate(r.Context(), credential)
 		if err != nil {
-			refuseCredential(w)
-			return
+			// A run credential whose exp has passed reaches a reload or a batch alone,
+			// which answer it with the end of its run, and nothing else.
+			late, ok := g.auth.(expiredAuth)
+			if !ok || !answersAnEnd(r) {
+				refuseCredential(w)
+				return
+			}
+			if id, err = late.authenticateExpired(credential); err != nil {
+				refuseCredential(w)
+				return
+			}
+			key = expiredKey{}
 		}
-		r = r.WithContext(context.WithValue(r.Context(), identityKey{}, id))
+		r = r.WithContext(context.WithValue(r.Context(), key, id))
 		r.Header = r.Header.Clone()
 		r.Header.Del("Authorization")
 		next.ServeHTTP(w, r)

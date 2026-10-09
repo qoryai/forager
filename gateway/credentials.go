@@ -75,6 +75,17 @@ func (c *credentialVerifier) authenticate(_ context.Context, credential string) 
 	return id, nil
 }
 
+// authenticateExpired verifies a run credential whose exp has passed, as
+// [runcredential.Verifier.VerifyExpired] does: the run it was for, which the gateway
+// only answers with its end, and never serves.
+func (c *credentialVerifier) authenticateExpired(credential string) (runIdentity, error) {
+	ver, err := c.v.VerifyExpired(credential, time.Now())
+	if err != nil {
+		return runIdentity{}, runcredential.ErrRefused
+	}
+	return runIdentity{Issuer: ver.Issuer, RunKey: ver.RunKey, Labels: ver.Labels, Details: ver.Details, Expires: ver.Expires}, nil
+}
+
 // runKeyID is a run key of an issuer, the run_key label of the runs of its run
 // credentials.
 type runKeyID struct{ issuer, runKey string }

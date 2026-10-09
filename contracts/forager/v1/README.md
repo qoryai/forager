@@ -1791,6 +1791,10 @@ The public package `runcredential` holds the rules beyond the schema:
   Ed25519; then the payload, one JSON object with each member name once, read only after
   the signature verified, and among the issuers whose key verified it the one whose
   issuer equals `iss`; then the claims, the scope and the mapping below.
+  `Verifier.VerifyExpired`, the same verification of a run credential that `Verify`
+  refuses only because its `exp` passed, less than 5 minutes before, the time checks
+  made as just before `exp`: the gateway uses it to answer a reload or a batch of a run
+  that has ended with its `410`, and for nothing else.
 - `Issuer.SelectKey`, the header: `alg` is among the issuer's algorithms, never `none` or
   an HMAC algorithm, and equals the selected key's; the key is selected by `kid`, and a
   run credential without one is accepted only while one key is pinned; `crit` is
@@ -1822,7 +1826,12 @@ unique; each period of activity is a run, of its own run id, with the run key as
 `run_key` label. Each run request of a session opens a run of its own, so one run key
 may have several runs at once, and one after another; every later request of a
 session's run carries a run credential of that run's run key, and a refreshed run
-credential continues only its own run. A client with no session presents its run
+credential continues only its own run. A reload or a batch of a session's run that
+has ended is answered with its `410` for a run credential of its run key whose `exp`
+has passed, less than 5 minutes before, its signature and every other claim verified as
+always, so the session learns the run's end, `credential_expired` under an issuer with
+no leeway among them; such a run credential is `401` `run_credential_refused` to every
+other request, and serves none. A client with no session presents its run
 credential as the password of its proxy login. While the client's run of its run key is
 open, the connection joins it, its run credential extending the run to its `exp`;
 otherwise the connection opens a new run, and a run that ended is never opened again. A

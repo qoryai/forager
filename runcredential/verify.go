@@ -127,6 +127,21 @@ var steps = []string{"serialisation", "header", "signature", "claims", "scope", 
 // Every failure is [ErrRefused], whose text names no claim value and never contains the
 // run credential; nothing else of a failure leaves this package.
 func (v *Verifier) Verify(raw string, now time.Time) (*Verified, error) {
+	return v.verify(raw, now, false)
+}
+
+// VerifyExpired verifies a run credential that [Verifier.Verify] refuses at now only
+// because its exp has passed, and by less than [MaxLeeway]: every step of Verify, the
+// time checks of [Issuer.CheckClaims] made as just before exp. It refuses, as
+// [ErrRefused], every other run credential, one that Verify accepts at now among them.
+// A gateway uses it only to answer a request of a run that has ended with that end,
+// never to serve one.
+func (v *Verifier) VerifyExpired(raw string, now time.Time) (*Verified, error) {
+	return v.verify(raw, now, true)
+}
+
+// verify is [Verifier.Verify], or with expired [Verifier.VerifyExpired].
+func (v *Verifier) verify(raw string, now time.Time, expired bool) (*Verified, error) {
 	if v == nil || len(v.issuers) == 0 {
 		return nil, refuseAt("header", "no issuer")
 	}
@@ -188,7 +203,21 @@ func (v *Verifier) Verify(raw string, now time.Time) (*Verified, error) {
 		return nil, refuseAt("claims", "iss is not the issuer whose key verified the signature")
 	}
 	i := &vi.issuer
-	if err := i.CheckClaims(claims, now); err != nil {
+	checkAt := now
+	if expired {
+		exp, ok, err := numericDate(claims, "exp")
+		if err != nil || !ok {
+			return nil, refuseAt("claims", "exp is missing or not a NumericDate")
+		}
+		switch {
+		case now.Before(exp.Add(i.LeewayOrDefault())):
+			return nil, refuseAt("claims", "exp has not passed")
+		case !now.Before(exp.Add(MaxLeeway)):
+			return nil, refuseAt("claims", "exp passed too long ago")
+		}
+		checkAt = exp.Add(-time.Nanosecond)
+	}
+	if err := i.CheckClaims(claims, checkAt); err != nil {
 		return nil, at("claims", err)
 	}
 	if !i.Allowed(claims) {
