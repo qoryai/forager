@@ -11,11 +11,11 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# On a pull request from this repository's own next, every job skips, and under a name of
-# its own, "<name> · checked by the push run", so that no skipped job answers a required
-# check: those come from the push to next, which tests the pull request's head, where the
-# pull request's run would test its merge with the base. A pull request from a fork's
-# next runs in full.
+# On a pull request from this repository's own next, every job skips, under a name that is
+# never a required check's: GitHub shows a skipped job's name expression unevaluated. The
+# required checks come only from the push to next, which tests the pull request's head,
+# where the pull request's run would test its merge with the base. A pull request from a
+# fork's next runs in full.
 jobs:
   part:
     # One job for each part of the module: the core (the packages at the root and under
