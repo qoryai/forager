@@ -6,5 +6,5 @@
       "mode": "observe"
     }
   },
-  "note": "A member the runner does not recognise is ignored."
+  "note": "A member the gateway does not recognise is ignored."
 }

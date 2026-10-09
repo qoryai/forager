@@ -1,92 +1,24 @@
 # Changelog
 
-Every release of the runner, newest first, in the shape of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Every release of Forager, newest first, in the shape of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
 ## [Unreleased]
 
-### Upgrading
+### Core and contract
 
-- In an image with a Docker of the agent's own, `dockerd` runs with `/usr/local/sbin`,
-  `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin` as its whole `PATH`, so
-  these directories contain the programs it starts, `containerd`, `runc` and `iptables`
-  among them. Of the run's environment it gets the proxy and, when the run has one, the
-  run's certificate bundle. `docker:dind` needs no change.
-- An image passed to `walltest.Run` with `Docker` needs the `docker` command as well as
-  `dockerd`: the suite starts a container with it as the agent's user.
-- A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
-  own stops the run when the wall writes the agent's docker configuration there, which
-  it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
-  it before.
-- A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
-  and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
-  runtime that has one, and the descriptor schema holds `runtime` to the same bound.
-- `walltest.Options` has `Recorders`: three `walltest.Recorder` values, each the helper
-  started with `walltest.RecorderArgs` and `walltest.RecorderEnv()` in a container of
-  its own, in this order: the host of a runtime's API key, the host of its OAuth
-  credential, then a host the policy allows with no credential. A `Recorder` holds the
-  `Host` the proxy reaches it on and a `Recorded` function that returns the content of
-  `walltest.RecorderFile` in its container. An adapter's test that passes none skips
-  the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
-  and a number other than none or three fails the suite. A recorder prints
-  `walltest.RecorderReady` once it listens, and `walltest.AwaitRecorder` waits for that
-  line in its container's log, and fails with the log at once when the container stops
-  first; a recorder's container started without `--rm` keeps that log. With
-  `Recorders`, `walltest.Run` points the roots of the process, and the programs it
-  starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE` and
-  `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
-  certificate, so the test binary's first verification must come within `Run`; from
-  then on, for the rest of the process, it trusts only the suite's authority.
-  `TestDockerConforms` starts the recorders from `busybox:stable`.
-- `session.Spec.Env` is what the run inherits. The values the harness computes itself go in
-  `LaunchFixed`, the values its author wrote as defaults in `LaunchDefaults`, the run's own variables,
-  `--env`, in `Variables.Run`, and the machine's, `wall.env`, in `Variables.Machine`, so
-  the runner tells each source apart and applies the highest that sets a name.
-  `HarnessHome` is the harness's home as the agent sees it, an absolute path, and the
-  runner sets `QORY_HARNESS_HOME` to it. `OnVariables` receives each name, its source
-  and the values that lost, once the variables are resolved and before the agent
-  starts.
-- A walled run refuses to pass into the enclosure a `QORY_` variable other than
-  `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
-  `variable_reserved`, whether it comes from `Env`, `LaunchFixed`, `LaunchDefaults`,
-  `Variables.Run` or `Variables.Machine`. Any run refuses a value from any of them for a
-  placeholder, `placeholder_conflict`. Both are checked before the variables are
-  resolved. Behind a wall, every variable the runtime declares or reserves that neither
-  a placeholder, a source nor the runtime's preparation sets is in the enclosure's
-  environment as an empty value, for Claude Code `ANTHROPIC_API_KEY`,
-  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`: a value the run passes for one
-  reaches the runtime as before.
-- With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
-  it, where the runner ignored it before, so a caller may pass a policy of its own
-  beside a server.
+#### Upgrading
+
 - `policy.Covers` covers an IP literal by an identical entry alone, as `policy.Match`
   matches it: `*.0.0.1` covers no `10.0.0.1`, under a machine's ceiling as in
   narrowing.
 - `session.Policy`'s `Tools` and `Credentials`, and the policy package's, distinguish an
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
-- The runtime prepares the launch before the tools start, since the names it sets are
-  the runner's own when the variables are resolved.
 
-### Added
+#### Added
 
-- A run configuration's `variables` reach the agent's process: for each name an object
-  with its string `value`, as the server resolved it. An attribute beside `value` is
-  ignored. For each name the run takes the value of the highest source that sets it: the
-  fixed names, those the runner, the proxy, the wall, the runtime's preparation and the
-  placeholders set and the values the harness computes; then the server's; the run's
-  own; the machine's; the harness's written defaults; and what the run inherits. The
-  deny list, which is `denied-variables.json`, the runtime's `denies` and
-  `Variables.Deny`, matched regardless of case with `*` for any run of characters,
-  leaves out a value of the server, the run, the machine or the harness's defaults; its
-  built-in entries leave out a value the harness computes too. The server's value of a
-  variable the runtime declares or reserves, or of one a credential is read from, is
-  left out. A run without a wall takes none of the server's variables unless
-  `Variables.Unwalled` is `accept`; the run's own apply with or without a wall. A value
-  that loses is left out and the run starts. The variables are fixed when the run
-  starts. Tools, the relay, the agent's Docker daemon and the wall's `docker` command
-  keep their own environment.
 - `dev.qory.run.policy_applied` reports `variables`, one entry per name, sorted: `name`,
   `from`, the source whose value the run applies, `fixed`, `apiary`, `run`, `machine`,
   `harness` or `shell`, and `lost`, each value left out with its source and why,
@@ -102,55 +34,15 @@ release may change what an existing document does, and says so under Upgrading.
   new policy by the same node policy. `dev.qory.run.policy_applied` reports the
   narrowed lists and `node_policy`: the node policy's `digest`, `sha256=` and the hex
   SHA-256 of its RFC 8785 serialisation, and its `paths`.
-- The runner's own refusals are `session.Refusal` values too, with the code, the names
+- Forager's own refusals are `session.Refusal` values too, with the code, the names
   they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
   `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
-  `mount_contains_runner_files`, `mount_mode_conflict`, `mount_shared_with_run`,
+  `mount_contains_forager_files`, `mount_mode_conflict`, `mount_shared_with_run`,
   `mount_through_link` and `engine_unreachable`.
   `errors.As` finds one in the error `session.Run` returns.
-- The runner reads a run configuration with `encoding/json/v2` first, which refuses a
-  member name that appears twice and invalid UTF-8, then against the schema and the
-  limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
-  which rule refused the document, and never quotes a value.
-- `runtimes.Secrets` is the optional interface of a runtime that declares the secrets it
-  needs; a descriptor's runtime implements it. `wall.Setter` is the optional interface
-  of a wall that sets variables in the enclosure itself, and `wall.Docker` implements
-  it.
-
-- A runtime descriptor defines the secrets the runtime needs, under an optional
-  `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
-  paths and scheme; `one_of`, groups of declarations of which the runtime needs at most
-  one, and exactly one of a required group; `reserves`; `denies`; and
-  `credential_files`. Behind a wall, a declared or reserved variable that nothing sets
-  goes in empty. It also has an optional `title`. `auth.schema.json` defines the
-  scheme, `bearer`, `header` or `basic`. The runner checks the secrets when it reads a
-  descriptor.
-- The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
-  `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
-  under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the
-  variables that move its requests, credential, shell, settings or TLS trust, and lists
-  `~/.claude/.credentials.json`.
-- `contracts/runner/v1/runtimes.json` lists the secrets of every descriptor the contract
+- `contracts/forager/v1/runtimes.json` lists the secrets of every descriptor the contract
   ships, for a server to vendor. `go generate ./contracts` writes it from the
   descriptors, and `go test ./...` fails while the file differs from them.
-- The wall's conformance suite checks a runtime's two credentials from inside the
-  enclosure, as Claude Code sends them: an API key in `x-api-key` and an OAuth
-  credential as a bearer, each a fake key for a recorder that acts as its host. Each key
-  reaches its own host once, in its own header and in place of the stand-in; another
-  allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
-  probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
-  key; and the run's directory, output and reports contain no key, after the
-  interactive run as well. The suite points its own process's roots at an authority of
-  its own with `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the
-  recorders. The proxy's tests cover both schemes as well, with a request that carries
-  both stand-ins.
-- `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
-  adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
-  `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
-  with an API key and once with an OAuth credential. Claude Code prints the recorder's
-  answer, each request carries the fake key in the credential's header and no stand-in,
-  and the record lists one request through the proxy for each the recorder received,
-  each to the recorder.
 - Contract `v1` revision 1, amended in place, gains the files of the access key, the
   refused run and the variables that the server vendors:
   `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
@@ -159,7 +51,7 @@ release may change what an existing document does, and says so under Upgrading.
   has checked the key and verified the proof under it; `events/run.refused.schema.json`,
   the data of `dev.qory.run.refused`, which `event.schema.json` lists among its types;
   and `denied-variables.json`, the built-in deny list of variable names and patterns.
-  The runner's code is unchanged.
+  Forager's code is unchanged.
 - Fixtures with the known answers of the access key: `fixtures/enrolment/`, two
   enrolment requests and the answer; and `fixtures/known-answers/`, the fixture access
   key and signing keys, the request, enrolment and answer signatures, the discovery body
@@ -167,6 +59,317 @@ release may change what an existing document does, and says so under Upgrading.
   recompute every one with Go's standard library: the keys from their seeds, the
   X25519 key from the access key, each signature, and the points of small order with
   integer arithmetic.
+- The public package `accesskey` is the access key of the contract, for Forager and
+  for qory alike. It generates a key and reads and writes its secret, `qak_` and the
+  32-byte Ed25519 seed in base64url; derives the public key, its fingerprint and the
+  X25519 key; runs the five checks the contract requires of a public key; builds and
+  signs the GET and POST request strings; verifies a signed answer under a pin; builds
+  an enrolment request with its normalised code and proof, posts it and verifies the
+  answer, a signed `409` `key_limit` or `key_invalid` and a signed `429` `rate_limited`,
+  under the key the code names and the enrolment answers' domain line, an unsigned
+  `409` or `429` being `answer_unsigned`; and makes the instance id with the two lines of
+  its file, the id and a keyed hash of the machine's identity. It verifies under no key
+  the key checks refuse, refuses a document that contains a secret with
+  `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
+  fingerprint however it is printed. Its tests reproduce every published known answer
+  of the access key, the requests, the answers and enrolment.
+- `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
+  a `409` `key_invalid` for a key already enrolled or `key_limit`, or a `429`
+  `rate_limited` per code, with `apiary_public_key`, the same list in the same order as
+  a `201`, so a machine without a pin verifies it as it verifies the `201`. A key the
+  checks refuse or a proof that does not verify under it gets an unsigned `409`
+  `key_invalid`, before the server signs anything. `fixtures/enrolment/` has the four
+  `409`s, with one key and with two, and the `429` with one key, and `signatures.json`
+  their signatures under the fixture signing key.
+- The reference receiver accepts the public keys its configuration holds, answers in
+  the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
+  being `invalid_request`, and signs every answer after verification under its own key,
+  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
+  `run_closed` and refuse an instance's ping with `instance_limit`.
+- `dev.qory.run.started` contains `about` when the caller passes one: what the run is
+  about, as the caller passed it, every member optional. `kind` is the kind of run, at
+  most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
+  of `type`, an open name of words of `a-z` and `0-9` joined by one space, underscore,
+  dot or dash, at most 64 bytes, `ref`, at most 256 bytes, and `url`, an absolute `http`
+  or `https` URL of at most 2048 bytes that never carries a user name or password, and
+  `title`, with no two of the same `type` and `ref`; `details` a JSON object of at most
+  8192 bytes as the event contains it, compacted, with `<`, `>` and `&` written as
+  `\u003c`, `\u003e` and `\u0026`, nested at most 4 levels deep, with keys of 1 to 64
+  bytes, shown to every reader of the run, so it never holds a secret. No string in it
+  contains a control character. Only this event contains it; it is never sent on the
+  run configuration request and never selects a policy, and an empty `about` is left
+  out. `fixtures/run/about-*.json` holds accepted and refused ones. `session.Spec.About`
+  is a `session.About` of `Kind`, `Title`, `Subjects`, each a `session.Subject` of
+  `Type`, `Ref`, `URL` and `Title`, and `Details`, a `json.RawMessage`; run.started
+  reports `Details` as `CheckAbout` measured them. `session.CheckAbout` holds an
+  `About` to these rules and returns the first failure as a `*session.AboutError`, its
+  `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
+  before it contacts the server, and an `About` it refuses is no run.
+
+#### Changed
+
+- The module is a core and three parts over it. The core, at the root, is `contracts`,
+  `accesskey`, `receiver`, `policy`, `refusal`, `event`, `sink`, `server`, `program`,
+  and `link`, which holds the names the parts agree on.
+- Contract `v1` revision 1 is amended in place for a run's variables and a node that
+  narrows the server's policy. `run-configuration.schema.json` has `variables`, at most
+  128 names of `^[A-Za-z_][A-Za-z0-9_]{0,127}$` with string values without NUL,
+  carriage return or line feed, and `security_policy` is optional: without it the
+  node's policy is the run's. `events/run.policy_applied.schema.json` has `variables`
+  and `node_policy`, and allows `url` and `run_configuration` beside `source` `config`
+  or `none`. The README gains §Variables and the narrowing table in §The policy, and
+  §The server reads that the launch spec's policy narrows a fetched policy.
+  `fixtures/invalid/run-configuration-no-policy.json` is now
+  `fixtures/run-configuration/no-policy.json`, `{"version": 1}`; the run configuration
+  fixtures gain `variables.json`, and the invalid ones a variable that is no string and
+  one with a line feed.
+- The README is short. It lists Forager's four jobs: it records the session,
+  enforces a policy, walls the agent in with the secrets kept outside, and reports to a
+  server. It shows that `qory run` starts Forager, and where a run's policy comes
+  from. `docs/` contains the rest, one page per topic.
+- Contract `v1` revision 1 is amended in place: §The descriptor has six parts,
+  `secrets` among them, defines `title` and the bound on `runtime`, and describes
+  `runtimes.json`.
+- Contract `v1` revision 1 is amended in place again: §Images lists what `dockerd`
+  starts among the programs in the system directories, and §The wall defines the
+  daemon's environment, the owners and modes of `/run/qory` and the agent's docker
+  configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
+  that configuration.
+- `dev.qory.run.started` records `command` and `args` as the runtime prepared them, as
+  Forager always did; `run.started.schema.json` and §Sequence now say so. For an
+  interactive Claude Code whose API key is a placeholder, `command` is `/bin/sh` and
+  `args` hold the script in the run directory, then `claude` and its arguments.
+- Contract `v1` revision 1 is amended in place again: a runtime in §The runtime defines
+  seven things, the secrets it declares among them, through `runtimes.Secrets` in Go;
+  its preparation receives the variables the enclosure gets the placeholder value in,
+  and may change the command and the arguments, so it may start the program through a
+  script it writes into the run directory. §The descriptor describes Claude Code's
+  approval of an API key and the script that pre-approves the placeholder value, and
+  §Sequence's steps 6 and 7 list the script.
+- Contract `v1` revision 1 is amended in place: the gateway signs every request with an
+  access key, an Ed25519 key, and verifies every answer under the server's key it pins.
+  The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
+  no secret; `session.Server` has the same members, and `session.Spec` and
+  `session.ResendSpec` have `AccessKey`, `InstanceID` and `InstanceName`. Every request
+  contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
+  `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
+  but a `401` is signed under the server's key and bound to the request's signature,
+  and the gateway reads its body and headers only once it verifies; during a run an
+  answer that does not verify is retried. §The server defines the access key, nodes
+  and instances, the pin, the request string, signed answers, the coded refusals and
+  their order, and enrolment.
+- Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
+  an access key allowed stored secrets.
+- `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
+  300; with a server, `session.Spec.Heartbeat` is a whole number of seconds, so the
+  ping announces the interval the heartbeats tick at. Heartbeats run from the accepted ping until the final event, and
+  `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
+  `run_closed`.
+- `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
+  `fixtures/signed/` has `get-configuration-no-instance-id` and `-header-twice`,
+  `batch-unknown-key` in place of `batch-wrong-key`, and
+  `expect_code` for a coded refusal. `fixtures/invalid/` has
+  `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
+  `event-ping-interval-too-long` in place of `server-no-key`;
+  `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
+  `node_id` and `apiary_public_key`; and the pings of `fixtures/batch/ping.json` and
+  of the recorded runs contain `interval_seconds`.
+- The contract is at `contracts/forager/v1`, and every `$id` and `dataschema` is
+  `https://qory.dev/contracts/forager/v1/…`. `dev.qory.ping` and `dev.qory.run.started`
+  contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was
+  not recorded is `gateway_lost`; and the refusal code of a mount that holds Forager's
+  own files is `mount_contains_forager_files`, `refusal.MountContainsForagerFiles`.
+  `accesskey.UserAgent(version)` builds the `User-Agent` of every request to a server,
+  `qory-forager/<version>`. The four batch fixtures under `fixtures/signed` are signed
+  over their new bodies.
+
+### Gateway
+
+#### Added
+
+- The gateway reads a run configuration with `encoding/json/v2` first, which refuses a
+  member name that appears twice and invalid UTF-8, then against the schema and the
+  limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
+  which rule refused the document, and never quotes a value.
+- A server can close a run with a signed `410` `run_closed` to a delivery: the session
+  stops the runtime as at its time limit, records `dev.qory.run.exited` with
+  `reason: run_closed` in the file sink and sends nothing further; before
+  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
+  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
+  run the same way, with exit code -1.
+  `session.Result` has `RunClosed`.
+- A run refused with a code is a `session.Refusal`, with the code and the server's
+  status: `apiary_public_key_missing` for a server without a pin, before any request;
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
+  `instance_limit` when the node's live instances are at its limit.
+
+#### Changed
+
+- The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
+- The organization of the run's certificate authority is `Forager gateway, one run
+  only`. The gateway's `403` for a link-local address or the machine's own address
+  reads "qory: egress to <host>:<port> denied by the gateway: link-local addresses are
+  never reached through it, and the gateway's own machine only for a host the policy's
+  allow list names", and for an ambiguous path "qory: egress to <host>:<port> denied by
+  the gateway: the path could be read two ways". Package `gateway` holds the names the
+  session drives the proxy, the credentials and the tools by.
+
+### Wall
+
+#### Upgrading
+
+- In an image with a Docker of the agent's own, `dockerd` runs with `/usr/local/sbin`,
+  `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin` as its whole `PATH`, so
+  these directories contain the programs it starts, `containerd`, `runc` and `iptables`
+  among them. Of the run's environment it gets the proxy and, when the run has one, the
+  run's certificate bundle. `docker:dind` needs no change.
+- A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
+  own stops the run when the wall writes the agent's docker configuration there, which
+  it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
+  it before.
+
+#### Added
+
+- `wall.Engined` is a wall whose enclosures are containers of an engine; its `Engine` is a
+  `wall.Engine`: the adapter, `docker` whichever command it runs, the command, absolute
+  when found in PATH, the variables that select the engine, `DOCKER_HOST`,
+  `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`,
+  `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS` and
+  `CONTAINERD_NAMESPACE`, a password in an address left out and an address that cannot be
+  read left out whole, `Pinned`, and the engine's id, `info --format {{.ID}}`, when it
+  gives one. `Pinned` follows the variables the command reads. For the command named
+  podman, it is true when `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded.
+  For any other command, it is true when `DOCKER_HOST` or `DOCKER_CONTEXT` is set and
+  recorded; with neither set, it pins the context the command shows, `context show`, and
+  `DOCKER_CONFIG`, else `~/.docker`, and a command whose `context show` fails is unpinned.
+  A variable of the other kind stays recorded and never makes `Pinned` true. An address
+  that cannot be read leaves the selection unpinned, and then neither the context nor the
+  id is asked. Every engine command of `wall.Docker`'s, and the agent's container, then
+  runs with the recorded selection in place of Forager's own; with an address left out,
+  with Forager's own environment. `EngineID` asks the engine's id again through the
+  recorded selection; a run whose engine gave none as it started asks once the enclosure
+  is prepared, and records the answer. A walled run's registry entry records the engine.
+  `wall.RunContainersExist` asks the engine's id again, when one is recorded, and then
+  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with
+  the recorded variables in place of Forager's own. It asks a command other than podman
+  by its id, through its pinned selection, and refuses one recorded without an id, since
+  podman installed under another name reads no `DOCKER_HOST` and every Docker engine gives
+  an id; it asks the command named podman by its pinned selection when it gave no id, and
+  refuses one recorded with neither.
+- `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
+  machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
+  directory the enclosure makes later. `wall.Docker` lists its helper and the pattern
+  `wall.TempDirs()` before it prepares an enclosure; its enclosure lists the helper,
+  the hook socket's directory and the private directory that holds the run's
+  environment files and, with a CA, the `ca-bundle.pem` it binds, which it makes when
+  it lists them. The session lists a wall's binds in the registry when the run starts,
+  with the pattern of the runs' socket directories, and the enclosure's just before it
+  binds them. A place that lies inside a writable directory another run's wall binds
+  is `mount_shared_with_run`.
+
+#### Changed
+
+- The wall is `wall`.
+- Behind a wall, the enclosure binds the outermost of the places a run lists, the
+  mounts and the workspace, each once: a place inside another one of the same mode is
+  reached through the outer one. The workspace is the working directory inside, through
+  the mount that holds it, and is bound at its own path, writable, only when no mount
+  holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
+  and refuses a launch whose `Dir` no mount's path holds.
+
+#### Fixed
+
+- In an enclosure with a Docker of the agent's own, the agent's `docker` command reads
+  its configuration, so the containers it starts get the proxy. `wall.Nest` made
+  `/run/qory` root's with mode 0700, which the agent's user could not pass through: the
+  command printed `WARNING: Error loading config file: open
+  /run/qory/docker/config.json: permission denied`, and its containers reached nothing.
+  `/run/qory` is now root's with mode 0755, whatever the umask, and a `/run/qory`
+  already in the image is set to the same owner and mode; `/run/qory/docker` and its
+  `config.json` stay the agent's, 0700 and 0600, now also whatever the umask or the
+  image made them, and the file is written anew. A link where either directory goes is
+  refused. An image that makes `/run/qory` 0755 to work around this may keep doing so.
+- `wall.Nest` started `dockerd` with the run's environment, so the daemon looked for
+  `containerd`, `runc` and `iptables` on the run's `PATH`, which may list a directory of
+  the workspace, and ran what it found there as the enclosure's root; `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `XTABLES_LIBDIR` and the `DOCKER_` variables reached it the same
+  way. The daemon now runs with the system directories as its `PATH`, the proxy
+  variables for its pulls and, when the run has a bundle, `SSL_CERT_FILE` pointing at
+  it, and with nothing else; the agent keeps the run's environment. The conformance
+  suite puts programs of these names first on the run's `PATH`, in the workspace, and
+  requires that none of them runs.
+- A run that sets `DOCKER_CONFIG` to an empty string gets the agent's docker
+  configuration: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
+  entry, the agent's `docker` command read the empty one as unset, and the containers it
+  started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
+  wall's, when the run's is unset or empty; a non-empty one stays as it is.
+
+### Session
+
+#### Upgrading
+
+- A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
+  and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
+  runtime that has one, and the descriptor schema holds `runtime` to the same bound.
+- `session.Spec.Env` is what the run inherits. The values the harness computes itself go in
+  `LaunchFixed`, the values its author wrote as defaults in `LaunchDefaults`, the run's own variables,
+  `--env`, in `Variables.Run`, and the machine's, `wall.env`, in `Variables.Machine`, so
+  the session tells each source apart and applies the highest that sets a name.
+  `HarnessHome` is the harness's home as the agent sees it, an absolute path, and the
+  session sets `QORY_HARNESS_HOME` to it. `OnVariables` receives each name, its source
+  and the values that lost, once the variables are resolved and before the agent
+  starts.
+- A walled run refuses to pass into the enclosure a `QORY_` variable other than
+  `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
+  `variable_reserved`, whether it comes from `Env`, `LaunchFixed`, `LaunchDefaults`,
+  `Variables.Run` or `Variables.Machine`. Any run refuses a value from any of them for a
+  placeholder, `placeholder_conflict`. Both are checked before the variables are
+  resolved. Behind a wall, every variable the runtime declares or reserves that neither
+  a placeholder, a source nor the runtime's preparation sets is in the enclosure's
+  environment as an empty value, for Claude Code `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`: a value the run passes for one
+  reaches the runtime as before.
+- With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
+  it, where Forager ignored it before, so a caller may pass a policy of its own
+  beside a server.
+- The runtime prepares the launch before the tools start, since the names it sets are
+  Forager's own when the variables are resolved.
+
+#### Added
+
+- A run configuration's `variables` reach the agent's process: for each name an object
+  with its string `value`, as the server resolved it. An attribute beside `value` is
+  ignored. For each name the run takes the value of the highest source that sets it: the
+  fixed names, those the session, the proxy, the wall, the runtime's preparation and the
+  placeholders set and the values the harness computes; then the server's; the run's
+  own; the machine's; the harness's written defaults; and what the run inherits. The
+  deny list, which is `denied-variables.json`, the runtime's `denies` and
+  `Variables.Deny`, matched regardless of case with `*` for any run of characters,
+  leaves out a value of the server, the run, the machine or the harness's defaults; its
+  built-in entries leave out a value the harness computes too. The server's value of a
+  variable the runtime declares or reserves, or of one a credential is read from, is
+  left out. A run without a wall takes none of the server's variables unless
+  `Variables.Unwalled` is `accept`; the run's own apply with or without a wall. A value
+  that loses is left out and the run starts. The variables are fixed when the run
+  starts. Tools, the relay, the agent's Docker daemon and the wall's `docker` command
+  keep their own environment.
+- `runtimes.Secrets` is the optional interface of a runtime that declares the secrets it
+  needs; a descriptor's runtime implements it. `wall.Setter` is the optional interface
+  of a wall that sets variables in the enclosure itself, and `wall.Docker` implements
+  it.
+- A runtime descriptor defines the secrets the runtime needs, under an optional
+  `secrets`: `declares`, each secret with its id, title, variable, exact hosts, optional
+  paths and scheme; `one_of`, groups of declarations of which the runtime needs at most
+  one, and exactly one of a required group; `reserves`; `denies`; and
+  `credential_files`. Behind a wall, a declared or reserved variable that nothing sets
+  goes in empty. It also has an optional `title`. `auth.schema.json` defines the
+  scheme, `bearer`, `header` or `basic`. Forager checks the secrets when it reads a
+  descriptor.
+- The Claude Code descriptor declares its model credential: `ANTHROPIC_API_KEY`, set as
+  `x-api-key`, or `CLAUDE_CODE_OAUTH_TOKEN`, set as a bearer, on `api.anthropic.com`
+  under `/v1/`, one of the two required. It reserves `ANTHROPIC_AUTH_TOKEN`, denies the
+  variables that move its requests, credential, shell, settings or TLS trust, and lists
+  `~/.claude/.credentials.json`.
 - A runtime declares its secrets in Go through `runtimes.Secrets`, an optional interface
   checked by type assertion, whose `Secrets` method returns `runtimes.Declarations`: the
   declarations, the `one_of` groups, and the reserved, denied and credential-file lists
@@ -194,75 +397,28 @@ release may change what an existing document does, and says so under Upgrading.
   configuration first and copies it over, through a link when the configuration is one;
   whatever fails, the configuration keeps its content and Claude Code starts. The OAuth
   credential, and every headless session, start Claude Code as before.
-- `TestDockerClaudeCodeThroughTheWall` also runs Claude Code interactively, on a
-  pseudo-terminal with a home of its own whose configuration has the onboarding done and
-  the workspace trusted, with the API key and with the OAuth credential. The test types
-  a prompt once Claude Code shows its input and leaves with `/exit`; with the API key,
-  Claude Code reaches its input with no approval prompt for the key, and the
-  configuration then holds the placeholder value's entry and every member it held
-  before. Every run sets `ANTHROPIC_AUTH_TOKEN` and the other credential's variable
-  empty, and the recorder receives the chosen credential's header alone, so Claude Code
-  reads an empty variable as unset and uses the placeholder.
-- The public package `accesskey` is the access key of the contract, for the runner and
-  for qory alike. It generates a key and reads and writes its secret, `qak_` and the
-  32-byte Ed25519 seed in base64url; derives the public key, its fingerprint and the
-  X25519 key; runs the five checks the contract requires of a public key; builds and
-  signs the GET and POST request strings; verifies a signed answer under a pin; builds
-  an enrolment request with its normalised code and proof, posts it and verifies the
-  answer, a signed `409` `key_limit` or `key_invalid` and a signed `429` `rate_limited`,
-  under the key the code names and the enrolment answers' domain line, an unsigned
-  `409` or `429` being `answer_unsigned`; and makes the instance id with the two lines of
-  its file, the id and a keyed hash of the machine's identity. It verifies under no key
-  the key checks refuse, refuses a document that contains a secret with
-  `ErrSecretInDocument`, names a secret in no error, and prints a `Key` as its
-  fingerprint however it is printed. Its tests reproduce every published known answer
-  of the access key, the requests, the answers and enrolment.
 - No tool, credential program or agent receives `QORY_ACCESS_KEY_SECRET`,
-  `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the runner leaves them out of every
+  `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the session leaves them out of every
   environment it starts a program with.
-- A server can close a run with a signed `410` `run_closed` to a delivery: the runner
-  stops the runtime as at its time limit, records `dev.qory.run.exited` with
-  `reason: run_closed` in the file sink and sends nothing further; before
-  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
-  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
-  run the same way, with exit code -1.
-  `session.Result` has `RunClosed`.
-- `enrolment.schema.json` defines a signed refusal at enrolment, `$defs/refusal`:
-  a `409` `key_invalid` for a key already enrolled or `key_limit`, or a `429`
-  `rate_limited` per code, with `apiary_public_key`, the same list in the same order as
-  a `201`, so a machine without a pin verifies it as it verifies the `201`. A key the
-  checks refuse or a proof that does not verify under it gets an unsigned `409`
-  `key_invalid`, before the server signs anything. `fixtures/enrolment/` has the four
-  `409`s, with one key and with two, and the `429` with one key, and `signatures.json`
-  their signatures under the fixture signing key.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
   document is read and before the ping, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.
-- A run refused with a code is a `session.Refusal`, with the code and the server's
-  status: `apiary_public_key_missing` for a server without a pin, before any request;
-  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
-  `instance_limit` when the node's live instances are at its limit.
-- The reference receiver accepts the public keys its configuration holds, answers in
-  the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
-  being `invalid_request`, and signs every answer after verification under its own key,
-  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
-  `run_closed` and refuse an instance's ping with `instance_limit`.
-
-- A walled run refuses a mount, or the workspace, that is, contains or lies inside one
-  of the runner's files, `mount_contains_runner_files`, before it contacts the server and
-  before anything starts, `Local` included. `session.Spec` has `RunnerFiles`, the
-  absolute paths the caller lists as its own, such as the directory of qory's runner
-  file. Beside them the runner checks the directory of every credential and tool program
-  the machine defines, the file a credential is read from, the private directories of
-  every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
-  files (`qory-wall-*`) in the system's temporary directory, and the files a wall lists through the new `wall.Filer`:
-  `wall.Docker` lists the directory of the `docker` command, of the helper, and the
-  command's configuration directory. The refusal's `Names` are the mount and the
-  runner's file, in that order. `session.Overlap` returns how a mount and a path stand,
-  `is`, `contains` or `lies inside`, after symbolic links and by whole components, with
-  the filesystem judging which directories are the same, case and bind mounts included.
-  A link whose target does not exist yet is followed to the target, a path that cannot
-  be resolved is no run, and the check runs again just before the enclosure is built.
+- A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
+  Forager's files, `mount_contains_forager_files`, before it contacts the server and
+  before anything starts, `Local` included. `session.Spec` has `ForagerFiles`, the
+  absolute paths the caller lists as its own, such as the directory of qory's
+  `forager.yaml`. Beside them the session checks the directory of every credential and tool
+  program the machine defines, the file a credential is read from, the private directories
+  of every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
+  files (`qory-wall-*`) in the system's temporary directory, and the files a wall lists
+  through the new `wall.Filer`: `wall.Docker` lists the directory of the `docker` command,
+  of the helper, and the command's configuration directory. The refusal's `Names` are the
+  mount and Forager's file, in that order. `session.Overlap` returns how a mount and a
+  path stand, `is`, `contains` or `lies inside`, after symbolic links and by whole
+  components, with the filesystem judging which directories are the same, case and bind
+  mounts included. A link whose target does not exist yet is followed to the target, a
+  path that cannot be resolved is no run, and the check runs again just before the
+  enclosure is built.
 - No walled run binds from a place a walled agent of the same user can change: no name on
   the way to a bind source is looked up in a writable bind, the run's own or another
   walled run's still going, or in a directory inside one. A walled run is refused with
@@ -279,14 +435,14 @@ release may change what an existing document does, and says so under Upgrading.
   run's run directory, whatever the modes. `Names` holds this run's path, the other run's
   id and the other run's path, each as its run passed it. Two runs that bind the same root
   run side by side, and two read-only binds never conflict. A run whose own helper, or
-  another directory of the runner's its wall binds, lies inside a writable bind of such a
-  run, or is reached through one, does not start. The runner keeps the walled runs still
-  going in a registry of its own, per user, `$XDG_STATE_HOME/qory-runner/walled`, else
-  `~/.local/state/qory-runner/walled`, 0700: a file per run, named by its run id, with its
-  process id and its binds, each as passed, as resolved, with the entries its names are
-  looked up as, whether writable, and what it is when it is not a place; the file is held
-  locked for the run's life and removed when it ends, kept when the wall could not be
-  removed. A file whose lock is free is the run of a runner that is gone: it is still
+  another directory of Forager's its wall binds, lies inside a writable bind of such a
+  run, or is reached through one, does not start. The session keeps the walled runs still
+  going in a registry of its own, per user, `$XDG_STATE_HOME/qory-forager/walled`, else
+  `~/.local/state/qory-forager/walled`, 0700: a file per run, named by its run id, with
+  its process id and its binds, each as passed, as resolved, with the entries its names
+  are looked up as, whether writable, and what it is when it is not a place; the file is
+  held locked for the run's life and removed when it ends, kept when the wall could not be
+  removed. A file whose lock is free is the run of a session that is gone: it is still
   going while the container engine its entry records holds a container labelled with its
   run id, in any state, and is removed when the engine holds none. A run that cannot ask
   that engine, whose engine answers with another id than the one recorded, or that reads
@@ -300,83 +456,17 @@ release may change what an existing document does, and says so under Upgrading.
   checks its binds and adds its own entry under a lock of the registry's, before it
   contacts the server, and again, with its wall's own binds, just before the enclosure
   binds them. `events/run.refused.schema.json` lists the four codes.
-- `wall.Engined` is a wall whose enclosures are containers of an engine; its `Engine` is a
-  `wall.Engine`: the adapter, `docker` whichever command it runs, the command, absolute
-  when found in PATH, the variables that select the engine, `DOCKER_HOST`,
-  `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`,
-  `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS` and
-  `CONTAINERD_NAMESPACE`, a password in an address left out and an address that cannot be
-  read left out whole, `Pinned`, and the engine's id, `info --format {{.ID}}`, when it
-  gives one. `Pinned` follows the variables the command reads. For the command named
-  podman, it is true when `CONTAINER_HOST` or `CONTAINER_CONNECTION` is set and recorded.
-  For any other command, it is true when `DOCKER_HOST` or `DOCKER_CONTEXT` is set and
-  recorded; with neither set, it pins the context the command shows, `context show`, and
-  `DOCKER_CONFIG`, else `~/.docker`, and a command whose `context show` fails is unpinned.
-  A variable of the other kind stays recorded and never makes `Pinned` true. An address
-  that cannot be read leaves the selection unpinned, and then neither the context nor the
-  id is asked. Every engine command of `wall.Docker`'s, and the agent's container, then
-  runs with the recorded selection in place of the runner's own; with an address left out,
-  with the runner's own environment. `EngineID` asks the engine's id again through the
-  recorded selection; a run whose engine gave none as it started asks once the enclosure
-  is prepared, and records the answer. A walled run's registry entry records the engine.
-  `wall.RunContainersExist` asks the engine's id again, when one is recorded, and then
-  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with
-  the recorded variables in place of the runner's own. It asks a command other than podman
-  by its id, through its pinned selection, and refuses one recorded without an id, since
-  podman installed under another name reads no `DOCKER_HOST` and every Docker engine gives
-  an id; it asks the command named podman by its pinned selection when it gave no id, and
-  refuses one recorded with neither.
-- `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
-  machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
-  directory the enclosure makes later. `wall.Docker` lists its helper and the pattern
-  `wall.TempDirs()` before it prepares an enclosure; its enclosure lists the helper,
-  the hook socket's directory and the private directory that holds the run's
-  environment files and, with a CA, the `ca-bundle.pem` it binds, which it makes when
-  it lists them. The runner lists a wall's binds in the registry when the run starts,
-  with the pattern of the runs' socket directories, and the enclosure's just before it
-  binds them. A place that lies inside a writable directory another run's wall binds
-  is `mount_shared_with_run`.
-- The runner passes every bind's path clean, and a run whose working directory lies in
+- The session passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
-- `dev.qory.run.started` contains `about` when the caller passes one: what the run is
-  about, as the caller passed it, every member optional. `kind` is the kind of run, at
-  most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
-  of `type`, an open name of words of `a-z` and `0-9` joined by one space, underscore,
-  dot or dash, at most 64 bytes, `ref`, at most 256 bytes, and `url`, an absolute `http`
-  or `https` URL of at most 2048 bytes that never carries a user name or password, and
-  `title`, with no two of the same `type` and `ref`; `details` a JSON object of at most
-  8192 bytes as the event contains it, compacted, with `<`, `>` and `&` written as
-  `\u003c`, `\u003e` and `\u0026`, nested at most 4 levels deep, with keys of 1 to 64
-  bytes, shown to every reader of the run, so it never holds a secret. No string in it
-  contains a control character. Only this event contains it; it is never sent on the
-  run configuration request and never selects a policy, and an empty `about` is left
-  out. `fixtures/run/about-*.json` holds accepted and refused ones. `session.Spec.About`
-  is a `session.About` of `Kind`, `Title`, `Subjects`, each a `session.Subject` of
-  `Type`, `Ref`, `URL` and `Title`, and `Details`, a `json.RawMessage`; run.started
-  reports `Details` as `CheckAbout` measured them. `session.CheckAbout` holds an
-  `About` to these rules and returns the first failure as a `*session.AboutError`, its
-  `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
-  before it contacts the server, and an `About` it refuses is no run.
 
-### Changed
+#### Changed
 
-- The module is a core and three parts over it. The core, at the root, is `contracts`,
-  `accesskey`, `receiver`, `policy`, `refusal`, `event`, `sink`, `server`, `program`,
-  and `link`, which holds the names the parts agree on. The gateway is `gateway`, over
-  `gateway/internal/{proxy,credential,tool}`. The session is `session`, with
-  `session/runtimes/…` (from `runtimes/…`) and `session/internal/…`. The wall is `wall`,
-  and its conformance suite is package `e2e` (from `wall/walltest`).
-  `runtimes.CheckStopSignal` checks a stop signal, and `session.CheckStopSignal` calls it.
-- Behind a wall, the enclosure binds the outermost of the places a run lists, the
-  mounts and the workspace, each once: a place inside another one of the same mode is
-  reached through the outer one. The workspace is the working directory inside, through
-  the mount that holds it, and is bound at its own path, writable, only when no mount
-  holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
-  and refuses a launch whose `Dir` no mount's path holds.
-- `Spec.RunsDir` and the registry of walled runs are among the runner's files, so a
+- The session is `session`, with `session/runtimes/…` (from `runtimes/…`) and
+  `session/internal/…`.
+- `Spec.RunsDir` and the registry of walled runs are among Forager's files, so a
   walled run's mount, or workspace, that is, contains or lies inside either one is
-  `mount_contains_runner_files`, and so is a writable one that holds a directory a name
-  on the way to one of the runner's files is looked up in, a link say. A walled run's
+  `mount_contains_forager_files`, and so is a writable one that holds a directory a name
+  on the way to one of Forager's files is looked up in, a link say. A walled run's
   run directory lies outside every place it binds and is reached through none, and the
   agent can neither change nor move its record. The default runs directory,
   `.qory/runs` in the workspace, lies inside the workspace, so a walled run passes one
@@ -385,101 +475,84 @@ release may change what an existing document does, and says so under Upgrading.
   the registry included. A place that resolves otherwise than at the start, or whose
   names are looked up in other directories, fails the run with a sentence that says
   which.
-- Contract `v1` revision 1 is amended in place for a run's variables and a node that
-  narrows the server's policy. `run-configuration.schema.json` has `variables`, at most
-  128 names of `^[A-Za-z_][A-Za-z0-9_]{0,127}$` with string values without NUL,
-  carriage return or line feed, and `security_policy` is optional: without it the
-  node's policy is the run's. `events/run.policy_applied.schema.json` has `variables`
-  and `node_policy`, and allows `url` and `run_configuration` beside `source` `config`
-  or `none`. The README gains §Variables and the narrowing table in §The policy, and
-  §The server reads that the launch spec's policy narrows a fetched policy.
-  `fixtures/invalid/run-configuration-no-policy.json` is now
-  `fixtures/run-configuration/no-policy.json`, `{"version": 1}`; the run configuration
-  fixtures gain `variables.json`, and the invalid ones a variable that is no string and
-  one with a line feed.
-- The README is short. It lists the runner's four jobs: it records the session,
-  enforces a policy, walls the agent in with the secrets kept outside, and reports to a
-  server. It shows that `qory run` starts the runner, and where a run's policy comes
-  from. `docs/` contains the rest, one page per topic.
-- Contract `v1` revision 1 is amended in place: §The descriptor has six parts,
-  `secrets` among them, defines `title` and the bound on `runtime`, and describes
-  `runtimes.json`.
-- Contract `v1` revision 1 is amended in place again: §Images lists what `dockerd`
-  starts among the programs in the system directories, and §The wall defines the
-  daemon's environment, the owners and modes of `/run/qory` and the agent's docker
-  configuration, and that a non-empty `DOCKER_CONFIG` of the run's takes the place of
-  that configuration.
-- `dev.qory.run.started` records `command` and `args` as the runtime prepared them, as
-  the runner always did; `run.started.schema.json` and §Sequence now say so. For an
-  interactive Claude Code whose API key is a placeholder, `command` is `/bin/sh` and
-  `args` hold the script in the run directory, then `claude` and its arguments.
-- Contract `v1` revision 1 is amended in place again: a runtime in §The runtime defines
-  seven things, the secrets it declares among them, through `runtimes.Secrets` in Go;
-  its preparation receives the variables the enclosure gets the placeholder value in,
-  and may change the command and the arguments, so it may start the program through a
-  script it writes into the run directory. §The descriptor describes Claude Code's
-  approval of an API key and the script that pre-approves the placeholder value, and
-  §Sequence's steps 6 and 7 list the script.
-- Contract `v1` revision 1 is amended in place: the runner signs every request with an
-  access key, an Ed25519 key, and verifies every answer under the server's key it pins.
-  The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
-  no secret; `session.Server` has the same members, and `session.Spec` and
-  `session.ResendSpec` have `AccessKey`, `InstanceID` and `InstanceName`. Every request
-  contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
-  `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
-  but a `401` is signed under the server's key and bound to the request's signature,
-  and the runner reads its body and headers only once it verifies; during a run an
-  answer that does not verify is retried. §The server defines the access key, nodes
-  and instances, the pin, the request string, signed answers, the coded refusals and
-  their order, and enrolment.
-- Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
-  an access key allowed stored secrets.
-- `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
-  300; with a server, `session.Spec.Heartbeat` is a whole number of seconds, so the
-  ping announces the interval the heartbeats tick at. Heartbeats run from the accepted ping until the final event, and
-  `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
-  `run_closed`.
-- `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
-  `fixtures/signed/` has `get-configuration-no-instance-id` and `-header-twice`,
-  `batch-unknown-key` in place of `batch-wrong-key`, and
-  `expect_code` for a coded refusal. `fixtures/invalid/` has
-  `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
-  `event-ping-interval-too-long` in place of `server-no-key`;
-  `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
-  `node_id` and `apiary_public_key`; and the pings of `fixtures/batch/ping.json` and
-  of the recorded runs contain `interval_seconds`.
+- The registry of walled runs is `$XDG_STATE_HOME/qory-forager/walled`, else
+  `~/.local/state/qory-forager/walled`. `session.Spec` has `ForagerVersion` and
+  `ForagerFiles`. `runtimes.CheckStopSignal` checks a stop signal and
+  `runtimes.StopSignal` returns the signal of its name; `session.CheckStopSignal` calls
+  the first.
 
-### Fixed
+### e2e and CI
 
-- In an enclosure with a Docker of the agent's own, the agent's `docker` command reads
-  its configuration, so the containers it starts get the proxy. `wall.Nest` made
-  `/run/qory` root's with mode 0700, which the agent's user could not pass through: the
-  command printed `WARNING: Error loading config file: open
-  /run/qory/docker/config.json: permission denied`, and its containers reached nothing.
-  `/run/qory` is now root's with mode 0755, whatever the umask, and a `/run/qory`
-  already in the image is set to the same owner and mode; `/run/qory/docker` and its
-  `config.json` stay the agent's, 0700 and 0600, now also whatever the umask or the
-  image made them, and the file is written anew. A link where either directory goes is
-  refused. An image that makes `/run/qory` 0755 to work around this may keep doing so.
-- The wall's conformance suite missed that: the containers it starts through the Engine
-  API receive the relay's address. It also starts one with the image's `docker`
+#### Upgrading
+
+- An image passed to `e2e.Run` with `Docker` needs the `docker` command as well as
+  `dockerd`: the suite starts a container with it as the agent's user.
+- `e2e.Options` has `Recorders`: three `e2e.Recorder` values, each the helper
+  started with `e2e.RecorderArgs` and `e2e.RecorderEnv()` in a container of
+  its own, in this order: the host of a runtime's API key, the host of its OAuth
+  credential, then a host the policy allows with no credential. A `Recorder` holds the
+  `Host` the proxy reaches it on and a `Recorded` function that returns the content of
+  `e2e.RecorderFile` in its container. An adapter's test that passes none skips
+  the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
+  and a number other than none or three fails the suite. A recorder prints
+  `e2e.RecorderReady` once it listens, and `e2e.AwaitRecorder` waits for that
+  line in its container's log, and fails with the log at once when the container stops
+  first; a recorder's container started without `--rm` keeps that log. With
+  `Recorders`, `e2e.Run` points the roots of the process, and the programs it
+  starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
+  certificate, so the test binary's first verification must come within `Run`; from
+  then on, for the rest of the process, it trusts only the suite's authority.
+  `TestDockerConforms` starts the recorders from `busybox:stable`.
+
+#### Added
+
+- The wall's conformance suite checks a runtime's two credentials from inside the
+  enclosure, as Claude Code sends them: an API key in `x-api-key` and an OAuth
+  credential as a bearer, each a fake key for a recorder that acts as its host. Each key
+  reaches its own host once, in its own header and in place of the stand-in; another
+  allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
+  probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
+  key; and the run's directory, output and reports contain no key, after the
+  interactive run as well. The suite points its own process's roots at an authority of
+  its own with `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the
+  recorders. The proxy's tests cover both schemes as well, with a request that carries
+  both stand-ins.
+- `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
+  adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
+  `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
+  with an API key and once with an OAuth credential. Claude Code prints the recorder's
+  answer, each request carries the fake key in the credential's header and no stand-in,
+  and the record lists one request through the proxy for each the recorder received,
+  each to the recorder.
+- `TestDockerClaudeCodeThroughTheWall` also runs Claude Code interactively, on a
+  pseudo-terminal with a home of its own whose configuration has the onboarding done and
+  the workspace trusted, with the API key and with the OAuth credential. The test types
+  a prompt once Claude Code shows its input and leaves with `/exit`; with the API key,
+  Claude Code reaches its input with no approval prompt for the key, and the
+  configuration then holds the placeholder value's entry and every member it held
+  before. Every run sets `ANTHROPIC_AUTH_TOKEN` and the other credential's variable
+  empty, and the recorder receives the chosen credential's header alone, so Claude Code
+  reads an empty variable as unset and uses the placeholder.
+
+#### Changed
+
+- The wall's conformance suite is package `e2e`, from `wall/walltest`. CI runs gofmt,
+  vet, the tests, the build and revive in one job per part, `core`, `gateway`, `wall`,
+  `session` and `e2e`; the job named `Go tests` passes when they all pass; and the two
+  wall conformance jobs run `./e2e`. A test in `internal/importrules` holds each part's
+  imports to the rules: the core imports no part; the gateway and the wall import the
+  core; the session imports the core, the wall and package `gateway`; and only `e2e`
+  imports the session.
+
+#### Fixed
+
+- The wall's conformance suite missed that the agent's `docker` command could not read
+  its configuration: the containers it starts through the Engine API receive the relay's
+  address. It also starts one with the image's `docker`
   command, as the agent's user and with no proxy setting of its own, and requires it to
   reach the origin through the proxy and nothing else, so the image of
   `TestDockerNestedConforms` contains the docker command as well as dockerd.
-- `wall.Nest` started `dockerd` with the run's environment, so the daemon looked for
-  `containerd`, `runc` and `iptables` on the run's `PATH`, which may list a directory of
-  the workspace, and ran what it found there as the enclosure's root; `LD_PRELOAD`,
-  `LD_LIBRARY_PATH`, `XTABLES_LIBDIR` and the `DOCKER_` variables reached it the same
-  way. The daemon now runs with the system directories as its `PATH`, the proxy
-  variables for its pulls and, when the run has a bundle, `SSL_CERT_FILE` pointing at
-  it, and with nothing else; the agent keeps the run's environment. The conformance
-  suite puts programs of these names first on the run's `PATH`, in the workspace, and
-  requires that none of them runs.
-- A run that sets `DOCKER_CONFIG` to an empty string gets the agent's docker
-  configuration: `wall.Nest` added `DOCKER_CONFIG=/run/qory/docker` after the empty
-  entry, the agent's `docker` command read the empty one as unset, and the containers it
-  started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
-  wall's, when the run's is unset or empty; a non-empty one stays as it is.
 
 ## [0.6.0] - 2026-09-28
 

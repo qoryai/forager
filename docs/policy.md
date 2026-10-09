@@ -1,7 +1,7 @@
 # The policy
 
-The runner pins one policy for the run. A policy can only narrow what the binary allows.
-The runner observes and enforces egress through a proxy it owns.
+Forager pins one policy for the run. A policy can only narrow what the binary allows.
+Forager observes and enforces egress through a proxy it owns.
 
 ## The modes
 
@@ -38,7 +38,7 @@ them. See [credentials](credentials.md), [tools](credentials.md#tools) and
 
 A run has one policy. It comes from one of three places:
 
-- **The machine's policy.** For `qory`, the `egress` section of `runner.yaml`, below.
+- **The machine's policy.** For `qory`, the `egress` section of `forager.yaml`, below.
   From Go, `Policy` in the spec.
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/forager/v1/README.md#the-policy).
@@ -47,13 +47,13 @@ A run has one policy. It comes from one of three places:
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
-  section. Then the runner fetches the run configuration, with the run's labels. Its
+  section. Then the gateway fetches the run configuration, with the run's labels. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
-The node's policy is `Spec.Policy`, the policy the runner is passed: for `qory`, the
+The node's policy is `Spec.Policy`, the policy Forager is passed: for `qory`, the
 machine's `egress` with the run's own under it. Which one applies:
 
-| The runner has         | The policy is                                                           |
+| Forager has            | The policy is                                                           |
 | ---------------------- | ----------------------------------------------------------------------- |
 | no server              | the node's                                                              |
 | a server               | the server's, narrowed by the node's; the node's when the server has none |
@@ -79,12 +79,12 @@ server, so what the node contributes can only narrow the run:
 - The record reports the policy the table computes, and the node's policy as
   `node_policy`: its digest and its paths.
 
-With no policy at all, the runner observes everything: every connection is allowed and
+With no policy at all, the gateway observes everything: every connection is allowed and
 recorded.
 
-## In runner.yaml
+## In forager.yaml
 
-For `qory`, one optional file changes what the runner does: `~/.config/qory/runner.yaml`.
+For `qory`, one optional file changes what Forager does: `~/.config/qory/forager.yaml`.
 It is never in a repository.
 
 ```yaml
@@ -103,7 +103,7 @@ server:                                 # optional
 - `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows
   the server's. See [where the policy comes from](#where-the-policy-comes-from).
 - Without `egress`, and with no other policy, everything is allowed and recorded.
-- `server` defines the server the runner reports to. See [the server](server.md).
+- `server` defines the server the gateway reports to. See [the server](server.md).
 
 ## A denied connection
 
@@ -114,8 +114,8 @@ A denied connection is:
 
 The session goes on. A denial never ends a session.
 
-Of what the runner does, only a time limit ends a session: `Timeout` in the spec. At the
-limit, the runtime is stopped, and `dev.qory.run.exited` records the reason. The runner
+Of what Forager does, only a time limit ends a session: `Timeout` in the spec. At the
+limit, the runtime is stopped, and `dev.qory.run.exited` records the reason. The session
 stops the runtime the same way when the caller's context ends.
 
 ## Hosts the harness declares

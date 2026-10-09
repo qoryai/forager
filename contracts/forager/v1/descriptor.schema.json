@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/descriptor.schema.json",
   "title": "Runtime descriptor",
-  "description": "How the runner attaches to one runtime and turns its records into session events. A descriptor matches and copies; it never computes. runtimes/<name>/descriptor.yaml, with fixtures beside it.",
+  "description": "How the session attaches to one runtime and turns its records into session events. A descriptor matches and copies; it never computes. runtimes/<name>/descriptor.yaml, with fixtures beside it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
   ],
   "properties": {
     "version": {
-      "description": "The descriptor format. A runner refuses a version it does not read.",
+      "description": "The descriptor format. Forager refuses a version it does not read.",
       "const": 1
     },
     "runtime": {
@@ -29,12 +29,12 @@
       "maxLength": 128
     },
     "runtime_version": {
-      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; the runner never checks the installed version.",
+      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; Forager never checks the installed version.",
       "type": "string",
       "minLength": 1
     },
     "sources": {
-      "description": "How the runner attaches. The terminal bytes are always captured and need no source: there is nothing in them to match.",
+      "description": "How the session attaches. The terminal bytes are always captured and need no source: there is nothing in them to match.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -53,7 +53,7 @@
           }
         },
         "hooks": {
-          "description": "Hook calls the runtime makes. The runner installs its forwarder as a command hook for each listed event in the settings the launch passes; the forwarder writes what it reads on its standard input to the local socket as one record.",
+          "description": "Hook calls the runtime makes. The session installs its forwarder as a command hook for each listed event in the settings the launch passes; the forwarder writes what it reads on its standard input to the local socket as one record.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -62,7 +62,7 @@
           ],
           "properties": {
             "install": {
-              "description": "How the runner installs its forwarder, chosen among the ways the binary implements. claude-settings: a command hook per event, added to the JSON settings file the launch passes with --settings, or to a new one when it passes none.",
+              "description": "How the session installs its forwarder, chosen among the ways the binary implements. claude-settings: a command hook per event, added to the JSON settings file the launch passes with --settings, or to a new one when it passes none.",
               "type": "string",
               "enum": [
                 "claude-settings"
@@ -83,13 +83,13 @@
       }
     },
     "stop": {
-      "description": "How the runner stops the runtime, at a run's time limit or when the runner itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this sets which the runtime gets. A run that sets a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
+      "description": "How the session stops the runtime, at a run's time limit or when Forager itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this sets which the runtime gets. A run that sets a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
         "signal": {
-          "description": "The signal that requests the runtime's exit, among the ones the runner sends.",
+          "description": "The signal that requests the runtime's exit, among the ones the session sends.",
           "enum": ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"]
         },
         "grace": {
@@ -167,14 +167,14 @@
           "items": {"$ref": "#/$defs/name"}
         },
         "denies": {
-          "description": "Variables the runner always leaves out of the server's set for the runtime, and reports: the ones that move where the runtime sends its requests and credentials, or change what it runs.",
+          "description": "Variables the session always leaves out of the server's set for the runtime, and reports: the ones that move where the runtime sends its requests and credentials, or change what it runs.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/name"}
         },
         "credential_files": {
-          "description": "Files in which the runtime keeps a credential of its own, ~ being the home of the user the runner runs as.",
+          "description": "Files in which the runtime keeps a credential of its own, ~ being the home of the user Forager runs as.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

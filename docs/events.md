@@ -1,6 +1,6 @@
 # The record
 
-The runner records the whole session as events. It reports three things, all as
+Forager records the whole session as events. It reports three things, all as
 CloudEvents:
 
 - the session's output,
@@ -21,7 +21,7 @@ qory run                                # the composed runtime, at your terminal
 qory run claude -- -p "Reply pong"      # one headless turn
 ```
 
-Every connection the runtime makes goes through the runner's proxy, and is recorded.
+Every connection the runtime makes goes through the gateway, and is recorded.
 The session is written to its run directory, `<id>/` in the runs directory the caller
 passes. `qory` keeps them under its state directory and prints the path:
 
@@ -30,7 +30,7 @@ passes. `qory` keeps them under its state directory and prints the path:
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
 
-## The runner's events
+## Forager's events
 
 | Type                          | When                                                    |
 | ----------------------------- | ------------------------------------------------------- |
@@ -43,7 +43,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.heartbeat`      | Every 30 seconds while the runtime runs                 |
 | `dev.qory.run.exited`         | The runtime exited: the result, the last event          |
 
-The runner heartbeats while the session runs. The exit status of a run is the runtime's.
+The gateway heartbeats while the session runs. The exit status of a run is the runtime's.
 
 ## The session's events
 
@@ -65,7 +65,7 @@ output. A **descriptor** maps those reports to events:
 | `dev.qory.session.ended`             | The runtime closed its session        |
 | `dev.qory.session.result`            | A headless session printed its result |
 
-The runner ships the descriptor for Claude Code. A runtime that nothing describes still
+Forager ships the descriptor for Claude Code. A runtime that nothing describes still
 runs: its run, its log and its egress are recorded, with no session events. See
 [the runtime](go.md#the-runtime).
 

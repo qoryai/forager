@@ -10,10 +10,10 @@
     "mode": {"type": "string", "enum": ["observe", "enforce"]},
     "allow": {"description": "The allow list in force: the policy's entries. When the node's policy narrows a server's, the hosts both allow: under enforce on both sides each side's entries the other side's list covers, each once; under enforce on one side that side's; else the server's. The hosts the harness declared do not narrow it.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "deny": {"description": "The deny list in force: the policy's entries, each denied by name in either mode, and when the node's policy narrows a server's, both sides' entries, the server's first. Absent means an empty list.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "source": {"description": "config when a policy document is passed to the runner; fetched when the policy is the security_policy of a run configuration the server returned, narrowed by the node's policy when there is one; none when there was neither and the runner observes everything. With config or none, url and run_configuration are present when the server returned a run configuration without a security_policy.", "type": "string", "enum": ["none", "config", "fetched"]},
+    "source": {"description": "config when a policy document is passed to Forager; fetched when the policy is the security_policy of a run configuration the server returned, narrowed by the node's policy when there is one; none when there was neither and the gateway observes everything. With config or none, url and run_configuration are present when the server returned a run configuration without a security_policy.", "type": "string", "enum": ["none", "config", "fetched"]},
     "url": {"description": "The URL the run configuration was fetched from, without its query, when the server returned one.", "type": "string", "format": "uri", "minLength": 1},
-    "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. The runner's own.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+    "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. Forager's own.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one. The server's own and opaque: the gateway never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
       "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a secret.",
@@ -47,7 +47,7 @@
     },
     "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "harness_hosts": {"description": "The egress the harness declared, as passed to the runner, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {
       "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it: the record shows both sides of every path rule.",
       "type": "object",
@@ -59,7 +59,7 @@
       }
     },
     "variables": {
-      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by name. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list leaves out a value the harness computed. A fixed name, one the runner, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and the runner's own names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
+      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by name. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's own names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
       "type": "array",
       "items": {
         "type": "object",

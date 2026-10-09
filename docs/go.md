@@ -1,15 +1,15 @@
-# The runner from Go
+# Forager from Go
 
-The runner is the security boundary around one coding agent session. It is a Go module,
+Forager is the security boundary around one coding agent session. It is a Go module,
 `github.com/qoryai/runner`. The [`qory`](https://github.com/qoryai/qory) command imports
 it, and ships `qory run` in front of it. The module has no command of its own.
 
-The runner:
+Forager:
 
 - starts the agent on a composed harness;
 - pins a policy that can only narrow what the binary allows;
 - observes and enforces egress through a proxy it owns;
-- keeps the runner's credentials out of the session;
+- keeps its own credentials out of the session;
 - heartbeats while the session runs;
 - reports the session's output and its own observations as CloudEvents: to files
   always, to a server when one is configured;
@@ -44,7 +44,7 @@ with the tests.
 
 ## The runtime
 
-`Runtime` is the program as the runner needs to know it: a
+`Runtime` is the program as Forager needs to know it: a
 [`runtimes.Runtime`](../session/runtimes/runtimes.go). It defines:
 
 - how its launch is prepared,
@@ -72,26 +72,26 @@ A program that needs code of its own implements the interface.
   - The exception: an argument the runtime's descriptor lists as headless is among
     `Args`, such as `-p` for Claude Code. Then the session runs on pipes.
   - Without `Interactive`, the session runs on pipes as well.
-  - On pipes, the runner reads the runtime's structured output.
+  - On pipes, the session reads the runtime's structured output.
 - `Forwarder` is the command installed as the runtime's hook. It must call
   `session.Forward(ctx, os.Stdin)`. That passes the hook's input to the run, over a
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
-  `Mounts` are what else of the machine the wall shows, and `RunnerFiles` the caller's
-  own files, which no mount may hold. See [the runner's files](wall.md#the-runners-files).
+  `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
+  own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Server` defines the server the run reports to. See [the server](server.md).
 - `Policy` is the node's policy. Without a server's policy it is the run's; with one it
   narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The variables come from several sources, and for each name the highest wins. See
   [variables](server.md#variables).
   - `LaunchFixed` is the values the harness computes itself. They win over every source
-    but the runner's own names. The server's variables come next.
+    but the session's own names. The server's variables come next.
   - `Variables.Run` is the run's own, `--env`, and `Variables.Machine` the machine's,
     `wall.env`. `Variables` also holds the deny entries and how an unwalled run takes
     the server's.
   - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
     what the run inherits, the lowest.
-  - `HarnessHome` is the harness's home as the agent sees it. The runner sets
+  - `HarnessHome` is the harness's home as the agent sees it. The session sets
     `QORY_HARNESS_HOME` to it.
   - `OnVariables` receives each name, its source and the values that lost, once, before
     the agent starts.
@@ -117,7 +117,7 @@ with `e2e` to check them together.
     answers, the pin of the server's keys, enrolment, the instance id and its file, and
     the refusal codes of the server's answers.
   - `receiver/`: a server of the contract that is not a control plane. It is the
-    handler the tests run the runner against. It is tested against the signed fixtures.
+    handler the tests run Forager against. It is tested against the signed fixtures.
     It is a worked example of the contract's receiving rules.
   - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
     `program/`.
@@ -125,15 +125,15 @@ with `e2e` to check them together.
     loopback address, the variables that name the run's socket and a tool's socket, the
     headers the proxy sets for a tool, and the placeholder value.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
-- `session/`: the session runner.
+- `session/`: the session.
   - `session.Run` takes a launch spec, with the policy, the server and the wall as
     values, and returns the exit status.
   - `session.Forward` is the hook forwarder behind it.
   - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
-    runner and the program it runs: how a launch is prepared, what the program's records
+    session and the program it runs: how a launch is prepared, what the program's records
     mean, how it is stopped.
     - `Described` is a runtime written as a descriptor.
-    - `Bare` is a program the runner runs and does not read.
+    - `Bare` is a program the session runs and does not read.
     - `session/runtimes/claude` is Claude Code.
     - `session/runtimes/catalog` resolves a name to a runtime.
     - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
@@ -153,7 +153,7 @@ launch template. The hook command it installs calls `session.Forward`.
 
 ## Two invariants
 
-**The runner takes a spec.** `qory` imports `runner`; `runner` imports nothing of
+**Forager takes a spec.** `qory` imports Forager; Forager imports nothing of
 `qory`. Stacks, modules, homes and reports stay in `qory`. Inside the module, a test
 holds the imports to these rules:
 

@@ -5,10 +5,10 @@ happened.
 
 ## The wall
 
-The wall starts the agent in a container with no route out except to the session
-runner's proxy. The policy, the record and the access key secret stay on the node.
+The wall starts the agent in a container with no route out except to the
+gateway. The policy, the record and the access key secret stay on the node.
 
-The runner added it in these versions:
+Forager added it in these versions:
 
 - **0.2.0**: as `qory run --wall docker`.
 - **0.3.0**: it keeps a run's credentials outside the container, and limits a host to

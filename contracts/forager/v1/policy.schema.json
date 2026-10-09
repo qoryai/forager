@@ -2,17 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/policy.schema.json",
   "title": "Run policy",
-  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or from the security_policy of a server's run configuration, and pinned for the run. It can only tighten what the runner binary allows; it never grants: a credential, a tool or an image it selects is one the machine defines, and it defines none.",
+  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or from the security_policy of a server's run configuration, and pinned for the run. It can only tighten what the Forager binary allows; it never grants: a credential, a tool or an image it selects is one the machine defines, and it defines none.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "egress"],
   "properties": {
     "version": {
-      "description": "The policy format. A runner refuses a version it does not read.",
+      "description": "The policy format. Forager refuses a version it does not read.",
       "const": 1
     },
     "egress": {
-      "description": "What the session may reach through the runner's proxy.",
+      "description": "What the session may reach through the gateway.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode"],
@@ -54,7 +54,7 @@
       }
     },
     "credentials": {
-      "description": "The credentials of the machine's this run may use, by name, behind a wall. The runner keeps each outside the enclosure and the proxy sets it on the requests to the hosts it is for, which it terminates TLS for; the session's environment and files contain at most a placeholder for it. A name the machine does not define is no run.",
+      "description": "The credentials of the machine's this run may use, by name, behind a wall. The gateway keeps each outside the enclosure and sets it on the requests to the hosts it is for, which it terminates TLS for; the session's environment and files contain at most a placeholder for it. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",
@@ -67,7 +67,7 @@
       }
     },
     "tools": {
-      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that it allows, including under observe those whose path no rule covers, which are recorded as allowed with an empty path_rule. A name the machine does not define is no run.",
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The gateway starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that it allows, including under observe those whose path no rule covers, which are recorded as allowed with an empty path_rule. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",

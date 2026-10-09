@@ -7,9 +7,9 @@
   "additionalProperties": false,
   "required": ["forager_version", "events", "contract_version", "interval_seconds"],
   "properties": {
-    "forager_version": {"description": "The runner module version, as Go stamps it.", "type": "string", "minLength": 1},
+    "forager_version": {"description": "The Forager module version, as Go stamps it.", "type": "string", "minLength": 1},
     "events": {"description": "The event types the server receives, as its configuration lists them.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "contract_version": {"description": "The revision of this contract the runner implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
+    "contract_version": {"description": "The revision of this contract Forager implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
     "interval_seconds": {"description": "The heartbeat interval the run uses, in seconds: heartbeats run from the accepted ping until the run's final event, so the server's liveness window follows the run's own value. A larger value fails the schema, a signed 400 invalid_request.", "type": "integer", "minimum": 1, "maximum": 300}
   }
 }

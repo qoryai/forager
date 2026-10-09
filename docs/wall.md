@@ -12,7 +12,7 @@ nothing.
 ```
  the node                                              elsewhere
 ┌─────────────────────────────────────────────────────┐
-│ qory run: the session runner, outside the wall      │
+│ qory run: the session, outside the wall             │
 │   policy ─▶ proxy ─▶ decides, records, dials ───────┼──▶ the hosts the policy allows
 │   events ─▶ <runs directory>/<id>/events.jsonl      │
 │          └▶ events, signed ─────────────────────────┼──▶ the server: your control plane
@@ -40,11 +40,11 @@ nothing.
   going.
   See
   [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
-- A mount that is, contains or lies inside one of the runner's files is no run,
-  `mount_contains_forager_files`: the runner file's directory with the access key
-  secret, the programs the runner starts outside the wall, their configuration. See
-  [the runner's files](#the-runners-files).
-- The session runner, the policy and the access key secret stay outside, on the node.
+- A mount that is, contains or lies inside one of Forager's files is no run,
+  `mount_contains_forager_files`: the directory of `forager.yaml` with the access key
+  secret, the programs Forager starts outside the wall, their configuration. See
+  [Forager's files](#foragers-files).
+- The session, the policy and the access key secret stay outside, on the node.
   The record is written from outside.
 
 What every wall guarantees is in the contract's
@@ -99,7 +99,7 @@ agent's.
 The helper and the hooks differ by machine:
 
 - **On Linux**, `qory` mounts itself into the container as the relay and the hook
-  forwarder. The agent's hooks reach the runner.
+  forwarder. The agent's hooks reach the session.
 - **On a Mac**, the container cannot run the Mac's binary. Download the Linux archive of
   the same `qory` release, for your engine's architecture. Set `wall.helper` to that
   binary.
@@ -109,7 +109,7 @@ there has the log, the egress record and the structured output, and no hook even
 
 ## Configure it
 
-One file on the node defines it: `~/.config/qory/runner.yaml`. It is never in a
+One file on the node defines it: `~/.config/qory/forager.yaml`. It is never in a
 repository, so a checkout cannot set what it runs under. With a `wall` section, a bare
 `qory run` is walled:
 
@@ -163,7 +163,7 @@ is the container.
 A [`wall.Wall`](../wall/wall.go) in the spec starts the runtime in an enclosure. Its only
 route out leads to the proxy.
 
-- The session runner, the policy and the access key secret stay outside.
+- The session, the policy and the access key secret stay outside.
 - The run's record is read-only inside.
 
 The Docker adapter uses the `docker` command, and whatever engine it reaches:
@@ -177,7 +177,7 @@ res, err := session.Run(ctx, session.Spec{
 	Dir:     checkout,                            // the workspace and working directory
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
 	RunsDir: runs,                                // the run directories, outside every mount
-	RunnerFiles: []string{configDir},             // the caller's own files, which no mount may hold
+	ForagerFiles: []string{configDir},            // the caller's own files, which no mount may hold
 	Image:   "base",                              // the default: a name of Images, or a reference
 	Images: []session.Image{                      // the machine's; a policy's image selects one by name
 		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
@@ -200,21 +200,21 @@ Sizes are written the way Docker writes them: a number, and optionally `b`, `k`,
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
 refused.
 
-### The runner's files
+### Forager's files
 
 A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
-the runner's files. Such a run returns a `*session.Refusal` with the code
-`mount_contains_forager_files`, and `Names` holds the mount, then the runner's file. The
+Forager's files. Such a run returns a `*session.Refusal` with the code
+`mount_contains_forager_files`, and `Names` holds the mount, then Forager's file. The
 check comes before the server is contacted and before anything starts, `Local` included.
-An agent that changes a program the runner starts outside the wall, or reads the access
+An agent that changes a program Forager starts outside the wall, or reads the access
 key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
-run directory and the hook socket's directory, which the runner shows the enclosure
-itself, are the run's own, and lie in the runner's files. The runner's files are:
+run directory and the hook socket's directory, which the session shows the enclosure
+itself, are the run's own, and lie in Forager's files. Forager's files are:
 
-- `Spec.RunnerFiles`, the absolute paths the caller lists as its own. `qory` lists the
-  runner file's directory, with the access key secret.
+- `Spec.ForagerFiles`, the absolute paths the caller lists as its own. `qory` lists the
+  directory of `forager.yaml`, with the access key secret.
 - The directory of every credential program and every tool program the machine defines,
-  found in `PATH` as the runner starts it, and the directory of the file a link to one
+  found in `PATH` as the gateway starts it, and the directory of the file a link to one
   leads to. A program's neighbours, an interpreter or a module, are covered with it.
 - The file a credential with `File` is read from.
 - The private directories of the tools' sockets, this run's and every other run's on
@@ -230,12 +230,12 @@ itself, are the run's own, and lie in the runner's files. The runner's files are
   configuration directory, `DOCKER_CONFIG` or `~/.docker`.
 - `Spec.RunsDir`, where the run directories are made. Its default, `.qory/runs` in the
   workspace, lies inside the workspace, so a walled run passes one outside it.
-- The runner's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
+- The session's registry of walled runs, `$XDG_STATE_HOME/qory-forager/walled`, else
   `~/.local/state/qory-forager/walled`.
 
 Both sides are resolved through symbolic links, a part that does not exist yet through
 its nearest parent that does, and a link whose target does not exist yet through that
-target. A path that cannot be resolved, such as one through a directory the runner
+target. A path that cannot be resolved, such as one through a directory Forager
 cannot search, is no run, with a plain error. The check runs again just before the
 enclosure binds the mounts.
 
@@ -261,7 +261,7 @@ looked up in its parent, so two binds of one root are allowed.
   directory inside (`--workdir` for Docker), reached through the mount that holds it.
   `qory` passes the checkout's root as a mount and the current directory as `Dir`:
   one bind, the checkout's root, and the working directory below it. A workspace that
-  no mount holds is bound at its own path, writable. The runner passes every bind to
+  no mount holds is bound at its own path, writable. The session passes every bind to
   the enclosure, each path clean, and the working directory lies in one of them, by
   its names, or the run fails; `wall.Docker` binds nothing of the caller's the launch
   does not list, and refuses a launch whose `Dir` no mount holds.
@@ -286,29 +286,29 @@ looked up in its parent, so two binds of one root are allowed.
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
-- **The runner's files.** A writable place that contains a directory a name on the way
-  to one of the runner's files is looked up in, such as a runs directory that is a link
+- **Forager's files.** A writable place that contains a directory a name on the way
+  to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
   elsewhere.
-- **The run directory.** The runs directory is one of the runner's files, so the run
+- **The run directory.** The runs directory is one of Forager's files, so the run
   directory lies inside no place the run lists. It is bound read-only to its own run's
   enclosure, and to no other: a bind that is, holds or lies inside another walled run's
   run directory, whatever its mode, is `mount_shared_with_run`.
 - **The wall's own binds.** For `wall.Docker` they are the helper, read-only, the hook
   socket's directory, writable, and, read-only, the private directory that holds the
   run's environment files and, with a CA, the `ca-bundle.pem` the enclosure binds. A
-  wall, and its enclosure, lists them through `wall.Binder`. The runner lists the
+  wall, and its enclosure, lists them through `wall.Binder`. The session lists the
   wall's in the registry when the run starts, the directories it makes later as their
   patterns, `wall.TempDirs()` and the pattern of the runs' socket directories, and the
   enclosure's, made by then, just before it binds them. A pattern stands for the
-  directories its runner makes; two runners' patterns never conflict.
-- **Other walled runs.** The runner keeps a registry of the walled runs still going on the
+  directories its session makes; two sessions' patterns never conflict.
+- **Other walled runs.** The session keeps a registry of the walled runs still going on the
   machine, per user, in `$XDG_STATE_HOME/qory-forager/walled`, else
-  `~/.local/state/qory-forager/walled`: a directory of the user's, 0700, which the runner
+  `~/.local/state/qory-forager/walled`: a directory of the user's, 0700, which the session
   refuses when it is anything else. Each run holds a file there, named by its run id, with
   its process id and its binds: each as the run passed it, as it resolved, the entries its
   names are looked up as, whether it is writable, and what it is when it is not a place,
-  the run directory, the helper or a directory of the runner's, and whether it is a
+  the run directory, the helper or a directory of Forager's, and whether it is a
   pattern, and, for a wall in a container engine, the engine: the command, the variables
   that select it, a password in an address left out, whether that selection is pinned, and
   the engine's id. The selection is pinned by the variables the command reads. For the
@@ -324,13 +324,13 @@ looked up in its parent, so two binds of one root are allowed.
   every Docker engine gives an id. An address that cannot be read is left out whole and
   leaves the selection unpinned, and then neither the context nor the id is asked. Every
   engine command of the run's, and the agent's container, runs with the recorded selection
-  in place of the runner's own, so the engine recorded is the one the run uses; with an
-  address left out, they run with the runner's own environment. An engine that gives no id
+  in place of the session's own, so the engine recorded is the one the run uses; with an
+  address left out, they run with the session's own environment. An engine that gives no id
   as the run starts is asked again through the recorded selection once the enclosure is
   prepared, and its answer goes in the entry. The run holds the file locked until it ends,
-  and the file stays when the wall could not be removed. An entry is live while its runner
+  and the file stays when the wall could not be removed. An entry is live while its session
   holds it, or while a container labelled `dev.qory.run=<id>` exists, in any state, on the
-  engine the entry records: an agent killed with its runner keeps its binds. The runner
+  engine the entry records: an agent killed with its session keeps its binds. The session
   asks that engine, with the recorded variables, for its id, when one is recorded, and
   then `<command> ps --all --quiet --filter label=dev.qory.run=<id>`, and removes an entry
   whose engine holds no such container. For an entry whose lock is free, a run that cannot
@@ -354,11 +354,11 @@ looked up in its parent, so two binds of one root are allowed.
   writable bind /work of the walled run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is
   still going: a walled agent of that run can change it".
 
-  A run whose own helper, or another directory of the runner's it binds, lies inside a
+  A run whose own helper, or another directory of Forager's it binds, lies inside a
   writable bind of another run's, or is reached through one, fails with a plain error:
-  "the runner's helper /work/bin/qory lies inside the writable bind /work of the walled
+  "Forager's helper /work/bin/qory lies inside the writable bind /work of the walled
   run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that
-  run can change it", or "the runner's directory …" for a directory.
+  run can change it", or "Forager's directory …" for a directory.
 
   The check comes before the server is contacted, and the run leaves the registry when
   it ends, however it ends, unless its wall could not be removed.
@@ -392,7 +392,7 @@ The machine defines the images a run may start in. The run's policy selects one 
 with `image`, as it selects credentials and tools. Without a selection, the run starts
 in `Image`.
 
-`qory` reads `wall.images` from `runner.yaml`: named images, each with a `ref`, and a
+`qory` reads `wall.images` from `forager.yaml`: named images, each with a `ref`, and a
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
 starts in when its policy selects none.
 

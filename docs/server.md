@@ -5,16 +5,16 @@ selects goes there too, signed. The server can also set the run's policy.
 
 A server is a control plane, or a receiver of your own.
 
-## In runner.yaml
+## In forager.yaml
 
-For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the server. The
-example is in [the policy](policy.md#in-runneryaml).
+For `qory`, the `server` section of `~/.config/qory/forager.yaml` defines the server. The
+example is in [the policy](policy.md#in-forageryaml).
 
-- The runner reports to the server as an access key: `access_key_id` is its id, and
+- The gateway reports to the server as an access key: `access_key_id` is its id, and
   its secret, one line starting `qak_`, lives in the file `access-key-secret` beside
-  `runner.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
+  `forager.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
   Ed25519 and is never sent.
-- `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
+- `apiary_public_key` is the pin, the server's keys: the gateway verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
   id and the pin; the code's use activates the key at once. A key made for an existing
@@ -30,9 +30,9 @@ example is in [the policy](policy.md#in-runneryaml).
 - `qory run --local` runs with the files alone.
 - Without `server`, the run writes files only.
 
-## How the runner uses the server
+## How the gateway uses the server
 
-A `session.Server` in the spec defines the server the runner reports to. The runner:
+A `session.Server` in the spec defines the server the gateway reports to. The gateway:
 
 1. fetches the server's configuration document, with a signed `GET` of
    `/.well-known/qory-configuration`;
@@ -44,7 +44,7 @@ A `session.Server` in the spec defines the server the runner reports to. The run
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
-request, and the runner reads an answer only once it verifies under the pin. The
+request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
 The spec holds what identifies the run to the server:
@@ -68,12 +68,12 @@ A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a
 server does not hold, `instance_limit` when the node's live instances are at its
 limit, `answer_unsigned` for an answer that does not verify under the pin, and
 `apiary_public_key_missing` for a server without a pin. A server closes a running run
-with a signed `410` `run_closed`: the runner stops the runtime as at its time limit,
+with a signed `410` `run_closed`: the session stops the runtime as at its time limit,
 records `reason: run_closed`, and sends nothing further.
 
 ## A policy that changes while the run goes
 
-A server may answer a later batch with another digest. The runner then fetches the run
+A server may answer a later batch with another digest. The gateway then fetches the run
 configuration again, and puts it in force while the run goes, narrowed by the same node
 policy. The variables stay as they were when the run started.
 
@@ -85,7 +85,7 @@ and for each name the run takes the value of the highest that sets it:
 
 | Source, highest first | What it is | In the spec |
 | --- | --- | --- |
-| `fixed` | the runner's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
+| `fixed` | the session's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
 | `apiary` | the server's run configuration, resolved by the server | |
 | `run` | the run's own, `qory run --env` | `Variables.Run` |
 | `machine` | the machine's, `wall.env` | `Variables.Machine` |
@@ -98,7 +98,7 @@ and for each name the run takes the value of the highest that sets it:
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
-  `denies`, and `Spec.Variables.Deny`. It holds the runner's own names, the proxy's, the
+  `denies`, and `Spec.Variables.Deny`. It holds the session's own names, the proxy's, the
   trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
   computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
@@ -133,11 +133,11 @@ spec.OnVariables = func(applied session.Applied) { // once, before the agent sta
 ```
 
 `LaunchFixed` is the values the harness computes itself, and `LaunchDefaults` the values
-its author wrote as defaults; the runner applies each as its source. `HarnessHome` is an absolute path, and the runner sets `QORY_HARNESS_HOME` to it
+its author wrote as defaults; the session applies each as its source. `HarnessHome` is an absolute path, and the session sets `QORY_HARNESS_HOME` to it
 as one of its own names; a path that is not absolute, or that holds a NUL, a carriage
 return or a line feed, is an error before anything starts.
 
-Before it resolves anything, the runner refuses to pass in what stays outside. It
+Before it resolves anything, the session refuses to pass in what stays outside. It
 checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 `Variables.Run` and `Variables.Machine`.
 
@@ -168,7 +168,7 @@ A control plane is the same server every run has:
 - **The rules**: the contract's
   [server section](../contracts/forager/v1/README.md#the-server).
 - **A worked example**: the public package [`receiver`](../receiver/receiver.go). It is a
-  server of the contract that is not a control plane. The runner's tests run against
+  server of the contract that is not a control plane. Forager's tests run against
   it, and it is tested against the signed fixtures.
 - **The test data**: `contracts/forager/v1/fixtures/signed/`. Any receiver is tested
   against it.

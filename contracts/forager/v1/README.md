@@ -1,6 +1,6 @@
-# Runner contract, v1
+# Forager contract, v1
 
-What the runner reads, and what it emits. The runner is the security boundary around one
+What Forager reads, and what it emits. Forager is the security boundary around one
 coding agent session: the only thing between the agent and the world. This directory is
 its contract: the documents, one JSON schema per document, and the fixtures a reader or
 a receiver is tested against.
@@ -16,23 +16,23 @@ object does, because the file is read on its own and its format evolves with the
 product. A document addressed by a schema URL, read or written by a program, contains an
 integer that guards its reader, because the URL already contains the group and the
 generation. The policy, the server document, the documents a server returns and the
-descriptor are on this side: the objects the command passes to the runner and the ones a
+descriptor are on this side: the objects the command passes to Forager and the ones a
 control plane sends over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 1. The runner sends the revision as one integer:
+**Revisions.** This is `v1`, revision 1. Forager sends the revision as one integer:
 the header `X-Qory-Contract-Version: 1` on every request to the server, and
-`contract_version: 1` in the ping's data. A runner on revision N reads every section
+`contract_version: 1` in the ping's data. Forager on revision N reads every section
 defined up to N and ignores any other section, and a server may rely on the sections up
 to N and no more. An addition is a new revision; a breaking change is `v2`. An addition
-made while no released runner is in use goes into the revision the runner sends; the
-revision is raised only when a released runner is in use. Revision 1 is everything this
+made while no release of Forager is in use goes into the revision Forager sends; the
+revision is raised only when a release of Forager is in use. Revision 1 is everything this
 document describes: the server (§The server), a run's variables (§Variables), tools
 (§Tools) and images (§Images), where `container_runtime` and `docker` belong to an
 option that is experimental (§The wall), and nodes, access keys, instances and
 enrolment (§The server).
 
-`v1` is the first generation of this namespace, not a stability promise. The runner
+`v1` is the first generation of this namespace, not a stability promise. The Forager
 module is at `v0`, which under Go's rules promises no compatibility: while the module is
 at `v0`, a document or an event here may change in a way that breaks a reader, and the
 changelog lists each such change. With the module at `v1`, a breaking change is a new
@@ -40,40 +40,40 @@ event type or a new directory, `v2`, never a change in place.
 
 ## The boundary
 
-The runner's duties, in the order that matters when they conflict:
+Forager's duties, in the order that matters when they conflict:
 
-1. **Policy.** The runner reads one policy document, pinned for the run, that can only
+1. **Policy.** Forager reads one policy document, pinned for the run, that can only
    narrow what the binary allows: the egress mode, the allow list, the deny list, the
    paths of a host, and which of the machine's credentials the run may use. A policy
    that cannot be read means no run. No policy means observe everything, with no
    list to deny by. Nothing in a policy grants; a stale or failed policy degrades toward more
    restrictive, never toward more permissive.
-2. **Egress.** The runner runs an HTTP proxy, on loopback or, behind a wall, on the one
-   address the enclosure reaches (§The wall), and starts the session behind it.
+2. **Egress.** Forager runs its gateway, an HTTP proxy, on loopback or, behind a wall, on
+   the one address the enclosure reaches (§The wall), and starts the session behind it.
    Every connection the session opens through the proxy is observed and recorded as one
    event: the host, the port, whether it was a `CONNECT` tunnel or a plain request, the
    decision, and the rule that made it. A connection to a host the deny list covers is
    denied in either mode; in enforce mode a connection to a host outside the allow
    list is denied as well. A denied attempt is recorded and the session continues; a
    denial never ends a run.
-3. **Credentials.** The session's environment and files contain none of the runner's. On
+3. **Credentials.** The session's environment and files contain none of Forager's. On
    a developer machine the session runs with the developer's own environment, and the
    server's variables only when the launch spec accepts them (§Variables). Behind a
-   wall the runner keeps the credentials the run's policy selects in memory, outside the
-   enclosure, and its proxy sets each on the requests to the hosts it is for
+   wall the gateway keeps the credentials the run's policy selects in memory, outside the
+   enclosure, and sets each on the requests to the hosts it is for
    (§Credentials): the session reaches a code host and a model endpoint as itself, and
    its environment and files contain at most a placeholder for the credential. The tools
    the policy selects run outside as well, and the proxy sends them the requests to the
    hosts they serve (§Tools).
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
-5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
+5. **Reporting.** The session's terminal bytes as log chunks, Forager's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
    event goes to files. When a server is configured, every event its configuration lists
    goes there too. When the caller passes a stream, such as standard output, every event
    goes there as well, as the line `events.jsonl` contains; that is how a run with no
    receiver is followed.
 6. **The harness reports over a local socket**, never over a network. A hook the
-   runtime calls forwards what it received to the runner's socket; the runner is the
+   runtime calls forwards what it received to the session's socket; the gateway is the
    only thing that sends to a receiver.
 
 ## Limits
@@ -92,19 +92,19 @@ Stated so a receiver reads the record for what it is.
   back, an echo service, returns to the session the credential the proxy set. A path rule
   reads a path and nothing else: where a host, such as a GraphQL endpoint, takes every
   request on one path, the path is reachable or it is not, and what the request may
-  touch behind it is bounded by the credential's own scope, not by the runner.
+  touch behind it is bounded by the credential's own scope, not by the gateway.
 - Only proxy-aware programs are seen. The agent CLIs, git over HTTPS, curl, the package
   managers and the language runtimes read the proxy variables; SSH, and any program that
   ignores the variables, is not seen. Without a wall, enforce mode is
   advisory against such a program. Enforcement against bypass belongs to the wall (§The
-  wall): the session runner runs outside and the agent in an enclosure whose only route
+  wall): the session runs outside and the agent in an enclosure whose only route
   out leads to the proxy. The three outcomes: a connection through the proxy is decided
   by the policy and recorded, on any machine; a connection around the proxy succeeds
-  unseen without a wall, and fails unseen behind one. The runner records what passes
+  unseen without a wall, and fails unseen behind one. The gateway records what passes
   through it and nothing else; a record of attempts a wall refuses is the container
   layer's own logging, or the network's.
 - A wall decides which process may connect, not where the machine may connect. A packet
-  filter in front of a node cannot distinguish the agent from the runner, so its list is
+  filter in front of a node cannot distinguish the agent from the gateway, so its list is
   the union of both; the run's policy can only be enforced at the proxy. Neither
   distinguishes two accounts on one allowed host: a code host, an object store and a
   model endpoint each deliver data to whoever owns the account the request specifies.
@@ -130,26 +130,26 @@ Stated so a receiver reads the record for what it is.
   transport is the local socket (§The local socket).
 - The runtime's session events are what the runtime reports through its hooks and its
   structured output. A runtime that reports nothing produces no session events; the log
-  and the egress record are the runner's own and are always there.
+  and the egress record are Forager's own and are always there.
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
-  is a runner change, never a configuration change.
-- The server is trusted with what it is sent. The access key authenticates the runner to
-  the server. Every answer is signed under the key the runner pins, so the runner
+  is a Forager change, never a configuration change.
+- The server is trusted with what it is sent. The access key authenticates the gateway to
+  the server. Every answer is signed under the key the gateway pins, so the gateway
   authenticates the server over `https` and over loopback `http` alike.
 
 ## Sequence
 
 One run, on a developer machine, with a server configured:
 
-1. The runner receives a launch spec: the program, its arguments, its environment and
+1. Forager receives a launch spec: the program, its arguments, its environment and
    directory, whether the session is interactive, the policy document, the server
    document with the access key secret and the instance id and name, the egress the
    harness declared, the run's and the machine's variables, the harness's computed
    values and defaults, and the runtime name. The spec comes from
    the `qory` command, which reads the policy and the server from its own
-   configuration; the runner receives nothing about what composed it or where it was
+   configuration; Forager receives nothing about what composed it or where it was
    read.
-2. The runner creates a run id, a UUID version 7, and the run directory `<id>/` in the
+2. The session creates a run id, a UUID version 7, and the run directory `<id>/` in the
    runs directory the caller passes, else in `.qory/runs/` in the checkout. A walled
    run's runs directory lies outside every place the run binds (§The wall).
 3. It validates the server document once, when one is passed; without a pinned
@@ -179,11 +179,11 @@ One run, on a developer machine, with a server configured:
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path,
    `QORY_RUN_ID` to the run id, and `QORY_HARNESS_HOME` to the harness's home when the
-   launch spec has one. Nothing else of the runner's enters the environment but
+   launch spec has one. Nothing else of Forager's enters the environment but
    the variables (§Variables), the placeholders and, in a walled run, the runtime's
    declared and reserved variables nothing else sets, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
-   the runner's forwarder as a command hook for each event the runtime lists. For Claude
+   Forager's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
    `settings.json` in the run directory and passed in its place, and, for an
    interactive session whose API key is a placeholder, a script that pre-approves the
@@ -201,19 +201,19 @@ One run, on a developer machine, with a server configured:
    the proxy is one `dev.qory.run.egress`; every record the descriptor matches is one
    session event; every thirty seconds one `dev.qory.run.heartbeat`, from the accepted
    ping with a server and from step 7 without one, until the final event.
-9. The program exits. The runner drains the socket, so a hook on the runtime's last
+9. The program exits. The session drains the socket, so a hook on the runtime's last
    event is still read, emits `dev.qory.run.exited`, waits up to fifteen seconds for the
    sinks to flush, reports what the server has not accepted, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with `signal` set.
 
-A run may have a time limit. When the runtime still runs at the limit the runner stops
+A run may have a time limit. When the runtime still runs at the limit the session stops
 it, and `dev.qory.run.exited` contains `reason: timeout` with the state `failed`; step 9
 is otherwise the same. A denied connection never ends a run; the limit is the one thing
-of the runner's that does. A server ends a run by closing it: a signed `410` with
+of Forager's that does. A server ends a run by closing it: a signed `410` with
 `run_closed` to a delivery stops the runtime as at the limit, and
 `dev.qory.run.exited` contains `reason: run_closed` (§The server).
 
-The runner stops a runtime the same way at the limit and when its own context ends: a
+The session stops a runtime the same way at the limit and when its own context ends: a
 signal that requests the runtime's exit, then SIGKILL after a grace. The signal is one of
 SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2, since runtimes differ in what
 each means: one closes its session on SIGINT and drops it on SIGTERM, another the other
@@ -221,19 +221,19 @@ way round. So the runtime defines which and how long (§The runtime), the run ma
 others over it, and with neither it is SIGTERM and ten seconds. Behind a wall the
 enclosure passes the same signal on to the runtime inside.
 
-The run id is the runner's own, a UUID version 7, unless the caller already has one: a
+The run id is Forager's own, a UUID version 7, unless the caller already has one: a
 caller's id is a UUID in the canonical lower-case form, since it is every event's
 `subject` and the run directory's name, and anything else is no run. What else the caller
 identifies the run by, a key in its queue, a repository, an issue, goes in `labels` on
 `dev.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
-value of at most 256 bytes. The runner reads nothing into them. It copies them into
+value of at most 256 bytes. Forager reads nothing into them. It copies them into
 `dev.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
 It sends them, all of them, on the run configuration request (§The server), and the
 server decides which labels identify what the run works on. The `qory` command, for one,
 labels a run in a git checkout with `forge` and `repository` from its origin remote, and
 a server that keys its policies on those finds them there.
 
-Behind a wall, three steps differ and no event does. Before step 5 the runner starts the
+Behind a wall, three steps differ and no event does. Before step 5 the gateway starts the
 tools the policy selects and waits until each listens (§Tools), then has the wall
 prepare the enclosure and listens on the address the wall returns, not on loopback.
 After step 6 it passes the wall the launch, the proxy's address, the socket and the
@@ -247,7 +247,7 @@ and `docker` when the image is one the machine defines (§Images).
 ### What a run is about
 
 What the run is about, as the caller passed it, goes in `about` on
-`dev.qory.run.started`. Every member is optional, and the runner copies it and reads
+`dev.qory.run.started`. Every member is optional, and Forager copies it and reads
 nothing into it:
 
 - `kind`: the kind of run, the caller's word, 1 to 64 bytes.
@@ -267,11 +267,11 @@ nothing into it:
   so it never holds a secret.
 
 No string in `about`, key or value, contains a control character: U+0000 to U+001F,
-U+007F to U+009F, U+2028 and U+2029. The schema states every rule but these, which the
-runner alone checks: the byte limits, the 8192 bytes of `details`, that no two subjects
+U+007F to U+009F, U+2028 and U+2029. The schema states every rule but these, which
+Forager alone checks: the byte limits, the 8192 bytes of `details`, that no two subjects
 have the same `type` and `ref`, a `url`'s syntax and host, that a `url` carries no user
 name or password, and that no member name appears twice in `details`. The schema's
-lengths count characters, so they are upper bounds of the byte limits. The runner holds
+lengths count characters, so they are upper bounds of the byte limits. Forager holds
 `about` to every rule here before it contacts the server: an `about` that breaks one is
 no run.
 
@@ -280,9 +280,9 @@ configuration request and never selects a policy. An empty `about` is left out.
 
 ## The policy
 
-`policy.schema.json`. The document the command passes to the runner, from the machine's
+`policy.schema.json`. The document the command passes to Forager, from the machine's
 own configuration, never from inside the checkout, where the agent it constrains can
-write it: for `qory`, the `egress` section of `~/.config/qory/runner.yaml`. The same
+write it: for `qory`, the `egress` section of `~/.config/qory/forager.yaml`. The same
 document a server's run configuration contains as `security_policy` (§The server), so
 nothing is designed twice.
 
@@ -300,7 +300,7 @@ egress:
 
 | Field | Meaning |
 |---|---|
-| `version` | `1`. A runner refuses a version it does not read, and the error contains that version |
+| `version` | `1`. Forager refuses a version it does not read, and the error contains that version |
 | `egress.mode` | `observe`: every connection is recorded, and only a host `deny` covers is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
@@ -320,7 +320,7 @@ server's policy and no node policy, the server's applies as it is.
 | Field | The run's |
 |---|---|
 | `egress.mode` | `enforce` when either side sets `enforce`, else `observe` |
-| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. The runner reports the entries of each side under `enforce` that every other such side's list covers, the server's first, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
+| `egress.allow` | under `enforce`, a host passes only when the allow list of every side under `enforce` covers it; a side under `observe` allows every host its `deny` leaves open. Forager reports the entries of each side under `enforce` that every other such side's list covers, the server's first, each entry once, which is exactly the hosts both allow; with neither side under `enforce`, the server's entries |
 | `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
 | `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does: under `enforce` it is denied; under `observe` it passes; either way it is recorded with an empty `path_rule`. A request every such side matches is recorded with the narrowest entry that matched |
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
@@ -337,7 +337,7 @@ computes them, the server's `paths`, `source` `fetched` with the server's `url`,
 `digest` and `run_configuration`, and the node's policy as `node_policy` (§The events).
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
-declare, the command passes that list to the runner, and `dev.qory.run.policy_applied`
+declare, the command passes that list to Forager, and `dev.qory.run.policy_applied`
 reports it as `harness_hosts`; it decides nothing. The policy alone decides: `allow` is
 the policy's list, a declared host the policy does not cover is denied under `enforce`
 like any other, and one `deny` covers is denied in either mode. The grammar of a declared
@@ -394,7 +394,7 @@ such requests checks them there or leaves the host out.
 
 ## Credentials
 
-A credential is a secret the runner keeps outside the enclosure and the proxy sets on the
+A credential is a secret the gateway keeps outside the enclosure and sets on the
 requests it applies to; the session's environment and files contain at most a
 placeholder for it.
 The machine defines credentials; the run's policy selects among them by name and
@@ -406,13 +406,13 @@ A definition defines where the secret comes from, exactly one of:
 
 | Source | The secret is |
 |---|---|
-| `env` | a variable of the runner's own environment, read once when the run starts |
+| `env` | a variable of Forager's own environment, read once when the run starts |
 | `file` | a file's content, read again whenever it is used, so whatever rotates it notifies no one |
 | `adapter` | what a program of the machine's prints |
 
 **An adapter** contains what one kind of host needs: a source code host, an artifact
-store. The runner contains nothing specific to any host. The runner starts the adapter
-outside the enclosure, with the runner's environment without the access key's
+store. Forager contains nothing specific to any host. The gateway starts the adapter
+outside the enclosure, with Forager's environment without the access key's
 variables, a minute to answer, and `${argument}`
 in its arguments replaced by the policy's argument, which the definition's pattern must
 match whole: one word of the command line, never a shell's. It prints one document,
@@ -432,7 +432,7 @@ to standard error is the reason reported.
 The adapter's answer defines how its secret is used, because hosts differ in it: which
 hosts, which scheme, and which paths make up what the run requests. The schemes are a
 closed set, `bearer`, `basic` with a `username`, `header` with a header's name; an
-adapter chooses among what the runner implements and adds nothing to it. Of a host with
+adapter chooses among what the gateway implements and adds nothing to it. Of a host with
 `paths` the run reaches those and no other, so one repository's credential does not open
 another organization's on the same host; a path the adapter leaves out, such as the
 host's GraphQL endpoint, is not reached. A definition may set `hosts` and `paths` of its
@@ -443,7 +443,7 @@ itself.
 Before the run starts every selected credential is resolved, and any of these is
 no run: a name the machine does not define, an argument it does not provide for, a host
 two credentials claim, a claim above the definition's, and under `enforce` a host the
-run's allow list does not cover. The runner runs an adapter again five minutes before
+run's allow list does not cover. The gateway runs an adapter again five minutes before
 `expires_at`, and when a host returns 401 to a request it set the secret on, at most
 once every thirty seconds. The new answer changes the secret and nothing else: one
 that lists other hosts, schemes or paths is refused and reported, and the old secret
@@ -457,7 +457,7 @@ variable does not start.
 
 **Termination.** For the hosts the credentials are for, and the hosts with path rules,
 the proxy ends the session's TLS itself, answering as the host with a certificate of an
-authority created for the run. The authority's key is in the runner's memory and nowhere
+authority created for the run. The authority's key is in the gateway's memory and nowhere
 else, and gone with the run; its certificate is what the wall adds to the enclosure's
 trusted bundle (§The wall). The proxy verifies the real host against the machine's own
 roots. Every other host stays a tunnel the proxy does not read, and a run with no
@@ -477,8 +477,8 @@ and no error contains a secret.
 A tool is a program of the machine's that serves hosts, for what a run reaches that
 needs more than a secret in a header: a request signed with a key that stays outside the
 enclosure, a protocol with an exchange of its own, a service that exists only on the
-machine, such as an MCP server. The runner implements no protocol and a tool implements
-one, so no protocol, cloud or provider enters the runner. The machine defines tools; the
+machine, such as an MCP server. Forager implements no protocol and a tool implements
+one, so no protocol, cloud or provider enters Forager. The machine defines tools; the
 run's policy selects among them by name, with an argument, as it selects credentials,
 and defines none. Tools need a wall, as credentials do.
 
@@ -501,19 +501,19 @@ tools:
   - {name: files, argument: acme/shop}
 ```
 
-**Starting.** Before the runtime starts, the runner starts every selected tool outside
+**Starting.** Before the runtime starts, the gateway starts every selected tool outside
 the enclosure: the command, with `${argument}` replaced by the argument, one word of the
-command line and never a shell's; the runner's own environment, without the variables
+command line and never a shell's; Forager's own environment, without the variables
 the machine's credentials are read from and without the access key's,
 `QORY_ACCESS_KEY_SECRET`, `QORY_ACCESS_KEY_ID` and `QORY_APIARY_PUBLIC_KEY`, with
 `QORY_TOOL_LISTEN`, the path of a Unix
-socket in a private directory of the runner's, mode `0700`, and `QORY_RUN_ID`. The tool
+socket in a private directory of Forager's, mode `0700`, and `QORY_RUN_ID`. The tool
 listens there within a minute; one that exits first, or does not listen in time, is no
 run, and the last line it writes to standard error is the reason reported. Once it
-listens, what it writes to standard error is reported as the runner's own lines and its
+listens, what it writes to standard error is reported as Forager's own lines and its
 standard output is discarded. A tool that exits while the run goes on is reported and
 not started again: a request to it is a failed dial. When the run ends, once the proxy
-is closed, the runner sends SIGTERM to the tool's process group, SIGKILL after five
+is closed, the gateway sends SIGTERM to the tool's process group, SIGKILL after five
 seconds, and removes the socket.
 
 **Reaching one.** For the hosts a tool serves, the proxy ends the session's TLS as for a
@@ -542,7 +542,7 @@ command line.
 **What the tool decides.** A path rule reads the path and nothing else (§The policy), so
 what a request specifies in its query, its headers or its body is the tool's to check,
 against its argument and the path rule it receives. A tool refines inside what the
-runner allows and never widens it: a request the rules refuse never reaches it. What a
+gateway allows and never widens it: a request the rules refuse never reaches it. What a
 tool forwards, and where, leaves from the machine directly, not through the proxy; the
 record contains only the request that reached the tool. A tool that forwards a request
 unchanged sends the placeholder with it; replacing or dropping it is the tool's.
@@ -563,13 +563,13 @@ request, with `request_method`, `path` without its query, `path_rule`, `tool`, t
 tool's name, `request_id`, and, once the tool answers, `status`. A request a path rule
 refuses contains the tool it did not reach, with `decision: denied`; a connection the
 policy refuses by its host, by the deny list, the guard or the allow list, contains
-none. The runner reads no body, so what an invocation does beyond its method and its
-path is not read by the runner, and the tool checks it; the runtime's hooks report the MCP call an agent makes
+none. The gateway reads no body, so what an invocation does beyond its method and its
+path is not read by the gateway, and the tool checks it; the runtime's hooks report the MCP call an agent makes
 (`dev.qory.session.tool_started`).
 
 ## Variables
 
-A run's variables reach the agent's process alone. The runner adds them to the launch's
+A run's variables reach the agent's process alone. The session adds them to the launch's
 environment; the tools, the relay, the agent's Docker daemon and the wall's `docker`
 command keep their own environment.
 
@@ -578,25 +578,25 @@ of the highest source that sets it:
 
 | Source, highest first | What it is | In the launch spec, Go |
 |---|---|---|
-| `fixed` | the runner's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
+| `fixed` | Forager's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's own variables, `qory run --env` | `Spec.Variables.Run` |
-| `machine` | the machine's variables, the runner file's `wall.env` | `Spec.Variables.Machine` |
+| `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `Spec.Variables.Machine` |
 | `harness` | the harness's written defaults | `Spec.LaunchDefaults` |
 | `shell` | the environment the run inherits | `Spec.Env` |
 
 The server resolves its variables among its own levels, a lock included, and sends the
-resolved values alone, a name and a value each; the runner reads no level. So the
+resolved values alone, a name and a value each; Forager reads no level. So the
 server's value of a name wins over the node's whenever the run applies it, and a node
 source applies to the names the server leaves alone and to a name whose server value is
 left out.
-Among the fixed names, the runner's, the proxy's, the wall's, the preparation's and the
+Among the fixed names, Forager's, the proxy's, the wall's, the preparation's and the
 placeholders win over the harness's computed values. Names are compared exactly between
 sources; the deny list matches regardless of case. A value that loses is left out, the
 record lists it with its source and the reason (§The record of the variables), and the
 run starts.
 
-**Refusals first.** Before it resolves anything, the runner checks every value the node
+**Refusals first.** Before it resolves anything, the session checks every value the node
 passes: what the run inherits, the harness's computed values and defaults, and the run's
 and the machine's variables. They keep the node's secrets and the stand-ins out of the
 enclosure. A walled run that passes a `QORY_` variable, or a variable a value of the
@@ -604,11 +604,11 @@ machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY
 and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall
 stops the run. A run that passes a value for a placeholder is no run,
 `placeholder_conflict`, with or without a wall. These are the only refusals of the
-variables. `QORY_HARNESS_HOME` is the runner's own when the launch spec has a harness
-home, and the runner sets it after the check. Behind a wall, a value any node source
+variables. `QORY_HARNESS_HOME` is Forager's own when the launch spec has a harness
+home, and the session sets it after the check. Behind a wall, a value any node source
 passes for it is `variable_reserved`, as any `QORY_` name is. Without a wall, the deny
 list leaves out a value of the server, the run, the machine or the harness for it, and
-the runner's value wins over the one the run inherits: the record lists that one as
+Forager's value wins over the one the run inherits: the record lists that one as
 `shell`, lost as `fixed`, when another source set the name too.
 
 **Denied names.** The deny list leaves out a value of the server, the run, the machine
@@ -620,8 +620,8 @@ computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `
 and the node's entries leave them in, since the harness computes such values for the
 runtime. What the run inherits is matched against no entry: it is the developer's own
 environment. A denied value is left out, recorded as `denied`, and the next source's
-value of the name applies. Each built-in entry undermines the wall, the proxy or the
-runner. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
+value of the name applies. Each built-in entry undermines the wall, the proxy or
+Forager. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
 character other than `*`. It matches a whole name: `*` matches any run of characters,
 the empty run included, anywhere in the entry. Matching ignores case, because programs
 read `http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1,
@@ -632,8 +632,8 @@ and the runtime's `denies`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
-| `QORY_*` | the runner's own |
-| `*_PROXY`, `NO_PROXY` included, in any case | the runner sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
+| `QORY_*` | Forager's own |
+| `*_PROXY`, `NO_PROXY` included, in any case | the session sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and another value would replace it |
 | `SSL_CERT_DIR`, `GIT_SSL_CAPATH` | they point the same programs at another store beside the bundle the wall sets |
 | every name the wall sets for the run's bundle | the node's own names for the run's bundle |
@@ -656,7 +656,7 @@ empty value, so an image's own `ENV` cannot set one.
 variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
 `ignore`, an unwalled run starts without them; each is recorded as `unwalled`, and the
 node's sources apply. With `accept`, they apply as in a walled run, the deny list first.
-The deny list protects the wall and the runner, not the developer, so `accept` opens the
+The deny list protects the wall and Forager, not the developer, so `accept` opens the
 developer's shell to the server. The run's own variables apply with or without a wall.
 
 **The record of the variables.** `dev.qory.run.policy_applied`'s `variables` lists the
@@ -674,7 +674,7 @@ each with its source, `from`, and the reason, `why`: `overridden`, `denied`, `fi
 - A name is listed when the server, the run, the machine or the harness's defaults set
   it, and when the built-in list leaves out a value the harness computed.
 - A fixed name is listed only when it won over one of those sources, with `from:
-  fixed`, so the runner's, the proxy's and the wall's names do not fill every record.
+  fixed`, so Forager's, the proxy's and the wall's names do not fill every record.
 - A name the run inherits is listed only when one of those sources set it too, so the
   developer's whole shell does not fill the record of an unwalled run.
 - A name no source's value applies to has no `from`: a value left out by the deny list
@@ -688,12 +688,12 @@ launch spec's `OnVariables`, in Go, receives the same list once, before the agen
 starts, so `qory` prints a line for an `--env` value that lost.
 
 **The document.** `variables` maps each name to an object with its `value`:
-`{"LOG_LEVEL": {"value": "info"}}`. The object is open: a runner ignores a member beside
+`{"LOG_LEVEL": {"value": "info"}}`. The object is open: Forager ignores a member beside
 `value` it does not recognise; one it must honour needs a new revision.
 
 **Limits.** At most 128 variables, each name `^[A-Za-z_][A-Za-z0-9_]{0,127}$`, each
 value a string of at most 4096 bytes of UTF-8 with no NUL, carriage return or line feed.
-The schema's `maxLength` counts characters, so the runner counts the bytes beside it. A
+The schema's `maxLength` counts characters, so Forager counts the bytes beside it. A
 document beyond them is `run_configuration_invalid`. The variables are fixed when the
 run starts: a reload leaves them as they were. Events carry their names alone.
 
@@ -713,13 +713,13 @@ contract, as it roots the schema URLs.
 | `source` | `urn:qory:run:<run id>`. One run is one source, so `sequence` orders within it |
 | `subject` | the run id. A receiver creates the run on the first event with an unknown subject |
 | `type` | one of the types below, and nothing else. A breaking change to a type's data is a new type |
-| `time` | the runner's clock, RFC 3339, UTC |
-| `sequence` | the [sequence extension](https://github.com/cloudevents/spec/blob/main/cloudevents/extensions/sequence.md): the runner-assigned order of the event within the run, a decimal zero-padded to ten digits, from `0000000001`, contiguous. A receiver orders by it, never by arrival |
+| `time` | Forager's clock, RFC 3339, UTC |
+| `sequence` | the [sequence extension](https://github.com/cloudevents/spec/blob/main/cloudevents/extensions/sequence.md): the Forager-assigned order of the event within the run, a decimal zero-padded to ten digits, from `0000000001`, contiguous. A receiver orders by it, never by arrival |
 | `dataschema` | `https://qory.dev/contracts/forager/v1/events/<type without dev.qory.>.schema.json`, the schema of `data` |
 | `datacontenttype` | absent, which the JSON format reads as `application/json` |
 | `data` | a JSON object validating against `dataschema` |
 
-The types, one namespace. The runner's own:
+The types, one namespace. Forager's own:
 
 | Type | When | Data |
 |---|---|---|
@@ -766,9 +766,9 @@ more the runtime shows of a task is in its own output stream, recorded as
 `dev.qory.run.log`. What becomes of work in the background
 when a run ends is the runtime's as well: it may end such work itself shortly after its
 last answer, wait for it up to a ceiling of its own, and read that ceiling from a variable.
-The runner adds no rule of its own here. Behind a wall only the variables a run lists go
+Forager adds no rule of its own here. Behind a wall only the variables a run lists go
 in, so such a variable is listed like any other; and the run's stop signal and grace are
-what the runtime has to close such work when the runner stops it.
+what the runtime has to close such work when the session stops it.
 
 Every session event that comes from a hook may contain `agent_id` and `agent_type` when
 it happened inside a subagent; `dev.qory.session.result`, read from the runtime's
@@ -781,7 +781,7 @@ enumerations in `source`, `reason`, `kind`, `outcome` are the runtime's words.
 `config` or `fetched`; `url` is where the run configuration was fetched from, and
 `run_configuration` the server's digest of it as its header contained it, with
 `fetched`, and with `config` or `none` when the run configuration has no
-`security_policy`; `digest` is the runner's own hex sha256 of the policy document's
+`security_policy`; `digest` is Forager's own hex sha256 of the policy document's
 canonical JSON, with `config` and `fetched`; `allow` and `deny` are the policy's two
 lists as written, `deny` the hosts denied by name in either mode, and when the node's
 policy narrows a server's, the lists the narrowing computes (§The policy).
@@ -814,7 +814,7 @@ when the runtime exits is the last chunk.
 A replay lays the redraws of a full-screen program over each other, which takes the
 terminal's size, so the size is in the record. On a pseudo-terminal
 `dev.qory.run.started` contains `terminal`, the columns and rows the runtime starts on:
-the runner's own terminal's when it has one, 80 by 24 otherwise. Every change after that is
+Forager's own terminal's when it has one, 80 by 24 otherwise. Every change after that is
 one `dev.qory.run.resized` with the new size, at the sequence where it takes effect: what
 the gap has buffered is cut before it, so the chunks before it were written to a terminal
 of the old size and the chunks after it to one of the new. On pipes there is no
@@ -829,7 +829,7 @@ compose keeps it out of git:
   included when one is sent. The record of truth; the server's is a copy.
 - `output.log`: the raw bytes of the session's output, the concatenation of the
   `dev.qory.run.log` chunks. Both files tail.
-- `settings.json`: the runtime's settings with the runner's hooks added, when hooks
+- `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
 
@@ -837,10 +837,10 @@ compose keeps it out of git:
 
 ## The server
 
-`server.schema.json`. The document the command passes to the runner, from the machine's
-own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
+`server.schema.json`. The document the command passes to Forager, from the machine's
+own configuration: for `qory`, the `server` section of `~/.config/qory/forager.yaml`,
 with the access key secret from the file descriptor `--access-key-secret-fd <n>` names,
-else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. The runner is a client of the server defined here and of
+else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. The gateway is a client of the server defined here and of
 nothing else: it fetches the server's configuration, posts its events to the URL it
 defines, and takes the server's policy for the run, which the node's narrows, and the
 run's variables from the server when the server offers them. A server is a control
@@ -857,9 +857,9 @@ apiary_public_key:                    # the pin: the server's Ed25519 keys, one 
 ```
 
 `url` is the server's origin and nothing after it: no path, no query, no fragment. The
-runner finds every endpoint through the configuration document under it.
+gateway finds every endpoint through the configuration document under it.
 
-**The access key.** The access key authenticates the runner to the server. It is one
+**The access key.** The access key authenticates the gateway to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
 padding, 47 characters, from the system's random source; the prefix lets secret scanners
 recognise it. The secret signs every request and is never sent, and the server stores
@@ -867,7 +867,7 @@ only the public key. The server assigns the access key its id, `ak_` and 16 lowe
 Crockford base32 characters, when the key enrols (Enrolment, below). The secret lives
 outside this document and outside any repository, in the machine's configuration
 directory, its environment or a file descriptor; it is never in a checkout and never in
-an event. The runner leaves `QORY_ACCESS_KEY_SECRET`, `QORY_ACCESS_KEY_ID` and
+an event. Forager leaves `QORY_ACCESS_KEY_SECRET`, `QORY_ACCESS_KEY_ID` and
 `QORY_APIARY_PUBLIC_KEY` out of the environment of every program it starts: the
 session, the tools, the credential adapters and the wall's `docker` commands, the one
 that starts the agent's container included. The fixtures sign with the published fixture access key of
@@ -911,10 +911,10 @@ the run has arrived for 3 × the `interval_seconds` its ping announced.
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
 server's key can rotate. Every answer of the server, to discovery, to the run
 configuration and to every delivery, is verified under the pin before its body or its
-headers are read, and the runner takes keys from its pin alone. `qory` takes the pin
+headers are read, and the gateway takes keys from its pin alone. `qory` takes the pin
 from `QORY_APIARY_PUBLIC_KEY`, the same list written as JSON, when the section has none,
 and refuses to start when both are set; it takes `access_key_id` from
-`QORY_ACCESS_KEY_ID` the same way. A runner with a server and no pin is no run,
+`QORY_ACCESS_KEY_ID` the same way. A run with a server and no pin is no run,
 `apiary_public_key_missing`, decided before the first request.
 
 **On every request** to the server:
@@ -925,7 +925,7 @@ and refuses to start when both are set; it takes `access_key_id` from
 | `X-Qory-Access-Key-Id` | the access key id |
 | `X-Qory-Instance-Id` | the instance id |
 | `X-Qory-Instance-Name` | the instance's display name, unsigned, for display alone |
-| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `1` |
+| `X-Qory-Contract-Version` | the revision of this contract Forager implements, `1` |
 | `X-Qory-Signature-Ed25519` | the Ed25519 signature of the request string under the access key secret, 64 bytes in base64url without padding |
 
 **The request string** is lines joined by `\n`, with no newline after the last. It
@@ -990,10 +990,10 @@ the checks and the proof verifies under it. Line 3 binds the answer to its reque
 through the request's signature to the access key and the instance that sent it. An
 enrolment answer has its own domain line because its line 3 is a proof, which anyone
 holding a live code chooses: its signature never verifies as the answer to a signed
-request, nor the reverse. At run start the runner treats an answer without a valid
+request, nor the reverse. At run start the gateway treats an answer without a valid
 signature under the pin as no run, `answer_unsigned`; during the run a delivery's answer
 without one is no answer, retried as any other with its headers unread, and a reload's
-fetch without one fails the reload. The runner reads a body's code only from a signed
+fetch without one fails the reload. The gateway reads a body's code only from a signed
 answer, and a refusal body over 64 KiB counts as unsigned. Two known answers under the
 fixture signing key, to the GET of discovery above: `200` with the 208-byte body of
 `fixtures/known-answers/discovery.json` and `X-Qory-Configuration: sha256=` and the hex
@@ -1022,7 +1022,7 @@ an event of a run the server has closed; then, for a ping alone, `409`
 `X-Qory-Access-Key-Id` or `X-Qory-Signature-Ed25519`, an access key id of the wrong
 shape, an access key the server does not recognise or has revoked, a timestamp that is
 not an integer, a stale timestamp, a signature that does not verify. The body never
-indicates which, and the runner reports every `401` as `unauthorized`. The server
+indicates which, and the gateway reports every `401` as `unauthorized`. The server
 verifies the Ed25519 signature, cofactorless as RFC 8032 defines it, looks the access
 key up only after its id's shape is checked, logs nothing about the signature header,
 and records the instance id and name as display data. A redirect is not followed: a 3xx
@@ -1075,7 +1075,7 @@ refuses. The known answers are `fixtures/enrolment/` and the enrolment lines of
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
 access key. The answer is a signed `200`, `application/json`, with the header
 `X-Qory-Configuration: sha256=<hex>`, the server's digest of the document: opaque to the
-runner, which compares it byte for byte and never recomputes it.
+gateway, which compares it byte for byte and never recomputes it.
 
 ```json
 {"version": 1,
@@ -1088,14 +1088,14 @@ runner, which compares it byte for byte and never recomputes it.
 `version`, `node_id`, `events` and `apiary_public_key` are required. `node_id` is the id
 of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
 display: `qory` prints it. `apiary_public_key` lists the server's current key, and
-during a rotation the next one, for information: a runner verifies under its pin alone.
+during a rotation the next one, for information: the gateway verifies under its pin alone.
 `secrets` is optional, `{url}` with `run.url`'s grammar: present for an access key
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
 offers no run configuration, and the policy is the machine's. A top-level member the
-runner does not recognise is ignored, which is how a new revision adds a section.
+gateway does not recognise is ignored, which is how a new revision adds a section.
 
 **The run configuration document.** `run-configuration.schema.json`. A signed `GET
 <run.url>?<the run's labels>`: one query parameter per label, the label's key as the
@@ -1106,7 +1106,7 @@ form is, a space as `+`, so a run labelled `forge: github.com`, `issue: "77"` an
 `<run.url>?forge=github.com&issue=77&repository=acme%2Fshop`. When `run.url` has a query
 of its own, the labels are added to it, and a label replaces a parameter of the same
 name. The server decides which labels identify what the run works on and returns the
-policy for that; the runner reads nothing into them. The labels are bounded, at most 16,
+policy for that; Forager reads nothing into them. The labels are bounded, at most 16,
 a key of at most 64 bytes that needs no encoding and a value of at most 256 bytes, which
 is at most 768 once encoded, so the query the labels make is at most 13,343 bytes; a
 server whose front end limits a request line to less refuses the longest of them. The
@@ -1131,40 +1131,40 @@ and `dev.qory.run.policy_applied` reports `url` and `run_configuration` beside `
 by the command's, and one that drops it puts the command's back. `variables` are the
 server's variables for the run, a name and an object with its string `value` each
 (§Variables). A member
-the runner does not recognise is ignored. The digest is the server's and opaque; the
-runner keeps it, sends it back on every POST, and never recomputes it. The runner reads
+the gateway does not recognise is ignored. The digest is the server's and opaque; the
+gateway keeps it, sends it back on every POST, and never recomputes it. The gateway reads
 the document with a decoder that refuses a member name that appears twice and invalid
 UTF-8, then against the schema and the limits, and its error states where in the
 document and which rule refused it, never a value. Anything but `200`, or a document the
-runner refuses, is no run, `run_configuration_invalid` for the latter.
+gateway refuses, is no run, `run_configuration_invalid` for the latter.
 
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
-events of one run, in sequence order, never empty. The runner cuts a batch at one
+events of one run, in sequence order, never empty. The gateway cuts a batch at one
 hundred events, at one mebibyte, or after one second since its first event, whichever
 comes first; the ping is a batch of one, sent before anything else, with the heartbeat
 interval the run uses, `interval_seconds`, at most 300. A receiver verifies the Ed25519
 signature over the request string before parsing, then deduplicates on each event's
 `id`, since delivery is at least once.
 
-The runner reads a body's code only from a signed answer:
+The gateway reads a body's code only from a signed answer:
 
 | Status | Meaning |
 |---|---|
-| 2xx, signed | accepted; the runner forgets the batch |
+| 2xx, signed | accepted; the gateway forgets the batch |
 | 409 to the ping, signed, such as `instance_limit` | no run, with its code |
-| 410, signed, with `run_closed` | the run ends: the runner stops the runtime as at its time limit, records `dev.qory.run.exited` with `reason: run_closed` in the file sink, and sends nothing further. Before `dev.qory.run.started`, it stops the start and records `dev.qory.run.refused` with the code `run_closed` instead |
-| 410, signed, without that code | stop: the server requests nothing more for this run. The runner sends no further batch and the run continues on the file sink |
+| 410, signed, with `run_closed` | the run ends: the session stops the runtime as at its time limit, records `dev.qory.run.exited` with `reason: run_closed` in the file sink, and sends nothing further. Before `dev.qory.run.started`, it stops the start and records `dev.qory.run.refused` with the code `run_closed` instead |
+| 410, signed, without that code | stop: the server requests nothing more for this run. The gateway sends no further batch and the run continues on the file sink |
 | anything else, an answer that does not verify, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
 
 Every answer may contain `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
 digests in force: of the configuration document, and of the run configuration for the
-run's labels. The runner compares each to the one it keeps. A different
+run's labels. The gateway compares each to the one it keeps. A different
 run-configuration digest means fetch the run configuration again and apply it; a
 different configuration digest means fetch the configuration document again and use
 its sections for the batches that follow: the events URL and the filter. A
 header absent means nothing, and so does a digest of an answer that does not verify.
 This is how a control plane changes a run's policy while it runs, and the whole of it:
-the runner reads a body's code only from a signed answer.
+the gateway reads a body's code only from a signed answer.
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
@@ -1176,33 +1176,34 @@ the runner reads a body's code only from a signed answer.
 3. A host the new policy terminates TLS for is terminated on its next connection.
 
 What is still undelivered when the run ends is spooled to the run directory's
-`undelivered/` as batch files with their delivery ids, and the runner reports the count
+`undelivered/` as batch files with their delivery ids, and Forager reports the count
 on its standard error. The file sink has every event regardless. The server never
 delays the session: posting is asynchronous behind a bounded queue, and a queue that
 fills spools to the same directory rather than blocking the runtime.
 
-**After a runner stops unexpectedly.** The run directory records what the server is
-still owed, without the runner that wrote it. `events.jsonl` is written as events
+**After Forager stops unexpectedly.** The run directory records what the server is
+still owed, without the Forager process that wrote it. `events.jsonl` is written as events
 happen. `delivered.log` beside it gets a line as each batch is accepted, the delivery id
 and the sequence of every event in it, and the one word `stopped` for a signed 410.
-`lock` is held by the runner for as long as it lives, by the kernel, so it is free once
-the runner is gone however it went. Sending a run again is the job's last step, whatever
+`lock` is held by the session for as long as it lives, by the kernel, so it is free once
+the session is gone however it went. Sending a run again is the job's last step, whatever
 happens before it: refused while the lock is held; then what the run's wall leaves
 behind is removed, by the run's label; a record that has `dev.qory.run.started` and no
 `dev.qory.run.exited` gets one, numbered on from the last event, with `state: failed`,
-`exit_code: -1` and `reason: gateway_lost`; and every event the server's filter selects
+`exit_code: -1` and `reason: gateway_lost`, the gateway having been lost before the run's
+exit was recorded; and every event the server's filter selects
 that no accepted batch contained is posted, in order, in batches cut the same way, until
-the server accepts them or the runner stops retrying. The resend fetches the
+the server accepts them or the gateway stops retrying. The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
-`undelivered/` again. A receiver sees some events twice when the runner dies between an
+`undelivered/` again. A receiver sees some events twice when Forager dies between an
 answer and its line, and discards them by `id` as any duplicate. Nothing of this
 recovers a machine that dies: the record is lost with it, and a receiver detects that
 from heartbeats that stop.
 
 **The modes of a run:**
 
-| The runner receives | Events go to | The policy comes from |
+| Forager receives | Events go to | The policy comes from |
 |---|---|---|
 | nothing | files only | the machine's policy the command passes (`egress`), else observe everything |
 | a server | the server's `events.url`, after a signed discovery fetch and a ping | the server's run configuration when it offers one, narrowed by the node's policy, else the node's policy |
@@ -1222,7 +1223,7 @@ the public keys listed in its own configuration and skips enrolment, verifies ea
 request and answers in the order this section defines, signs every answer after
 verification under its own key, returns the digest headers, deduplicates and appends to
 a file. Its discovery lists `version`, `node_id`, `events` and `apiary_public_key`, and
-no `secrets`. The module's own tests run the runner's client against it.
+no `secrets`. The module's own tests run the gateway's client against it.
 `fixtures/signed/` is what any receiver is tested against: one request per file,
 `method`, `target`, `headers`, a header sent twice being a list of its values, `body`
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
@@ -1235,13 +1236,13 @@ may read that code.
 
 ## The runtime
 
-The runner starts a program, records it and stops it, and contains nothing specific to
+The session starts a program, records it and stops it, and contains nothing specific to
 one. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it. A runtime
 defines seven things: its name and the version of the program it was written against,
 reported in `dev.qory.run.started`; how a launch is prepared so the program reports to
-the runner and runs with the run's placeholders, which may change the command and
+the session and runs with the run's placeholders, which may change the command and
 arguments, add variables and write into the run directory, and nothing else (a script it
 writes there may record an approval where the program reads it, then start the program);
 whether the program's standard output is records to read; what event, if any, one record
@@ -1261,7 +1262,7 @@ There are three ways to a runtime, and a name resolves to the first that applies
 2. **A bare runtime**, for a name nothing describes. Nothing is prepared and no record
    is read: the run's own events, its log and its egress record are all there, the
    session's are not. Any program runs behind a wall this way, with no descriptor.
-3. **An implementation in Go**, for a caller that embeds the runner and whose program
+3. **An implementation in Go**, for a caller that embeds Forager and whose program
    needs what a descriptor cannot express. It is set in `session.Spec.Runtime` like any
    other.
 
@@ -1275,13 +1276,13 @@ recorded events and that each passes this contract's schema.
 `runtime`, the name, a lower-case letter and then up to 63 lower-case letters, digits
 and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
-**Sources**: how the runner attaches. The terminal bytes always, with nothing to match
+**Sources**: how the session attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when
 the session runs on pipes; a line that is not a JSON object is not a record. `hooks`:
-the runtime's hook events, for each of which the runner installs its forwarder as a
+the runtime's hook events, for each of which the session installs its forwarder as a
 command hook, the way `install` selects among the installers the binary has: a
 descriptor selects an installer and never contains one, so a program that takes hooks
-another way needs an installer in the runner before a descriptor can select it.
+another way needs an installer in Forager before a descriptor can select it.
 `claude-settings` adds a group per event under `hooks` in the JSON settings the launch
 passes with `--settings`, leaving the groups already there. The forwarder writes the
 JSON it reads on its standard input to the local socket, as one record. A forwarder
@@ -1295,7 +1296,7 @@ values are copied unchanged; a path that does not exist leaves the field out, wh
 how optional fields work. Rules run in order and the first that matches produces one
 event; a record no rule matches produces nothing. No patterns, no expressions, no
 defaults, no concatenation. A mapping that needs more than equality and presence is a
-runner change.
+Forager change.
 
 **Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
 runtime that closes its session on one signal and drops it on another defines which.
@@ -1322,11 +1323,11 @@ paths of those hosts, in the policy's path grammar; and how it is set,
 declared ids, each in one group at most: groups of declarations of which the runtime
 needs at most one, and exactly one of a `required` group. `reserves` lists variables
 the runtime reads a credential from beside the declared ones; `denies`, variables the
-runner always leaves out of the server's set for the runtime; `credential_files`, files
-in which the runtime keeps a credential of its own, `~` being the home of the user the
-runner runs as. Behind a wall, a declared or reserved variable that neither a
+session always leaves out of the server's set for the runtime; `credential_files`, files
+in which the runtime keeps a credential of its own, `~` being the home of the user
+Forager runs as. Behind a wall, a declared or reserved variable that neither a
 placeholder, the run nor the runtime's preparation sets goes in empty (§Variables). The
-runner checks `secrets` when it reads the descriptor: the schema, that ids are
+session checks `secrets` when it reads the descriptor: the schema, that ids are
 distinct, and that every id of a group is declared and in one group at most.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
@@ -1338,7 +1339,7 @@ accepted. The tests validate every record and every expected event against the s
 `runtimes/claude/descriptor.yaml` is the Claude Code descriptor, written against version
 2.1.273 as installed and its published hooks reference. Its hooks are the canonical
 source in both modes; its standard output adds the result line, which only the output
-reports. A descriptor records the version it was written against; the runner
+reports. A descriptor records the version it was written against; Forager
 reports that version and does not check the installed one. Its `secrets` declare the
 model credential, an API key set as `x-api-key` or an OAuth credential set as a bearer,
 on `api.anthropic.com` under `/v1/`, one of the two required.
@@ -1379,13 +1380,13 @@ writes.
 `QORY_RUN_SOCKET` is an address, not a path to open: a path, or `unix:` and a path, is
 the local socket, and any other scheme selects a transport, which a forwarder without it
 refuses with an error that contains the scheme. The local socket is the only transport.
-It is a Unix domain socket the runner creates before the runtime starts, in a private
+It is a Unix domain socket the session creates before the runtime starts, in a private
 directory of its own under the system's temporary directory, mode `0700`, because a
 socket path has a short limit on some systems and a run directory in a deep checkout can
 exceed it. A client connects, writes one record per line in the shape of
-`record.schema.json`, and closes; the runner reads until end of file, one connection at
+`record.schema.json`, and closes; the session reads until end of file, one connection at
 a time in the order they arrive, so two hook calls in a row keep their order. There is
-no answer and no framing beyond the newline. The forwarder the runner installs as a hook
+no answer and no framing beyond the newline. The forwarder the session installs as a hook
 is one such client; a harness that reports something of its own writes the same shape
 with `source: hooks`. Nothing on the socket reaches a receiver except through the
 descriptor's rules. The socket is removed when the run ends.
@@ -1445,7 +1446,7 @@ one, and `docker: true` when the enclosure has a daemon of its own.
 
 A wall is what makes a connection around the proxy fail. It is optional: with none, the
 runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
-the runtime runs in an **enclosure** and the session runner stays outside it with the
+the runtime runs in an **enclosure** and the session stays outside it with the
 proxy, the policy and the access key secret; the record is written from outside, and the
 enclosure sees the run directory read-only. A wall is built by an adapter, one per
 container interface; the contract's rules refer to no specific tool and define one list
@@ -1453,7 +1454,7 @@ for all of them.
 
 **What every wall guarantees:**
 
-- no route out of the enclosure except to the session runner's proxy;
+- no route out of the enclosure except to the gateway;
 - a resolver that resolves nothing outside the enclosure;
 - no cloud metadata address, which is a network path to credentials;
 - no file of the host beyond the mounts the run lists, and no environment beyond what
@@ -1467,10 +1468,10 @@ for all of them.
   container on the host's network from the daemon has left the wall. A mount that is a
   socket, or a directory containing a runtime's, is refused.
 
-**The runner's files.** A walled run, one without a server included, refuses a mount,
-or the workspace, that is, contains or lies inside one of the runner's files: no run,
-`mount_contains_forager_files`, with the mount and the runner's file as its names, in
-that order. The runner checks before it contacts the server and before anything starts,
+**Forager's files.** A walled run, one without a server included, refuses a mount,
+or the workspace, that is, contains or lies inside one of Forager's files: no run,
+`mount_contains_forager_files`, with the mount and Forager's file as its names, in
+that order. The session checks before it contacts the server and before anything starts,
 so no event records that refusal, and checks again just before the enclosure binds the
 mounts. Both paths are
 resolved through symbolic links, a part that does not exist yet through its nearest
@@ -1478,10 +1479,10 @@ parent that does and a link whose target does not exist yet through that target,
 compared by whole components; a path that cannot be resolved is no run. The filesystem
 judges what exists: two directories are the same when they are one file, by device and
 inode, so a path written in another case on a disk that ignores case is the directory
-it names. A part that does not exist yet is compared by name, regardless of case. The
-runner's files are:
+it names. A part that does not exist yet is compared by name, regardless of case.
+Forager's files are:
 
-- the paths the caller lists as its own: for `qory`, the runner file's directory, with
+- the paths the caller lists as its own: for `qory`, the directory of `forager.yaml`, with
   the access key secret;
 - the directory of every credential program and every tool program the machine defines,
   and of the file a link to one leads to, the directory and not only the file, so an
@@ -1496,10 +1497,10 @@ runner's files are:
 - the wall's own: for `docker`, the directory of the `docker` command and of the
   helper, and the command's configuration directory, `DOCKER_CONFIG` or `~/.docker`,
   whose context and credential helpers start programs;
-- the runs directory, where the runner makes the run directories;
-- the runner's registry of walled runs (below).
+- the runs directory, where the session makes the run directories;
+- the session's registry of walled runs (below).
 
-An agent that can change a program the runner starts outside the wall, or read a file a
+An agent that can change a program Forager starts outside the wall, or read a file a
 credential is read from, has left the wall.
 
 **No bind from a place a walled agent can change.** An engine looks up every name of a
@@ -1512,7 +1513,7 @@ is looked up in its parent, so two binds of one root are allowed:
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the run directory, read-only. The workspace is writable and
   is the working directory inside, through the bind that holds it, or bound at its own
-  path when no mount holds it. The runner passes the wall every bind, each path clean,
+  path when no mount holds it. The session passes the wall every bind, each path clean,
   and the working directory lies in one of them by its names, or the run fails; a wall
   binds nothing of the caller's the launch does not list;
 - a place inside another one, or the same, of the same mode is reached through the
@@ -1525,15 +1526,15 @@ is looked up in its parent, so two binds of one root are allowed:
   agent that writes the link would choose what is bound. Its names are the place as
   passed, the link, absolute and clean, the last one inside the writable place on the
   way, and the writable place as passed;
-- the runs directory is one of the runner's files, so the run directory lies in no
+- the runs directory is one of Forager's files, so the run directory lies in no
   place the run lists, and a writable place that holds a directory a name on the way
-  to one of the runner's files is looked up in is `mount_contains_forager_files`;
-- the runner keeps a registry of the walled runs still going on the machine, per user,
+  to one of Forager's files is looked up in is `mount_contains_forager_files`;
+- the session keeps a registry of the walled runs still going on the machine, per user,
   with each run's binds: the places, the run directory and the wall's own, for `docker`
   its helper, the hook socket's directory and the private directory that holds the run's
   environment files and, with a CA, the bundle the enclosure binds. The wall's are listed
   when the run starts, those it makes later as their patterns, which never conflict with
-  another runner's. A run is no run, `mount_shared_with_run`, when one of its binds lies
+  another session's. A run is no run, `mount_shared_with_run`, when one of its binds lies
   inside a writable bind of another run's or is reached through one, when one of its
   writable binds holds a bind of another run's or a directory a name on the way to one is
   looked up in, or when one of its binds is, holds or lies inside another run's run
@@ -1541,11 +1542,11 @@ is looked up in its parent, so two binds of one root are allowed:
   root never conflict otherwise, and neither do two read-only ones. Its names are the path
   of this run's, the other run's id and the other run's path. A place that lies inside a
   writable directory another run's wall binds of its own is refused too. A run whose own
-  helper, or another directory of the runner's its wall binds, lies inside a writable bind
-  of another run's, or is reached through one, does not start. The runner checks and lists
+  helper, or another directory of Forager's its wall binds, lies inside a writable bind
+  of another run's, or is reached through one, does not start. The session checks and lists
   the run in one step, before it contacts the server, and the run leaves the registry when
   it ends, however it ends, unless its wall could not be removed. A run is still going
-  while its runner holds its entry, or, once its runner is gone, while the container
+  while its session holds its entry, or, once its session is gone, while the container
   engine its entry records, pinned by its selection and by its id when it gave one, holds
   a container labelled `dev.qory.run=<id>`, in any state. The selection is pinned by the
   variables the command reads: for the command named podman, `CONTAINER_HOST` or
@@ -1561,14 +1562,14 @@ is looked up in its parent, so two binds of one root are allowed:
 Each of these refusals lists its names in the order given with it. A place of this run's,
 a mount or the workspace, is named by its path as the caller passed it, and its run
 directory by the runs directory the caller passed; a bind of another run's is named as
-that run passed it, a runner's file, a link and a registry entry by their paths, and an
+that run passed it, a file of Forager's, a link and a registry entry by their paths, and an
 earlier or another run by its id. The first name of each `mount_` refusal is one of this
 run's places, or for `mount_shared_with_run` also its run directory; the first name of
-`engine_unreachable` is the earlier run's id. The runner checks again just before the enclosure binds, with the wall's own binds, and
+`engine_unreachable` is the earlier run's id. The session checks again just before the enclosure binds, with the wall's own binds, and
 a place that resolves otherwise, or whose names are looked up in other directories,
 than at the start does not start. So no name on the way to a bind source is looked up
 in a place a walled agent of this user's can write. A process outside every wall, the
-user's own or another user's, can still change a path between the runner's last check
+user's own or another user's, can still change a path between the session's last check
 and the bind.
 
 When the run has an authority of its own (§Credentials), a wall sets the enclosure's
@@ -1587,12 +1588,12 @@ the engine's defaults. They are no guarantee of the wall's: they keep one run fr
 starving a machine, not an agent inside.
 
 The proxy is part of the list, because it dials from outside on behalf of what is
-inside: behind a wall it is **guarded**, and what is on the runner's machine is not
+inside: behind a wall it is **guarded**, and what is on Forager's machine is not
 reached by default. Two rules, in either mode, observe included:
 
 - The link-local range, where a cloud keeps its metadata service, is refused whatever
   the allow list contains.
-- The runner's own machine, loopback and every address it has, is refused unless an
+- Forager's own machine, loopback and every address it has, is refused unless an
   `egress.allow` entry of the policy lists the host itself. A `*.` suffix over it does
   not count, and neither does a name a harness declares under such a suffix: the
   machine's owner decides what is opened on the machine, a repository cannot. A
@@ -1606,15 +1607,15 @@ A refusal the proxy can make without resolving, a literal address or `localhost`
 resolves to such an address passes the decision, is refused when dialled, and the
 runtime gets a `502`. Without the guard the way around a wall is through the proxy.
 
-**What crosses**, all three the session runner's, none containing a credential of the
-runner's: the proxy, as a network address; the pseudo-terminal or the pipes, through the
+**What crosses**, all three the session's, none containing a credential of the
+gateway's: the proxy, as a network address; the pseudo-terminal or the pipes, through the
 adapter's own command; the hook socket, as a mounted file where a file can cross.
 
-**The relay.** The agent reaches the proxy by a name, through a relay: a process of the
-runner's on the enclosure's network and on an ordinary one, listening on a fixed port and
+**The relay.** The agent reaches the proxy by a name, through a relay: a process of
+Forager's on the enclosure's network and on an ordinary one, listening on a fixed port and
 copying every byte to one address fixed when it starts, the proxy's. It reads nothing,
-decides nothing and takes no instruction from the agent; the policy stays in the session
-runner. It exists because the host is not always where a container expects it: with
+decides nothing and takes no instruction from the agent; the policy stays in the
+gateway. It exists because the host is not always where a container expects it: with
 the engine in a virtual machine the network's gateway is the virtual machine's, not the
 host's. It forwards no packet between its two networks: IP forwarding is off in its
 namespace, so what it passes on is the connections it copies and nothing routed
@@ -1674,7 +1675,7 @@ capability added.
 
 **One conformance suite**, the `e2e` package, checks the list from inside the
 enclosure with a real session behind the adapter, and an adapter ships when the suite
-passes for it. The suite needs Linux and the tool, so it runs in the runner's CI on a
+passes for it. The suite needs Linux and the tool, so it runs in Forager's CI on a
 Linux machine; the ordinary tests compare the commands an adapter generates with golden
 files and need neither.
 
@@ -1683,7 +1684,7 @@ engine that command reaches. It is supported where the suite passes. An engine i
 virtual machine on a Mac is where a wall is developed, not a target: the suite passes
 there without the hook check (§Limits). The agent's image is the caller's; the wall
 builds none. A Docker of the agent's own is experimental, under `sysbox-runc`, where the
-suite passes with it: the runner's CI installs Sysbox on a Linux machine and runs the
+suite passes with it: Forager's CI installs Sysbox on a Linux machine and runs the
 suite in an enclosure with a daemon. The suite checks the list as the agent's user; what
 the enclosure's root reaches of the mounts the run lists is the open question that keeps
 the option experimental.
@@ -1707,7 +1708,7 @@ the option experimental.
 | `fixtures/batch/` | delivery bodies: the ping, a first batch, the `dev.qory.run.refused` of a run the server closed before it started | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules |
-| `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only the runner checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the runner's check, `session.CheckAbout`, expecting a failure for every refused one |
+| `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |

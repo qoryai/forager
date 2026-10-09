@@ -76,7 +76,7 @@
       "required": ["version", "access_key_id", "node_id", "node_kind", "stored_secrets", "apiary_public_key"],
       "properties": {
         "version": {
-          "description": "The document format. A runner refuses a version it does not read.",
+          "description": "The document format. Forager refuses a version it does not read.",
           "const": 1
         },
         "access_key_id": {

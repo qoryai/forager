@@ -20,6 +20,6 @@
     "decision": {"type": "string", "enum": ["allowed", "denied"]},
     "outcome": {"description": "What became of the connection. connected: the dial succeeded. dial_failed: allowed, and the dial failed. refused: not dialled, because the policy or the wall's guard denied it, or closed by the proxy when a new run configuration denied its host.", "type": "string", "enum": ["connected", "dial_failed", "refused"]},
     "mode": {"description": "The policy mode the decision was made under.", "type": "string", "enum": ["observe", "enforce"]},
-    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied. Behind a wall, wall:own-address is the wall's own refusal, in either mode: the host is a link-local address, such as the metadata service, or the runner's machine with no allow entry listing it.", "type": "string"}
+    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied. Behind a wall, wall:own-address is the wall's own refusal, in either mode: the host is a link-local address, such as the metadata service, or Forager's machine with no allow entry listing it.", "type": "string"}
   }
 }

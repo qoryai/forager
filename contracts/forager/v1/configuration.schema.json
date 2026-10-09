@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where the runner posts its events, where it fetches a run configuration when the server offers one, whether the access key is allowed stored secrets, and the server's keys. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where the gateway posts its events, where it fetches a run configuration when the server offers one, whether the access key is allowed stored secrets, and the server's keys. A section the gateway does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "node_id", "events", "apiary_public_key"],
   "properties": {
     "version": {
-      "description": "The document format. A runner refuses a version it does not read.",
+      "description": "The document format. Forager refuses a version it does not read.",
       "const": 1
     },
     "node_id": {
@@ -69,7 +69,7 @@
       }
     },
     "apiary_public_key": {
-      "description": "The server's Ed25519 public keys, the current one and during a rotation the next one after it, listed for every verified access key for information: a runner verifies under its pin alone.",
+      "description": "The server's Ed25519 public keys, the current one and during a rotation the next one after it, listed for every verified access key for information: the gateway verifies under its pin alone.",
       "type": "array",
       "minItems": 1,
       "maxItems": 2,
