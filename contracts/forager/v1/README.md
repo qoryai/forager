@@ -1485,7 +1485,7 @@ document:
  "digest": "<hex sha256 of the policy as canonical JSON>",
  "variables": {"NODE_ENV": {"value": "test"}},
  "placeholders": ["GIT_SECRET"],
- "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+ "reserved": ["EXAMPLE_SOURCE_KEY"],
  "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
  "applied": {"mode": "enforce", "allow": ["api.example", "git.example"], "deny": ["tracker.example"],
              "source": "fetched", "url": "https://apiary.example/v1/run-configuration",
@@ -1510,8 +1510,9 @@ document:
 - `placeholders`: the variables the agent sees in place of a credential or a tool's
   secret the gateway holds, names alone: the session sets each to a value that is no
   credential, as it sets a credential's placeholder (§Credentials). Absent means none.
-- `reserved`: the names of the variables the gateway sets for the run, which the session
-  must not set. Absent means none.
+- `reserved`: the names of the variables the machine's credentials are read from: a
+  walled run that passes one is refused with `variable_reserved`, and an unwalled run has
+  its value left out, as today. Absent means none.
 - `image`: the image the run gets, as a definition of `images` has it, `ref` required:
   the one the policy in force selects, or the machine's default, `name` absent when the
   default is a reference. Present when the request's `wall` is true. The session's
@@ -1666,7 +1667,7 @@ digest unchanged. Behind a separate gateway, to a refusal with a code of
  "digest": "<hex sha256 of the policy as canonical JSON>",
  "variables": {"NODE_ENV": {"value": "test"}},
  "placeholders": ["GIT_SECRET"],
- "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+ "reserved": ["EXAMPLE_SOURCE_KEY"],
  "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
  "applied": {"mode": "enforce", "allow": ["api.example"], "source": "fetched",
              "url": "https://apiary.example/v1/run-configuration",

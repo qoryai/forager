@@ -239,8 +239,9 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway holds them, the run credential's behind a separate gateway, `details`, the
   `about.details` keys the run credential decides with its values, the policy in force
   and its `digest`, `variables`, `placeholders`, the variables the agent sees in place of
-  a credential or a tool's secret, `reserved`, the variables the gateway sets and the
-  session must not, `image`, the image the run gets when it has a wall, `applied`,
+  a credential or a tool's secret, `reserved`, the variables the machine's credentials
+  are read from, which a walled run that passes one is refused for, `variable_reserved`,
+  and whose value an unwalled run has left out, `image`, the image the run gets when it has a wall, `applied`,
   required, the members of `dev.qory.run.policy_applied` the gateway decides, every one
   but `variables` and `harness_hosts`, which the session adds to write its own, the run's
   `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
