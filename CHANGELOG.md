@@ -326,7 +326,9 @@ release may change what an existing document does, and says so under Upgrading.
   runtime and records `dev.qory.run.exited` with `run_closed` in its own record alone.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
-  `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`, and it
+  `dev.qory.run.egress`, every one after a reload's switch held until the session's
+  `dev.qory.run.policy_applied` of the new policy is numbered, and, when it ends the
+  run, its `dev.qory.run.exited`, and it
   writes `dev.qory.run.policy_applied` for a run with no session. A walled agent never
   reaches the local link's socket, and an unwalled one is never given the link secret:
   `qory` hands the session the secret in memory, never in an environment or a file, so

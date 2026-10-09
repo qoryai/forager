@@ -335,10 +335,15 @@ func hostsAndTypes(evs []event.Event) string {
 	return strings.Join(out, " ")
 }
 
+// egress is a run.egress's data for host.
+func egress(host string) map[string]any { return map[string]any{"host": host} }
+
 // TestWaitingEgressFollowsItsPolicyApplied pins the reload's order, today's session's:
-// the run.egress made with EmitAfter follow the run.policy_applied they wait for, not
-// another; one that comes releases those made before it that still wait; and when the
-// session's final event comes first, they are numbered right before it.
+// from a Hold on, every run.egress waits, the tunnels Await names first, then those
+// emitted after the Hold, and follows the run.policy_applied the Hold waits for, not
+// another; egress before the Hold keeps its place; a policy_applied that releases one
+// Hold releases those made before it; and when the session's final event comes first,
+// what waits is numbered right before it.
 func TestWaitingEgressFollowsItsPolicyApplied(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	runID := event.NewRunID()
@@ -347,37 +352,54 @@ func TestWaitingEgressFollowsItsPolicyApplied(t *testing.T) {
 		sessionEvent(runID, event.RunStarted, map[string]any{}),
 		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "a"}),
 	})
-	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"}, map[string]any{"host": "two.example"})
+	r.Emit(event.RunEgress, egress("before.example"))
+	h := r.Hold()
+	r.Emit(event.RunEgress, egress("new1.example"))
+	r.Await(h, appliedDigest("b"), event.RunEgress, egress("closed1.example"), egress("closed2.example"))
+	r.Emit(event.RunEgress, egress("new2.example"))
 	r.Accept([]event.Event{
 		sessionEvent(runID, event.RunLog, map[string]any{}),
 		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "a"}),
 	})
-	r.Emit(event.RunEgress, map[string]any{"host": "now.example"})
 	r.Accept([]event.Event{
 		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "b"}),
 		sessionEvent(runID, event.RunLog, map[string]any{}),
 	})
-	r.EmitAfter(appliedDigest("c"), event.RunEgress, map[string]any{"host": "three.example"})
-	r.EmitAfter(appliedDigest("d"), event.RunEgress, map[string]any{"host": "four.example"})
+	r.Emit(event.RunEgress, egress("after.example"))
+	hc := r.Hold()
+	r.Await(hc, appliedDigest("c"), event.RunEgress, egress("three.example"))
+	r.Emit(event.RunEgress, egress("new3.example"))
+	hd := r.Hold()
+	r.Await(hd, appliedDigest("d"), event.RunEgress, egress("four.example"))
+	r.Emit(event.RunEgress, egress("new4.example"))
 	r.Accept([]event.Event{sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "d"})})
-	r.EmitAfter(appliedDigest("e"), event.RunEgress, map[string]any{"host": "five.example"})
+	he := r.Hold()
+	r.Await(he, appliedDigest("e"), event.RunEgress, egress("five.example"))
 	r.Accept([]event.Event{
 		sessionEvent(runID, event.RunLog, map[string]any{}),
 		sessionEvent(runID, event.RunExited, map[string]any{}),
 	})
-	if err := r.EmitAfter(appliedDigest("f"), event.RunEgress, map[string]any{"host": "six.example"}); !errors.Is(err, ErrEnded) {
+	if h := r.Hold(); h != nil {
+		t.Error("a Hold after the final event")
+	}
+	if err := r.Await(nil, appliedDigest("f"), event.RunEgress, egress("six.example")); !errors.Is(err, ErrEnded) {
 		t.Errorf("after the final event: %v", err)
 	}
 	r.Close(context.Background())
 	rec := readRecord(t, r.Dir())
 	contiguous(t, runID, rec)
-	want := "run.started run.policy_applied run.log run.policy_applied run.egress:now.example " +
-		"run.policy_applied run.egress:one.example run.egress:two.example run.log " +
-		"run.policy_applied run.egress:three.example run.egress:four.example " +
+	want := "run.started run.policy_applied run.egress:before.example run.log run.policy_applied " +
+		"run.policy_applied run.egress:closed1.example run.egress:closed2.example run.egress:new1.example run.egress:new2.example run.log " +
+		"run.egress:after.example run.policy_applied run.egress:three.example run.egress:new3.example run.egress:four.example run.egress:new4.example " +
 		"run.log run.egress:five.example run.exited"
 	if got := hostsAndTypes(rec); got != want {
 		t.Errorf("the record:\n got %s\nwant %s", got, want)
 	}
+}
+
+// emitAfter holds the run's egress from now on behind data, until match.
+func emitAfter(r *Run, match func(*event.Event) bool, data ...any) {
+	r.Await(r.Hold(), match, event.RunEgress, data...)
 }
 
 // TestWaitingEgressPrecedesTheGatewaysEnd pins the other ends: the gateway's own
@@ -388,7 +410,7 @@ func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
 	r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{})})
-	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	emitAfter(r, appliedDigest("b"), map[string]any{"host": "one.example"})
 	r.Emit(event.RunExited, map[string]any{"state": "failed"})
 	r.Close(context.Background())
 	rec := readRecord(t, r.Dir())
@@ -400,7 +422,7 @@ func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
 	runID = event.NewRunID()
 	r, _ = s.Open(runID)
 	r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{})})
-	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	emitAfter(r, appliedDigest("b"), map[string]any{"host": "one.example"})
 	r.Close(context.Background())
 	rec = readRecord(t, r.Dir())
 	contiguous(t, runID, rec)
@@ -410,7 +432,7 @@ func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
 
 	runID = event.NewRunID()
 	r, _ = s.Open(runID)
-	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	emitAfter(r, appliedDigest("b"), map[string]any{"host": "one.example"})
 	r.Close(context.Background())
 	if got := hostsAndTypes(readRecord(t, r.Dir())); got != "run.egress:one.example" {
 		t.Errorf("the record of a run that never started: %s", got)
