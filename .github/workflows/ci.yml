@@ -17,7 +17,7 @@ jobs:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
     container:
-      image: docker.io/golang:1.27
+      image: public.ecr.aws/docker/library/golang:1.27
     steps:
       - name: Install node for the JavaScript actions
         # checkout@v7 runs on node 24; the image has none.

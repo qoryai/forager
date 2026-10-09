@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 func TestDockerConforms(t *testing.T) {
 	image := os.Getenv("QORY_WALL_IMAGE")
 	if image == "" {
-		image = "busybox:stable"
+		image = "public.ecr.aws/docker/library/busybox:stable"
 	}
 	conform(t, image, "", false)
 }
@@ -40,7 +40,7 @@ func TestDockerNestedConforms(t *testing.T) {
 	}
 	image := os.Getenv("QORY_WALL_NESTED_IMAGE")
 	if image == "" {
-		image = "docker:dind"
+		image = "public.ecr.aws/docker/library/docker:dind"
 	}
 	conform(t, image, rt, true)
 }
@@ -63,7 +63,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	// hold httpd, so the origin is then busybox.
 	origin := image
 	if docker {
-		origin = "busybox:stable"
+		origin = "public.ecr.aws/docker/library/busybox:stable"
 	}
 	helper := e2e.Helper(t)
 	name := fmt.Sprintf("qory-walltest-origin-%d", os.Getpid())
@@ -84,7 +84,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		for _, kv := range e2e.RecorderEnv() {
 			args = append(args, "--env", kv)
 		}
-		args = append(append(args, "--entrypoint", "/walltest", "busybox:stable"), e2e.RecorderArgs...)
+		args = append(append(args, "--entrypoint", "/walltest", "public.ecr.aws/docker/library/busybox:stable"), e2e.RecorderArgs...)
 		if out, err := exec.Command(command, args...).CombinedOutput(); err != nil {
 			t.Fatalf("a recorder: %v: %s", err, out)
 		}
