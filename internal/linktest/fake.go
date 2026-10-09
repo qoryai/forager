@@ -189,8 +189,9 @@ func (f *Fake) Reloads() []string {
 	return slices.Clone(f.reloads)
 }
 
-// RunSecrets are the X-Qory-Run-Secret values the reloads and batches received carried,
-// in order, joined by a comma when one carried several, empty for none.
+// RunSecrets are the X-Qory-Run-Secret values the reloads, the outcome asks and the
+// batches received carried, in order, joined by a comma when one carried several, empty
+// for none.
 func (f *Fake) RunSecrets() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

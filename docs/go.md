@@ -246,7 +246,7 @@ res, err := session.Resend(ctx, session.ResendSpec{
   gateway accepts it or `ctx` ends; what it still has not accepted is under
   `undelivered/` again, unless the gateway ended the run. The events the session
   records in its own record alone are not sent. A record that owes nothing is sent
-  nothing, with no request.
+  nothing, with no request, and the result is the zero `ResendResult`.
 - A record with no `delivered.log` is of a run that never opened at the gateway, a run
   refused at its run request say: `ResendResult.NotOpened` says so, the record is left
   as it is, and nothing is sent, with no request. A record that owes nothing has a
@@ -254,13 +254,16 @@ res, err := session.Resend(ctx, session.ResendSpec{
 - `ResendResult` has `Sent`, the events the gateway accepted now, and `Undelivered`,
   those it still has not. `RunClosed` says the gateway had ended the run: its `410`,
   with `ClosedReason`, its code, as `Result` has it; nothing more is sent, and the
-  events stay in the run directory. `State` and `Reason` say how the run ended where
-  that is known, as `Result` has them: the state and the reason the gateway's `410`
-  says, as the session records them, and otherwise, a `410` `run_closed` among them,
-  those of the `dev.qory.run.exited` in `session.jsonl`; both empty when neither says.
-- A `dev.qory.run.exited` with a reason of the run's starter's, the outcome it gave at
-  the runtime's exit, is sent again like any other event; one whose reason is the code
-  of a gateway's `410` is in the session's record alone, and is not.
+  events stay in the run directory. Once something was sent, `State` and `Reason` say
+  how the run ended where that is known, as `Result` has them: the state and the
+  reason the gateway's `410` says, as the session records them, and otherwise, a `410`
+  `run_closed` among them, those of the `dev.qory.run.exited` in `session.jsonl`; both
+  empty when neither says.
+- The `dev.qory.run.exited` the session posted, with the state and the reason of the
+  runtime's exit or of the starter's outcome, is sent again like any other event. The
+  one the session records after the gateway ended the run is in its record alone, and
+  is never sent: `delivered.log` says `stopped` before it is written, whether the `410`
+  answered a batch or a reload.
 - The refusals of the run credential are a `*session.Refusal` from `gateway`, with the
   events left under `undelivered/`: `run_credential_refused`, the `401`, which an
   expired run credential gets at the discovery; `target_differs_from_credential` and
@@ -359,7 +362,9 @@ A program that needs code of its own implements the interface.
     gateway once, before it writes `dev.qory.run.exited`, how the run's starter says the
     run ended, and waits at most about 10 seconds. An outcome sets `State` and `Reason`,
     such as `failed` and `checks_failed` for a runtime that exited 0; the reason is
-    empty when the starter gave none.
+    empty when the starter gave none, and a reason that is one of Forager's reserved
+    codes, or not a code, is dropped alone, the starter's state kept. The heartbeats go
+    on while the session waits.
   - With no outcome, an answer of `{}`, one that is not valid, a refusal or no answer
     in time, the runtime's exit decides: `succeeded` on 0, `failed` otherwise, with no
     reason, and nothing is added to the record. On the local link there is no starter to

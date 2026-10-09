@@ -215,7 +215,7 @@ func TestTheRunSecretIsKeptWhileTheRecordOwes(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{State: "succeeded"}) || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || n.Load() != 0 {
 		t.Errorf("a resend of a record that owes nothing: %+v %v, %d requests", got, err, n.Load())
 	}
 	noRunSecret(t, "a resend of a record that owes nothing", res.Dir)

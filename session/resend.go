@@ -52,11 +52,11 @@ type ResendResult struct {
 	// as [Result.ClosedReason] holds it; batch_refused when the gateway refused a batch.
 	RunClosed    bool
 	ClosedReason string
-	// State and Reason are how the run ended, where that is known, as [Result] has them:
-	// when the gateway had ended the run, the state and the reason its 410 says, as the
-	// session records them; otherwise, and after a 410 run_closed, the state and the
-	// reason of the run.exited the record holds. Both are empty when neither says, and
-	// Reason when the end has none.
+	// State and Reason are how the run ended, where that is known, as [Result] has them,
+	// once something was sent: when the gateway had ended the run, the state and the
+	// reason its 410 says, as the session records them; otherwise, and after a 410
+	// run_closed, the state and the reason of the run.exited the record holds. Both are
+	// empty when neither says or nothing was owed, and Reason when the end has none.
 	State  string
 	Reason string
 	// NotOpened says the record holds no delivered.log: the run never opened at the
@@ -71,9 +71,11 @@ type ResendResult struct {
 // delivered.log: every event of the record the link takes that no accepted batch
 // contained is posted again, in order and in batches cut as the session cuts them,
 // until the gateway accepts it or ctx ends, and what it still has not accepted is under
-// undelivered/ again, unless the gateway ended the run. The events the session records in its own record alone are not
-// sent: a run.exited the gateway decides and a run.refused of a code the session does
-// not decide. A record that owes nothing is sent nothing, and no request is made. A
+// undelivered/ again, unless the gateway ended the run. The events the session records
+// in its own record alone are not sent: the run.exited of a run the gateway ended,
+// which delivered.log's stopped says, and a run.refused of a code the session does not
+// decide. A record that owes nothing is sent nothing, no request is made, and the
+// result is the zero ResendResult. A
 // record with no delivered.log is of a run that never opened at the gateway, a run
 // refused at its run request say: it is NotOpened, left as it is, and sent nothing,
 // with no request.
@@ -127,22 +129,17 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if err != nil {
 		return ResendResult{}, err
 	}
-	// How the run ended, as far as the record says.
-	state, reason := exitOf(lines)
-	accepted, _, err := sink.Delivered(spec.Dir)
+	accepted, stopped, err := sink.Delivered(spec.Dir)
 	if err != nil {
 		return ResendResult{}, err
 	}
-	var owed []recordedLine
-	for _, l := range lines {
-		if !accepted[l.Sequence] && l.posted() {
-			owed = append(owed, l)
-		}
-	}
+	owed := owedOf(lines, accepted, stopped)
 	if len(owed) == 0 {
 		removeRunSecret(spec.Dir)
-		return ResendResult{State: state, Reason: reason}, nil
+		return ResendResult{}, nil
 	}
+	// How the run ended, as far as the record says.
+	state, reason := exitOf(lines)
 	k, err := spec.Gateway.link(spec.ForagerVersion, nil)
 	if err != nil {
 		return ResendResult{}, err
@@ -157,7 +154,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	owed = slices.DeleteFunc(owed, func(l recordedLine) bool { return !target.Wants(l.Type) })
 	if len(owed) == 0 {
 		removeRunSecret(spec.Dir)
-		return ResendResult{State: state, Reason: reason}, nil
+		return ResendResult{}, nil
 	}
 	// What was spooled is in session.jsonl as well, and is spooled again if the
 	// gateway still does not take it.
@@ -275,13 +272,12 @@ type recordedLine struct {
 	line []byte
 }
 
-// posted reports whether the line is one the session posts on the link: not a
-// run.exited whose reason is the code of a gateway's 410, one of [server.EndCodes],
-// nor a run.refused of a code the session does not decide or with a status, which the
-// session records in its own record alone. A run.exited with no reason, timeout or a
-// reason of the run's starter's is posted: the session's own record of a 410 with the
-// starter's reason, or none, reads the same, and the gateway, which ended that run,
-// answers it with its 410.
+// posted reports whether the line is one the session may have posted on the link: not
+// a run.refused of a code the session does not decide or with a status, which the
+// session records in its own record alone, nor a run.exited whose reason is the code of
+// a gateway's 410, one of [server.EndCodes], which only the session's own record of a
+// 410 holds. Its own record of a 410 with the starter's reason, or none, reads as a
+// posted one does: delivered.log's stopped tells it apart ([owedOf]).
 func (l recordedLine) posted() bool {
 	switch l.Type {
 	case event.RunExited:
@@ -384,16 +380,27 @@ func owes(dir string, target sink.Target) bool {
 	if err != nil {
 		return true
 	}
-	accepted, _, err := sink.Delivered(dir)
+	accepted, stopped, err := sink.Delivered(dir)
 	if err != nil {
 		return true
 	}
+	return slices.ContainsFunc(owedOf(lines, accepted, stopped), func(l recordedLine) bool { return target.Wants(l.Type) })
+}
+
+// owedOf is what of the record the gateway is still owed, as delivered.log says: every
+// line the session posts that no accepted batch contained, but a run.exited once
+// delivered.log says stopped. The gateway's answer that ended the run, a 410 to a batch
+// or to a reload, is the one word stopped, written before the session records its own
+// run.exited in its record alone; the gateway, which ended that run, wrote its
+// run.exited itself.
+func owedOf(lines []recordedLine, accepted map[string]bool, stopped bool) []recordedLine {
+	var owed []recordedLine
 	for _, l := range lines {
-		if !accepted[l.Sequence] && l.posted() && target.Wants(l.Type) {
-			return true
+		if !accepted[l.Sequence] && l.posted() && (!stopped || l.Type != event.RunExited) {
+			owed = append(owed, l)
 		}
 	}
-	return false
+	return owed
 }
 
 // removeRunSecret removes the run's secret from the run directory, once nothing is owed.

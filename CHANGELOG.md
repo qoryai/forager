@@ -521,10 +521,14 @@ release may change what an existing document does, and says so under Upgrading.
   credential and the run's secret as a reload carries them, bounded to
   `server.OutcomeTimeout`, 10 seconds, and returns a `server.LinkOutcome`, `State` and
   `Reason`: the starter's outcome from a `200` that `link-outcome-answer.schema.json`
-  accepts with no reserved reason, and `{}` for anything else, an error, no answer in
-  time, another status, a `410` among them, or an answer that is not valid. On the local
+  accepts, a reason that is one of Forager's reserved codes, or one the schema refuses,
+  dropped alone and the state kept, and `{}` for anything else, an error, no answer in
+  time, another status, a `410` among them, or an answer that is not valid, a state the
+  schema refuses among them. On the local
   link it sends nothing and returns `{}`. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
-  and posts it without its sequence.
+  and posts it without its sequence. `(*sink.Server).RunEnded` records that an answer
+  the sink did not read itself, a reload's `410`, ended the run: nothing more is sent,
+  `RunClosed` reports true, and `delivered.log` says `stopped`.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -1076,15 +1080,18 @@ release may change what an existing document does, and says so under Upgrading.
   until the gateway accepts it or the context ends, and what it does not accept is under
   `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
   sent. Every batch carries the run's `run_secret` from `run-secret`, which is removed
-  once nothing is owed. A record that owes nothing is sent nothing, with no request. A record with no
+  once nothing is owed. A record that owes nothing is sent nothing, with no request, and
+  the result is the zero `ResendResult`. A record with no
   `delivered.log`, of a run that never opened at the gateway, a run refused at its run
   request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
   the gateway has ended answers with its `410`:
-  `RunClosed`, with `ClosedReason`, and nothing more is sent. `State` and `Reason` say
-  how the run ended where that is known: the state and the reason the gateway's `410`
-  says, as the session records them, else those of the record's
-  `dev.qory.run.exited`. A `dev.qory.run.exited` with a reason of the starter's is sent
-  again; one with the code of a gateway's `410` is the session's alone, and is not. The gateway's
+  `RunClosed`, with `ClosedReason`, and nothing more is sent. Once something was sent,
+  `State` and `Reason` say how the run ended where that is known: the state and the
+  reason the gateway's `410` says, as the session records them, else those of the
+  record's `dev.qory.run.exited`. The `dev.qory.run.exited` the session posted is sent
+  again; the one it records after the gateway ended the run is the session's alone, and
+  is never sent: `delivered.log` says `stopped` before it, whether the `410` answered a
+  batch or a reload. The gateway's
   `401` `run_credential_refused`, which an expired run credential gets at the discovery,
   and its `403` `target_differs_from_credential` and `differs_from_credential` are a
   `*session.Refusal` from `gateway`, the events left under `undelivered/`. A record its
@@ -1108,8 +1115,9 @@ release may change what an existing document does, and says so under Upgrading.
   asks the gateway once for the outcome its starter gave, before `dev.qory.run.exited`
   is written, and waits at most about 10 seconds: an outcome sets the state and the
   reason, such as `failed` and `checks_failed` for a runtime that exited 0, whose
-  `exit_code` stays 0. With `{}`, an answer that is not valid, a refusal or no answer in
-  time, the exit decides, `succeeded` on 0 and `failed` otherwise, and nothing is added
+  `exit_code` stays 0; a reserved reason, or one that is not a code, is dropped alone,
+  the state kept, and the heartbeats go on while it waits. With `{}`, an answer that is
+  not valid, a refusal or no answer in time, the exit decides, `succeeded` on 0 and `failed` otherwise, and nothing is added
   to the record or reported. A run stopped at its time limit, by the caller's context or
   by the gateway asks nothing, and a run on the local link never asks or waits.
 - The session fetches the run's configuration from the gateway again whenever the

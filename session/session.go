@@ -190,7 +190,8 @@ type Result struct {
 	// dev.qory.run.exited, how the run ended: succeeded, failed or cancelled, and the
 	// reason, empty when there is none. When the runtime exits by itself, behind a
 	// separate gateway, the outcome the run's starter gave at the exit sets both, the
-	// starter's reason empty when it gave none; with none, the runtime's exit decides,
+	// starter's reason empty when it gave none, or gave a reserved code or one that is
+	// not a code, which is dropped alone; with none, the runtime's exit decides,
 	// succeeded on 0 and failed otherwise, with no reason, as on the local link, where the
 	// session asks nothing. At the spec's Timeout they are cancelled and timeout. When
 	// the gateway closed the run, RunClosed, they are the state and the reason its 410
@@ -843,11 +844,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// status.
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
-	stopBeat()
 	closeSocket()
 	// A reload still in flight ends here: nothing of it goes after run.exited.
 	reload.stop()
 	if err != nil && !closed {
+		stopBeat()
 		closeSinks(ctx)
 		return nil, err
 	}
@@ -873,6 +874,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			outcome = server.LinkOutcome{}
 		}
 	}
+	// The heartbeats go on while the gateway is asked, so a short interval does not
+	// lose the session meanwhile, and stop before run.exited.
+	stopBeat()
 	state, reason := "failed", ""
 	switch {
 	case closed:
@@ -897,8 +901,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	case closed:
 		// The end of the run at the gateway is in its stream already: the session
 		// records its own run.exited, with the state and the reason it was closed with,
-		// in its record alone.
+		// in its record alone, once delivered.log says the gateway ended the run, which
+		// a reload's 410 leaves to the session to say: a resend never sends it.
 		res.ClosedReason = closedBy.get().Code
+		posts.RunEnded()
 		own(event.RunExited, exited)
 	case timedOut:
 		spec.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))

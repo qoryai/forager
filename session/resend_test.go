@@ -147,7 +147,7 @@ func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 		t.Error("the resend changed session.jsonl")
 	}
 	again, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{State: "succeeded"}) || got.NotOpened || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || got.NotOpened || n.Load() != 0 {
 		t.Errorf("a resend of a record that owes nothing: %+v %v, %d requests", got, err, n.Load())
 	}
 	s.close(t)
