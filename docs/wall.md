@@ -41,7 +41,7 @@ nothing.
   See
   [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
 - A mount that is, contains or lies inside one of Forager's files is no run,
-  `mount_contains_forager_files`: the directory of `runner.yaml` with the access key
+  `mount_contains_forager_files`: the directory of `forager.yaml` with the access key
   secret, the programs Forager starts outside the wall, their configuration. See
   [Forager's files](#foragers-files).
 - The session, the policy and the access key secret stay outside, on the node.
@@ -109,20 +109,21 @@ there has the log, the egress record and the structured output, and no hook even
 
 ## Configure it
 
-One file on the node defines it: `~/.config/qory/runner.yaml`. It is never in a
+One file on the node defines it: `~/.config/qory/forager.yaml`. It is never in a
 repository, so a checkout cannot set what it runs under. With a `wall` section, a bare
 `qory run` is walled:
 
 ```yaml
 apiVersion: qory.dev/v1alpha1
-egress:                         # what the agent may reach; without it, everything, recorded
-  mode: enforce                 # or observe: record everything, deny only what deny names
-  allow: [api.anthropic.com, github.com, "*.githubusercontent.com"]
-server:                         # how the node reports; without it, files only
-  url: https://control-plane.example.com
-  access_key_id: ak_f1xt0re000000000   # or QORY_ACCESS_KEY_ID in the environment
-  apiary_public_key:                   # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
-    - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
+gateway:
+  egress:                       # what the agent may reach; without it, everything, recorded
+    mode: enforce               # or observe: record everything, deny only what deny names
+    allow: [api.anthropic.com, github.com, "*.githubusercontent.com"]
+  server:                       # how the node reports; without it, files only
+    url: https://control-plane.example.com
+    access_key_id: ak_f1xt0re000000000  # or QORY_ACCESS_KEY_ID in the environment
+    apiary_public_key:                  # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
+      - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 wall:
   adapter: docker
   image: agent:1                # or --image
@@ -132,9 +133,9 @@ wall:
   command: podman               # only for another command than docker
 ```
 
-- `egress` is the policy when the server offers no run configuration, and it narrows
-  the server's when the server offers one. See [the policy](policy.md).
-- `server` defines the control plane. See [the server](server.md).
+- `gateway.egress` is the policy when the server offers no run configuration, and it
+  narrows the server's when the server offers one. See [the policy](policy.md).
+- `gateway.server` defines the control plane. See [the server](server.md).
 - `wall.env` is the whole of the node's environment that goes in, by name: the
   machine's variables. A server's value of the same name wins over one, and `--env`
   does too. See [variables](server.md#variables) and [credentials](credentials.md).
@@ -212,7 +213,7 @@ run directory and the hook socket's directory, which the session shows the enclo
 itself, are the run's own, and lie in Forager's files. Forager's files are:
 
 - `Spec.ForagerFiles`, the absolute paths the caller lists as its own. `qory` lists the
-  directory of `runner.yaml`, with the access key secret.
+  directory of `forager.yaml`, with the access key secret.
 - The directory of every credential program and every tool program the machine defines,
   found in `PATH` as the gateway starts it, and the directory of the file a link to one
   leads to. A program's neighbours, an interpreter or a module, are covered with it.
@@ -392,7 +393,7 @@ The machine defines the images a run may start in. The run's policy selects one 
 with `image`, as it selects credentials and tools. Without a selection, the run starts
 in `Image`.
 
-`qory` reads `wall.images` from `runner.yaml`: named images, each with a `ref`, and a
+`qory` reads `wall.images` from `forager.yaml`: named images, each with a `ref`, and a
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
 starts in when its policy selects none.
 

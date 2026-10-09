@@ -5,14 +5,14 @@ selects goes there too, signed. The server can also set the run's policy.
 
 A server is a control plane, or a receiver of your own.
 
-## In runner.yaml
+## In forager.yaml
 
-For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the server. The
-example is in [the policy](policy.md#in-runneryaml).
+For `qory`, the `gateway.server` section of `~/.config/qory/forager.yaml` defines the
+server. The example is in [the policy](policy.md#in-forageryaml).
 
 - Forager reports to the server as an access key: `access_key_id` is its id, and
   its secret, one line starting `qak_`, lives in the file `access-key-secret` beside
-  `runner.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
+  `forager.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
   Ed25519 and is never sent.
 - `apiary_public_key` is the pin, the server's keys: Forager verifies every answer
   under it. A server without a pin is no run.
@@ -25,10 +25,10 @@ example is in [the policy](policy.md#in-runneryaml).
   policy, `Spec.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
-- With `server` set, the run starts only when the server answers the fetch and a ping,
-  signed. So a run meant to be observed never runs unobserved.
+- With `gateway.server` set, the run starts only when the server answers the fetch and
+  a ping, signed. So a run meant to be observed never runs unobserved.
 - `qory run --local` runs with the files alone.
-- Without `server`, the run writes files only.
+- Without `gateway.server`, the run writes files only.
 
 ## How Forager uses the server
 

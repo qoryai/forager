@@ -138,7 +138,7 @@ type Spec struct {
 	// nothing.
 	Mounts []wall.Mount
 	// ForagerFiles are the absolute paths of the caller's files that are Forager's
-	// own, such as the directory of qory's runner.yaml with the access key secret. A
+	// own, such as the directory of qory's forager.yaml with the access key secret. A
 	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
 	// them, or one of the paths Forager knows itself, RunsDir among them,
 	// mount_contains_forager_files: see [Overlap].

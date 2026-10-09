@@ -282,9 +282,9 @@ configuration request and never selects a policy. An empty `about` is left out.
 
 `policy.schema.json`. The document the command passes to Forager, from the machine's
 own configuration, never from inside the checkout, where the agent it constrains can
-write it: for `qory`, the `egress` section of `~/.config/qory/runner.yaml`. The same
-document a server's run configuration contains as `security_policy` (§The server), so
-nothing is designed twice.
+write it: for `qory`, the `gateway.egress` section of `~/.config/qory/forager.yaml`.
+The same document a server's run configuration contains as `security_policy` (§The
+server), so nothing is designed twice.
 
 ```yaml
 version: 1
@@ -581,7 +581,7 @@ of the highest source that sets it:
 | `fixed` | Forager's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's own variables, `qory run --env` | `Spec.Variables.Run` |
-| `machine` | the machine's variables, the `wall.env` of `runner.yaml` | `Spec.Variables.Machine` |
+| `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `Spec.Variables.Machine` |
 | `harness` | the harness's written defaults | `Spec.LaunchDefaults` |
 | `shell` | the environment the run inherits | `Spec.Env` |
 
@@ -838,9 +838,10 @@ compose keeps it out of git:
 ## The server
 
 `server.schema.json`. The document the command passes to Forager, from the machine's
-own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
-with the access key secret from the file descriptor `--access-key-secret-fd <n>` names,
-else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. Forager is a client of the server defined here and of
+own configuration: for `qory`, the `gateway.server` section of
+`~/.config/qory/forager.yaml`, with the access key secret from the file descriptor
+`--access-key-secret-fd <n>` names, else `QORY_ACCESS_KEY_SECRET`, else the file
+`access-key-secret`. Forager is a client of the server defined here and of
 nothing else: it fetches the server's configuration, posts its events to the URL it
 defines, and takes the server's policy for the run, which the node's narrows, and the
 run's variables from the server when the server offers them. A server is a control
@@ -1482,7 +1483,7 @@ inode, so a path written in another case on a disk that ignores case is the dire
 it names. A part that does not exist yet is compared by name, regardless of case.
 Forager's files are:
 
-- the paths the caller lists as its own: for `qory`, the directory of `runner.yaml`, with
+- the paths the caller lists as its own: for `qory`, the directory of `forager.yaml`, with
   the access key secret;
 - the directory of every credential program and every tool program the machine defines,
   and of the file a link to one leads to, the directory and not only the file, so an
