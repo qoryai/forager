@@ -55,8 +55,9 @@ type ResendResult struct {
 // Resend completes and delivers the record of one run whose gateway is gone, as the
 // session's resend does today. A record still held, by an open run or by the run's
 // session, is [ErrRunning], and is left as it is. A record with run.started and no
-// run.exited gets one, numbered on from its last event, with state failed, exit_code -1
-// and the reason gateway_lost. Then every event the server wants that no accepted batch
+// run.exited gets one, numbered on from its last event, with the reason gateway_lost,
+// and state failed and exit_code -1 for a session's run; a run a gateway opened, with
+// no process, has neither. Then every event the server wants that no accepted batch
 // contained is posted, in order and in the run's own batches, until the server accepts
 // it or the context ends. A server that said stop during the run is sent nothing.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
@@ -140,7 +141,11 @@ type recorded struct {
 	Type     string `json:"type"`
 	Sequence string `json:"sequence"`
 	Time     string `json:"time"`
-	line     []byte
+	// Data is what Resend reads of an event's data: run.started's opened_by.
+	Data struct {
+		OpenedBy string `json:"opened_by"`
+	} `json:"data"`
+	line []byte
 }
 
 // record reads the events file. A last line the gateway died in the middle of is cut
@@ -183,13 +188,14 @@ func record(file string) ([]recorded, error) {
 // run.started to the last event recorded.
 func closeRecord(file, runID string, lines *[]recorded, now func() time.Time) (bool, error) {
 	var started time.Time
-	begun := false
+	begun, byGateway := false, false
 	for _, l := range *lines {
 		switch l.Type {
 		case event.RunExited:
 			return false, nil
 		case event.RunStarted:
 			begun = true
+			byGateway = l.Data.OpenedBy == event.OpenedByGateway
 			started, _ = time.Parse(time.RFC3339Nano, l.Time)
 		}
 	}
@@ -207,7 +213,13 @@ func closeRecord(file, runID string, lines *[]recorded, now func() time.Time) (b
 	if end, err := time.Parse(time.RFC3339Nano, last.Time); err == nil && !started.IsZero() && end.After(started) {
 		ran = end.Sub(started).Milliseconds()
 	}
-	ev := event.NewEmitterAfter(runID, seq, now).Make(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": event.ReasonGatewayLost, "duration_ms": ran})
+	data := map[string]any{"reason": event.ReasonGatewayLost, "duration_ms": ran}
+	if !byGateway {
+		// A session's run: no exit status was recorded. A run a gateway opened has no
+		// process, and its run.exited neither.
+		data["state"], data["exit_code"] = "failed", -1
+	}
+	ev := event.NewEmitterAfter(runID, seq, now).Make(event.RunExited, data)
 	line, err := ev.JSON()
 	if err != nil {
 		return false, err
