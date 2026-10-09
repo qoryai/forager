@@ -88,6 +88,8 @@ For each run the session, over the gateway's link:
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 Every connection to the proxy opens with the relay's preamble and the run's proxy
 secret: without a wall the forwarder writes it, behind one the wall's relay does.
+Behind a separate gateway the forwarder reaches the gateway's one address over TLS
+instead: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -124,6 +126,65 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
 read or that do not match, `TLS` without `Listen`, and `Listen` without `RunCredentials`
 or `Dir`.
+
+### The session behind a separate gateway
+
+A session on another machine names the gateway with a `session.RemoteGateway` in place
+of `session.LocalGateway`:
+
+```go
+res, err := session.Run(ctx, session.Spec{
+	// …the runtime, the command and the rest, as on one machine
+	Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project"},
+	Gateway: session.RemoteGateway{
+		URL:               "https://gateway.example:8443", // its one address
+		CAFile:            caFile,                          // empty: the system's roots
+		CertificateSHA256: pin,                             // empty: no pin
+		Credential: func(context.Context) (string, error) { // asked before every request
+			b, err := os.ReadFile(runCredentialFile)
+			return strings.TrimSpace(string(b)), err
+		},
+	},
+})
+```
+
+- `URL` is `https` and a host with an optional port, `443` when it has none, and no user
+  information, path, query or fragment. The link is TLS 1.3 alone. The session verifies
+  the gateway's certificate chain for the URL's host name against the system's roots,
+  or, with `CAFile`, against the authorities of that PEM file alone, which replace the
+  system's roots. With `CertificateSHA256`, the SHA-256 of the certificate's DER
+  SubjectPublicKeyInfo in standard base64 with padding, it accepts only a certificate
+  with that key, and still checks its chain. No proxy of the environment is used, and no
+  redirect is followed.
+- `Credential` returns the run credential. Every request on the link carries it as
+  `Authorization: Bearer <run credential>`, and the session asks for it before each
+  request, so a run credential its issuer refreshes in a file is sent from then on. Its
+  error is the request's, and must not hold the run credential. A `RemoteGateway`
+  without `Credential` is no run. The run credential is never printed, logged, recorded
+  or contained in an error: a `session.RemoteGateway` prints as its URL, its `CAFile`
+  and its pin.
+- No access key is involved, and the gateway holds no files on the session's machine, so
+  none of its files are checked against a walled run's mounts, and it reserves no
+  variables there.
+- The discovery must list URLs of the gateway's origin alone, and name the gateway's one
+  address, the URL's host and port, as its proxy; the loopback check of the local link
+  does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
+  among them, and `About`. The run's labels are the run credential's, and the run
+  request carries no narrowing: `Spec` has none.
+- The gateway's refusals return a `*session.Refusal` as on one machine, its `Error` the
+  refusal's `message`: `run_credential_refused`, a `401` that may come to discovery as
+  well, before anything is recorded; `target_differs_from_credential` and
+  `differs_from_credential`, whose names are `<member>=<the run credential's value>`;
+  and `run_id_used`. A refusal of the run request is recorded in the session's record
+  alone.
+- Agent traffic goes to the gateway's one address over TLS, with the link's trust,
+  through the session's forwarder. Without a wall, the agent's proxy URL is the
+  forwarder on loopback with the run's proxy secret as its password,
+  `http://qory:<proxy secret>@127.0.0.1:<port>`, as the contract has it: the agent's
+  environment holds the proxy secret, and every program the agent starts can read it,
+  and print it into the run's output. It is the run's alone, refused once the run ends,
+  and never the run credential. Behind a wall, the proxy secret stays in the session's
+  memory: see [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway).
 
 ## The runtime
 
@@ -163,11 +224,13 @@ A program that needs code of its own implements the interface.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
-  link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The session reaches
+  link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
+  `session.RemoteGateway` on a machine of its own (see
+  [the session behind a separate gateway](#the-session-behind-a-separate-gateway)). The session reaches
   that gateway in the process's memory, never by its socket's path, which serves a
   session in another process. The link's secret stays in the process's memory: a
   `session.Gateway` is printed and logged by its socket alone, and a
-  `*gateway.Gateway` by its proxy's address and its socket. The zero `Gateway` is no run. The server the run reports to and the node's
+  `*gateway.Gateway` by its proxy's address and its socket. A nil `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).
