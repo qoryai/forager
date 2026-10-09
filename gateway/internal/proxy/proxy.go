@@ -30,6 +30,12 @@
 // tool that serves the host. For every other host the proxy sees host names and ports
 // and never the content of a TLS connection: a tunnel is a blind relay once
 // established. Only a proxy-aware program is seen.
+//
+// One run's proxy listens on its own address ([Listen]), or many runs share one
+// [Listener]: each run's proxy is made without a listener ([New]) and registered under
+// the run's secret ([NewSecret]), every connection opens with [link.RelayPreamble] and
+// that secret, and is served by that run's proxy alone. A connection that names no live
+// run's secret is closed unanswered.
 package proxy
 
 import (
@@ -104,11 +110,15 @@ type rules struct {
 	opened []string
 }
 
-// Proxy is a listening proxy.
+// Proxy is one run's proxy: listening on its own address ([Listen]), or served the
+// run's connections by a [Listener] shared with other runs ([New]).
 type Proxy struct {
 	rules   atomic.Pointer[rules]
 	observe func(Decision)
+	// ln is the proxy's own listener, from [Listen]; in is where a [Listener] hands a
+	// proxy [New] made its connections. One of the two is set.
 	ln      net.Listener
+	in      *inbox
 	srv     *http.Server
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	wg      sync.WaitGroup
@@ -153,7 +163,8 @@ func (e *guardError) Error() string { return e.msg }
 // and deny lists, handing every decision to observe. An empty addr is [link.Loopback];
 // port 0 is a port of the system's choosing. Close stops it.
 func Listen(addr string, mode policy.Mode, allow, deny []string, observe func(Decision)) (*Proxy, error) {
-	if err := mode.Validate(); err != nil {
+	p, err := newProxy(mode, allow, deny, observe)
+	if err != nil {
 		return nil, err
 	}
 	if addr == "" {
@@ -163,9 +174,32 @@ func Listen(addr string, mode policy.Mode, allow, deny []string, observe func(De
 	if err != nil {
 		return nil, err
 	}
-	p := &Proxy{observe: observe, ln: ln, tunnels: map[*tunnel]struct{}{}}
+	p.ln = ln
+	p.serve(&gate{Listener: ln, p: p})
+	return p, nil
+}
+
+// New makes one run's proxy, in the given mode with the given allow and deny lists,
+// handing every decision to observe, without a listener of its own: it serves the
+// connections a [Listener] hands it once it is registered there under the run's
+// secret. It has no address, so Addr, URL and Env are empty. Close stops it.
+func New(mode policy.Mode, allow, deny []string, observe func(Decision)) (*Proxy, error) {
+	p, err := newProxy(mode, allow, deny, observe)
+	if err != nil {
+		return nil, err
+	}
+	p.in = newInbox()
+	p.serve(p.in)
+	return p, nil
+}
+
+// newProxy makes a proxy that serves nothing yet.
+func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*Proxy, error) {
+	if err := mode.Validate(); err != nil {
+		return nil, err
+	}
+	p := &Proxy{observe: observe, tunnels: map[*tunnel]struct{}{}}
 	p.rules.Store(&rules{mode: mode, allow: allow, deny: deny})
-	gate := &gate{Listener: ln, p: p}
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
 	d := &net.Dialer{Timeout: 30 * time.Second, ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
@@ -183,23 +217,44 @@ func Listen(addr string, mode policy.Mode, allow, deny []string, observe func(De
 	}}
 	p.dial = d.DialContext
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-		p.srv.Serve(gate)
-	}()
 	return p, nil
 }
 
-// Addr is the address the proxy listens on, host:port.
-func (p *Proxy) Addr() string { return p.ln.Addr().String() }
+// serve serves the proxy's connections from ln until Close.
+func (p *Proxy) serve(ln net.Listener) {
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.srv.Serve(ln)
+	}()
+}
 
-// URL is the proxy's URL for the proxy variables.
-func (p *Proxy) URL() string { return "http://" + p.Addr() }
+// Addr is the address the proxy listens on, host:port, or empty for a proxy [New]
+// made, which a [Listener] hands its connections to.
+func (p *Proxy) Addr() string {
+	if p.ln == nil {
+		return ""
+	}
+	return p.ln.Addr().String()
+}
+
+// URL is the proxy's URL for the proxy variables, or empty for a proxy without an
+// address of its own.
+func (p *Proxy) URL() string {
+	if p.ln == nil {
+		return ""
+	}
+	return "http://" + p.Addr()
+}
 
 // Env returns the variables that point a program at the proxy, by the address it
-// listens on.
-func (p *Proxy) Env() []string { return link.ProxyEnv(p.URL()) }
+// listens on, or none for a proxy without an address of its own.
+func (p *Proxy) Env() []string {
+	if p.ln == nil {
+		return nil
+	}
+	return link.ProxyEnv(p.URL())
+}
 
 // Close stops the listener and every tunnel.
 func (p *Proxy) Close() error {
