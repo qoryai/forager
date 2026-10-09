@@ -1552,7 +1552,8 @@ func TestTheHoldRunsToTheLatestExpHeld(t *testing.T) {
 // TestAHoldThatFailsToWrite pins a write of the refused run keys that fails: the
 // failure is reported once, the run key is refused all the same, and the write is tried
 // again until it succeeds, on each refused request of the run key, every keepRetry, and
-// once more at Close.
+// once more at Close; a write that recovers is reported, and so is a Close that still
+// cannot write them, with how many run keys a restart would not refuse.
 func TestAHoldThatFailsToWrite(t *testing.T) {
 	kept := func(dir string) bool {
 		b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
@@ -1586,6 +1587,13 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		}
 	}
 	const line = "keeping the run key of a run of the issuer"
+	recovered := func(s *service) {
+		t.Helper()
+		want := "the run keys the issuer ended are written to " + filepath.Join(s.dir, runcredential.EndedFile) + " again"
+		if got := s.reportsWith("are written to"); len(got) != 1 || got[0] != want {
+			t.Errorf("the recovery reported %q, want %q", got, want)
+		}
+	}
 
 	// Each refused request of the run key tries again.
 	s := failing(time.Hour)
@@ -1598,10 +1606,14 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		t.Fatal("kept while the directory takes no new file")
 	}
 	os.Chmod(s.dir, 0o700)
+	if s.reported("are written to") {
+		t.Error("a recovery reported while the write fails")
+	}
 	refused(s)
 	if !kept(s.dir) {
 		t.Error("a refused request did not write the run key")
 	}
+	recovered(s)
 
 	// Every keepRetry, with no request.
 	s = failing(20 * time.Millisecond)
@@ -1612,6 +1624,8 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 	refused(s)
 	os.Chmod(s.dir, 0o700)
 	eventually(t, "the run key written again", func() bool { return kept(s.dir) })
+	eventually(t, "the recovery reported", func() bool { return s.reported("are written to") })
+	recovered(s)
 
 	// Once more at Close.
 	s = failing(time.Hour)
@@ -1622,6 +1636,18 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 	s.close()
 	if !kept(s.dir) {
 		t.Error("Close did not write the run key")
+	}
+	recovered(s)
+	if s.reported("closing with") {
+		t.Error("a Close that wrote the run keys reported them not written")
+	}
+
+	// A Close that still cannot write them.
+	s = failing(time.Hour)
+	s.close()
+	want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+	if got := s.reportsWith("closing with"); len(got) != 1 || got[0] != want {
+		t.Errorf("Close reported %q, want %q", got, want)
 	}
 }
 

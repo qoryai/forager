@@ -189,8 +189,9 @@ by issuer, in a file of its state directory (mode 0600, in a directory only its 
 writes), `ended-run-keys.json`, so a restart refuses them too. When a write of the file
 fails, the gateway reports it once and refuses the run key all the same while it runs;
 it writes the file again on each refused request of the run key, every 5 seconds, and
-once more at Close, until a write succeeds. A run key whose write never succeeded is
-not refused after a restart.
+once more at Close, until a write succeeds. It reports the write that succeeds again,
+and at Close, when the write still fails, how many run keys a restart would not refuse.
+A run key whose write never succeeded is not refused after a restart.
 
 ## The introspection endpoint
 

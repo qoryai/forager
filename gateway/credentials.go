@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/qoryai/forager/event"
@@ -133,8 +134,8 @@ const keepRetry = 5 * time.Second
 // a crash as after a stop, opens a run of it before then. The gateway refuses the run
 // key in this process whether or not the write succeeds. A run key whose write failed
 // is written again by each later hold of it, and every [keepRetry] until a write
-// succeeds, which holds every run key refused in memory; a gateway that is closing
-// leaves the last try to Close. first reports a failure for a run key whose write had
+// succeeds, which holds every run key refused in memory, and is reported; a gateway that
+// is closing leaves the last try to Close, which reports the run keys still not written. first reports a failure for a run key whose write had
 // not failed since the last that succeeded.
 func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	if g.ended == nil {
@@ -151,8 +152,8 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	}
 	err = g.ended.Add(k.issuer, k.runKey, exp)
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if err != nil {
+		defer g.mu.Unlock()
 		if exp.After(g.unkept[k]) {
 			g.unkept[k] = exp
 		}
@@ -169,8 +170,8 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 		g.endedUntil[k] = exp
 	}
 	// The file now holds every run key refused in memory, those whose write failed
-	// among them. When this loop clears any, the write recovered: the proposed report
-	// line of a recovered write goes here once its wording is approved.
+	// among them: when there were any, the write recovered.
+	recovered := len(g.unkept) > 0
 	for uk, until := range g.unkept {
 		if until.After(g.endedUntil[uk]) {
 			g.endedUntil[uk] = until
@@ -181,8 +182,15 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 		g.keepTimer.Stop()
 		g.keepTimer = nil
 	}
+	g.mu.Unlock()
+	if recovered {
+		g.report(fmt.Sprintf("the run keys the issuer ended are written to %s again", g.endedPath()))
+	}
 	return false, nil
 }
+
+// endedPath is the file of the refused run keys, in the gateway's directory.
+func (g *Gateway) endedPath() string { return filepath.Join(g.cfg.Dir, runcredential.EndedFile) }
 
 // unkeptKey is a run key whose write failed and that the gateway still refuses, and the
 // exp it is to be kept to; ok is false when there is none. Those the gateway no longer

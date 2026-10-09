@@ -484,10 +484,10 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 			g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
 		}
 	}
-	// A write of the refused run keys that failed is tried once more. The proposed
-	// report line of the run keys still not written, keepOnClose's count, which a
-	// restart would no longer refuse, goes here once its wording is approved.
-	g.keepOnClose()
+	// A write of the refused run keys that failed is tried once more.
+	if n := g.keepOnClose(); n > 0 {
+		g.report(fmt.Sprintf("closing with %d run keys the issuer ended not written to %s: a restart would not refuse them", n, g.endedPath()))
+	}
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs...)
 	g.mu.Unlock()

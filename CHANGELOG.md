@@ -595,7 +595,8 @@ release may change what an existing document does, and says so under Upgrading.
   refuses them too; a write of it that fails is reported once, the run key is refused
   all the same while the gateway runs, and the file is written again on each refused
   request of the run key, every 5 seconds, and once more at Close, until a write
-  succeeds. A
+  succeeds; the write that succeeds again is reported, and at Close, when the write
+  still fails, how many run keys a restart would not refuse. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
   only the policy before it opens, when it enforces and names the host itself. Its

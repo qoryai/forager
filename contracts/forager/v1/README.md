@@ -1903,7 +1903,8 @@ verification extends nothing. The gateway keeps the refused run keys in its stat
 directory, so a restart refuses them too. When that write fails, the gateway reports it
 once and refuses the run key all the same while it runs; it writes them again on each
 refused request of the run key, every 5 seconds, and once more at Close, until a write
-succeeds.
+succeeds. It reports the write that succeeds again, and at Close, when the write still
+fails, how many run keys a restart would not refuse.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run
