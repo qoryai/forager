@@ -30,8 +30,8 @@ var gatewaySurface = []string{
 const (
 	surfaceRule = "package gateway exports only what starts a gateway, configures it and closes it: " +
 		"Start, Config, Gateway with Addr, LocalLink, Close, Wait and the methods that print it, Resend, and the types their fields need"
-	linkRule = "the session reaches a gateway over its local link alone, " +
-		"so no file of session/ but a test imports a gateway package"
+	linkRule = "the session reaches a gateway over the gateway's link alone, the local link on one machine " +
+		"or a separate gateway's one address over TLS, so no file of session/ but a test imports a gateway package"
 	testRule = "a session test may start a real gateway, " +
 		"with package gateway's surface alone: Start, Config, Gateway, Resend and the types their fields need"
 )
