@@ -331,8 +331,8 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 // is 400 bad_request, before another contract revision, which is 400
 // unsupported_contract_version; a batch that is not
 // one, or a ping with an interval over 300 seconds, is 400 invalid_request; and on
-// the events endpoint, a closed run is 410 run_closed, a run the receiver wants
-// nothing more of 410 without a code, and a ping from an instance it does not admit 409
+// the events endpoint, a run the receiver wants nothing more of is 410 without a
+// code, and a ping from an instance it does not admit 409
 // instance_limit, while a retried ping it already accepted gets its 202 again.
 func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	h, _, _ := handler(t, 1700000000)
@@ -392,8 +392,6 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	beat, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}).JSON()
 	h.Stop = func(run string) bool { return run == e.RunID() }
 	check("a run it wants nothing more of", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat)+"]")), 410, "")
-	h.Closed = func(run string) bool { return run == e.RunID() }
-	check("a closed run", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat)+"]")), 410, "run_closed")
 }
 
 // TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests pins the events endpoint: the

@@ -792,6 +792,51 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 	noSecretIn(t, s.dir, expiring, ending, inactive)
 }
 
+// TestARunWithNoSessionOutlivesAServersStop pins a run with no session whose server
+// answers a signed 410, run_closed among them: the run goes on. Its next connection
+// joins the same run, its gateway heartbeats are recorded and sent no more, and its
+// record holds no run.exited.
+func TestARunWithNoSessionOutlivesAServersStop(t *testing.T) {
+	o := origin(t)
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	s := startVerifying(t, gateway.Config{Server: c.server(), Policy: enforce127, Heartbeat: time.Second}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	if status, _, err := get(s.clientWith(cred), o.URL); err != nil || status != http.StatusOK {
+		t.Fatalf("the first connection: %d %v", status, err)
+	}
+	ids := runsIn(t, s.dir)
+	if len(ids) != 1 {
+		t.Fatalf("runs %v", ids)
+	}
+	runID := ids[0]
+	c.closed.Store(true)
+	eventually(t, "the server's 410", func() bool {
+		b, _ := os.ReadFile(filepath.Join(s.dir, "runs", runID, "delivered.log"))
+		return bytes.Contains(b, []byte("stopped"))
+	})
+	sent := c.deliveries.Load()
+	before := len(s.record(runID))
+	eventually(t, "a heartbeat after the server's 410", func() bool {
+		rec := s.record(runID)
+		return len(rec) > before && rec[len(rec)-1].Type == event.RunHeartbeat
+	})
+	if status, _, err := get(s.clientWith(cred), o.URL); err != nil || status != http.StatusOK {
+		t.Errorf("a connection after the server's 410: %d %v", status, err)
+	}
+	if got := runsIn(t, s.dir); len(got) != 1 {
+		t.Errorf("after the server's 410, runs %v", got)
+	}
+	if got := types(s.record(runID)); slices.Contains(got, event.RunExited) {
+		t.Errorf("the run ended at the server's 410: %v", got)
+	}
+	if n := c.deliveries.Load() - sent; n != 0 {
+		t.Errorf("%d requests reached the server after its 410", n)
+	}
+	s.close()
+}
+
 // TestARunWithNoSessionReadsInsideHTTPSWithTheGatewaysAuthority pins the proxy of a run
 // with no session for a host its policy holds path rules for: it ends the client's TLS
 // with a certificate of the gateway's own authority, which the operator installs on
@@ -1024,6 +1069,41 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	noSecretIn(t, s.dir, cred)
 }
 
+// TestARunWithNoSessionThatAServers410DoesNotOpen pins a run with no session whose
+// server answers its run configuration with a signed 410 run_closed: no run, as for a
+// failure without a code. The connection gets the 503 that says to try again, and its
+// record, and what the server receives, hold the ping alone.
+func TestARunWithNoSessionThatAServers410DoesNotOpen(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	c.goneOnFetch.Store(true)
+	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+cred)) + "\r\n\r\n"
+	resp, conn, _ := s.proxyRequest(t, login)
+	b, _ := io.ReadAll(resp.Body)
+	conn.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || string(b) != "the gateway could not open the run; try again" {
+		t.Errorf("a 410 to the run configuration: %d %q", resp.StatusCode, b)
+	}
+	ids := runsIn(t, s.dir)
+	if len(ids) != 1 {
+		t.Fatalf("runs %v", ids)
+	}
+	if got := types(s.record(ids[0])); !slices.Equal(got, []string{event.Ping}) {
+		t.Errorf("record %v", got)
+	}
+	s.close()
+	for _, l := range c.lines(t) {
+		if l.Type == event.RunRefused {
+			t.Errorf("the server was sent %v", l)
+		}
+	}
+}
+
 // TestNoLinkSocketWithTheOneAddress pins Config.NoLinkSocket beside Listen: the
 // gateway serves the one address over TLS, a session's run on its run credential going
 // as without it, and makes no link directory and no socket; its local link is in
@@ -1176,14 +1256,20 @@ func TestARunKeyIsNotUnique(t *testing.T) {
 	}
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'c')
 	s.openSession(t, cred, server.LinkRunRequest{})
-	// After Qory Apiary's 410: the run ends as always, and the run key opens a new run.
+	// After Qory Apiary's 410: the run goes on, and the run key opens a new run.
 	c.closed.Store(true)
+	after.post(t, cred, heartbeat(after.a.RunID))
 	eventually(t, "Qory Apiary's 410", func() bool {
-		after.post(t, cred, heartbeat(after.a.RunID))
-		status, body := after.reload(t, cred, after.a.RunID)
-		return status == http.StatusGone && refusalOf(body)["from"] == "apiary"
+		b, _ := os.ReadFile(filepath.Join(s.dir, "runs", after.a.RunID, "delivered.log"))
+		return bytes.Contains(b, []byte("stopped"))
 	})
 	c.closed.Store(false)
+	if status, body := after.post(t, cred, heartbeat(after.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("a batch after Qory Apiary's 410: %d %s", status, body)
+	}
+	if status, body := after.reload(t, cred, after.a.RunID); status != http.StatusOK {
+		t.Errorf("a reload after Qory Apiary's 410: %d %s", status, body)
+	}
 	s.openSession(t, cred, server.LinkRunRequest{})
 }
 
@@ -1488,6 +1574,42 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 	}
 }
 
+// blockHold makes every write of the refused run keys in dir fail, for any user, root
+// among them, who writes a directory of mode 0500 all the same: the file is written
+// beside itself and renamed over, and a directory that is not empty stands at its path,
+// so the rename fails. The file as last written, when there is one, is set aside. The
+// function returned puts it back, and writes succeed again; it runs at the test's end
+// too.
+func blockHold(t *testing.T, dir string) (unblock func()) {
+	t.Helper()
+	path := filepath.Join(dir, runcredential.EndedFile)
+	aside := filepath.Join(t.TempDir(), runcredential.EndedFile)
+	written := true
+	if err := os.Rename(path, aside); errors.Is(err, fs.ErrNotExist) {
+		written = false
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "blocked"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	unblock = func() {
+		once.Do(func() {
+			if err := os.RemoveAll(path); err != nil {
+				t.Error(err)
+			}
+			if written {
+				if err := os.Rename(aside, path); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	t.Cleanup(unblock)
+	return unblock
+}
+
 // TestARunWhoseHoldIsNotWrittenIsLetGoOf pins the issuer's end when the refused run
 // keys cannot be written: the failure is reported, the run key is refused all the same,
 // and the run that ended is let go of once its record is flushed.
@@ -1498,11 +1620,8 @@ func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
 	s := startVerifying(t, cfg, in, 0)
 	first := credentialFor("rk-0001")
 	r := s.openSession(t, first, server.LinkRunRequest{})
-	// The gateway's directory takes no new file, the refused run keys' among them.
-	if err := os.Chmod(s.dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+	// The refused run keys cannot be written.
+	blockHold(t, s.dir)
 	in.end(first)
 	status, body := r.reload(t, first, r.a.RunID)
 	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
@@ -1563,8 +1682,9 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
 		return err == nil && strings.Contains(string(b), `"rk-0001"`)
 	}
-	// failing starts a gateway whose directory takes no new file once a run of rk-0001
-	// is open, and ends that run at the issuer.
+	// failing starts a gateway whose refused run keys cannot be written once a run of
+	// rk-0001 is open, and ends that run at the issuer; unblock lets them be written.
+	unblock := map[*service]func(){}
 	failing := func(retry time.Duration) *service {
 		t.Helper()
 		in := &introspection{}
@@ -1573,10 +1693,7 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		s := startVerifying(t, cfg, in, 0)
 		first := credentialFor("rk-0001")
 		r := s.openSession(t, first, server.LinkRunRequest{})
-		if err := os.Chmod(s.dir, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		unblock[s] = blockHold(t, s.dir)
 		in.end(first)
 		status, body := r.reload(t, first, r.a.RunID)
 		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
@@ -1607,9 +1724,9 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		t.Errorf("the failure reported %d times", n)
 	}
 	if kept(s.dir) {
-		t.Fatal("kept while the directory takes no new file")
+		t.Fatal("kept while the refused run keys cannot be written")
 	}
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	if s.reported("are written to") {
 		t.Error("a recovery reported while the write fails")
 	}
@@ -1626,14 +1743,14 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		t.Errorf("the failure reported %d times as it was retried", n)
 	}
 	refused(s)
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	eventually(t, "the run key written again", func() bool { return kept(s.dir) })
 	eventually(t, "the recovery reported", func() bool { return s.reported("are written to") })
 	recovered(s)
 
 	// Once more at Close.
 	s = failing(time.Hour)
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	if kept(s.dir) {
 		t.Fatal("kept before Close")
 	}
@@ -1723,47 +1840,6 @@ func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
 	}
 }
 
-// TestARunTheServerClosesAsItsSessionGivesUp pins a run request whose session has gone
-// when the server's 410 run_closed is heard as the run opens: no run opens, its run id
-// is free again, and the gateway goes on answering, a retry of the run id among it.
-func TestARunTheServerClosesAsItsSessionGivesUp(t *testing.T) {
-	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
-	cfg := gateway.Config{Server: c.server()}
-	var closes atomic.Bool
-	closes.Store(true)
-	gateway.SetClosesAtOpen(&cfg, func() bool {
-		if !closes.Load() {
-			return false
-		}
-		// The session gives up first.
-		time.Sleep(time.Second)
-		return true
-	})
-	s := startVerifying(t, cfg, nil, 0)
-	cred := credentialFor("rk-0001")
-	s.secrets = append(s.secrets, cred)
-	runID := event.NewRunID()
-	impatient := s.client(cred)
-	impatient.Timeout = 300 * time.Millisecond
-	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
-	if resp, err := impatient.Post(s.url("/v1/run-configuration"), server.LinkContentType, bytes.NewReader(body)); err == nil {
-		resp.Body.Close()
-		t.Fatalf("answered %d", resp.StatusCode)
-	}
-	eventually(t, "the run's record removed", func() bool {
-		_, err := os.Stat(filepath.Join(s.dir, "runs", runID))
-		return errors.Is(err, fs.ErrNotExist)
-	})
-	closes.Store(false)
-	r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
-	if r.a == nil || r.a.RunID != runID {
-		t.Fatalf("the retry %+v", r.a)
-	}
-	r.post(t, cred, exited(runID))
-	s.close()
-}
-
 // TestAStateDirectoryThatCannotBeWritten pins Start against a state directory it
 // cannot create a file in, though it holds the gateway's authority already: no gateway,
 // since it could never keep a run key the issuer ended.
@@ -1816,7 +1892,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			status, body := r.reload(t, first, r.a.RunID)
 			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
 		}
-		// Written once, while the directory takes new files.
+		// Written once, while the refused run keys can be written.
 		end("rk-0002")
 		var never string
 		var neverRun *sessionRun
@@ -1825,10 +1901,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			s.secrets = append(s.secrets, never)
 			neverRun = s.openSession(t, never, server.LinkRunRequest{})
 		}
-		if err := os.Chmod(s.dir, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		blockHold(t, s.dir)
 		// Its extension to a later exp fails to write.
 		later := mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil)
 		s.secrets = append(s.secrets, later)

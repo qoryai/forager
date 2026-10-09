@@ -269,19 +269,10 @@ func invalid(w http.ResponseWriter) {
 	refuse(w, http.StatusBadRequest, server.CodeInvalidRequest, nil, accesskey.FromGateway, gatewayText(server.CodeInvalidRequest))
 }
 
-// gone answers the 410 of a run that ended at the gateway: its code, and who ended it.
-// The server's close of a run that has not started reads as today's session's error
-// then; of one that has, the same without "before it started".
-func gone(w http.ResponseWriter, code, from string, started bool) {
-	text := gatewayText(code)
-	if from == accesskey.FromApiary {
-		detail := "the server closed the run before it started"
-		if started {
-			detail = "the server closed the run"
-		}
-		text = (&accesskey.Refusal{Code: code, Status: http.StatusGone, Detail: detail}).Error()
-	}
-	refuse(w, http.StatusGone, code, nil, from, text)
+// gone answers the 410 of a run that ended at the gateway: its code, and who ended it,
+// always the gateway, since a server's 410 ends no run.
+func gone(w http.ResponseWriter, code, from string) {
+	refuse(w, http.StatusGone, code, nil, from, gatewayText(code))
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

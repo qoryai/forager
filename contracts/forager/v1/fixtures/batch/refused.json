@@ -9,8 +9,7 @@
     "sequence": "0000000002",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.refused.schema.json",
     "data": {
-      "code": "run_closed",
-      "status": 410
+      "code": "run_configuration_invalid"
     }
   }
 ]

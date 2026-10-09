@@ -61,9 +61,8 @@ type linkRun struct {
 	batch sync.Mutex
 
 	mu sync.Mutex
-	// opened says the run answer is made; serverClosed that the server closed the run,
-	// a signed 410 run_closed.
-	opened, serverClosed bool
+	// opened says the run answer is made.
+	opened bool
 	// pingAt is when the gateway's ping for the run was numbered, zero without a server.
 	pingAt time.Time
 	// seen are the ids of the session's events numbered so far; startedID is its
@@ -152,9 +151,6 @@ var sessionGone = ending{code: event.ReasonSessionLost, from: accesskey.FromGate
 // batch_refused.
 var batchRefused = ending{reason: event.ReasonSessionLost, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
 
-// serverClosed ends a run the server closed.
-var serverClosedRun = ending{reason: event.ReasonRunClosed, code: accesskey.CodeRunClosed, from: accesskey.FromApiary, closed: true}
-
 // credentialExpired ends a run on the one address whose run credential's exp passed
 // with no fresh one; endedAtIssuer one whose issuer no longer holds its run credential
 // active, or ended another run of its run key.
@@ -207,15 +203,8 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	fail := func(err error) (*linkRun, bool, error) {
 		lr.release()
-		lr.mu.Lock()
-		closed := lr.serverClosed
-		lr.mu.Unlock()
-		if closed {
-			// The server closed the run before it started: dev.qory.run.refused, which
-			// reaches the record alone, as today's session records it.
-			st.Emit(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
-			err = &accesskey.Refusal{Code: accesskey.CodeRunClosed, Status: 410, Detail: "the server closed the run before it started", From: accesskey.FromApiary}
-		} else if ref := (*accesskey.Refusal)(nil); how.client && errors.As(err, &ref) && ref.Code != "" {
+		err = codeless(err)
+		if ref := (*accesskey.Refusal)(nil); how.client && errors.As(err, &ref) && ref.Code != "" {
 			// No session tells of a run with no session that did not open: the gateway
 			// does, its dev.qory.run.refused right after the ping, with the refusal's
 			// code, as the session writes one of its own. A failure without a code is
@@ -246,9 +235,8 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 				return failed(err)
 			}
 			if err == nil {
-				// A run the server closed as it opened fails without an error of its
-				// own: the session's going is the error, so no caller takes the
-				// missing run for one that opened.
+				// No failure comes without an error now; should one, the session's going
+				// is the error, so no caller takes the missing run for one that opened.
 				err = how.request.Err()
 			}
 			lr.release()
@@ -278,7 +266,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			return fail(err)
 		}
 		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, labels, g.report)
-		lr.posts = sink.NewServer(g.client, sink.Target{URL: g.conf.Events.URL, Types: g.conf.Events.Types}, st.Dir(), g.report, lr.live.digests, lr.onServerClosed)
+		lr.posts = sink.NewServer(g.client, sink.Target{URL: g.conf.Events.URL, Types: g.conf.Events.Types}, st.Dir(), g.report, lr.live.digests)
 		lr.live.posts = lr.posts
 		if err := st.Deliver(lr.posts, pingID); err != nil {
 			lr.posts.Close(g.base)
@@ -371,18 +359,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		}
 		lr.runSecret, lr.runSecretSum = newSecretValue(runSecret), sha256.Sum256([]byte(runSecret))
 	}
-	if g.cfg.closesAtOpen != nil && g.cfg.closesAtOpen() {
-		lr.onServerClosed()
-	}
 	lr.mu.Lock()
 	lr.refresh()
-	closed := lr.serverClosed
-	lr.opened = !closed
+	lr.opened = true
 	lr.last = time.Now()
 	lr.mu.Unlock()
-	if closed {
-		return fail(nil)
-	}
 	if how.client {
 		lr.begin()
 		return lr, true, nil
@@ -552,19 +533,6 @@ func (lr *linkRun) release() {
 // holds it until run.started is numbered.
 func (lr *linkRun) observe(d proxy.Decision) { lr.st.Emit(event.RunEgress, run.Egress(d)) }
 
-// onServerClosed hears the server's signed 410 run_closed, on the sink's goroutine:
-// the run ends at the gateway, and the session's next request is a 410 from apiary.
-func (lr *linkRun) onServerClosed() {
-	lr.mu.Lock()
-	lr.serverClosed = true
-	opened := lr.opened
-	lr.mu.Unlock()
-	if opened {
-		// The sink tells the user, as today.
-		lr.end(serverClosedRun)
-	}
-}
-
 // touch says the session asked something of the run now.
 func (lr *linkRun) touch() {
 	lr.mu.Lock()
@@ -658,8 +626,7 @@ func (lr *linkRun) end(e ending) {
 			return
 		}
 		if e.reason != "" {
-			switch {
-			case lr.st.Started():
+			if lr.st.Started() {
 				var ran int64
 				if !startedAt.IsZero() {
 					ran = max(time.Since(startedAt).Milliseconds(), 0)
@@ -673,9 +640,6 @@ func (lr *linkRun) end(e ending) {
 					data["quiet_seconds"] = e.quietSeconds
 				}
 				lr.st.Emit(event.RunExited, data)
-			case e.from == accesskey.FromApiary:
-				// Closed before it started: what today's session records then.
-				lr.st.Emit(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
 			}
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)

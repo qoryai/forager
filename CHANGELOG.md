@@ -102,8 +102,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The reference receiver accepts the public keys its configuration holds, answers in
   the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
   being `invalid_request`, and signs every answer after verification under its own key,
-  the `410` of its `Stop` among them. Its new hooks `Closed` and `Admit` close a run with
-  `run_closed` and refuse an instance's ping with `instance_limit`.
+  the `410` of its `Stop` among them. Its new hook `Admit` refuses an instance's ping
+  with `instance_limit`.
 - `dev.qory.run.started` contains `about` when the caller passes one: what the run is
   about, as the caller passed it, every member optional. `kind` is the kind of run, at
   most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
@@ -362,16 +362,19 @@ release may change what an existing document does, and says so under Upgrading.
   `qory` hands the session the secret in memory, never in an environment or a file, so
   a program the agent starts does not inherit it. A session's heartbeats are its run's,
   and a session silent for 3 × the interval ends the run, `session_lost`. When the
-  gateway ends a session's run, with `session_lost`, `credential_expired`,
-  `run_ended_at_issuer` or the server's `run_closed`, it writes the run's
-  `dev.qory.run.exited` itself, `failed` and `-1`, and delivers it toward the server,
-  except after the server's own `410`, where it records it in its record alone. It
-  answers the session's next request and every one after it with a `410`, whose code
-  the session records as the reason of its own `dev.qory.run.exited`, in its own record
-  alone, posting nothing more: `run_closed` from `apiary` when the server closed the
-  run, and from `gateway` `credential_expired`, `run_ended_at_issuer`, `session_lost`
-  after a silent session, or `batch_refused` after a refused batch, which the gateway's
-  record says as `session_lost`. Every `410` on the link carries `from`. The relay opens its
+  gateway ends a session's run, with `session_lost`, `credential_expired` or
+  `run_ended_at_issuer`, it writes the run's `dev.qory.run.exited` itself, `failed` and
+  `-1`, and delivers it toward the server. It answers the session's next request and
+  every one after it with a `410`, whose code the session records as the reason of its
+  own `dev.qory.run.exited`, in its own record alone, posting nothing more: from
+  `gateway` `credential_expired`, `run_ended_at_issuer`, `session_lost` after a silent
+  session, or `batch_refused` after a refused batch, which the gateway's record says as
+  `session_lost`. Every `410` on the link carries `from`, and the gateway's own `410`
+  `run_closed` to a request of a run already ended is unchanged. A server's signed
+  `410`, with any code or none, stops delivery: the gateway sends no further batch for
+  the run and marks its record `stopped`, and the run goes on, its record keeping every
+  event. A signed `410` to the ping, or to the run configuration as a run opens, is no
+  run, and no refusal: no `410` from `apiary` crosses the link. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
@@ -537,6 +540,9 @@ release may change what an existing document does, and says so under Upgrading.
   `fixtures/invalid/` nine refused `run.started` and `run.exited` events, two of them
   without a `credential` or with one of no kind it names, and a run answer without
   `credential`.
+- The server judges a run's liveness by its heartbeats' own `time`, corrected by the
+  run's clock offset, with a tolerance of 300 seconds and never later than their
+  arrival, and a delivery id is never used again for other events.
 
 ### Gateway
 
@@ -663,6 +669,12 @@ release may change what an existing document does, and says so under Upgrading.
   refused.
 - `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
   30 minutes when zero.
+- `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
+  is, since the run never opened at the server: its ping was never accepted, or it had
+  no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
+  resend reports then, which a caller that reports `NotOpened` itself may leave out,
+  and `gateway.ResendTorn` the one for lines of the record that are not whole events,
+  a format of their count and the record's path.
 
 #### Changed
 
@@ -681,6 +693,31 @@ release may change what an existing document does, and says so under Upgrading.
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
   gateway: the path could be read two ways".
+
+#### Fixed
+
+- `gateway.Resend` reads on past a line of `events.jsonl` that holds no whole event, a
+  write the gateway did not finish, on a full disk: it skips those bytes, and keeps and
+  sends every event the gateway wrote after them, one the next write put on the same
+  line too, the object that ends the line, never one inside the bytes before it. When
+  those bytes are themselves exactly one whole event, a write that lost its newline
+  alone, it is kept too. A whole event numbered at or below the one before it is
+  skipped. Before, it cut the file at that line, and every event after it was lost. A
+  last line without its newline that is a whole event is kept, and gets its newline
+  before `gateway_lost` follows it; any other is cut off, as before. The resend
+  reports "<n> lines of <file> are not whole events and are not sent". `gateway_lost`
+  is numbered after the highest sequence of the whole events or of `delivered.log`,
+  since an event whose line was not finished may have reached the server whole, and the
+  file is changed only when `gateway_lost` is added.
+- `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
+  that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
+  its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend
+  reports "the server never accepted the run's ping; nothing is sent". Before, its
+  ping and events were posted, which reported a run that never opened. The same holds
+  of a record with no ping and no `delivered.log`, of a run that had no server, sent to
+  a server: it never opened there, and the resend reports "the run had no server;
+  nothing is sent". Before, its events were posted without a ping. A record with a
+  `delivered.log` is sent, its ping's line torn or not.
 
 ### Wall
 
@@ -879,9 +916,9 @@ release may change what an existing document does, and says so under Upgrading.
   gateway's record. After a gateway restart, the session's undelivered events get the
   `401` and stay in the run directory, and the gateway's own resend completes the run
   `gateway_lost`.
-- `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
-  the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
-  `gateway`, and with what code, `run_closed`, `credential_expired` or
+- `Result.RunClosed`, `Result.ClosedBy` and `Result.ClosedReason`: a run the gateway
+  closed, by a `410` on the gateway's link or the gateway's `400` to a batch, says who
+  closed it, `gateway`, and with what code, `run_closed`, `credential_expired` or
   `run_ended_at_issuer`. The runtime is stopped as at its time limit, and the session's
   record has `dev.qory.run.exited` with that code as its reason.
 - The session fetches the run's configuration from the gateway again whenever the
@@ -1009,13 +1046,6 @@ release may change what an existing document does, and says so under Upgrading.
   binds them. `events/run.refused.schema.json` lists the four codes.
 - The session passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
-- A server can close a run with a signed `410` `run_closed` to a delivery: the session
-  stops the runtime as at its time limit, records `dev.qory.run.exited` with
-  `reason: run_closed` in the file sink and sends nothing further; before
-  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
-  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
-  run the same way, with exit code -1.
-  `session.Result` has `RunClosed`.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
   status: `apiary_public_key_missing` for a server without a pin, before any request;
   `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and

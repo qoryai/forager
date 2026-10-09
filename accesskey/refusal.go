@@ -31,7 +31,8 @@ const (
 	// CodeInstanceLimit is the server's signed 409 to a ping from a new instance beyond
 	// its node's limit.
 	CodeInstanceLimit = "instance_limit"
-	// CodeRunClosed is the server's signed 410 to an event of a run it has closed.
+	// CodeRunClosed is the gateway's 410 to a request of a run already ended at the
+	// gateway. A server's 410 never ends a run.
 	CodeRunClosed = "run_closed"
 )
 

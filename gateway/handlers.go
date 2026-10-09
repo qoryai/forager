@@ -256,8 +256,10 @@ func (g *Gateway) discard(lr *linkRun) {
 // decides and for a run without a wall whose policy needs one, wall_required. Any
 // other failure is a 500 internal. Each carries the error's text as its message, which
 // the session returns as its error, the text today's session returned; the gateway
-// itself tells the user nothing of it.
+// itself tells the user nothing of it. A server's 410 is no refusal: it is a failure
+// without a code, so no 410 from apiary crosses the link.
 func refuseOpen(w http.ResponseWriter, err error) {
+	err = codeless(err)
 	var wall *refusal.NeedsWall
 	if errors.As(err, &wall) {
 		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway, err.Error())
@@ -281,6 +283,18 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		status = http.StatusBadGateway
 	}
 	refuse(w, status, ref.Code, ref.Names, from, err.Error())
+}
+
+// codeless turns a server's signed 410 to a request the gateway makes as a run opens,
+// whatever its code, into the failure without a code a code-less 410 to that request
+// is, with its text: a server's 410 ends no run and refuses none. Any other error is
+// returned as it is.
+func codeless(err error) error {
+	var ref *accesskey.Refusal
+	if !errors.As(err, &ref) || ref.From != accesskey.FromApiary || ref.Status != http.StatusGone {
+		return err
+	}
+	return fmt.Errorf("%s: status %d", ref.Detail, ref.Status)
 }
 
 // codeInternal is the code of a run that failed to open for a reason without one.
@@ -414,7 +428,7 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 	if lr == nil {
 		if sp, spent := g.spentOf(runID); spent && sp.key == k {
 			g.presented(id)
-			gone(w, sp.code, sp.from, sp.started)
+			gone(w, sp.code, sp.from)
 			return nil, id
 		}
 	}
@@ -436,12 +450,12 @@ func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) 
 	switch {
 	case lr != nil:
 		if code, from, ended := lr.gone(); ended && lr.cred != nil && !lr.client && lr.cred.key == k {
-			gone(w, code, from, lr.st.Started())
+			gone(w, code, from)
 			return
 		}
 	default:
 		if sp, spent := g.spentOf(runID); spent && sp.key == k {
-			gone(w, sp.code, sp.from, sp.started)
+			gone(w, sp.code, sp.from)
 			return
 		}
 	}
@@ -458,7 +472,7 @@ func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) 
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
-		gone(w, code, from, lr.st.Started())
+		gone(w, code, from)
 		return false
 	}
 	if lr.g.blocked(keyOf(id)) {
@@ -469,7 +483,7 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		lr.end(endedAtIssuer)
 		lr.g.presented(id)
 		code, from, _ := lr.gone()
-		gone(w, code, from, lr.st.Started())
+		gone(w, code, from)
 		return false
 	}
 	if ref := lr.differs(id); ref != nil {
@@ -480,7 +494,7 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 	lr.renew(id)
 	if !lr.stillActive(r.Context()) {
 		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from, lr.st.Started())
+			gone(w, code, from)
 		} else {
 			// The request went before the issuer answered.
 			refuseCredential(w)
@@ -511,7 +525,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 			return
 		}
 		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from, lr.st.Started())
+			gone(w, code, from)
 			return
 		}
 	}
@@ -557,7 +571,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		lr.batch.Lock()
 		defer lr.batch.Unlock()
 		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from, lr.st.Started())
+			gone(w, code, from)
 			return
 		}
 	}
@@ -589,7 +603,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := lr.st.Accept(evs); err != nil {
 		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from, lr.st.Started())
+			gone(w, code, from)
 			return
 		}
 		refused(err.Error())

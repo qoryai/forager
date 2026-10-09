@@ -359,12 +359,11 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 
 // TestA410OnTheLinkEndsTheRun pins the end of a run at the gateway: a 410 on any
 // request carries its code, run_closed, credential_expired, run_ended_at_issuer,
-// session_lost or batch_refused, and run_closed for another code or none, and who ended it, apiary when the body says so
-// and the gateway otherwise; it hands on no digests; and a batch's 410 ends the run
-// with the code.
+// session_lost or batch_refused, and run_closed for another code or none, and who
+// ended it, the gateway; it hands on no digests; and a batch's 410 ends the run with
+// the code.
 func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 	for body, want := range map[string][2]string{
-		`{"error":"run_closed","from":"apiary"}`:           {"run_closed", accesskey.FromApiary},
 		`{"error":"run_closed","from":"gateway"}`:          {"run_closed", accesskey.FromGateway},
 		`{"error":"credential_expired","from":"gateway"}`:  {"credential_expired", accesskey.FromGateway},
 		`{"error":"run_ended_at_issuer","from":"gateway"}`: {"run_ended_at_issuer", accesskey.FromGateway},

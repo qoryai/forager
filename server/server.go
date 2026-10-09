@@ -576,15 +576,10 @@ func (d Delivery) Authentic() bool { return d.Signed || d.Link }
 // the link.
 func (d Delivery) Accepted() bool { return d.Authentic() && d.Status >= 200 && d.Status < 300 }
 
-// Closed reports whether the server closed the run: a signed 410 run_closed; on the
-// link, an answer with an End. The run ends, as at its time limit, and nothing further
-// is sent.
-func (d Delivery) Closed() bool {
-	if d.Link {
-		return d.End != ""
-	}
-	return d.Signed && d.Status == http.StatusGone && d.Code == accesskey.CodeRunClosed
-}
+// Closed reports whether the gateway ended the run: on the link, an answer with an End.
+// The run ends, as at its time limit, and nothing further is sent. Toward the server it
+// is always false: a server's 410 is a [Delivery.Stop] alone, and never ends a run.
+func (d Delivery) Closed() bool { return d.Link && d.End != "" }
 
 // Stop reports whether the server wants nothing more for the run: a signed 410, or on
 // the link an answer with an End. Its events go on to the file sink alone.
@@ -620,14 +615,15 @@ func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body
 }
 
 // ErrNotAccepted is the error of a ping the server answered, signed, with neither a
-// 2xx nor a code.
+// 2xx nor a code, or with a 410, whatever its code.
 var ErrNotAccepted = errors.New("the server did not accept the ping")
 
 // Ping delivers a batch of one ping event to the events URL and returns nil only on a
 // signed 2xx. It is what makes a configured server fail closed: the run does not start
 // otherwise. A 401 is unauthorized, an answer that does not verify answer_unsigned,
 // and a signed refusal its code, instance_limit or rate_limited say, each an
-// [*accesskey.Refusal]; the error names the URL and the status.
+// [*accesskey.Refusal]; a signed 410, with any code or none, is [ErrNotAccepted]: the
+// server would record nothing of the run. The error names the URL and the status.
 func (c *Client) Ping(ctx context.Context, eventsURL, deliveryID string, body []byte) error {
 	a, err := c.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
 		h.Set("Content-Type", ContentType)
@@ -638,6 +634,9 @@ func (c *Client) Ping(ctx context.Context, eventsURL, deliveryID string, body []
 	}
 	if a.signed && a.status >= 200 && a.status < 300 {
 		return nil
+	}
+	if a.signed && a.status == http.StatusGone {
+		return fmt.Errorf("ping %s: status %d: %w", eventsURL, a.status, ErrNotAccepted)
 	}
 	err = a.refusal("ping " + eventsURL)
 	var r *accesskey.Refusal

@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -180,15 +181,20 @@ func TestARealGatewayRefusesARunThatNeedsAWall(t *testing.T) {
 }
 
 // control is a server of the contract in front of the reference receiver, with a run
-// configuration the test may change during a run and close every run with.
+// configuration the test may change during a run, and a 410 to every delivery.
 type control struct {
 	srv   *httptest.Server
 	key   *accesskey.Key
 	pin   accesskey.Pin
 	store *receiver.File
-	// closed makes every run closed; closeOnFetch closes every run once the run
-	// configuration is fetched; limit admits no instance.
+	// closed answers every delivery a signed 410 run_closed, a server's 410 with a
+	// code; closeOnFetch sets closed once the run configuration is fetched; limit admits
+	// no instance.
 	closed, closeOnFetch, limit atomic.Bool
+	// gone counts the deliveries closed answered.
+	gone atomic.Int32
+	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
+	goneOnFetch atomic.Bool
 
 	mu     sync.Mutex
 	run    []byte
@@ -209,7 +215,6 @@ func newControl(t *testing.T) *control {
 		},
 		Signer: signer,
 		Store:  store,
-		Closed: func(string) bool { return c.closed.Load() },
 		Admit:  func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(c.pin)
@@ -226,6 +231,16 @@ func newControl(t *testing.T) *control {
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/run-configuration" && c.closeOnFetch.Load() {
 			c.closed.Store(true)
+		}
+		if (r.URL.Path == "/v1/events" && c.closed.Load()) || (r.URL.Path == "/v1/run-configuration" && c.goneOnFetch.Load()) {
+			if r.URL.Path == "/v1/events" {
+				c.gone.Add(1)
+			}
+			body := []byte(`{"error":"run_closed"}`)
+			w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
+			w.WriteHeader(http.StatusGone)
+			w.Write(body)
+			return
 		}
 		h.ServeHTTP(w, r)
 	}))
@@ -301,68 +316,95 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 	}
 }
 
-// TestARealGatewayPassesOnTheServersClose pins the server's 410 end to end: closed
-// during the run, the runtime is stopped and the result says the server closed it,
-// with run.exited run_closed in each record; closed before it started, the run is
-// refused as one the server closed, from apiary.
-func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
-	t.Run("during the run", func(t *testing.T) {
-		c := newControl(t)
-		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
-		sp := spec(t)
-		sleeps(&sp, 30*time.Second)
-		sp.StopGrace = time.Second
-		sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
-		rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
-		own := filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")
-		// The server closes the run once it is going: once its session has sent a
-		// heartbeat.
-		go func() {
-			waitFor(t, func() bool {
-				_, err := os.Stat(own)
-				return err == nil && len(ofType(events(t, &session.Result{Dir: filepath.Dir(own)}), "dev.qory.run.heartbeat")) > 0
-			})
-			c.closed.Store(true)
-		}()
-		start := time.Now()
-		res, err := session.Run(context.Background(), sp)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if time.Since(start) > 20*time.Second {
-			t.Errorf("the run took %s", time.Since(start))
-		}
-		if !res.RunClosed || res.ClosedBy != accesskey.FromApiary || res.ClosedReason != "run_closed" || res.State != "failed" {
-			t.Errorf("result %+v", res)
-		}
-		if d := rg.close(t); !d.RunClosed || d.ClosedBy != "apiary" || d.Reason != "run_closed" {
-			t.Errorf("delivery %+v", d)
-		}
-		for name, evs := range map[string][]map[string]any{"the session's": events(t, res), "the gateway's": record(t, res)} {
-			if l := evs[len(evs)-1]; l["type"] != "dev.qory.run.exited" || data(l)["reason"] != "run_closed" {
-				t.Errorf("%s record ends %v", name, l)
+// TestARealGatewayKeepsARunAfterTheServersStop pins a server's signed 410, run_closed
+// among them, end to end. During the run, the runtime runs to its own exit: the
+// session's batches all get 202 and are in the gateway's record, the server is sent
+// nothing more, and the gateway reports it once. After the ping, the run opens and runs
+// the same way. To the ping, or to the run configuration, the run does not open: the
+// session's error is the gateway's message of a failure without a code, no refusal, and
+// nothing is recorded of it.
+func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
+	for _, when := range []string{"during the run", "after the ping"} {
+		t.Run(when, func(t *testing.T) {
+			c := newControl(t)
+			c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+			sp := spec(t)
+			sleeps(&sp, 4*time.Second)
+			sp.StopGrace = time.Second
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+			if when == "after the ping" {
+				c.closeOnFetch.Store(true)
+			} else {
+				own := filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")
+				// The server answers 410 once the run is going: once its session has sent
+				// a heartbeat.
+				go func() {
+					waitFor(t, func() bool {
+						_, err := os.Stat(own)
+						return err == nil && len(ofType(events(t, &session.Result{Dir: filepath.Dir(own)}), "dev.qory.run.heartbeat")) > 0
+					})
+					c.closed.Store(true)
+				}()
 			}
-		}
-	})
-	t.Run("before it started", func(t *testing.T) {
-		c := newControl(t)
-		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
-		c.closeOnFetch.Store(true)
-		sp := spec(t)
-		sleeps(&sp, 30*time.Second)
-		sp.StopGrace = time.Second
-		startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
-		res, err := session.Run(context.Background(), sp)
-		var r *session.Refusal
-		switch {
-		case err == nil:
-			// The gateway opened the run before the server's close reached it: it ends
-			// on its first batch.
-			if !res.RunClosed || res.ClosedBy != accesskey.FromApiary || res.ClosedReason != "run_closed" {
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RunClosed || res.ClosedBy != "" || res.State != "succeeded" || res.ExitCode != 0 || res.TimedOut || res.Undelivered != 0 {
 				t.Errorf("result %+v", res)
 			}
-		case !errors.As(err, &r) || r.Code != "run_closed" || r.From != accesskey.FromApiary:
-			t.Errorf("%v, want the server's run_closed", err)
+			if d := rg.close(t); d != (gateway.Delivery{}) {
+				t.Errorf("delivery %+v", d)
+			}
+			own, gw := events(t, res), record(t, res)
+			if l := gw[len(gw)-1]; l["type"] != "dev.qory.run.exited" || data(l)["state"] != "succeeded" || data(l)["reason"] != nil {
+				t.Errorf("the gateway's record ends %v", l)
+			}
+			if a, b := len(ofType(own, "dev.qory.run.heartbeat")), len(ofType(gw, "dev.qory.run.heartbeat")); a == 0 || a != b {
+				t.Errorf("the session sent %d heartbeats, the gateway's record holds %d", a, b)
+			}
+			if n := c.gone.Load(); n != 1 {
+				t.Errorf("the server answered %d deliveries 410, want 1 and nothing more sent", n)
+			}
+			rg.mu.Lock()
+			defer rg.mu.Unlock()
+			if want := "the server answered 410; no further batch is sent for this run, which goes on"; len(rg.reports) != 1 || rg.reports[0] != want {
+				t.Errorf("reports %q, want one: %q", rg.reports, want)
+			}
+		})
+	}
+	t.Run("to the ping", func(t *testing.T) {
+		c := newControl(t)
+		c.closed.Store(true)
+		sp := spec(t)
+		sleeps(&sp, 30*time.Second)
+		sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+		startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+		_, err := session.Run(context.Background(), sp)
+		var r *session.Refusal
+		if want := "ping " + c.srv.URL + "/v1/events: status 410: the server did not accept the ping"; err == nil || err.Error() != want || errors.As(err, &r) {
+			t.Errorf("%v, want %q", err, want)
+		}
+		if b, err := os.ReadFile(filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")); err == nil && bytes.Contains(b, []byte("dev.qory.run.refused")) {
+			t.Errorf("the session recorded the 410 to the ping: %s", b)
+		}
+	})
+	t.Run("to the run configuration", func(t *testing.T) {
+		c := newControl(t)
+		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+		c.goneOnFetch.Store(true)
+		sp := spec(t)
+		sleeps(&sp, 30*time.Second)
+		sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+		startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+		_, err := session.Run(context.Background(), sp)
+		var r *session.Refusal
+		if err == nil || errors.As(err, &r) || !strings.HasPrefix(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") || !strings.HasSuffix(err.Error(), ": status 410") {
+			t.Errorf("%v, want the failure without a code of a 410 to the run configuration", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")); err == nil && bytes.Contains(b, []byte("dev.qory.run.refused")) {
+			t.Errorf("the session recorded the 410 to the run configuration: %s", b)
 		}
 	})
 }

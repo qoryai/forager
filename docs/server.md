@@ -68,7 +68,7 @@ the document lists a `secrets` section, which it does for an access key allowed 
 secrets. `qory` prints the node id. An error it returns is no gateway, and nothing
 more is sent.
 
-## When the server refuses or closes a run
+## When the server refuses a run, or wants nothing more
 
 A refusal at the start has a code. The gateway passes the server's on to the session,
 which returns it as a `*session.Refusal` whose `From` is `apiary`: `unauthorized` for a
@@ -78,13 +78,16 @@ server without a pin `apiary_public_key_missing`: `gateway.Start` returns either
 `*accesskey.Refusal` when it fetches the configuration document, and starts no
 gateway.
 
-A server closes a running run with a signed `410` `run_closed`. The gateway ends the
-run, writes its `dev.qory.run.exited` with `reason: run_closed`, sends the server
-nothing further, and answers the session's next request with a `410`. The session
-stops the runtime as at its time limit, records the same reason in its own record, and
-returns a `Result` whose `RunClosed` is true, `ClosedBy` `apiary` and `ClosedReason`
-`run_closed`. A run the server closes before it starts is a `*session.Refusal`,
-`run_closed`, from `apiary`.
+Qory Apiary records what a run reports and never ends a run it did not start. A
+server's signed `410`, with any code or none, says it wants nothing more of the run:
+the gateway sends it no further batch, writes `stopped` to the run's `delivered.log`,
+and reports it once. The run goes on. The gateway keeps numbering the run's events and
+recording them in `events.jsonl`, it answers the session's requests as before, and the
+runtime runs to its own exit. A resend of the run's record sends the server nothing.
+A signed `410` to the ping is no run: the server did not accept the ping, and the
+session returns the gateway's error, which names the events URL and the status. A
+signed `410` to the run configuration as the run opens is no run either, a failure
+without a code, whose error names the run configuration's URL and the status.
 
 ## A policy that changes while the run goes
 

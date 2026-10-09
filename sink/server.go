@@ -39,8 +39,8 @@ const QueueSize = 10000
 
 // DeliveredFile is the file in the run directory that holds what the server accepted,
 // a line per batch written as the answer comes: the delivery id, then the sequence of
-// each event in it. A server's stop, a signed 410 with run_closed or without a code,
-// is the one word stopped. With events.jsonl it says what a run cut short still owes
+// each event in it. A server's stop, a signed 410 with any code or none, is the one
+// word stopped. With events.jsonl it says what a run cut short still owes
 // its server.
 const DeliveredFile = "delivered.log"
 
@@ -97,9 +97,9 @@ type Config struct {
 	// the worker's goroutine, and must not block.
 	OnDigests func(server.Digests)
 	// OnEnded, when not nil, is called once, on the worker's goroutine, when the
-	// receiver ends the run, with the end code and who ended it: the server's signed 410
-	// run_closed, from empty; on the link the answer's End, one of [server.EndCodes],
-	// and its From, gateway or apiary. It must not block.
+	// gateway ends the run, with the end code and who ended it: on the link the answer's
+	// End, one of [server.EndCodes], and its From. A server never ends a run: its signed
+	// 410 only stops the deliveries. It must not block.
 	OnEnded func(code, from string)
 	// Wait is how long a batch waits after its first event; zero means [BatchWait].
 	Wait time.Duration
@@ -130,7 +130,7 @@ type Server struct {
 	done    chan struct{}
 	mu      sync.Mutex
 	stopped bool
-	// runClosed says the server closed the run, a signed 410 run_closed.
+	// runClosed says an answer on the link ended the run.
 	runClosed bool
 	closed    bool
 	lost      int
@@ -147,20 +147,15 @@ type queued struct {
 // [BatchWait]. spool is the run directory, under which undelivered batches are
 // written; report receives one line per thing worth telling the user, a stop or a
 // spool, and may be nil; onDigests, when not nil, gets the digests every signed answer
-// contains, on the worker's goroutine, and must not block; onClosed, when not nil, is
-// called once, on the worker's goroutine, when the server closes the run with a signed
-// 410 run_closed, and must not block. The worker runs until Close.
-func NewServer(client Deliverer, target Target, spool string, report func(string), onDigests func(server.Digests), onClosed func()) *Server {
-	var onEnded func(string, string)
-	if onClosed != nil {
-		onEnded = func(string, string) { onClosed() }
-	}
+// contains, on the worker's goroutine, and must not block. A signed 410 stops the
+// deliveries and ends nothing. The worker runs until Close.
+func NewServer(client Deliverer, target Target, spool string, report func(string), onDigests func(server.Digests)) *Server {
 	if spool == "" {
 		// Today's record of a run always has its directory: an empty one is the
 		// working directory, as it always was.
 		spool = "."
 	}
-	return New(Config{To: client, Target: target, Spool: spool, Report: report, OnDigests: onDigests, OnEnded: onEnded})
+	return New(Config{To: client, Target: target, Spool: spool, Report: report, OnDigests: onDigests})
 }
 
 // New returns a sink posting as c says. The worker runs until Close.
@@ -322,10 +317,10 @@ func (w *Server) next() ([]queued, bool) {
 // deliver posts one batch until it is accepted, the server says stop, or the sink's
 // context ends; then it spools what was not accepted. An answer whose signature does
 // not verify under the pin is no answer, retried like a transport failure. The digests
-// of every signed answer but a 410 go to the caller. A signed 410 stops the
-// deliveries; with run_closed it also closes the run, which the caller hears of once.
-// On the link every answer is read, and an answer with an End, a 410 or a 400
-// invalid_request, closes the run with it.
+// of every signed answer but a 410 go to the caller. A signed 410, with any code or
+// none, stops the deliveries and nothing more: the run goes on. On the link every
+// answer is read, and an answer with an End, a 410 or a 400 invalid_request, closes the
+// run with it, which the caller hears of once.
 // A batch queued before the stop is dropped, as one written after it is.
 func (w *Server) deliver(batch []queued) {
 	w.mu.Lock()
@@ -363,19 +358,13 @@ func (w *Server) deliver(batch []queued) {
 			w.ack(stoppedWord, nil)
 			if d.Closed() {
 				w.closeOnce.Do(func() {
-					code := d.Code
-					if d.Link {
-						code = d.End
-					} else {
-						w.report("the server closed the run with a signed 410 run_closed; the run ends, and no further batch is sent")
-					}
 					if w.onEnded != nil {
-						w.onEnded(code, d.From)
+						w.onEnded(d.End, d.From)
 					}
 				})
 				return
 			}
-			w.report(fmt.Sprintf("the server answered %d; no further batch is sent for this run", d.Status))
+			w.report(fmt.Sprintf("the server answered %d; no further batch is sent for this run, which goes on", d.Status))
 			return
 		}
 		if w.ctx.Err() != nil || !w.sleep(w.ctx, backoff) {
@@ -481,8 +470,8 @@ func (w *Server) Stopped() bool {
 	return w.stopped
 }
 
-// RunClosed reports whether the server closed the run, a signed 410 run_closed, or on
-// the link an answer ended it.
+// RunClosed reports whether an answer on the link ended the run. A server's signed 410
+// never sets it.
 func (w *Server) RunClosed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

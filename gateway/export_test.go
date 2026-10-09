@@ -134,10 +134,6 @@ func SecretsIndexed(g *Gateway) int {
 	return len(g.bySecret)
 }
 
-// SetClosesAtOpen sets what is asked as a run is about to open: true is the server's
-// signed 410 run_closed heard then.
-func SetClosesAtOpen(c *Config, f func() bool) { c.closesAtOpen = f }
-
 // SetOpened sets what is called once a run on the one address opened, before the
 // gateway looks again whether it refuses the run's run key.
 func SetOpened(c *Config, f func()) { c.opened = f }
