@@ -794,7 +794,10 @@ proxy, with no session. The run has no process, so the event contains none of
 `host`, `wall` and `image`, and the run's `dev.qory.run.exited` contains no `exit_code`
 and no `state`. `forager_version` is the version of what opened the run: the gateway's
 for a run a gateway opened. Such a run's `labels`, `run_key` among them, and
-`about.details` come from the run credential's mapping.
+`about.details` come from the run credential's mapping. It gets the credentials, the
+tools and the path rules its policy selects, as a session's run does; the gateway's
+proxy reads inside HTTPS for them with the gateway's own certificate authority, which
+the clients' machines trust.
 
 **How a run ends.** `dev.qory.run.exited` contains `reason` when the run ended other
 than by the runtime's own exit. The session writes `timeout`, and `run_closed` when the
@@ -825,7 +828,12 @@ reason to a state of its own.
 `security_policy`; `digest` is Forager's own hex sha256 of the policy document's
 canonical JSON, with `config` and `fetched`; `allow` and `deny` are the policy's two
 lists as written, `deny` the hosts denied by name in either mode, and when the node's
-policy narrows a server's, the lists the narrowing computes (§The policy).
+policy narrows a server's, the lists the narrowing computes (§The policy). Behind a
+separate gateway, for a policy a session's `narrowing` narrows (§The gateway's link),
+`source` is the source of the policy it narrows, `config` or `fetched`, with that
+policy's `url` and `run_configuration`, and `digest` is the narrowed policy's own; a
+narrowing of no policy has `source` `config`, the narrowing coming from the session's
+configuration.
 `node_policy`, present when the run has both a fetched policy and a policy the command
 passes, contains its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785
 serialisation of that `policy.schema.json` document, and its `paths`, when it has any,

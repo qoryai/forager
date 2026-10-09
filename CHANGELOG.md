@@ -562,13 +562,17 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited`, and every later request gets the `410` with that code. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
-  only the policy before it opens, when it enforces and names the host itself. The local link reaches none of the one address's runs.
+  only the policy before it opens, when it enforces and names the host itself. Its
+  `dev.qory.run.policy_applied` has the `source` of the policy it narrows, with the
+  narrowed policy's own `digest`, and `source` `config` for a narrowing of no policy.
+  The local link reaches none of the one address's runs.
 - A client with no session sets the gateway's one address as its HTTPS proxy, its run
   credential the password of Basic in `Proxy-Authorization`; every failure of its login
   is the same `407`, with `Proxy-Authenticate: Basic realm="qory"` and the text "a
   valid run credential is required as the proxy password". The first connection of a
-  run key with no run opens one, of the gateway's own run id, decided as a walled run:
-  the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  run key with no run opens one, of the gateway's own run id, decided as a walled run,
+  with the credentials, the tools and the path rules its policy selects, as a
+  session's run: the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
   the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
   every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
   HTTPS with the gateway's own authority. Every later connection of the run key joins
@@ -577,7 +581,17 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
   credentials are `407` from then on. A run refused with a code gets the gateway's
   `dev.qory.run.refused` with that code, right after its ping; one that fails without
-  a code gets no event. Either way its run key ends.
+  a code gets no event. Either way its run key ends. A refusal's answer is written in
+  full, the connection's writing side closed and what the client still sends read
+  briefly before it closes, so no reset takes the answer's place.
+- A refreshed run credential moves a run's end to its later `exp` only once the ended
+  run keys keep the run key to it; when they cannot, the request is refused, a
+  session's `500` `internal` and a client's connection a `500`, and the run goes on to
+  its earlier end.
+- Once a run of the one address has ended, its record is flushed and its run key is
+  kept, the gateway holds only how a later request of its run key is answered, until a
+  run credential of it can no longer be accepted. A gateway's own authority keeps at
+  most 1024 hosts' certificates, the least recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
   TLS the proxy ends, so no connection relays past the run.
 - `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
