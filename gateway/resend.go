@@ -31,7 +31,7 @@ type ResendConfig struct {
 // the server accepts it or ctx ends. A line of the record that holds no whole event, a
 // write the gateway did not finish, is skipped, and every event after it is sent. A
 // record whose ping the server never accepted, of a run that never opened, is left as
-// it is and sent nothing, Sent and Undelivered 0. A server that said stop during the
+// it is and sent nothing: NotOpened, Sent and Undelivered 0. A server that said stop during the
 // run is sent nothing. A refusal of the server's, at
 // its discovery, is an [*accesskey.Refusal] with its From, Code and Names. A server
 // that closes the run now, a signed 410 run_closed, is RunClosed, from apiary: the
@@ -62,7 +62,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if err != nil {
 		return Delivery{}, err
 	}
-	d := Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed}
+	d := Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed, NotOpened: res.NotOpened}
 	if res.RunClosed {
 		d.RunClosed, d.ClosedBy, d.Reason = true, accesskey.FromApiary, accesskey.CodeRunClosed
 	}

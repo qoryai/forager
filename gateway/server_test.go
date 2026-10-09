@@ -438,7 +438,7 @@ func TestCloseAndResend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Sent != 4 || r.Undelivered != 0 || r.Completed {
+	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened {
 		t.Errorf("resend %+v", r)
 	}
 	r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", lost.RunID)})
@@ -510,7 +510,7 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 
 // TestResendSendsNothingOfARunThatNeverOpened pins a resend of the record of a run whose
 // ping the server refused: the run never opened, so nothing of it is posted, the
-// record is left as it is, and the delivery says nothing was sent.
+// record is left as it is, and the delivery says the run never opened.
 func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	c := newControl(t)
 	h := start(t, gateway.Config{Server: c.server()})
@@ -533,7 +533,7 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r != (gateway.Delivery{}) {
+	if r != (gateway.Delivery{NotOpened: true}) {
 		t.Errorf("resend %+v", r)
 	}
 	if n := c.store.Count(); n != stored {

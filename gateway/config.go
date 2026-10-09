@@ -197,4 +197,8 @@ type Delivery struct {
 	// Close.
 	Sent      int
 	Completed bool
+	// NotOpened says a resend sent nothing, and left the record as it is, since the run
+	// never opened at the server: the server never accepted its ping. Sent and
+	// Undelivered are then 0. False for Close.
+	NotOpened bool
 }
