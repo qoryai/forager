@@ -364,7 +364,10 @@ A program that needs code of its own implements the interface.
     such as `failed` and `checks_failed` for a runtime that exited 0; the reason is
     empty when the starter gave none, and a reason that is one of Forager's reserved
     codes, or not a code, is dropped alone, the starter's state kept. The heartbeats go
-    on while the session waits.
+    on while the session waits. Once the runtime has exited, a context that ends cuts
+    neither the ask nor the record short: the answer still decides, the session still
+    writes and posts `dev.qory.run.exited`, and `Run` returns after them, within their
+    bounds. The gateway closing the run still ends the ask.
   - With no outcome, an answer of `{}`, one that is not valid, a refusal or no answer
     in time, the runtime's exit decides: `succeeded` on 0, `failed` otherwise, with no
     reason, and nothing is added to the record. On the local link there is no starter to

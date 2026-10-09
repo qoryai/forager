@@ -1136,9 +1136,13 @@ release may change what an existing document does, and says so under Upgrading.
   is written, and waits at most about 10 seconds: an outcome sets the state and the
   reason, such as `failed` and `checks_failed` for a runtime that exited 0, whose
   `exit_code` stays 0; a reserved reason, or one that is not a code, is dropped alone,
-  the state kept, and the heartbeats go on while it waits. With `{}`, an answer that is
-  not valid, a refusal or no answer in time, the exit decides, `succeeded` on 0 and `failed` otherwise, and nothing is added
-  to the record or reported. A run stopped at its time limit, by the caller's context or
+  the state kept, and the heartbeats go on while it waits. Once the runtime has exited,
+  the caller's context ending cuts neither the ask nor the record short: the answer
+  still decides, `dev.qory.run.exited` is still written and posted, and `Run` returns
+  after them, within their bounds; the gateway closing the run still ends the ask.
+  With `{}`, an answer that is not valid, a refusal or no answer in time, the exit
+  decides, `succeeded` on 0 and `failed` otherwise, and nothing is added to the record
+  or reported. A run stopped at its time limit, by the caller's context or
   by the gateway asks nothing, and a run on the local link never asks or waits.
   `Result.Cancelled`, beside `Result.TimedOut`, says the caller's context had ended
   when the session observed the runtime's exit, whoever stopped the runtime; a context

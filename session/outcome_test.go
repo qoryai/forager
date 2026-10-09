@@ -437,3 +437,192 @@ func TestARunClosedWhileItAsksEndsAsClosed(t *testing.T) {
 		t.Errorf("run.exited %v, posted %v", own, posted)
 	}
 }
+
+// TestTheCallersEndAfterTheExitLeavesTheOutcome pins the caller's context ending once
+// the runtime has exited by itself: as the exit is observed, or while the gateway is
+// asked. The session asks once all the same and waits for the answer, the heartbeats go
+// on meanwhile, and the starter's outcome decides: the record, the link and the result
+// say failed and checks_failed for a runtime that exited 0, and Cancelled is false.
+func TestTheCallersEndAfterTheExitLeavesTheOutcome(t *testing.T) {
+	for name, inAsk := range map[string]bool{"as the exit is observed": false, "during the ask": true} {
+		t.Run(name, func(t *testing.T) {
+			sp, g, reports := remoteSpec(t, 0)
+			g.SetInterval(1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if !inAsk {
+				session.SetExitObserved(cancel)
+				defer session.SetExitObserved(nil)
+			}
+			var during atomic.Int32
+			var ended atomic.Bool
+			g.OnOutcome(func(string) linktest.Reply {
+				if inAsk {
+					cancel()
+				}
+				ended.Store(ctx.Err() != nil)
+				before := len(ofType(g.Events(), "dev.qory.run.heartbeat"))
+				time.Sleep(3500 * time.Millisecond)
+				during.Store(int32(len(ofType(g.Events(), "dev.qory.run.heartbeat")) - before))
+				return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+			})
+			res, err := session.Run(ctx, sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ended.Load() {
+				t.Fatal("the caller's context had not ended when the gateway was asked")
+			}
+			if res.State != "failed" || res.Reason != "checks_failed" || res.ExitCode != 0 || res.Cancelled || res.RunClosed || res.TimedOut || res.Undelivered != 0 {
+				t.Errorf("result %+v, want failed checks_failed with exit 0, not cancelled", res)
+			}
+			if got := g.Outcomes(); len(got) != 1 {
+				t.Errorf("the outcome was asked for %v", got)
+			}
+			if during.Load() < 2 {
+				t.Errorf("the gateway got %d heartbeats while it was asked for 3.5s at an interval of 1s", during.Load())
+			}
+			want := map[string]any{"state": "failed", "reason": "checks_failed", "exit_code": float64(0)}
+			own, posted := exitedOf(t, res, g)
+			for _, got := range []map[string]any{own, posted} {
+				delete(got, "duration_ms")
+				if !maps.Equal(got, want) {
+					t.Errorf("run.exited %v, want %v", got, want)
+				}
+			}
+			if r := reports(); len(r) != 0 {
+				t.Errorf("the session reported %q", r)
+			}
+		})
+	}
+}
+
+// TestTheCallersEndWhileRunExitedIsPostedKeepsIt pins the caller's context ending
+// while the gateway takes the batch with run.exited and the sinks close: run.exited
+// stays in the record with the starter's outcome, the gateway takes it, and the result
+// is the same, with Cancelled false.
+func TestTheCallersEndWhileRunExitedIsPostedKeepsIt(t *testing.T) {
+	sp, g, _ := remoteSpec(t, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g.OnOutcome(func(string) linktest.Reply {
+		return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+	})
+	g.OnBatch(func(evs []map[string]any) linktest.Reply {
+		if len(ofType(evs, "dev.qory.run.exited")) > 0 {
+			cancel()
+			time.Sleep(300 * time.Millisecond)
+		}
+		return linktest.Reply{Status: 200}
+	})
+	res, err := session.Run(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("no batch with run.exited reached the gateway")
+	}
+	if res.State != "failed" || res.Reason != "checks_failed" || res.ExitCode != 0 || res.Cancelled || res.Undelivered != 0 {
+		t.Errorf("result %+v", res)
+	}
+	accepted, _, err := sink.Delivered(res.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	if last := evs[len(evs)-1]; !accepted[fmt.Sprint(last["sequence"])] {
+		t.Errorf("delivered.log does not have run.exited, %v", last)
+	}
+	want := map[string]any{"state": "failed", "reason": "checks_failed", "exit_code": float64(0)}
+	own, posted := exitedOf(t, res, g)
+	for _, got := range []map[string]any{own, posted} {
+		delete(got, "duration_ms")
+		if !maps.Equal(got, want) {
+			t.Errorf("run.exited %v, want %v", got, want)
+		}
+	}
+}
+
+// TestARunClosedWhileItAsksEndsTheAsk pins a 410 that closes the run while the
+// gateway, which never answers the ask, is asked, the caller's context having ended
+// first or not: the ask ends at the close, long before its bound, and the run ends as
+// the 410 says, with Cancelled false.
+func TestARunClosedWhileItAsksEndsTheAsk(t *testing.T) {
+	for name, callerEnds := range map[string]bool{"the context lasts": false, "the context ended first": true} {
+		t.Run(name, func(t *testing.T) {
+			defer session.SetOutcomeWait(8 * time.Second)()
+			sp, g, _ := remoteSpec(t, 0)
+			sp.Args = []string{"-c", "echo the last line; exit 0"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			asked := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				if len(ofType(evs, "dev.qory.run.log")) == 0 {
+					return linktest.Reply{Status: 200}
+				}
+				select {
+				case <-asked:
+				case <-time.After(5 * time.Second):
+				}
+				return *gone("stopped", "cancelled", "no_longer_needed")
+			})
+			g.OnOutcome(func(string) linktest.Reply {
+				if callerEnds {
+					cancel()
+				}
+				close(asked)
+				<-release
+				return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+			})
+			start := time.Now()
+			res, err := session.Run(ctx, sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if took := time.Since(start); took > 4*time.Second {
+				t.Errorf("the run took %s: the close did not end the ask", took)
+			}
+			if !res.RunClosed || res.ClosedReason != "stopped" || res.State != "cancelled" || res.Reason != "no_longer_needed" || res.ExitCode != 0 || res.Cancelled {
+				t.Errorf("result %+v", res)
+			}
+			own, posted := exitedOf(t, res, g)
+			if own["state"] != "cancelled" || own["reason"] != "no_longer_needed" || posted != nil {
+				t.Errorf("run.exited %v, posted %v", own, posted)
+			}
+		})
+	}
+}
+
+// TestTheWaitForTheOutcomeIsBoundedAfterTheCallersEnd pins the bound of the ask when
+// the caller's context ends during it and the gateway never answers: the run waits no
+// longer than the bound, then the exit decides, with Cancelled false.
+func TestTheWaitForTheOutcomeIsBoundedAfterTheCallersEnd(t *testing.T) {
+	defer session.SetOutcomeWait(500 * time.Millisecond)()
+	sp, g, _ := remoteSpec(t, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release := make(chan struct{})
+	defer close(release)
+	g.OnOutcome(func(string) linktest.Reply {
+		cancel()
+		<-release
+		return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+	})
+	start := time.Now()
+	res, err := session.Run(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("the run took %s with a gateway that never answers the ask", took)
+	}
+	if res.State != "succeeded" || res.Reason != "" || res.Cancelled || len(g.Outcomes()) != 1 {
+		t.Errorf("result %+v, the outcome asked for %v", res, g.Outcomes())
+	}
+	own, _ := exitedOf(t, res, g)
+	if own["state"] != "succeeded" {
+		t.Errorf("run.exited %v", own)
+	}
+}

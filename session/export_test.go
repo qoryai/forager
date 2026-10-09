@@ -33,3 +33,7 @@ func SetOutcomeWait(d time.Duration) func() {
 	outcomeWait = d
 	return func() { outcomeWait = server.OutcomeTimeout }
 }
+
+// SetExitObserved sets what a run calls the moment its runtime's exit is observed,
+// once Cancelled is decided; nil for nothing.
+func SetExitObserved(f func()) { exitObserved = f }
