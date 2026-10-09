@@ -399,30 +399,37 @@ func TestTheHeartbeatsGoOnWhileTheSessionAsks(t *testing.T) {
 
 // TestARunClosedWhileItAsksEndsAsClosed pins a 410 that ends the run while the session
 // asks for its outcome, the answer to a batch of the runtime's output: the run ends as
-// the 410 says, in the session's record alone, and the outcome is not used.
+// the 410 says, in the session's record alone, and the outcome is not used. The
+// gateway gives its outcome only once the session has returned, so the 410 always
+// comes first.
 func TestARunClosedWhileItAsksEndsAsClosed(t *testing.T) {
 	sp, g, _ := remoteSpec(t, 0)
 	sp.Args = []string{"-c", "echo the last line; exit 0"}
-	var asked, refused atomic.Bool
+	var refused atomic.Bool
+	asked := make(chan struct{})
+	returned := make(chan struct{})
+	var once sync.Once
+	ret := func() { once.Do(func() { close(returned) }) }
+	defer ret()
 	// The batch of the runtime's output is answered once the session asks, with the 410.
 	g.OnBatch(func(evs []map[string]any) linktest.Reply {
 		if len(ofType(evs, "dev.qory.run.log")) == 0 {
 			return linktest.Reply{Status: 200}
 		}
-		for deadline := time.Now().Add(5 * time.Second); !asked.Load() && time.Now().Before(deadline); {
-			time.Sleep(10 * time.Millisecond)
+		select {
+		case <-asked:
+		case <-time.After(5 * time.Second):
 		}
 		refused.Store(true)
 		return *gone("stopped", "cancelled", "no_longer_needed")
 	})
 	g.OnOutcome(func(string) linktest.Reply {
-		asked.Store(true)
-		for deadline := time.Now().Add(5 * time.Second); !refused.Load() && time.Now().Before(deadline); {
-			time.Sleep(10 * time.Millisecond)
-		}
+		close(asked)
+		<-returned
 		return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
 	})
 	res, err := session.Run(context.Background(), sp)
+	ret()
 	if err != nil {
 		t.Fatal(err)
 	}
