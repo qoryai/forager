@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
 )
 
 // approvedEntry is what Claude Code 2.1.273 keeps for an approved key: the key trimmed,

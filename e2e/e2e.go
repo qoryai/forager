@@ -43,10 +43,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/session/runtimes/claude"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/wall"
 )
 
 // The modes of the helper, its first argument.

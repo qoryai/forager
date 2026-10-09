@@ -9,10 +9,10 @@ package gateway
 import (
 	"context"
 
-	"github.com/qoryai/runner/gateway/internal/credential"
-	"github.com/qoryai/runner/gateway/internal/proxy"
-	"github.com/qoryai/runner/gateway/internal/tool"
-	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/forager/gateway/internal/credential"
+	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/tool"
+	"github.com/qoryai/forager/policy"
 )
 
 // Proxy is a listening proxy.

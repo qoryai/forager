@@ -9,11 +9,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/program"
-	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/session/internal/socket"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/wall"
 )
 
 // Overlap says how a mount and a path stand to each other: "is" when they are the same

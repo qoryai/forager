@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/refusal"
 )
 
 // value is what every refused document below holds as a variable's value, so a test

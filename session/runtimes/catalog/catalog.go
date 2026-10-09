@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/session/runtimes/claude"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
 )
 
 // Installers are the hook installers a descriptor may name, by the names it names them.

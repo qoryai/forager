@@ -32,9 +32,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 )
 
 // EnvRunID names, in a tool's environment, the run it was started for.

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // TestOverlapComparesWholeComponentsThroughLinks pins how a mount and one of

@@ -27,7 +27,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/contracts"
 )
 
 // Descriptor is one runtime's descriptor.

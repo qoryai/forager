@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 )
 
 // fixture is the bytes of a contract fixture.

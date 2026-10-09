@@ -12,8 +12,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/wall"
 )
 
 // The registry of walled runs is a private directory of Forager's, per user: a file

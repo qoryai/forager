@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/event"
-	"github.com/qoryai/runner/server"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/server"
 )
 
 // fullAbout is an About at its bounds: every member set, a kind of 64 bytes and titles

@@ -108,8 +108,8 @@ or the server; **server** is what Forager is a client of, a control plane or a
 receiver; **receiver** is a server that is not a control plane; **descriptor** is the document that
 maps a runtime's output to session events; **record** is one unit of runtime output a
 descriptor reads; **harness** is what the session runs on, composed elsewhere. A runtime is
-never a provider, a tool, an agent or a vendor; Forager never names a hive, a bee or a
-flower.
+never a provider, a tool, an agent or a vendor; Forager's code and docs use no other hive
+words: no hive, bee or flower.
 
 ## Releases
 

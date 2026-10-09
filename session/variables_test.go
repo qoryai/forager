@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // serveDocument makes the control serve a run configuration document as it is.

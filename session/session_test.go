@@ -25,14 +25,14 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/receiver"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/session/internal/socket"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/session/runtimes/claude"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
 )
 
 const (

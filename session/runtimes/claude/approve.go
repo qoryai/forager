@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // apiKeyVar is the variable Claude Code reads an API key from.

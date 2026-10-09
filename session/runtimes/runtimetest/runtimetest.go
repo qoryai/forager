@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 var (

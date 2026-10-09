@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/gateway/internal/proxy"
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
 )
 
 // through returns a client that sends everything through the proxy, trusting the test

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/internal/descriptor"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/internal/descriptor"
 )
 
 func main() {

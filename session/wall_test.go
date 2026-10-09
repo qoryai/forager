@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
 )
 
 // openWall is a wall with nothing in it: it records what the session sends it

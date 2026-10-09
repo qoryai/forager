@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/event"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 )
 
 // TestEventsValidateAgainstTheContract pins that what the emitter makes is what the

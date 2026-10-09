@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/session/internal/descriptor"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/session/internal/descriptor"
 )
 
 // Runtime is one program Forager can run a session of.

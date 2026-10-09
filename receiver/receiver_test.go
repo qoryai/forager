@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/event"
-	"github.com/qoryai/runner/receiver"
-	"github.com/qoryai/runner/server"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/server"
 )
 
 const (

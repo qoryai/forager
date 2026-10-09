@@ -30,9 +30,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/policy"
 )
 
 // Definition is one credential as the machine defines it. Exactly one of Env, File and

@@ -8,8 +8,8 @@ package claude
 import (
 	"io/fs"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // Name is the runtime's name.

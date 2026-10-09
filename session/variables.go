@@ -9,12 +9,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/session/internal/variables"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/session/internal/variables"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
 )
 
 // variableShape is a variable's name as the contract bounds it.

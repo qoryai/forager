@@ -5,11 +5,11 @@ import (
 	"regexp"
 	"slices"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/session/internal/variables"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/session/internal/variables"
 )
 
 // Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the

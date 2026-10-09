@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/session/runtimes/runtimetest"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/runtimetest"
 )
 
 // other is a runtime that is not Claude Code, written as data alone: it prints JSON

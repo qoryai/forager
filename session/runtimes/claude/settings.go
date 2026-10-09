@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // hookTimeout is the seconds a runtime gives the forwarder before cancelling it.

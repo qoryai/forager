@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/session/runtimes/catalog"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes/catalog"
 )
 
 // Example runs one headless Claude Code turn inside the boundary, with a policy and a

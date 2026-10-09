@@ -31,8 +31,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Ignore and Accept are the two ways an unwalled run takes the server's variables:

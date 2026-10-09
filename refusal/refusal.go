@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/forager/accesskey"
 )
 
 // The codes Forager decides.

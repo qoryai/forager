@@ -17,8 +17,8 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/qoryai/runner/session/internal/chunk"
-	"github.com/qoryai/runner/session/runtimes"
+	"github.com/qoryai/forager/session/internal/chunk"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // process is the runtime's process and where its streams go.

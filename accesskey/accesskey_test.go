@@ -21,8 +21,8 @@ import (
 
 	"filippo.io/edwards25519"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 )
 
 // read reads one file of the contract, by its path under forager/v1.

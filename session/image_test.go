@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // TestAnImageDefinitionThatCannotBeOneIsRefused pins what a machine's image definition

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // refusalOf is the refusal with the code a run returned, or fails the test.

@@ -41,8 +41,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/server"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/server"
 )
 
 // MaxBody is the largest delivery accepted, and the most the handler reads of a body

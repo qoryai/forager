@@ -186,6 +186,8 @@ release may change what an existing document does, and says so under Upgrading.
   `accesskey.UserAgent(version)` builds the `User-Agent` of every request to a server,
   `qory-forager/<version>`. The four batch fixtures under `fixtures/signed` are signed
   over their new bodies.
+  The module is `github.com/qoryai/forager`, so `go get github.com/qoryai/forager` and
+  every import path start with it.
 
 ### Gateway
 
@@ -1091,7 +1093,7 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/qoryai/forager/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/qoryai/runner/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/qoryai/runner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qoryai/runner/compare/v0.4.1...v0.5.0

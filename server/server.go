@@ -34,8 +34,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 )
 
 // The headers of the contract and the content type of a delivery.

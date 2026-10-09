@@ -1,4 +1,4 @@
-# 🐝 Forager
+# Qory Forager
 
 Forager stands between your coding agent and the world.
 
@@ -145,7 +145,7 @@ program of your own to run an agent inside the same boundary. It needs Go 1.27.1
 above:
 
 ```sh
-go get github.com/qoryai/runner
+go get github.com/qoryai/forager
 ```
 
 One call, `session.Run`, runs one session. You pass the program to start and its policy.

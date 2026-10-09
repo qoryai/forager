@@ -22,9 +22,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/jcs"
-	"github.com/qoryai/runner/refusal"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/internal/jcs"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Mode is the egress mode of a policy.

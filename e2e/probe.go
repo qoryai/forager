@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qoryai/runner/link"
+	"github.com/qoryai/forager/link"
 	"golang.org/x/term"
 )
 

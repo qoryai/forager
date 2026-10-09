@@ -47,8 +47,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
 )
 
 // The outcomes of a connection, [Decision.Outcome].

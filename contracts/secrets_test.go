@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/contracts"
 )
 
 // The fixtures of the access key: enrolment's schema, and the known answers this

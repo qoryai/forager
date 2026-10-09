@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/e2e"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/e2e"
+	"github.com/qoryai/forager/wall"
 )
 
 func TestMain(m *testing.M) {

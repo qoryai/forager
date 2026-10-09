@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/qoryai/runner/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/socket"
 )
 
 // Forward is the hook forwarder: it reads one JSON object from r, the hook's input,

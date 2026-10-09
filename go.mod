@@ -1,4 +1,4 @@
-module github.com/qoryai/runner
+module github.com/qoryai/forager
 
 go 1.27.1
 

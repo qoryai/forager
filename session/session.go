@@ -15,17 +15,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/event"
-	"github.com/qoryai/runner/gateway"
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/server"
-	"github.com/qoryai/runner/session/internal/socket"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/sink"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/sink"
+	"github.com/qoryai/forager/wall"
 )
 
 // Spec is what one run is given.

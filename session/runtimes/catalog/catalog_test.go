@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/session/runtimes/catalog"
-	"github.com/qoryai/runner/session/runtimes/runtimetest"
+	"github.com/qoryai/forager/session/runtimes/catalog"
+	"github.com/qoryai/forager/session/runtimes/runtimetest"
 )
 
 // TestLookupIsTheMachinesDescriptorThenTheContractsThenBare pins where a runtime comes

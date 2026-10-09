@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/contracts"
 )
 
 // EnrolmentPath is where enrolment is served under the server's URL, beside discovery,

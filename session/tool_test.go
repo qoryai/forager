@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // toolMode is the first argument that makes the test binary a tool.

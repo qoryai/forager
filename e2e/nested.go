@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/wall"
 )
 
 // innerPrefix starts the one line of standard output that holds an inner container's

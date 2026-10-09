@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/link"
+	"github.com/qoryai/forager/link"
 )
 
 // preambleWait is how long a connection has to send its preamble.

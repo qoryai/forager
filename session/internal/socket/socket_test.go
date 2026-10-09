@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session/internal/descriptor"
-	"github.com/qoryai/runner/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/descriptor"
+	"github.com/qoryai/forager/session/internal/socket"
 )
 
 // TestForwardedHookInputArrivesAsAHooksRecord pins the forwarder and the listener

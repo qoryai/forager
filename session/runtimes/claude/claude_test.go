@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/runtimes"
-	"github.com/qoryai/runner/session/runtimes/claude"
-	"github.com/qoryai/runner/session/runtimes/runtimetest"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
+	"github.com/qoryai/forager/session/runtimes/runtimetest"
 )
 
 func TestClaudeCodeIsARuntime(t *testing.T) {

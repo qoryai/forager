@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/event"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // entry is a path as Forager looks its name up: in its parent, resolved.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/session/internal/chunk"
+	"github.com/qoryai/forager/session/internal/chunk"
 )
 
 // TestChunksCutAtLinesAndAtSize pins the rule: a newline ends a chunk and keeps its

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/forager/accesskey"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")

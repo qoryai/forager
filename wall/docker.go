@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/program"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/program"
 )
 
 // Where things are inside a Docker enclosure.

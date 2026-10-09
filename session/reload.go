@@ -7,11 +7,11 @@ import (
 	"maps"
 	"sync"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/policy"
-	"github.com/qoryai/runner/refusal"
-	"github.com/qoryai/runner/server"
-	"github.com/qoryai/runner/sink"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/sink"
 )
 
 // live is a run's server while the run goes: the configuration document as

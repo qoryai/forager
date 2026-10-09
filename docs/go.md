@@ -1,7 +1,7 @@
 # Forager from Go
 
 Forager is the security boundary around one coding agent session. It is a Go module,
-`github.com/qoryai/runner`. The [`qory`](https://github.com/qoryai/qory) command imports
+`github.com/qoryai/forager`. The [`qory`](https://github.com/qoryai/qory) command imports
 it, and ships `qory run` in front of it. The module has no command of its own.
 
 Forager:

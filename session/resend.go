@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/event"
-	"github.com/qoryai/runner/server"
-	"github.com/qoryai/runner/sink"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/sink"
+	"github.com/qoryai/forager/wall"
 )
 
 // ResendSpec is what sending a run's record again is given.

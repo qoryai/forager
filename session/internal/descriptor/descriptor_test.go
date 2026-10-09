@@ -8,8 +8,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/session/internal/descriptor"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/session/internal/descriptor"
 )
 
 // TestAnExpressionIsRefused pins that a descriptor matches and copies and never

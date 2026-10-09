@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qoryai/runner/link"
+	"github.com/qoryai/forager/link"
 )
 
 // RelayTokenEnv is the variable of the relay's environment that holds the run's proxy

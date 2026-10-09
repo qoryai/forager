@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/qoryai/runner/link"
-	"github.com/qoryai/runner/policy"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/policy"
 )
 
 // AmbiguousPath is the rule a denial names when a request's path could be read two
