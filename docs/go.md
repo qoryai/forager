@@ -225,7 +225,9 @@ with `e2e` to check them together.
     and `variables`.
 - `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, with the
   proxy, the credentials and the tools in `gateway/internal/`, and reports every run to
-  the server.
+  the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
+  and the `Gateway` it returns, `Resend` with its `ResendConfig`, and the types their
+  fields need are the package's whole surface.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.
@@ -244,9 +246,12 @@ holds the imports to these rules:
 
 - The core imports no part.
 - `gateway` and `wall` import the core.
-- `session` imports the core and `wall` for the interface. Its tests import package
-  `gateway` too, to run a session against a real one, and `internal/linktest`, a fake
-  gateway's link.
+- `session` imports the core and `wall` for the interface, and no gateway package: it
+  speaks to the gateway over its local link alone. Its tests import
+  `internal/linktest`, a fake gateway's link, and package `gateway`, to run a session
+  against a real one, using only its surface.
+- Package `gateway` exports its surface alone. A new export fails the test until its
+  list names it.
 - Only `e2e` imports `session`, and it imports every part.
 - No part imports the core's `internal/` packages, or another part's.
 

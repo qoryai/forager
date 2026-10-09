@@ -434,6 +434,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Gateway
 
+#### Upgrading
+
+- Package `gateway` exports `gateway.Start`, its `Config` and the `Gateway` it returns,
+  with `Addr`, `LocalLink`, `Close` and `Wait`; `gateway.Resend`, its `ResendConfig`,
+  `Delivery` and `ErrRunning`; and the types their fields need: `Server`, `TLS`,
+  `Policy` with `Under`, `ReadPolicy`, `PolicyEgress`, `PolicyCredential`, `PolicyTool`,
+  `Credential`, `Tool`, `Discovery` and `Image`. `Proxy`, `Decision`, `CA`,
+  `ProxyCredential`, `ProxyTool`, `CredentialDefinition`, `HeldCredentials`,
+  `ToolDefinition`, `ChosenTool`, `Tools`, `Listen`, `NewCA`, `ResolveCredentials`,
+  `ChooseTools`, `CheckTools`, `ToolPlaceholders`, `StartTools` and `ToolSocketDirs` are
+  removed: `gateway.Start` starts the one proxy every run shares, and for each run a
+  session opens on its link resolves the credentials and starts the tools the run's
+  policy selects among `gateway.Config`'s `Credentials` and `Tools`. A test in
+  `internal/importrules` fails on any other export.
+
 #### Changed
 
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
@@ -442,8 +457,7 @@ release may change what an existing document does, and says so under Upgrading.
   reads "qory: egress to <host>:<port> denied by the gateway: link-local addresses are
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
-  gateway: the path could be read two ways". Package `gateway` holds the names the
-  session drives the proxy, the credentials and the tools by.
+  gateway: the path could be read two ways".
 
 ### Wall
 
@@ -815,8 +829,8 @@ release may change what an existing document does, and says so under Upgrading.
   `session` and `e2e`; the job named `Go tests` passes when they all pass; and the two
   wall conformance jobs run `./e2e`. A test in `internal/importrules` holds each part's
   imports to the rules: the core imports no part; the gateway and the wall import the
-  core; the session imports the core, the wall and package `gateway`; and only `e2e`
-  imports the session.
+  core; the session imports the core and the wall, and its tests package `gateway`,
+  using only its surface; and only `e2e` imports the session.
 
 #### Fixed
 
