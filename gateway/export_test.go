@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/qoryai/forager/gateway/internal/proxy"
@@ -67,3 +69,13 @@ func BasicPassword(value string) (string, bool) { return basicPassword(value) }
 
 // Bearer is the credential of a request's Authorization values.
 func Bearer(values []string) (string, bool) { return bearer(values) }
+
+// PrintedCopy is a copy of the Gateway, *g, printed with format: its fields, since its
+// print methods are on the pointer.
+func PrintedCopy(g *Gateway, format string) string {
+	return fmt.Sprintf(format, reflect.ValueOf(g).Elem())
+}
+
+// PrintedSecret is the gateway's link secret, as its own type holds it, printed with
+// format.
+func PrintedSecret(g *Gateway, format string) string { return fmt.Sprintf(format, g.secret) }

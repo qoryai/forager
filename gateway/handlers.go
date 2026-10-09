@@ -5,6 +5,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -119,7 +120,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
-	w.Write(answer)
+	io.WriteString(w, answer.reveal())
 	lr.arm()
 }
 

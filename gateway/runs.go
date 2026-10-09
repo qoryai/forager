@@ -33,7 +33,8 @@ type linkRun struct {
 	r      *run.Run
 	st     *stream.Run
 	px     *proxy.Proxy
-	secret string
+	// secret is the run's proxy secret, held so that no print of the run shows it.
+	secret secretValue
 	tools  *tool.Set
 	posts  *sink.Server
 	live   *live
@@ -61,8 +62,9 @@ type linkRun struct {
 	// X-Qory-Run-Configuration of every answer for the run.
 	reloadBody   []byte
 	reloadDigest string
-	// answer is the run answer, given once.
-	answer []byte
+	// answer is the run answer, given once; it holds the proxy secret, so no print of
+	// the run shows it.
+	answer secretValue
 	// last is when the session last asked anything of the run; timer ends the run when
 	// it asks nothing for the gateway's quiet time.
 	last  time.Time
@@ -204,10 +206,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 		authority = ca.PEM()
 	}
-	if lr.secret, err = proxy.NewSecret(); err != nil {
+	secret, err := proxy.NewSecret()
+	if err != nil {
 		return fail(err)
 	}
-	if err := g.proxies.Register(lr.secret, lr.px); err != nil {
+	lr.secret = newSecretValue(secret)
+	if err := g.proxies.Register(secret, lr.px); err != nil {
 		return fail(err)
 	}
 	lr.mu.Lock()
@@ -223,7 +227,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 		authority = nil
 	}
 	lr.mu.Lock()
-	lr.answer = lr.runAnswer(authority)
+	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
 	return lr, true, nil
 }
@@ -246,8 +250,8 @@ func (lr *linkRun) arm() {
 // winds down; then its reload, its tools and its credentials. Each may be absent.
 func (lr *linkRun) release() {
 	lr.cancel()
-	if lr.secret != "" {
-		lr.g.proxies.Unregister(lr.secret)
+	if lr.secret != nil {
+		lr.g.proxies.Unregister(lr.secret.reveal())
 	}
 	if lr.px != nil {
 		lr.px.Close()
@@ -400,7 +404,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	doc, digest := policyDocument(pol)
 	b, _ := json.Marshal(runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		ProxySecret: lr.secret, CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
+		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	})
 	return b

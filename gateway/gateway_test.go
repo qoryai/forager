@@ -213,6 +213,20 @@ func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
 			t.Errorf("printed %s", out)
 		}
 	}
+	// A copy of the Gateway, *g, whose print methods are on the pointer, prints its
+	// fields: neither the link secret nor a live run's proxy secret is among what they
+	// show, under a verb that reprints what a field points to either.
+	a := h.open(server.LinkRunRequest{})
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+		if out := gateway.PrintedCopy(h.g, format); strings.Contains(out, secret) || strings.Contains(out, a.ProxySecret) || !strings.Contains(out, "secret") && format == "%+v" {
+			t.Errorf("a copy printed with %s: %s", format, out)
+		}
+	}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		if out := gateway.PrintedSecret(h.g, format); out != "[redacted]" {
+			t.Errorf("the secret's own type printed with %s: %s", format, out)
+		}
+	}
 }
 
 // TestARunWithNoServer pins a run with files only: the answer, the session's events

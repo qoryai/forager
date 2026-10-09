@@ -61,7 +61,7 @@ type Gateway struct {
 	cancel context.CancelFunc
 
 	dir     string
-	secret  string
+	secret  secretValue
 	ln      net.Listener
 	link    *linkListener
 	http    *http.Server
@@ -191,7 +191,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	g.secret = secret
+	g.secret = newSecretValue(secret)
 	if g.dir, err = os.MkdirTemp("", link.LinkDirPrefix); err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func (g *Gateway) Addr() string {
 func (g *Gateway) LocalLink() link.Local {
 	return link.Local{
 		Socket:   filepath.Join(g.dir, link.LinkSocketName),
-		Secret:   g.secret,
+		Secret:   g.secret.reveal(),
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
 		Reserved: g.reserved(),

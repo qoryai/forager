@@ -25,7 +25,7 @@ import (
 // unanswered, and nothing is logged of it.
 type linkListener struct {
 	ln     net.Listener
-	secret string
+	secret secretValue
 	uid    int
 	conns  chan net.Conn
 	done   chan struct{}
@@ -38,7 +38,7 @@ type linkListener struct {
 
 // newLinkListener serves the connections of uid's processes on ln.
 func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
-	l := &linkListener{ln: ln, secret: secret, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+	l := &linkListener{ln: ln, secret: newSecretValue(secret), uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	l.wg.Add(1)
 	go l.accept()
 	return l
@@ -132,7 +132,7 @@ func (l *linkListener) opens(c net.Conn, inMemory bool) (bool, *bufio.Reader) {
 	c.SetReadDeadline(time.Now().Add(link.PreambleWait))
 	defer c.SetReadDeadline(time.Time{})
 	r := bufio.NewReader(c)
-	if ok, err := link.ReadLinkPreamble(r, l.secret); !ok || err != nil {
+	if ok, err := link.ReadLinkPreamble(r, l.secret.reveal()); !ok || err != nil {
 		return false, nil
 	}
 	return true, r
