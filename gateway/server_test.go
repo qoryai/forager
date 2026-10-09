@@ -139,6 +139,11 @@ func TestTheServerClosesARunBeforeItStarts(t *testing.T) {
 		d := h.post(heartbeat(runID))
 		return d.Status == http.StatusGone && d.From == "apiary"
 	})
+	// The 410's message is the error today's session returned.
+	b, _ := json.Marshal([]map[string]any{heartbeat(runID)})
+	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["message"] != "the server closed the run before it started: run_closed (status 410)" || got["from"] != "apiary" {
+		t.Errorf("the 410: %d %v", status, got)
+	}
 	h.close()
 	lines := h.record(runID)
 	if l := lines[len(lines)-1]; l.Type != event.RunRefused || l.Data["code"] != "run_closed" || l.Data["status"] != 410.0 {
@@ -158,6 +163,10 @@ func TestRefusalsAtTheStartPassOn(t *testing.T) {
 	var r *accesskey.Refusal
 	if !errors.As(err, &r) || r.Code != "instance_limit" || r.From != "apiary" || r.Status != http.StatusConflict {
 		t.Errorf("the server's refusal: %v", err)
+	}
+	// Its message is the text today's session returned, the server's URL in it.
+	if status, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); status != http.StatusConflict || got["message"] != "ping "+c.srv.URL+"/v1/events: instance_limit (status 409)" {
+		t.Errorf("instance_limit: %d %v", status, got)
 	}
 	c.limit.Store(false)
 	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &r) || r.Code != "run_configuration_invalid" || r.From != "gateway" || r.Status != http.StatusForbidden {
@@ -317,8 +326,9 @@ func TestAReloadRecordsTheTunnelsItClosesAfterItsPolicyApplied(t *testing.T) {
 }
 
 // TestCloseAndResend pins delivery: events the server did not accept by Close are
-// Undelivered, and a resend of the run's record directory sends them; a run Close did
-// not see end is completed with gateway_lost.
+// Undelivered, and a resend of the run's record directory sends them; a run still live
+// at Close ends at once, without an exit, whatever the context allows, Close returning
+// within the flush's bound, and a resend completes it with gateway_lost.
 func TestCloseAndResend(t *testing.T) {
 	c := newControl(t)
 	cfg := gateway.Config{Server: c.server()}
@@ -330,11 +340,30 @@ func TestCloseAndResend(t *testing.T) {
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), logged(a.RunID))
 	h.post(exited(a.RunID))
 	h.post(started(lost.RunID, nil))
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	d, err := h.g.Close(ctx)
+	begun := time.Now()
+	closed := make(chan struct{})
+	var d gateway.Delivery
+	var err error
+	go func() {
+		defer close(closed)
+		d, err = h.g.Close(context.Background())
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close waits for a live run")
+	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if took := time.Since(begun); took > 3*time.Second {
+		t.Errorf("Close took %v", took)
+	}
+	if got := types(h.record(lost.RunID)); !slices.Equal(got, []string{event.Ping, event.RunStarted}) {
+		t.Errorf("the live run's record at Close %v", got)
+	}
+	if _, err := relay(h.g.Addr(), lost.ProxySecret).Get("http://a.example/"); err == nil {
+		t.Error("the live run's secret was served after Close")
 	}
 	if d.Undelivered < 5 || d.RunClosed {
 		t.Errorf("delivery %+v", d)
