@@ -1,11 +1,14 @@
 package run
 
 import (
+	"fmt"
+	"regexp"
 	"slices"
 
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the
@@ -242,4 +245,92 @@ type Discovery struct {
 	NodeID string
 	// Secrets is true when the document lists a secrets section.
 	Secrets bool
+}
+
+// Image is one image as the machine defines it: what an agent's enclosure is started
+// from, and how. A run's policy selects images by name and names no reference, so a
+// repository never chooses what it runs under.
+type Image struct {
+	// Name is what a policy, or [Images.Default], selects it by.
+	Name string
+	// Ref is the image's reference, pinned by digest where the machine wants the same
+	// image every time.
+	Ref string
+	// Runtime is the container runtime the wall starts the image under, one the
+	// machine's engine has: sysbox-runc. Empty is the engine's default.
+	Runtime string
+	// Docker gives the agent a Docker daemon of its own, inside the enclosure: the
+	// image holds dockerd, and the wall starts it before the agent. It needs a Runtime
+	// that runs a daemon in a container without privileges. Experimental: see
+	// contracts/forager/v1/README.md §The wall.
+	Docker bool
+}
+
+// Check refuses a definition that cannot be one, so a command reading the machine's
+// configuration says so before any run selects it.
+func (i Image) Check() error {
+	if !imageNameShape.MatchString(i.Name) {
+		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+	}
+	if i.Ref == "" {
+		return fmt.Errorf("image %s: the reference is empty", i.Name)
+	}
+	if i.Docker && i.Runtime == "" {
+		return fmt.Errorf("image %s: a Docker of the agent's own needs a runtime that runs one without privileges, such as sysbox-runc", i.Name)
+	}
+	return nil
+}
+
+var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+
+// Images are the session's image table: the images the machine defines, which a run's
+// policy selects among by name, and the one a run starts in when its policy selects
+// none.
+type Images struct {
+	// Default is the image when the policy selects none: the name of one of Defined, or
+	// a reference.
+	Default string
+	// Defined are the images the machine defines.
+	Defined []Image
+}
+
+// resolve is the image a run starts in: the one its policy selects, or the default,
+// which is the name of one of the definitions or a reference.
+func (im Images) resolve(selected string) (Image, error) {
+	for _, d := range im.Defined {
+		if err := d.Check(); err != nil {
+			return Image{}, err
+		}
+	}
+	if len(im.Defined) > 0 {
+		seen := map[string]bool{}
+		for _, d := range im.Defined {
+			if seen[d.Name] {
+				return Image{}, fmt.Errorf("the image %s is defined twice", d.Name)
+			}
+			seen[d.Name] = true
+		}
+	}
+	name := selected
+	if name == "" {
+		name = im.Default
+	}
+	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == name }); i >= 0 {
+		return im.Defined[i], nil
+	}
+	if selected != "" {
+		return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
+	}
+	return Image{Ref: im.Default}, nil
+}
+
+// Passing is a [Config.Passes] of the names of the variables the run passes a value
+// for: in what it inherits, what the harness sets, or the run's or the machine's
+// variables.
+func Passing(names []string) func(name string) bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return func(name string) bool { return set[name] }
 }
