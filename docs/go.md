@@ -141,8 +141,9 @@ minutes.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
-read or that do not match, `TLS` without `Listen`, and `Listen` without `RunCredentials`
-or `Dir`.
+read or that do not match, `TLS` without `Listen`, `Listen` without `RunCredentials`
+or `Dir`, and with `Listen` a `Dir` it cannot create a file in, "the ended run keys:
+<directory> cannot be written: <error>".
 
 ### The session behind a separate gateway
 

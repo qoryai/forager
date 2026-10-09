@@ -1760,6 +1760,40 @@ func TestARunTheServerClosesAsItsSessionGivesUp(t *testing.T) {
 	s.close()
 }
 
+// TestAStateDirectoryThatCannotBeWritten pins Start against a state directory it
+// cannot create a file in, though it holds the gateway's authority already: no gateway,
+// since it could never keep a run key the issuer ended.
+func TestAStateDirectoryThatCannotBeWritten(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a directory of mode 0500")
+	}
+	dir := t.TempDir()
+	certFile, keyFile, _ := testCertificate(t, t.TempDir())
+	cfg := gateway.Config{Dir: dir, Listen: "127.0.0.1:0", RunCredentials: realIssuers(t, false), TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}}
+	g, err := gateway.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "authority", "ca.pem")); err != nil {
+		t.Fatalf("the authority: %v", err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	g, err = gateway.Start(context.Background(), cfg)
+	if err == nil {
+		g.Close(context.Background())
+		t.Fatal("a gateway started on a directory it cannot write")
+	}
+	if want := "the ended run keys: " + dir + " cannot be written: "; !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("Start: %v, want %q and the OS error", err, want)
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.
