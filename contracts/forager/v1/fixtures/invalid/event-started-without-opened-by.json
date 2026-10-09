@@ -1,0 +1,22 @@
+{
+  "specversion": "1.0",
+  "id": "7e1c0000-0000-7000-8000-300000000002",
+  "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "type": "dev.qory.run.started",
+  "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "time": "2026-10-09T10:00:00.100Z",
+  "sequence": "0000000002",
+  "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
+  "data": {
+    "runtime": "claude",
+    "command": "claude",
+    "args": [
+      "-p",
+      "Reply pong"
+    ],
+    "dir": "/home/dev/app",
+    "interactive": false,
+    "forager_version": "0.7.0",
+    "host": "dev-laptop"
+  }
+}

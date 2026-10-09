@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// The refusal codes this package and the runner's client decide or read. The contract's
+// The refusal codes this package and Forager's client decide or read. The contract's
 // table of refusal codes lists every code and when each applies.
 const (
 	// CodeUnauthorized is a 401: the access key is unknown or revoked, or the request
@@ -36,7 +36,7 @@ const (
 )
 
 // Refusal is an answer, or a decision, that means no run or no key, with its code: the
-// server's, read from the body of a signed answer, or one the runner or this package
+// server's, read from the body of a signed answer, or one Forager or this package
 // decides. Status is the answer's HTTP status, or 0 when no answer is concerned.
 type Refusal struct {
 	Code   string
@@ -46,9 +46,34 @@ type Refusal struct {
 	// Detail says more about where the refusal came from, a URL say; it never contains
 	// a secret.
 	Detail string
+	// From says who refused, as the gateway's link reports it: [FromApiary] for a code
+	// read from the server's signed answer and for the server's 401 at run start,
+	// unsigned as every 401 is; [FromGateway] for one a gateway decides. It is empty for
+	// a refusal Forager decides, answer_unsigned or apiary_public_key_missing say, and
+	// for a session's own. Error does not show it.
+	From string
+	// Text, when not empty, is what Error returns, in place of the text made of the
+	// members: a refusal on the gateway's link carries the text the refusal's own Error
+	// returned, which the session sets here, so the user reads what they read when the
+	// session decided it.
+	Text string
 }
 
+// The values of [Refusal.From].
+const (
+	// FromGateway is a refusal a gateway decides.
+	FromGateway = "gateway"
+	// FromApiary is a refusal of Qory Apiary's, the server's: a code read from its
+	// signed answer, or its 401 at run start; a gateway passes it on with its code and
+	// status.
+	FromApiary = "apiary"
+)
+
+// Error is Text when it is set; else the Detail, the code, the status and the names.
 func (r *Refusal) Error() string {
+	if r.Text != "" {
+		return r.Text
+	}
 	var b strings.Builder
 	if r.Detail != "" {
 		b.WriteString(r.Detail + ": ")
@@ -69,7 +94,7 @@ var codeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // ReadRefusal reads the code of a coded refusal, {"error": "<code>", "names": [...]},
 // from the body of an answer whose signature verified. It returns nil when the body
 // contains no such code: a code is read from a signed answer alone, so a caller
-// verifies the answer first.
+// verifies the answer first. Its From is [FromApiary].
 func ReadRefusal(status int, body []byte) *Refusal {
 	var doc struct {
 		Error string   `json:"error"`
@@ -78,5 +103,5 @@ func ReadRefusal(status int, body []byte) *Refusal {
 	if jsonv2.Unmarshal(body, &doc) != nil || !codeShape.MatchString(doc.Error) {
 		return nil
 	}
-	return &Refusal{Code: doc.Error, Status: status, Names: doc.Names}
+	return &Refusal{Code: doc.Error, Status: status, Names: doc.Names, From: FromApiary}
 }

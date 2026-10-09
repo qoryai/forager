@@ -6,8 +6,8 @@ may do with it without asking.
 
 ## You may
 
-- Say that your receiver, your runtime descriptor or your team uses the Qory
-  runner, reports to it or is built for it, when that is true.
+- Say that your receiver, your runtime descriptor or your team uses Qory
+  Forager, reports to it or is built for it, when that is true.
 - Redistribute an unmodified release under the name Qory.
 - Use the word Qory to refer to this project, its code and its documentation.
 

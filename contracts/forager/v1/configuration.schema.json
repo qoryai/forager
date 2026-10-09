@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/configuration.schema.json",
+  "title": "Configuration",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where Forager posts its events, where it fetches a run configuration when the server offers one, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "node_id", "events", "apiary_public_key"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    },
+    "node_id": {
+      "description": "The id of the access key's node, nd_, or node pool, np_, followed by 16 lower-case Crockford base32 characters. Listed for every verified access key, for display.",
+      "type": "string",
+      "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
+    },
+    "events": {
+      "description": "Where the events go and which.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "types"],
+      "properties": {
+        "url": {
+          "description": "The endpoint every batch is posted to. https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        },
+        "types": {
+          "description": "The event types the server wants, by full type name, or * for every type. The ping is always sent.",
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|dev\\.qory\\.[a-z_]+(\\.[a-z_]+)*)$"
+          }
+        }
+      }
+    },
+    "run": {
+      "description": "Where the run configuration is fetched from, when the server offers one. A server whose document has no run section offers none, and the run's policy is the machine's.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels identify what the run works on is the server's to decide. https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        }
+      }
+    },
+    "secrets": {
+      "description": "Present for an access key allowed stored secrets. A server that lists it requires a wall for every run against it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "description": "https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        }
+      }
+    },
+    "apiary_public_key": {
+      "description": "The server's Ed25519 public keys, the current one and during a rotation the next one after it, listed for every verified access key for information: Forager verifies under its pin alone.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alg", "public_key"],
+        "properties": {
+          "alg": {"const": "ed25519"},
+          "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"}
+        }
+      }
+    }
+  }
+}

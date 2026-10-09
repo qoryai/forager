@@ -1,0 +1,22 @@
+{
+  "keys": [
+    {
+      "alg": "RS256",
+      "kid": "k-rs256",
+      "note": "pinned without a kid in one-key.json",
+      "public_key_file": "rs256.pem"
+    },
+    {
+      "alg": "ES256",
+      "kid": "k-es256",
+      "public_key_file": "es256.pem"
+    },
+    {
+      "alg": "EdDSA",
+      "kid": "k-eddsa",
+      "public_key_file": "eddsa.pem"
+    }
+  ],
+  "note": "The fixture issuer, https://issuer.example, and its keys, derived from the seed, bytes 193 to 224, in base64url. RSA: p is the first prime at or above the 1024-bit number SHA-256(seed || \"rs256-p\" || 0x00) || ... || SHA-256(seed || \"rs256-p\" || 0x03) with its two highest bits and its lowest bit set, searched upward in steps of two, with p - 1 not a multiple of 65537; q the same with \"rs256-q\"; e is 65537. ECDSA on P-256: the private scalar is SHA-256(seed || \"es256\" || 0x00), big endian. Ed25519: the key's seed is SHA-256(seed || \"eddsa\" || 0x00). Each public key is the PEM file named, a PKIX SubjectPublicKeyInfo. These keys are public: anyone can derive their private keys from the seed. Forager refuses each in a configuration; never pin them.",
+  "seed": "wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A"
+}

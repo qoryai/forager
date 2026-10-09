@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "security_policy": {
+    "version": 1,
+    "egress": {
+      "mode": "observe"
+    }
+  },
+  "note": "A member Forager does not recognise is ignored."
+}

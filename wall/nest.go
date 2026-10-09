@@ -45,7 +45,7 @@ const nestWait = 2 * 60
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
 //
-// Experimental: see contracts/runner/v1/README.md §The wall.
+// Experimental: see contracts/forager/v1/README.md §The wall.
 func Nest(args []string) error {
 	user, argv, err := parseNest(args)
 	if err != nil {
@@ -262,22 +262,22 @@ type nestOwner struct{ uid, gid int }
 // writeNestConfig writes the agent's docker configuration, config.json in dir, for the
 // agent alone: dir is owned by agent with mode 0700 and the file with mode 0600, since
 // the docker command reads its configuration as the agent's user and writes to it as
-// well. The directory above dir, /run/qory, is the runner's: it is owned by root, the
+// well. The directory above dir, /run/qory, is Forager's: it is owned by root, the
 // enclosure's root, with mode 0755, so the agent's user passes through it to dir and
 // writes nothing in it. Were it narrower, the docker command could not read the
 // configuration and would start the agent's containers without a proxy.
 //
 // Both modes are set whatever the umask, and whatever the image contains there: a
 // directory the image made narrower, or set to another owner, is changed rather than
-// refused, since the runner keeps nothing else in it and a narrower mode only hides the
+// refused, since Forager keeps nothing else in it and a narrower mode only hides the
 // agent's configuration from the agent. A link or a file in either place is refused,
 // since the owner and the mode would land where it points. The file is written anew.
 func writeNestConfig(dir string, config []byte, root, agent nestOwner) error {
-	runner := filepath.Dir(dir)
-	if err := os.MkdirAll(filepath.Dir(runner), 0o755); err != nil {
+	forager := filepath.Dir(dir)
+	if err := os.MkdirAll(filepath.Dir(forager), 0o755); err != nil {
 		return err
 	}
-	if err := nestDir(runner, 0o755, root); err != nil {
+	if err := nestDir(forager, 0o755, root); err != nil {
 		return err
 	}
 	if err := nestDir(dir, 0o700, agent); err != nil {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/accesskey"
+	"github.com/qoryai/forager/accesskey"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -171,7 +171,7 @@ func TestDockerCommandLines(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The docker command gets the runner's environment without the access key's
+			// The docker command gets Forager's environment without the access key's
 			// variables; no engine is recorded here, so no selection replaces any.
 			if !slices.Equal(wrapped.Env, accesskey.WithoutVariables(os.Environ())) {
 				t.Errorf("the docker command gets an environment of %d variables of its own",
@@ -420,7 +420,7 @@ func TestDockerRefusesANestWithoutItsRuntime(t *testing.T) {
 }
 
 // TestTheDockerCLIReceivesNoAccessKeyVariable pins that a command the wall runs on the
-// machine, the docker CLI and the credential helpers it starts, has the runner's
+// machine, the docker CLI and the credential helpers it starts, has Forager's
 // environment without the access key's variables.
 func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
@@ -434,15 +434,15 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 	if strings.Contains(string(out), "QORY_ACCESS_KEY_") || strings.Contains(string(out), "QORY_APIARY_") || !strings.Contains(string(out), "DOCKER_SEES=yes") {
 		t.Errorf("the command's environment:\n%s", out)
 	}
-	// With the engine's selection, the same, the runner's DOCKER_CONTEXT replaced.
-	t.Setenv("DOCKER_CONTEXT", "the-runners")
+	// With the engine's selection, the same, Forager's DOCKER_CONTEXT replaced.
+	t.Setenv("DOCKER_CONTEXT", "another-context")
 	out, err = hostSystem{}.output(context.Background(), []string{"env"},
 		[]string{"DOCKER_CONTEXT=pinned"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(out), "QORY_ACCESS_KEY_") ||
-		strings.Contains(string(out), "the-runners") ||
+		strings.Contains(string(out), "another-context") ||
 		!strings.Contains(string(out), "DOCKER_CONTEXT=pinned") ||
 		!strings.Contains(string(out), "DOCKER_SEES=yes") {
 		t.Errorf("the command's environment with a selection:\n%s", out)
@@ -669,7 +669,7 @@ func TestAnUnreadableAddressLeavesTheEngineUnpinned(t *testing.T) {
 			strings.Contains(strings.Join(e.Env, " "), "not-a-real-password") {
 			t.Errorf("%s: engine %+v, asked %q", name, e, rec.lines)
 		}
-		// The adapter's commands keep the runner's own environment, and the id is not
+		// The adapter's commands keep Forager's own environment, and the id is not
 		// asked later either.
 		if sel := d.selected(); sel != nil {
 			t.Errorf("%s: the adapter's commands run with %q", name, sel)

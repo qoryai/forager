@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/internal/jcs"
+	"github.com/qoryai/forager/internal/jcs"
 )
 
 // u is a JSON \u escape of four hex digits, spelt out so no tool on the way reads it

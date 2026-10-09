@@ -15,28 +15,28 @@ import (
 )
 
 // Base is the $id every schema of the contract carries, followed by the schema's path
-// under runner/v1. It names the contract; nothing is fetched from it.
-const Base = "https://qory.dev/contracts/runner/v1"
+// under forager/v1. It names the contract; nothing is fetched from it.
+const Base = "https://qory.dev/contracts/forager/v1"
 
 // Version is the contract version the embedded directory holds.
 const Version = "v1"
 
 // Revision is the revision of the contract version this module implements: the
-// integer the runner sends as X-Qory-Contract-Version and as contract_version in the
+// integer Forager sends as X-Qory-Contract-Version and as contract_version in the
 // ping. A revision adds; a breaking change is a new Version. The revision is raised
-// only once a released runner is in use.
+// only once a release of Forager is in use.
 const Revision = 1
 
-// runtimes.json lists the secrets of the descriptors under runner/v1/runtimes, for a
+// runtimes.json lists the secrets of the descriptors under forager/v1/runtimes, for a
 // server to vendor; it is written from them and never by hand.
-//go:generate go run ../internal/descriptor/runtimesjson runner/v1/runtimes.json
+//go:generate go run ../session/internal/descriptor/runtimesjson forager/v1/runtimes.json
 
-//go:embed all:runner
+//go:embed all:forager
 var embedded embed.FS
 
-// FS is the contract directory, rooted at runner/v1: the README, the schemas, the
+// FS is the contract directory, rooted at forager/v1: the README, the schemas, the
 // runtime descriptors and the fixtures.
-var FS = must(fs.Sub(embedded, "runner/v1"))
+var FS = must(fs.Sub(embedded, "forager/v1"))
 
 func must[T any](v T, err error) T {
 	if err != nil {
@@ -70,7 +70,7 @@ func Compiler() (*jsonschema.Compiler, error) {
 	return c, nil
 }
 
-// Compile compiles one schema of the contract by its path under runner/v1, such as
+// Compile compiles one schema of the contract by its path under forager/v1, such as
 // "policy.schema.json" or "events/run.log.schema.json".
 func Compile(name string) (*jsonschema.Schema, error) {
 	c, err := Compiler()
@@ -80,7 +80,7 @@ func Compile(name string) (*jsonschema.Schema, error) {
 	return c.Compile(Base + "/" + name)
 }
 
-// Document reads one YAML or JSON file of the contract, by its path under runner/v1,
+// Document reads one YAML or JSON file of the contract, by its path under forager/v1,
 // into the JSON types a schema validates: maps with string keys, slices, json.Number
 // for numbers. A YAML document goes through JSON on the way, so a YAML integer is a
 // number and a YAML key is a string.
@@ -114,7 +114,7 @@ func Decode(name string, b []byte) (any, error) {
 	return v, nil
 }
 
-// Lines reads a JSON lines file of the contract, by its path under runner/v1, one JSON
+// Lines reads a JSON lines file of the contract, by its path under forager/v1, one JSON
 // value per line in JSON types. A blank line is skipped; a line that is not JSON is an
 // error naming the line number.
 func Lines(name string) ([]any, error) {

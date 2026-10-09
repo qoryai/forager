@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-configuration.schema.json",
+  "title": "Run configuration",
+  "description": "What a server returns for a signed GET of its run configuration endpoint: the server's policy for the run and the variables the agent's process receives, chosen by the server for the run's labels, which the request sends as its query. The digest the server sends beside it is the server's own and opaque to Forager. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    },
+    "security_policy": {
+      "description": "The server's policy for the run, a policy document in the same shape as the machine's own. The policy the command passes, when there is one, narrows it: the node only takes away. Absent, the node's policy is the run's.",
+      "$ref": "policy.schema.json"
+    },
+    "variables": {
+      "description": "The variables the agent's process receives, by name, as the server resolved them among its own levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+      "additionalProperties": {"$ref": "#/$defs/variable"}
+    }
+  },
+  "$defs": {
+    "variable": {
+      "description": "One variable: its value. Forager ignores an attribute it does not recognise; one it must honour needs a new revision.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["value"],
+      "properties": {
+        "value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00\\r\\n]*$"}
+      }
+    }
+  }
+}

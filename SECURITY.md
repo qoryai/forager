@@ -19,24 +19,24 @@ earlier one.
 
 ## What is a vulnerability here
 
-The runner's promises are written down, so the test is whether one was broken. They are
-in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-wall),
-[credentials](contracts/runner/v1/README.md#credentials) and
-[the server](contracts/runner/v1/README.md#the-server). For example:
+Forager's promises are written down, so the test is whether one was broken. They are
+in the contract: [what every wall guarantees](contracts/forager/v1/README.md#the-wall),
+[credentials](contracts/forager/v1/README.md#credentials) and
+[the server](contracts/forager/v1/README.md#the-server). For example:
 
 - a session behind a wall reaches a host, or a path of a host, the run's policy denies;
-- a session reads a credential the runner keeps for it, the run's authority key, the
+- a session reads a credential the gateway keeps for it, the run's authority key, the
   relay's secret or the access key secret;
-- a session changes the run's record, or what the runner reports;
-- a run's policy, a descriptor or a credential adapter's answer makes the runner do
+- a session changes the run's record, or what Forager reports;
+- a run's policy, a descriptor or a credential adapter's answer makes Forager do
   something the binary does not already do, or widens what the machine's policy allows;
-- a receiver accepts a request the runner did not sign, by following this contract;
-- a runner accepts an answer the server did not sign.
+- a receiver accepts a request Forager did not sign, by following this contract;
+- Forager accepts an answer the server did not sign.
 
 ## What is not
 
-The contract states its [limits](contracts/runner/v1/README.md#limits), and what they
-describe is how the runner works, not a flaw in it:
+The contract states its [limits](contracts/forager/v1/README.md#limits), and what they
+describe is how Forager works, not a flaw in it:
 
 - without a wall, enforcement is cooperative: a program that ignores the proxy variables
   is not seen and not stopped;
@@ -44,6 +44,6 @@ describe is how the runner works, not a flaw in it:
 - a host that answers with the headers it was sent shows a session the credential set on
   its request; a credential belongs only on hosts trusted not to;
 - what a credential may do on the paths a run's policy allows is the credential's own
-  grant, not the runner's.
+  grant, not the gateway's.
 
 If you are not sure which side something falls on, write anyway.

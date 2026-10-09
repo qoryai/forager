@@ -1,0 +1,17 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": ["ak_f1xt0re000000000", "ak_f1xt0re000000000"],
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1700000000",
+    "X-Qory-Signature-Ed25519": "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ"
+  },
+  "body": null,
+  "expect": 400,
+  "expect_code": "bad_request",
+  "note": "get-configuration-valid with X-Qory-Access-Key-Id sent twice, each time the same. A header the signature depends on sent twice is refused before verification, with an unsigned 400 bad_request; a receiver replays a list as the header sent once per value."
+}

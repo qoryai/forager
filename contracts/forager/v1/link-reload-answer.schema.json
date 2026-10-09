@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-reload-answer.schema.json",
+  "title": "Link reload answer",
+  "description": "What a gateway returns on its link for a GET of a run's configuration by its run id, the reload, a 200, application/json, unsigned: the link's transport authenticates it. The policy in force for the run, its digest, the run's variables, placeholders, reserved names and image, the policy_applied members the gateway decides, and nothing of the run's secrets: the proxy secret and the certificate authority are given once, in the run answer. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "applied"],
+  "dependentRequired": {
+    "policy": ["digest"],
+    "digest": ["policy"]
+  },
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    },
+    "policy": {
+      "description": "The policy in force for the run now: the one the gateway holds for it, narrowed by the run request's narrowing when it had one. Absent when there is none, and the gateway observes everything.",
+      "$ref": "policy.schema.json"
+    },
+    "digest": {"$ref": "link-run-answer.schema.json#/properties/digest"},
+    "variables": {"$ref": "link-run-answer.schema.json#/properties/variables"},
+    "placeholders": {"$ref": "link-run-answer.schema.json#/properties/placeholders"},
+    "reserved": {"$ref": "link-run-answer.schema.json#/properties/reserved"},
+    "image": {
+      "description": "The image the run has, when it has a wall: the one of the run answer, since the image is fixed when the run starts.",
+      "$ref": "link-run-request.schema.json#/$defs/image"
+    },
+    "applied": {"$ref": "link-run-answer.schema.json#/properties/applied"},
+    "proxy_secret": false,
+    "certificate_authority": false
+  }
+}

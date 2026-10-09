@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/wall"
 )
 
 // SetRegisterPause sets what a run calls between its check against the registry of

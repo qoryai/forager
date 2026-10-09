@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/forager/contracts"
 )
 
 // The fixtures of the access key: enrolment's schema, and the known answers this
@@ -35,7 +35,7 @@ func b64(t *testing.T, s string) []byte {
 	return b
 }
 
-// read reads one file of the contract, by its path under runner/v1.
+// read reads one file of the contract, by its path under forager/v1.
 func read(t *testing.T, name string) []byte {
 	t.Helper()
 	b, err := fs.ReadFile(contracts.FS, name)
@@ -767,8 +767,8 @@ func TestDeniedVariables(t *testing.T) {
 	}
 }
 
-// TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's, the
-// runner's and qory's.
+// TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's,
+// Forager's, qory's and a gateway's.
 func TestRunRefusedCodes(t *testing.T) {
 	var s struct {
 		Properties struct {
@@ -779,16 +779,18 @@ func TestRunRefusedCodes(t *testing.T) {
 	}
 	load(t, "events/run.refused.schema.json", &s)
 	want := []string{
-		"answer_unsigned", "apiary_public_key_missing", "bad_request", "engine_unreachable",
-		"image_unknown", "instance_limit", "invalid_request", "key_invalid", "key_limit",
-		"labels_changed", "mount_contains_runner_files", "mount_mode_conflict",
-		"mount_shared_with_run", "mount_through_link", "placeholder_conflict", "rate_limited",
-		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
-		"secrets_not_allowed", "server_needs_wall", "tool_unknown", "unauthorized",
-		"unavailable", "unsupported_contract_version", "variable_reserved",
+		"answer_unsigned", "apiary_public_key_missing", "bad_request",
+		"differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
+		"invalid_request", "key_invalid", "key_limit", "labels_changed",
+		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
+		"mount_through_link", "placeholder_conflict", "rate_limited", "run_closed",
+		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused",
+		"run_id_used", "secrets_not_allowed", "server_needs_wall",
+		"target_differs_from_credential", "tool_unknown", "unauthorized", "unavailable",
+		"unsupported_contract_version", "variable_reserved",
 	}
-	if len(want) != 26 {
-		t.Fatalf("%d codes in the test's list; want 26", len(want))
+	if len(want) != 30 {
+		t.Fatalf("%d codes in the test's list; want 30", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/accesskey"
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/server"
-	"github.com/qoryai/runner/receiver"
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/server"
 )
 
 const (
@@ -69,7 +69,7 @@ func fixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// digestOf is a receiver's digest of a document: any string, opaque to the runner;
+// digestOf is a receiver's digest of a document: any string, opaque to Forager;
 // here the hex sha256 of the bytes.
 func digestOf(b []byte) string {
 	sum := sha256.Sum256(b)
@@ -377,16 +377,16 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	check("labels the contract refuses", signedGET(receiver.DefaultRunPath+"?Forge=x", fixtureKey, "1700000000"), 400, "invalid_request")
 
 	e := event.NewEmitter(event.NewRunID(), nil)
-	ping, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
+	ping, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
 	pingBody := []byte("[" + string(ping) + "]")
-	long, _ := e.Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
+	long, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
 	check("a ping with an interval over 300 seconds", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(long)+"]")), 400, "invalid_request")
 	admitted := true
 	h.Admit = func(id, instance string) bool { return admitted && id == key && instance == inst }
 	check("a ping it admits", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
 	admitted = false
 	check("the same ping again", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
-	other, _ := event.NewEmitter(event.NewRunID(), nil).Make(event.Ping, map[string]any{"runner_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
+	other, _ := event.NewEmitter(event.NewRunID(), nil).Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
 	check("a ping it does not admit", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(other)+"]")), 409, "instance_limit")
 
 	beat, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}).JSON()
@@ -502,8 +502,8 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	}
 }
 
-// TestAboutIsStoredAsReceived pins that a run.started with about is stored as the
-// runner sent it, byte for byte. The receiver reads nothing of about and holds it to no
+// TestAboutIsStoredAsReceived pins that a run.started with about is stored as
+// Forager sent it, byte for byte. The receiver reads nothing of about and holds it to no
 // bound: one with two subjects of the same type and ref is stored all the same.
 func TestAboutIsStoredAsReceived(t *testing.T) {
 	h, _, _ := handler(t, 1700000000)

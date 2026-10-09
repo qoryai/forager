@@ -1,6 +1,6 @@
 # The record
 
-The runner records the whole session as events. It reports three things, all as
+Forager records the whole session as events. It reports three things, all as
 CloudEvents:
 
 - the session's output,
@@ -8,7 +8,7 @@ CloudEvents:
 - what the runtime reports of its session.
 
 Every event goes to files, always. With a server configured, every event the server's
-configuration selects goes there too. See [the server](server.md).
+configuration selects goes there too, sent by the gateway. See [the server](server.md).
 
 ## Where the record is
 
@@ -21,29 +21,64 @@ qory run                                # the composed runtime, at your terminal
 qory run claude -- -p "Reply pong"      # one headless turn
 ```
 
-Every connection the runtime makes goes through the runner's proxy, and is recorded.
-The session is written to its run directory, `<id>/` in the runs directory the caller
+Every connection the runtime makes goes through the gateway, and is recorded.
+The run is written to its run directory, `<id>/` in the runs directory the caller
 passes. `qory` keeps them under its state directory and prints the path:
 
-- `events.jsonl`: one CloudEvent per line.
+- `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
+  writes it, with the run's delivery state beside it, `delivered.log` and
+  `undelivered/`: every event the session posts on the gateway's link, and the
+  gateway's own.
+- `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
+  session's own sequence, which is not the stream's: every event the session posts,
+  and the few it records alone (below).
 - `output.log`: the session's bytes.
+
+The gateway's record and the session's are in the same directory when the caller
+points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
+Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>/`.
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
 
-## The runner's events
+## Forager's events
 
-| Type                          | When                                                    |
-| ----------------------------- | ------------------------------------------------------- |
-| `dev.qory.ping`               | Before the runtime starts, with a server only           |
-| `dev.qory.run.started`        | The runtime is about to start                           |
-| `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect       |
-| `dev.qory.run.log`            | One per chunk of output                                 |
-| `dev.qory.run.resized`        | The pseudo-terminal was resized                         |
-| `dev.qory.run.egress`         | One per connection, or per request on a terminated host |
-| `dev.qory.run.heartbeat`      | Every 30 seconds while the runtime runs                 |
-| `dev.qory.run.exited`         | The runtime exited: the result, the last event          |
+| Type                          | When                                                         |
+| ----------------------------- | ------------------------------------------------------------ |
+| `dev.qory.ping`               | The gateway's, before the run's first, with a server only    |
+| `dev.qory.run.started`        | The run is open: the runtime is about to start               |
+| `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect            |
+| `dev.qory.run.log`            | One per chunk of output                                      |
+| `dev.qory.run.resized`        | The pseudo-terminal was resized                              |
+| `dev.qory.run.egress`         | One per connection, or per request on a terminated host      |
+| `dev.qory.run.heartbeat`      | Every interval while the runtime runs, 30 seconds by default |
+| `dev.qory.run.exited`         | The run ended: the result, the last event                    |
 
-The runner heartbeats while the session runs. The exit status of a run is the runtime's.
+Forager heartbeats while the session runs: the session sends one every interval the
+gateway's discovery announces, `gateway.Config.Heartbeat`, and the gateway ends a run
+whose session sends nothing for three. The exit status of a run is the runtime's.
+
+`dev.qory.run.started` says what opened the run, in `opened_by`: `session` for a run
+around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
+with no session. A run a gateway opened has no process, so its `dev.qory.run.started`
+names no runtime, command or host, and its `dev.qory.run.exited` contains no exit status
+and no state.
+
+When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
+`reason`. The session writes `timeout`, and posts it. The gateway writes the others:
+`session_lost`, the session was silent, or the gateway refused a batch of the
+session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
+`run_ended_at_issuer`; `run_closed` when the server closes the run; and sending a
+record again writes `gateway_lost`. When the gateway or the server ends a session's
+run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
+request with a `410` and a code. The session records its own `dev.qory.run.exited` in
+`session.jsonl` alone, with the 410's code as its reason, and posts nothing more:
+`credential_expired`, `run_ended_at_issuer` or `run_closed` as the gateway ended the
+run, and `run_closed` after `session_lost`, the session silent or a batch of its
+refused. A refusal of the run request with a code other than `wall_required` is
+recorded the same way: the session records `dev.qory.run.refused` in its own record
+alone, since the gateway opened no run. A run the gateway could not open for a reason
+without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the
+gateway's message says. The contract describes each.
 
 ## The session's events
 
@@ -65,16 +100,17 @@ output. A **descriptor** maps those reports to events:
 | `dev.qory.session.ended`             | The runtime closed its session        |
 | `dev.qory.session.result`            | A headless session printed its result |
 
-The runner ships the descriptor for Claude Code. A runtime that nothing describes still
+Forager ships the descriptor for Claude Code. A runtime that nothing describes still
 runs: its run, its log and its egress are recorded, with no session events. See
 [the runtime](go.md#the-runtime).
 
 ## Following a run
 
-[`Events`](go.md#the-spec) in the spec is any stream. A run with no receiver is followed
-on standard output, with the lines `events.jsonl` contains.
+`gateway.Config.Events` is any stream that gets every numbered event of every run as
+well, the lines `events.jsonl` contains. A run with no receiver is followed on
+standard output this way.
 
 ## The details
 
 The whole sequence, every event type and every file are in the
-[contract](../contracts/runner/v1/README.md#the-events).
+[contract](../contracts/forager/v1/README.md#the-events).

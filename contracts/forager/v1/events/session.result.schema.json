@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/session.result.schema.json",
+  "title": "dev.qory.session.result",
+  "description": "The result a non-interactive session printed on its standard output: outcome, turns, cost.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "outcome", "is_error"],
+  "properties": {
+    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "outcome": {"description": "success, or the runtime's error kind: error_max_turns, error_during_execution.", "type": "string", "minLength": 1},
+    "is_error": {"type": "boolean"},
+    "turns": {"type": "integer", "minimum": 0},
+    "duration_ms": {"type": "integer", "minimum": 0},
+    "cost_usd": {"type": "number", "minimum": 0},
+    "result": {"description": "The final response text, when the runtime printed one.", "type": "string"}
+  }
+}

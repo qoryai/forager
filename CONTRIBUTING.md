@@ -6,15 +6,15 @@ Thank you for considering a contribution.
 
 Everywhere. Three kinds are the most useful:
 
-- **A runtime descriptor.** One YAML file under `contracts/runner/v1/runtimes/<name>/`
+- **A runtime descriptor.** One YAML file under `contracts/forager/v1/runtimes/<name>/`
   that maps what a runtime emits, JSON lines on its standard output and hook calls, to the
   session events of the contract, with the fixtures that prove the mapping. A descriptor
   matches and copies; it never computes. A descriptor without fixtures is not accepted.
-- **The contract.** The documents under `contracts/runner/v1/`, their schemas and their
+- **The contract.** The documents under `contracts/forager/v1/`, their schemas and their
   fixtures. A receiver follows the contract and lives in your own repository; nothing in
   this one has to change for it.
-- **The runner** and the receiver: the packages `session` and `receiver` and what they
-  share under `internal/`.
+- **Forager** and the receiver: the parts `session`, `gateway` and `wall`, the
+  packages at the module's root that they share, and `receiver`.
 
 ## Contributor Licence Agreement
 
@@ -46,7 +46,7 @@ The toolchain is pinned in `mise.toml`; `mise install` provides it. Go 1.27.
 
 ```sh
 go build ./...
-go test ./...           # every fixture under contracts/runner/v1, and the unit tests
+go test ./...           # every fixture under contracts/forager/v1, and the unit tests
 go test ./... -cover    # per-package statement coverage
 gofmt -l .              # must print nothing
 go vet ./...
@@ -55,7 +55,7 @@ go run github.com/mgechev/revive@v1.16.0 -config revive.toml ./...
 
 A change to the contract starts with a fixture. A policy, a server document, a
 configuration document or an event fixture is one document under
-`contracts/runner/v1/fixtures/` that the schema accepts, or one under
+`contracts/forager/v1/fixtures/` that the schema accepts, or one under
 `fixtures/invalid/` that it refuses; a signed request is one under `fixtures/signed/`
 with the status a receiver answers. A descriptor fixture is one
 directory under `runtimes/<name>/fixtures/` holding the recorded records and the events
@@ -73,7 +73,7 @@ anyone's infrastructure, no real secrets, no recorded session of anyone's work. 
 for the behaviour it pins, not for the function it calls.
 
 One dependency direction is an invariant. `qory` imports this module and this module
-imports nothing of `qory`: the runner knows nothing of stacks, modules, homes or reports.
+imports nothing of `qory`: Forager knows nothing of stacks, modules, homes or reports.
 
 Dependencies stay few: the standard library, a pseudo-terminal package, a terminal
 package for raw mode, YAML, and JSON schema validation. No CloudEvents SDK: the
@@ -99,17 +99,17 @@ conventions, beyond what `revive` can check:
 - Link identifiers as `[Policy]`, `[session.Run]`. Indent code blocks with a tab, write
   lists as two spaces and a dash, and wrap at 90 columns.
 
-One vocabulary, no synonyms: **run** is one execution of one session under this runner,
+One vocabulary, no synonyms: **run** is one execution of one session under Forager,
 with an id; **session** is the runtime at work inside a run; **runtime** is the program
 that runs the session, such as Claude Code; **policy** is the document that narrows what a
 run may do; **egress** is a connection the session opens to the outside through the
-proxy; **event** is one CloudEvent the runner emits; **sink** is where events go, the file
-or the server; **server** is what the runner is a client of, a control plane or a
+proxy; **event** is one CloudEvent Forager emits; **sink** is where events go, the file
+or the server; **server** is what Forager is a client of, a control plane or a
 receiver; **receiver** is a server that is not a control plane; **descriptor** is the document that
 maps a runtime's output to session events; **record** is one unit of runtime output a
 descriptor reads; **harness** is what the session runs on, composed elsewhere. A runtime is
-never a provider, a tool, an agent or a vendor; the runner never names a hive, a bee or a
-flower.
+never a provider, a tool, an agent or a vendor; Forager's code and docs use no other hive
+words: no hive, bee or flower.
 
 ## Releases
 

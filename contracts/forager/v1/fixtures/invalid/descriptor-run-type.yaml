@@ -1,0 +1,14 @@
+# A descriptor produces session events only; the run events are Forager's own.
+version: 1
+runtime: claude
+runtime_version: "2.1.273"
+sources:
+  hooks:
+    install: claude-settings
+    events: [SessionEnd]
+rules:
+  - source: hooks
+    match: {hook_event_name: SessionEnd}
+    type: dev.qory.run.exited
+    data:
+      exit_code: reason

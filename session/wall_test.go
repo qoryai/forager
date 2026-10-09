@@ -3,19 +3,24 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/qoryai/runner/runtimes"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
 )
 
-// openWall is a wall with nothing in it: it records what the session runner tells it
+// openWall is a wall with nothing in it: it records what the session sends it
 // and starts the launch as it is, pointed at the proxy and the socket by their own
 // addresses.
 type openWall struct {
@@ -38,15 +43,66 @@ func (w *openWall) Wrap(_ context.Context, l wall.Launch) (wall.Launch, error) {
 }
 func (w *openWall) Close(context.Context) error { w.closed++; return nil }
 
+// relayWall is an open wall with a relay: the launch reaches the proxy through a
+// listener of the test's that opens every connection with the run's proxy secret, as
+// the wall's relay does.
+type relayWall struct {
+	openWall
+	ln net.Listener
+}
+
+func (w *relayWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *relayWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return wall.Launch{}, err
+	}
+	w.ln = ln
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				up, err := net.Dial("tcp", l.Proxy)
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				fmt.Fprintf(up, "%s %s\n", link.RelayPreamble, l.ProxyToken)
+				go io.Copy(up, c)
+				io.Copy(c, up)
+			}()
+		}
+	}()
+	relayed := l
+	relayed.Proxy = ln.Addr().String()
+	return w.openWall.Wrap(ctx, relayed)
+}
+
+func (w *relayWall) Close(ctx context.Context) error {
+	if w.ln != nil {
+		w.ln.Close()
+	}
+	return w.openWall.Close(ctx)
+}
+
 // TestWallWrapsTheLaunch pins what crosses to a wall and what does not: the enclosure
-// is asked where the proxy listens and told where it does, it gets the socket, the
-// settings the runner wrote and the run's environment without the proxy variables, a
-// nil environment is nothing and not the process's own, the record names the wall and
-// the image, and the enclosure is closed once.
+// is asked where the forwarder listens and told where it does, it gets the socket,
+// the settings the session wrote and the run's environment without the proxy
+// variables, the run's proxy secret goes to the wall's relay alone, a nil environment
+// is nothing and not the process's own, the record names the wall and the image, and
+// the enclosure is closed once.
 func TestWallWrapsTheLaunch(t *testing.T) {
 	t.Setenv("QORY_TEST_HOST_ONLY", "1")
 	w := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image, sp.Mounts = w, "example.com/agent:1", []wall.Mount{{Path: sp.Dir}}
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
@@ -61,11 +117,14 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if !strings.HasPrefix(w.got.Proxy, "127.0.0.1:") || strings.HasSuffix(w.got.Proxy, ":0") || w.got.Socket == "" {
 		t.Errorf("proxy %q socket %q", w.got.Proxy, w.got.Socket)
 	}
+	if w.got.ProxyToken != linktest.ProxySecret {
+		t.Errorf("the wall's relay got %q as the proxy secret", w.got.ProxyToken)
+	}
 	if want := []wall.Mount{{Path: sp.Dir}, {Path: res.Dir, ReadOnly: true}}; !slices.Equal(w.got.Mounts, want) {
 		t.Errorf("mounts %v, want %v", w.got.Mounts, want)
 	}
 	env := strings.Join(w.got.Env, "\n")
-	if strings.Contains(env, "PROXY") || strings.Contains(env, session.EnvSocket) || !strings.Contains(env, session.EnvRunID+"="+res.RunID) {
+	if strings.Contains(env, "PROXY") || strings.Contains(env, session.EnvSocket) || !strings.Contains(env, session.EnvRunID+"="+res.RunID) || strings.Contains(env, linktest.ProxySecret) {
 		t.Errorf("the enclosure's environment:\n%s", env)
 	}
 	evs := events(t, res)
@@ -77,199 +136,105 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	}
 
 	w = &openWall{}
-	sp = spec(t, nil)
+	sp = spec(t)
 	sp.Wall, sp.Image, sp.Env = w, "i", nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", `test -z "$QORY_TEST_HOST_ONLY"`}
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a nil environment under a wall carried the process's own: %v %+v", err, res)
 	}
+}
 
-	sp = spec(t, nil)
-	sp.Wall, sp.ProxyBind = &openWall{}, "127.0.0.1:0"
-	if _, err := session.Run(context.Background(), sp); err == nil {
-		t.Error("a wall and a proxy address were both accepted")
+// TestTheForwarderCarriesTheProxySecret pins how the agent's traffic reaches the
+// gateway's proxy: without a wall the forwarder opens every connection with the relay's
+// preamble and the run's proxy secret, behind a wall it passes on what the wall's relay
+// sends, which opens with it, so the proxy sees the preamble once either way; and the
+// agent's environment and the session's record never hold the secret.
+func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
+	for _, walled := range []bool{false, true} {
+		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a")
+			out := filepath.Join(t.TempDir(), "env")
+			sp.Forwarder = nil
+			sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+			if walled {
+				sp.Wall, sp.Image = &relayWall{}, "example.com/agent:1"
+			}
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.ExitCode != 0 {
+				t.Fatalf("exit %d", res.ExitCode)
+			}
+			if got, want := g.Preambles(), []string{link.RelayPreamble + " " + linktest.ProxySecret}; !slices.Equal(got, want) {
+				t.Errorf("the gateway's proxy saw %q, want %q", got, want)
+			}
+			if got := g.Proxied(); !slices.Equal(got, []string{"GET http://api.example/a"}) {
+				t.Errorf("the gateway's proxy answered %q", got)
+			}
+			env, _ := os.ReadFile(out)
+			record, _ := os.ReadFile(filepath.Join(res.Dir, "session.jsonl"))
+			if bytes.Contains(env, []byte(linktest.ProxySecret)) || bytes.Contains(record, []byte(linktest.ProxySecret)) {
+				t.Error("the proxy secret reached the agent's environment or the record")
+			}
+			if !walled && !bytes.Contains(env, []byte("HTTP_PROXY=http://127.0.0.1:")) {
+				t.Errorf("the agent's environment has no proxy on loopback:\n%s", env)
+			}
+		})
 	}
 }
 
-// TestEventsWriterGetsTheRecord pins that the writer gets the lines events.jsonl
-// holds, local or not.
-func TestEventsWriterGetsTheRecord(t *testing.T) {
-	var lines bytes.Buffer
-	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Events, sp.Local = &lines, true
-	res, err := session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	file, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
-	if lines.String() != string(file) || lines.Len() == 0 {
-		t.Errorf("the writer got %d bytes, the file holds %d", lines.Len(), len(file))
-	}
-}
+// authority is a certificate in the form the run answer carries one, PEM.
+const authority = "-----BEGIN CERTIFICATE-----\nMIIBexampleAAAA\n-----END CERTIFICATE-----\n"
 
-// TestProxyBindIsWhereTheProxyListens pins the bind address: the session is pointed at
-// the address given, and one that cannot be bound means no run.
-func TestProxyBindIsWhereTheProxyListens(t *testing.T) {
-	sp := spec(t, nil)
-	sp.ProxyBind = "127.0.0.1:0"
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", `case "$HTTP_PROXY" in http://127.0.0.1:*) exit 0;; esac; exit 9`}
-	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
-		t.Errorf("%v %+v", err, res)
+// TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder pins what a wall is given of the
+// run answer of a run whose gateway holds a credential: the run authority's
+// certificate and a placeholder in place of the credential, and what the record says
+// of it, the members of policy_applied the gateway decides as it gives them. Without
+// a wall the session sets neither.
+func TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder(t *testing.T) {
+	members := map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}, "deny": []string{}, "source": "config", "digest": strings.Repeat("a", 64),
+		"credentials": []any{map[string]any{"name": "model", "hosts": []string{"api.model.example"}, "scheme": "bearer"}}, "terminated": []string{"api.model.example"}}
+	answer := func(g *linktest.Fake) {
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["policy"] = map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}}, "credentials": []any{map[string]any{"name": "model"}}}
+			a["digest"], a["applied"], a["placeholders"] = strings.Repeat("a", 64), members, []string{"MODEL_TOKEN"}
+			if req.Wall {
+				a["certificate_authority"] = authority
+			}
+			return linktest.Reply{Status: 200, Body: a}
+		})
 	}
-	sp = spec(t, nil)
-	sp.ProxyBind = "192.0.2.1:0"
-	if _, err := session.Run(context.Background(), sp); err == nil {
-		t.Error("the run started with a proxy address this machine does not hold")
-	}
-}
-
-// TestCredentialsCrossAsAnAuthorityAndAPlaceholder pins what a wall is given when the
-// run's policy selects a credential: the run authority's certificate and a placeholder,
-// never the token; what the record says of it; and the runs that do not start.
-func TestCredentialsCrossAsAnAuthorityAndAPlaceholder(t *testing.T) {
-	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
-	defs := []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
-	pol := &session.Policy{Version: 1,
-		Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example", "git.example.com"}, Paths: map[string][]string{"git.example.com": {"/acme/*"}}},
-		Credentials: []session.PolicyCredential{{Name: "model"}}}
 	w := &openWall{}
-	sp := spec(t, pol, "FAKE_EXIT=0")
-	sp.Wall, sp.Image, sp.Credentials = w, "example.com/agent:1", defs
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	answer(g)
+	sp.Wall, sp.Image = w, "example.com/agent:1"
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(w.got.CA, []byte("BEGIN CERTIFICATE")) || bytes.Contains(w.got.CA, []byte("PRIVATE KEY")) {
+	if string(w.got.CA) != authority {
 		t.Errorf("the wall got %q as the authority", w.got.CA)
 	}
-	if !slices.ContainsFunc(w.got.Env, func(kv string) bool { return strings.HasPrefix(kv, "MODEL_TOKEN=qory-") }) {
+	if !slices.Contains(w.got.Env, "MODEL_TOKEN="+link.Placeholder) {
 		t.Errorf("no placeholder in %v", w.got.Env)
-	}
-	record, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
-	if strings.Contains(strings.Join(w.got.Env, " ")+string(record), "the-token-held-outside") {
-		t.Error("the token crossed the wall or reached the record")
 	}
 	applied := data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
 	creds, _ := applied["credentials"].([]any)
 	terminated, _ := applied["terminated"].([]any)
-	if len(creds) != 1 || creds[0].(map[string]any)["scheme"] != "bearer" || len(terminated) != 2 || applied["paths"] == nil {
+	if len(creds) != 1 || creds[0].(map[string]any)["scheme"] != "bearer" || len(terminated) != 1 || applied["digest"] != strings.Repeat("a", 64) {
 		t.Errorf("run.policy_applied %v", applied)
 	}
 
-	for name, change := range map[string]func(*session.Spec){
-		"no wall":                            func(s *session.Spec) { s.Wall = nil },
-		"a credential nobody defined":        func(s *session.Spec) { s.Credentials = nil },
-		"a value passed for the placeholder": func(s *session.Spec) { s.Env = append(s.Env, "MODEL_TOKEN=a-real-one") },
-	} {
-		sp := spec(t, pol)
-		sp.Wall, sp.Image, sp.Credentials = &openWall{}, "example.com/agent:1", defs
-		change(&sp)
-		if _, err := session.Run(context.Background(), sp); err == nil {
-			t.Errorf("%s: the run started", name)
-		}
-	}
-}
-
-// TestTheRecordListsACredentialsArgument pins what an audit of the record reads of a
-// credential an adapter mints: every use of it contains the argument the policy passed,
-// the repository the token is for, and a credential with no argument in the policy has
-// none in the record.
-func TestTheRecordListsACredentialsArgument(t *testing.T) {
-	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
-	adapter := filepath.Join(t.TempDir(), "adapter")
-	answer := `#!/bin/sh
-cat <<JSON
-{"version": 1, "token": "token-for-$1", "expires_at": "2099-01-01T00:00:00Z",
- "apply": [
-  {"hosts": ["git.example.com"], "scheme": "basic", "username": "x-access-token", "paths": ["/$1.git/*"]},
-  {"hosts": ["api.git.example.com"], "scheme": "bearer", "paths": ["/repos/$1", "/repos/$1/*"]}]}
-JSON
-`
-	if err := os.WriteFile(adapter, []byte(answer), 0o755); err != nil {
+	sp, g = specGateway(t, "FAKE_EXIT=0")
+	answer(g)
+	out := dumpsEnv(t, &sp)
+	if _, err := session.Run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
-	defs := []session.Credential{
-		{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"},
-		{Name: "git", Adapter: []string{adapter, "${argument}"}, Argument: `[a-z0-9-]+/[a-z0-9-]+`},
-	}
-	pol := &session.Policy{Version: 1,
-		Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example", "git.example.com", "api.git.example.com"}},
-		Credentials: []session.PolicyCredential{{Name: "model"}, {Name: "git", Argument: "acme/shop"}}}
-	sp := spec(t, pol, "FAKE_EXIT=0")
-	sp.Wall, sp.Image, sp.Credentials = &openWall{}, "example.com/agent:1", defs
-	res, err := runWithSettingsEnv(t, sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied := data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
-	creds, _ := applied["credentials"].([]any)
-	if len(creds) != 3 {
-		t.Fatalf("run.policy_applied %v", applied)
-	}
-	for _, c := range creds {
-		use := c.(map[string]any)
-		switch use["name"] {
-		case "model":
-			if _, set := use["argument"]; set {
-				t.Errorf("a credential with no argument in the policy has one in the record: %v", use)
-			}
-		case "git":
-			if use["argument"] != "acme/shop" {
-				t.Errorf("a use of the adapter's credential %v, want the argument acme/shop", use)
-			}
-		default:
-			t.Errorf("a use of %v", use["name"])
-		}
-	}
-	record, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
-	if strings.Contains(string(record), "token-for-") || strings.Contains(string(record), "the-token-held-outside") {
-		t.Error("a token reached the record")
-	}
-}
-
-// TestAReloadBehindAWallBringsCredentialsAndPaths pins the other half: behind a wall a
-// run with a server always has its authority, given to the enclosure at the start, so
-// a reloaded run configuration's path rules are held and its credentials resolved and
-// set, as a start's are, and recorded; a credential nobody defined fails the reload
-// and the policy in force stays.
-func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
-	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
-	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
-	ow := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Server, sp.Heartbeat = c.server(), time.Second
-	sp.Wall, sp.Image = ow, "example.com/agent:1"
-	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}
-	w := startWaiting(t, sp)
-	waitFor(t, func() bool { return w.applied() == 1 })
-	if !bytes.Contains(ow.got.CA, []byte("BEGIN CERTIFICATE")) {
-		t.Errorf("a walled run with a server got %q as the authority", ow.got.CA)
-	}
-
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example.com"],"paths":{"git.example.com":["/acme/*"]}},"credentials":[{"name":"model"}]}`, digest('2'))
-	waitFor(t, func() bool { return w.applied() == 2 })
-
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"nobody-defined"}]}`, digest('3'))
-	waitFor(t, func() bool { return w.reported("the policy in force stays") })
-
-	evs := w.finish()
-	pa := ofType(evs, "dev.qory.run.policy_applied")
-	if len(pa) != 2 {
-		t.Fatalf("policy_applied events: %v", pa)
-	}
-	if first := data(pa[0]); first["credentials"] != nil || first["terminated"] != nil {
-		t.Errorf("the first policy_applied %v", first)
-	}
-	then := data(pa[1])
-	creds, _ := then["credentials"].([]any)
-	terminated, _ := then["terminated"].([]any)
-	if len(creds) != 1 || creds[0].(map[string]any)["name"] != "model" || len(terminated) != 2 || then["paths"] == nil || then["run_configuration"] != digest('2') {
-		t.Errorf("the second policy_applied %v", then)
-	}
-	record, _ := os.ReadFile(filepath.Join(w.res.Dir, "events.jsonl"))
-	if strings.Contains(string(record), "the-token-held-outside") {
-		t.Error("the token reached the record")
+	if env := envOf(t, out); env["MODEL_TOKEN"] != "" {
+		t.Errorf("an unwalled run set the placeholder: %q", env["MODEL_TOKEN"])
 	}
 }
 
@@ -285,30 +250,30 @@ func (a *attached) Prepare(at runtimes.Attach) (runtimes.Launch, error) {
 }
 
 // TestPrepareIsGivenTheStandInsOfAWalledRun pins what a runtime learns of the stand-ins:
-// behind a wall, the variables the enclosure gets a stand-in in, a credential's and a
-// tool's; without one, none, since then there are none.
+// behind a wall, the variables the enclosure gets a stand-in in, the placeholders of
+// the gateway's run answer, a credential's and a tool's; without one, none.
 func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
-	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
-	sp, _ := toolSpec(t, filepath.Join(t.TempDir(), "invocations"))
-	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
-	sp.Policy.Credentials = []session.PolicyCredential{{Name: "model"}}
-	sp.Policy.Egress.Allow = append(sp.Policy.Egress.Allow, "api.model.example")
-	rt := &attached{Runtime: sp.Runtime}
-	sp.Runtime = rt
-	if _, err := runWithSettingsEnv(t, sp); err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"MODEL_TOKEN", "FILES_KEY"}; !slices.Equal(rt.got.Placeholders, want) {
-		t.Errorf("Prepare received %v, want %v", rt.got.Placeholders, want)
-	}
-
-	sp = spec(t, nil, "FAKE_EXIT=0")
-	rt = &attached{Runtime: sp.Runtime}
-	sp.Runtime = rt
-	if _, err := runWithSettingsEnv(t, sp); err != nil {
-		t.Fatal(err)
-	}
-	if len(rt.got.Placeholders) != 0 || rt.got.RunDir == "" {
-		t.Errorf("Prepare received %v without a wall", rt.got.Placeholders)
+	for _, walled := range []bool{true, false} {
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+			a := linktest.RunAnswer(req)
+			a["placeholders"] = []string{"MODEL_TOKEN", "FILES_KEY"}
+			return linktest.Reply{Status: 200, Body: a}
+		})
+		if walled {
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		}
+		rt := &attached{Runtime: sp.Runtime}
+		sp.Runtime = rt
+		if _, err := runWithSettingsEnv(t, sp); err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		if walled {
+			want = []string{"MODEL_TOKEN", "FILES_KEY"}
+		}
+		if !slices.Equal(rt.got.Placeholders, want) || rt.got.RunDir == "" {
+			t.Errorf("walled %v: Prepare received %v, want %v", walled, rt.got.Placeholders, want)
+		}
 	}
 }

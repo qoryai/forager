@@ -24,8 +24,8 @@ const SecretPrefix = "qak_"
 // SeedSize is the size of an access key's seed, the whole of its secret.
 const SeedSize = ed25519.SeedSize
 
-// Key is an Ed25519 key, held from its seed: an access key, whose secret signs the
-// runner's requests, or a server's signing key, whose public key a machine pins. It
+// Key is an Ed25519 key, held from its seed: an access key, whose secret signs
+// Forager's requests, or a server's signing key, whose public key a machine pins. It
 // formats as its fingerprint alone, whatever the verb, and marshals as text to the
 // same, so a log line that prints one shows which key it is and never its secret. The
 // key material sits behind two pointers, so a Key printed by reflection, as a field

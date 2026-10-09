@@ -12,34 +12,34 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/qoryai/runner/internal/refusal"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/wall"
 )
 
-// The registry of walled runs is a private directory of the runner's, per user: a file
+// The registry of walled runs is a private directory of Forager's, per user: a file
 // for every walled run still going on this machine, named by its run id, which its
-// runner holds locked for the run's whole life and removes when the run ends. A file
-// whose lock is free is a run whose runner is gone, however it ended; the run is still
+// session holds locked for the run's whole life and removes when the run ends. A file
+// whose lock is free is a run whose session is gone, however it ended; the run is still
 // going while a container labelled with its id exists, which an agent killed with its
-// runner can be.
+// session can be.
 
-// walledLock is the file in the registry a runner holds locked while it reads the
+// walledLock is the file in the registry a session holds locked while it reads the
 // entries, checks its own binds against them and writes its own, so that two runs that
 // start together are checked one after the other.
 const walledLock = "lock"
 
-// walledDir is the registry's directory, absolute: $XDG_STATE_HOME/qory-runner/walled
-// when XDG_STATE_HOME is absolute, else ~/.local/state/qory-runner/walled, a relative
+// walledDir is the registry's directory, absolute: $XDG_STATE_HOME/qory-forager/walled
+// when XDG_STATE_HOME is absolute, else ~/.local/state/qory-forager/walled, a relative
 // HOME taken from the working directory. A test points it elsewhere.
 var walledDir = func() (string, error) {
 	if state := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(state) {
-		return filepath.Join(state, "qory-runner", "walled"), nil
+		return filepath.Join(state, "qory-forager", "walled"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Abs(filepath.Join(home, ".local", "state", "qory-runner", "walled"))
+	return filepath.Abs(filepath.Join(home, ".local", "state", "qory-forager", "walled"))
 }
 
 // runContainersExist reports whether the engine holds a container labelled with the
@@ -56,7 +56,7 @@ type walledEntry struct {
 	PID   int          `json:"pid"`
 	Binds []bindSource `json:"binds"`
 	// Engine is the container engine the run's enclosure is in, as its wall reaches
-	// it, for another runner to ask once the run's runner is gone; nil for a wall
+	// it, for another session to ask once the run's session is gone; nil for a wall
 	// without one.
 	Engine *wall.Engine `json:"engine,omitempty"`
 }
@@ -102,7 +102,7 @@ type registration struct {
 }
 
 // keep leaves the entry in the registry when the run ends, its lock free: for a run
-// whose containers may outlive it, which another runner then asks the engine about.
+// whose containers may outlive it, which another session then asks the engine about.
 func (r *registration) keep() { r.kept = true }
 
 // register checks a walled run's binds against every other walled run of this user's
@@ -138,7 +138,7 @@ func register(
 		return nil, fmt.Errorf("the registry of walled runs: locking %s: %w", file, err)
 	}
 	r := &registration{dir: dir, runID: runID, engine: engine, f: f}
-	// The file goes before its lock, so no runner takes the lock of a file that is
+	// The file goes before its lock, so no session takes the lock of a file that is
 	// still there for a run that is over and finds a run that is not.
 	r.release = sync.OnceFunc(func() {
 		if !r.kept {
@@ -197,7 +197,7 @@ func (r *registration) update(binds []bindSource) error {
 	return r.write(binds)
 }
 
-// lockRegistry takes the registry's lock, waiting for a runner that holds it.
+// lockRegistry takes the registry's lock, waiting for a session that holds it.
 func lockRegistry(dir string) (func(), error) {
 	f, err := os.OpenFile(filepath.Join(dir, walledLock), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -281,7 +281,7 @@ func resolveOther(runID string, b bindSource) (bindSource, error) {
 }
 
 // readEntry reads one entry of the registry. An entry whose lock is held is live. One
-// whose lock is free is a run whose runner is gone: it is live while the engine its
+// whose lock is free is a run whose session is gone: it is live while the engine its
 // entry records holds a container labelled with its run id, and is removed when the
 // engine holds none. A run that cannot ask, for an entry that cannot be read, records
 // no engine or an engine that fails, does not start. One whose file is gone already is
@@ -339,7 +339,7 @@ func readEntry(file string) (walledEntry, bool, error) {
 }
 
 // engineUnreachable is the refusal of a run that cannot ask the container engine
-// whether an earlier walled run, whose runner is gone, still has containers: nothing is
+// whether an earlier walled run, whose session is gone, still has containers: nothing is
 // bound while one may. Its names are the earlier run's id and file, the path of its
 // entry, which the registry's directory makes absolute, so the entry can be found and
 // looked at.
@@ -352,8 +352,8 @@ func engineUnreachable(runID, file string, err error) *Refusal {
 	}
 }
 
-// wallKind reports whether a bind is one a wall binds of its own: the runner's helper
-// or another directory of the runner's.
+// wallKind reports whether a bind is one a wall binds of its own: Forager's helper
+// or another directory of Forager's.
 func wallKind(b bindSource) bool { return b.Kind == kindHelper || b.Kind == kindDir }
 
 // inside reports whether a bind lies inside dir, or is dir when orIs is set, by its
@@ -372,13 +372,13 @@ func inside(b bindSource, dir splitPath, orIs bool) (string, bool) {
 // shared is the error of one bind of this run's against one bind of another run's
 // still going, or nil when they do not conflict.
 //
-//   - A wall's own bind, the runner's helper or a directory of the runner's, that is or
+//   - A wall's own bind, Forager's helper or a directory of Forager's, that is or
 //     lies inside a writable bind of the other run's, or is reached through one, is a
 //     plain error; one of the other run's that a writable bind of this run's is, holds
 //     or reaches is refused, and so is a bind of this run's that is, lies inside or is
 //     reached through a writable one of the other run's. Patterns of the directories
-//     runners make are each runner's own, and never conflict with each other.
-//   - A run directory is its runner's alone: a bind that is, holds or lies inside the
+//     sessions make are each session's own, and never conflict with each other.
+//   - A run directory is its session's alone: a bind that is, holds or lies inside the
 //     other run's, or that the other run's is, holds or lies inside, whatever their
 //     modes, is refused.
 //   - Otherwise this run's bind is refused when it lies inside the other's, strictly,
@@ -397,8 +397,8 @@ func shared(own bindSource, otherID string, other bindSource) error {
 	still := " of the walled run " + otherID + ", which is still going: "
 	switch {
 	case wallKind(own) && wallKind(other) && (own.Pattern || other.Pattern):
-		// Each runner makes its private directories its own; the pattern stands for
-		// those it has not made yet, not for another runner's.
+		// Each session makes its private directories its own; the pattern stands for
+		// those it has not made yet, not for another session's.
 		return nil
 	case wallKind(own):
 		if _, ok := inside(own, other.at, true); ok && other.Writable {
@@ -407,9 +407,9 @@ func shared(own bindSource, otherID string, other bindSource) error {
 		}
 		return nil
 	case wallKind(other):
-		what := "the runner's directory "
+		what := "Forager's directory "
 		if other.Kind == kindHelper {
-			what = "the runner's helper "
+			what = "Forager's helper "
 		}
 		if entry, ok := inside(other, own.at, true); ok && own.Writable {
 			if entry != "" {
@@ -443,7 +443,7 @@ func shared(own bindSource, otherID string, other bindSource) error {
 			if other.Kind == kindRun {
 				theirs = "the run directory " + other.Resolved
 			}
-			return refuse("%s (%s) %s %s%sa run directory is its runner's alone",
+			return refuse("%s (%s) %s %s%sa run directory is its session's alone",
 				own.what, mode(own.Writable), how, theirs, still)
 		}
 	}

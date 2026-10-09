@@ -3,18 +3,19 @@ package session_test
 import (
 	"context"
 	"errors"
+	"github.com/qoryai/forager/gateway"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
-// TestOverlapComparesWholeComponentsThroughLinks pins how a mount and one of the
-// runner's paths stand to each other: by whole components, after symbolic links, with a
+// TestOverlapComparesWholeComponentsThroughLinks pins how a mount and one of
+// Forager's paths stand to each other: by whole components, after symbolic links, with a
 // part that does not exist yet resolved through the parent that does.
 func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 	root := t.TempDir()
@@ -23,14 +24,14 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// link leads to the runner's directory a/b, and m to its parent a.
+	// link leads to Forager's directory a/b, and m to its parent a.
 	if err := os.Symlink(filepath.Join(root, "a", "b"), filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(root, "a"), filepath.Join(root, "m")); err != nil {
 		t.Fatal(err)
 	}
-	// dangling and relative lead into the runner's directory, to names that do not
+	// dangling and relative lead into Forager's directory, to names that do not
 	// exist yet.
 	if err := os.Symlink(filepath.Join(root, "a", "b", "later"), filepath.Join(root, "dangling")); err != nil {
 		t.Fatal(err)
@@ -49,8 +50,8 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		{"sibling with the path as prefix", p("a/bc"), p("a/b"), ""},
 		{"sibling the path is a prefix of", p("a/b"), p("a/bc"), ""},
 		{"the filesystem's root", "/", p("a/b"), "contains"},
-		{"a link to the runner's directory, as the path", p("a"), p("link"), "contains"},
-		{"a link to the runner's directory, as the mount", p("link"), p("a/b"), "is"},
+		{"a link to Forager's directory, as the path", p("a"), p("link"), "contains"},
+		{"a link to Forager's directory, as the mount", p("link"), p("a/b"), "is"},
 		{"a mount under a linked parent", p("m/b"), p("a/b"), "is"},
 		{"a mount under a linked parent, above the path", p("m"), p("a/b/file"), "contains"},
 		{"a path that does not exist yet", p("a"), p("a/b/new/deeper"), "contains"},
@@ -79,9 +80,9 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		})
 	}
 
-	// A link in a directory the runner cannot search may lead anywhere: Overlap cannot
+	// A link in a directory Forager cannot search may lead anywhere: Overlap cannot
 	// say, and a run with it as a mount does not start.
-	t.Run("a link in a directory the runner cannot search", func(t *testing.T) {
+	t.Run("a link in a directory Forager cannot search", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root searches every directory")
 		}
@@ -100,8 +101,8 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		if got := session.Overlap(mount, p("a/b")); got != "" {
 			t.Errorf("Overlap = %q", got)
 		}
-		sp := spec(t, nil, "FAKE_EXIT=0")
-		sp.Wall, sp.Image, sp.RunnerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image, sp.ForagerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		err := runErr(sp)
 		var r *session.Refusal
@@ -113,7 +114,7 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 
 // TestOverlapJudgesTheSameDirectoryByTheFilesystem pins that on a disk that ignores
 // case, a path written in another case is the directory it names, and that an existing
-// directory matching a pattern of the runner's is refused like the pattern.
+// directory matching a pattern of Forager's is refused like the pattern.
 func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
 	root := t.TempDir()
 	for _, d := range []string{"Home/User/.config/qory", "tmp/qory-tool-abc"} {
@@ -144,9 +145,9 @@ func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
 	}
 }
 
-// runnerDir is a runner file's directory, a directory below a fresh one: the parent is
+// foragerDir is a Forager file's directory, a directory below a fresh one: the parent is
 // what a careless mount lists.
-func runnerDir(t *testing.T) (parent, dir string) {
+func foragerDir(t *testing.T) (parent, dir string) {
 	t.Helper()
 	parent = t.TempDir()
 	dir = filepath.Join(parent, ".config", "qory")
@@ -160,8 +161,8 @@ func runnerDir(t *testing.T) (parent, dir string) {
 func mountRefusal(t *testing.T, err error) *session.Refusal {
 	t.Helper()
 	var r *session.Refusal
-	if !errors.As(err, &r) || r.Code != "mount_contains_runner_files" {
-		t.Fatalf("want mount_contains_runner_files, got %v", err)
+	if !errors.As(err, &r) || r.Code != "mount_contains_forager_files" {
+		t.Fatalf("want mount_contains_forager_files, got %v", err)
 	}
 	return r
 }
@@ -172,17 +173,16 @@ func runErr(sp session.Spec) error {
 	return err
 }
 
-// TestAMountOfTheRunnersFilesIsNoRun pins the refusal of a walled run whose mount
-// contains a runner file's directory: it names the mount, then the runner's path, the
-// server is never contacted, the wall builds nothing and no run directory is made.
-func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
-	c := newControl(t)
-	parent, dir := runnerDir(t)
+// TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
+// contains a Forager file's directory: it names the mount, then Forager's path, the
+// gateway is never contacted, the wall builds nothing and no run directory is made.
+func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
+	parent, dir := foragerDir(t)
 	w := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Wall, sp.Image, sp.Server = w, "example.com/agent:1", c.server()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: parent, ReadOnly: true}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{parent, dir}; !slices.Equal(r.Names, want) {
 		t.Errorf("names %q, want %q", r.Names, want)
@@ -190,8 +190,8 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 	if !strings.Contains(r.Detail, "the mount "+parent+" contains "+dir) {
 		t.Errorf("detail %q", r.Detail)
 	}
-	if n := c.hits.Load(); n != 0 {
-		t.Errorf("the server got %d requests", n)
+	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
+		t.Errorf("the gateway got %d connections", n)
 	}
 	if w.req.RunID != "" || w.wrapped {
 		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
@@ -200,7 +200,7 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 		t.Errorf("a run directory was made: %v", err)
 	}
 
-	// A mount inside the runner's directory, and the workspace itself, are refused too.
+	// A mount inside Forager's directory, and the workspace itself, are refused too.
 	sp.Mounts = []wall.Mount{{Path: filepath.Join(dir, "labels")}}
 	r = mountRefusal(t, runErr(sp))
 	if want := []string{filepath.Join(dir, "labels"), dir}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, " lies inside ") {
@@ -223,36 +223,38 @@ func TestAMountOfTheRunnersFilesIsNoRun(t *testing.T) {
 	}
 }
 
-// TestAMountBesideTheRunnersFilesRuns pins that a mount that neither holds nor lies in
-// one of the runner's files runs, and that a run without a wall checks nothing, having
+// TestAMountBesideTheForagersFilesRuns pins that a mount that neither holds nor lies in
+// one of Forager's files runs, and that a run without a wall checks nothing, having
 // no mounts.
-func TestAMountBesideTheRunnersFilesRuns(t *testing.T) {
-	_, dir := runnerDir(t)
+func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
+	_, dir := foragerDir(t)
 	w := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: t.TempDir(), ReadOnly: true}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil || res.ExitCode != 0 || !w.wrapped {
-		t.Fatalf("a walled run beside the runner's files: %+v, %v", res, err)
+		t.Fatalf("a walled run beside Forager's files: %+v, %v", res, err)
 	}
 
-	sp = spec(t, nil, "FAKE_EXIT=0")
+	sp = spec(t, "FAKE_EXIT=0")
 	sp.Mounts = []wall.Mount{{Path: "/"}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
 		t.Fatalf("an unwalled run: %+v, %v", res, err)
 	}
 }
 
-// TestAMountOfAToolsProgramIsNoRun pins that the directory of a tool's program is one
-// of the runner's files, whether or not the run's policy selects the tool, and so is
-// the directory a link to the program leads to.
-func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "bin")
-	libexec := filepath.Join(t.TempDir(), "libexec")
-	for _, d := range []string{bin, libexec} {
+// TestAMountOfTheGatewaysFilesIsNoRun pins that the files a gateway hands out with its
+// link are Forager's files, refused in the words a run was always refused in: the
+// directory of a tool's program and the one a link to it leads to, the file a
+// credential is read from, and, in a mount that contains the system's temporary
+// directory, the private directories the tools' sockets are made in, whatever the
+// gateway's tools.
+func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
+	bin, libexec, creds := filepath.Join(t.TempDir(), "bin"), filepath.Join(t.TempDir(), "libexec"), filepath.Join(t.TempDir(), "creds")
+	for _, d := range []string{bin, libexec, creds} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -263,52 +265,95 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	if err := os.Symlink(filepath.Join(libexec, "files-tool"), filepath.Join(bin, "files-tool")); err != nil {
 		t.Fatal(err)
 	}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	key := filepath.Join(creds, "model.key")
+	if err := os.WriteFile(key, []byte("a-credential-of-the-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Tools = []session.Tool{{Name: "files", Command: []string{filepath.Join(bin, "files-tool")}, Serves: []string{"files.tools.internal"}}}
-	for _, mount := range []string{filepath.Dir(bin), libexec} {
-		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: mount}}
-		r := mountRefusal(t, runErr(sp))
-		if r.Names[0] != mount || !strings.Contains(r.Detail, "the tool files's program") {
-			t.Errorf("mount %s: names %q, detail %q", mount, r.Names, r.Detail)
+	startGateway(t, &sp, gateway.Config{
+		Tools:       []gateway.Tool{{Name: "files", Command: []string{filepath.Join(bin, "files-tool")}, Serves: []string{"files.tools.internal"}}},
+		Credentials: []gateway.Credential{{Name: "model", File: key, Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
+	})
+	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
+	for _, c := range []struct{ mount, detail string }{
+		{filepath.Dir(bin), "the mount " + filepath.Dir(bin) + " contains " + bin + ", the directory of the tool files's program"},
+		{libexec, "the mount " + libexec + " is " + real(libexec) + ", the directory of the tool files's program"},
+		{creds, "the mount " + creds + " contains " + key + ", the file the credential model is read from"},
+	} {
+		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: c.mount}}
+		if r := mountRefusal(t, runErr(sp)); r.Names[0] != c.mount || r.Detail != c.detail {
+			t.Errorf("mount %s: names %q, detail\n %q\nwant\n %q", c.mount, r.Names, r.Detail, c.detail)
 		}
 	}
 
-	// A mount that contains the system's temporary directory contains the private
-	// directory a tool's socket is made in.
-	sp.Tools[0].Command = []string{"/bin/sh"}
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	startGateway(t, &sp, gateway.Config{})
 	sp.Mounts = []wall.Mount{{Path: os.TempDir()}}
-	r := mountRefusal(t, runErr(sp))
-	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
-	}
-	// So does a run without tools: another run's tools have their sockets there too.
-	sp.Tools = nil
-	r = mountRefusal(t, runErr(sp))
-	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	want := "the mount " + os.TempDir() + " contains " + filepath.Join(os.TempDir(), "qory-tool-*") + ", where the tools' sockets are made"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != os.TempDir() || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
 	}
 }
 
-// TestRunnerFilesAreAbsolutePaths pins that a runner file that is no absolute path is
+// TestTheGatewaysDirectoriesComeAfterTheWalls pins the order Forager's files are
+// checked in, which decides what a mount that holds several is refused for: the
+// directories the gateway keeps come last, after the wall's
+// files and the run directories, so a Docker run that mounts a home holding both the
+// gateway's directory and ~/.docker is refused for ~/.docker, and a mount of the state
+// directory that holds the gateway's directory and the run directories for the run
+// directories, as it always was.
+func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DOCKER_CONFIG", "")
+	sp := spec(t, "FAKE_EXIT=0")
+	docker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sp.Wall, sp.Image = &wall.Docker{Command: docker, Helper: os.Args[0]}, "example.com/agent:1"
+	startGateway(t, &sp, gateway.Config{Dir: filepath.Join(home, ".local", "state", "qory")})
+	sp.Mounts = []wall.Mount{{Path: home}}
+	want := "the mount " + home + " contains " + filepath.Join(home, ".docker") + ", one of the docker wall's files"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != home || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
+	}
+
+	// A mount of the state directory that holds the gateway's directory and the run
+	// directories is refused for the run directories.
+	state := filepath.Join(home, ".local", "state")
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	sp.RunsDir = filepath.Join(state, "qory", "runs", "x")
+	startGateway(t, &sp, gateway.Config{Dir: filepath.Join(state, "qory")})
+	sp.Mounts = []wall.Mount{{Path: state}}
+	want = "the mount " + state + " contains " + sp.RunsDir + ", where the run directories are kept"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != state || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
+	}
+}
+
+// TestForagerFilesAreAbsolutePaths pins that a Forager file that is no absolute path is
 // a plain error, not a refusal, walled or not.
-func TestRunnerFilesAreAbsolutePaths(t *testing.T) {
+func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
-		sp := spec(t, nil, "FAKE_EXIT=0")
-		sp.RunnerFiles = []string{p}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.ForagerFiles = []string{p}
 		_, err := session.Run(context.Background(), sp)
 		var r *session.Refusal
 		if err == nil || errors.As(err, &r) {
-			t.Errorf("runner file %q: %v", p, err)
+			t.Errorf("Forager file %q: %v", p, err)
 		}
 	}
 }
 
-// TestAMountOfTheWallsFilesIsNoRun pins that the files a wall lists as its own are the
-// runner's: the Docker adapter's helper among them.
+// TestAMountOfTheWallsFilesIsNoRun pins that the files a wall lists as its own are
+// Forager's: the Docker adapter's helper among them.
 func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	helpers := filepath.Join(t.TempDir(), "helpers")
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &wall.Docker{Helper: filepath.Join(helpers, "qory"), RelayArgs: []string{"relay"}}, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: filepath.Dir(helpers), ReadOnly: true}}
 	r := mountRefusal(t, runErr(sp))
@@ -332,16 +377,16 @@ func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Encl
 }
 
 // TestTheMountsAreCheckedAgainBeforeTheWrap pins the second check: a mount that led
-// nowhere at the start and is a link to the runner's files by the time the enclosure
+// nowhere at the start and is a link to Forager's files by the time the enclosure
 // is wrapped is refused the same way, and the enclosure never shows it.
 func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
-	parent, dir := runnerDir(t)
+	parent, dir := foragerDir(t)
 	link := filepath.Join(t.TempDir(), "later")
 	w := &swappingWall{link: link, to: parent}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: link}}
-	sp.RunnerFiles = []string{dir}
+	sp.ForagerFiles = []string{dir}
 	r := mountRefusal(t, runErr(sp))
 	if want := []string{link, dir}; !slices.Equal(r.Names, want) {
 		t.Errorf("names %q, want %q", r.Names, want)
@@ -353,11 +398,11 @@ func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 
 // TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun pins that the private directories
 // runs make in the system's temporary directory, for their record sockets and for the
-// Docker wall's environment files, are the runner's files whoever made them: a mount
+// Docker wall's environment files, are Forager's files whoever made them: a mount
 // of the temporary directory while another run's exist is refused, and so is a mount
 // of one of them, or of a file in one.
 func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)

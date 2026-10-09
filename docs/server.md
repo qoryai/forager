@@ -5,16 +5,16 @@ selects goes there too, signed. The server can also set the run's policy.
 
 A server is a control plane, or a receiver of your own.
 
-## In runner.yaml
+## In forager.yaml
 
-For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the server. The
-example is in [the policy](policy.md#in-runneryaml).
+For `qory`, the `gateway.server` section of `~/.config/qory/forager.yaml` defines the
+server. The example is in [the policy](policy.md#in-forageryaml).
 
-- The runner reports to the server as an access key: `access_key_id` is its id, and
+- Forager reports to the server as an access key: `access_key_id` is its id, and
   its secret, one line starting `qak_`, lives in the file `access-key-secret` beside
-  `runner.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
+  `forager.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
   Ed25519 and is never sent.
-- `apiary_public_key` is the pin, the server's keys: the runner verifies every answer
+- `apiary_public_key` is the pin, the server's keys: Forager verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
   id and the pin; the code's use activates the key at once. A key made for an existing
@@ -22,60 +22,77 @@ example is in [the policy](policy.md#in-runneryaml).
   secret and pin as `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and
   `QORY_APIARY_PUBLIC_KEY`.
 - The run's policy comes from the server, when the server offers one. The node's
-  policy, `Spec.Policy`, narrows it. See
+  policy, `gateway.Config.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
-- With `server` set, the run starts only when the server answers the fetch and a ping,
-  signed. So a run meant to be observed never runs unobserved.
+- With `gateway.server` set, the run starts only when the server answers the fetch and
+  a ping, signed. So a run meant to be observed never runs unobserved.
 - `qory run --local` runs with the files alone.
-- Without `server`, the run writes files only.
+- Without `gateway.server`, the run writes files only.
 
-## How the runner uses the server
+## How Forager uses the server
 
-A `session.Server` in the spec defines the server the runner reports to. The runner:
+The gateway reports to the server; the session never speaks to it. A
+`gateway.Server` in `gateway.Config` defines the server. The gateway:
 
-1. fetches the server's configuration document, with a signed `GET` of
+1. fetches the server's configuration document when it starts, with a signed `GET` of
    `/.well-known/qory-configuration`;
-2. posts the events that document selects to the URL it defines, signed, after a
-   ping that announces the heartbeat interval; heartbeats run from the accepted ping;
-3. when the document contains a run configuration, fetches it, with every label of the
-   run as its query. Its `security_policy`, narrowed by the node's policy, is the run's
-   policy. Its `variables` are the server's variables for the run.
+2. for each run a session asks it for, pings first: the ping announces the heartbeat
+   interval and opens the run at the server, which decides `instance_limit` there;
+3. then fetches the run configuration when the document contains one, with every label
+   of the run as its query. Its `security_policy`, narrowed by the node's policy, is
+   the run's policy. Its `variables` are the server's variables for the run. The
+   gateway answers the session's run request with what follows of them;
+4. posts the events the document selects to the URL it defines, signed: the
+   session's, which it receives on its link and numbers, and its own.
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
-request, and the runner reads an answer only once it verifies under the pin. The
+request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
-The spec holds what identifies the run to the server:
+`gateway.Server` holds what identifies the run to the server:
 
-- `Spec.AccessKey` is the access key, an `*accesskey.Key` held from its secret, which
-  the caller reads. It signs every request. A `Server` needs it.
-- `Spec.InstanceID` is this instance's id: `qory` reads it from its instance-id file.
-  It is sent in `X-Qory-Instance-Id` and signed into every request. A `Server` needs
-  it, and it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
-- `Spec.InstanceName` is this instance's display name, sent in `X-Qory-Instance-Name`
-  on every request, unsigned. It matches the same pattern; empty sends none.
-- `Spec.Discovered`, when not nil, is called once the configuration document is read
-  and verified, before the ping, with a `session.Discovery`: `NodeID`, the id of the
-  access key's node, `nd_`, or node pool, `np_`; and `Secrets`, true when the document
-  lists a `secrets` section, which it does for an access key allowed stored secrets.
-  `qory` prints the node id. An error it returns is no run, and nothing more is sent.
+- `AccessKey` is the access key, an `*accesskey.Key` held from its secret, which the
+  caller reads. It signs every request.
+- `InstanceID` is this instance's id: `qory` reads it from its instance-id file. It is
+  sent in `X-Qory-Instance-Id` and signed into every request, and it matches
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+- `InstanceName` is this instance's display name, sent in `X-Qory-Instance-Name` on
+  every request, unsigned. It matches the same pattern; empty sends none.
+
+`gateway.Config.Discovered`, when not nil, is called once the configuration document is
+read and verified, before `gateway.Start` returns, with a `gateway.Discovery`: `NodeID`,
+the id of the access key's node, `nd_`, or node pool, `np_`; and `Secrets`, true when
+the document lists a `secrets` section, which it does for an access key allowed stored
+secrets. `qory` prints the node id. An error it returns is no gateway, and nothing
+more is sent.
 
 ## When the server refuses or closes a run
 
-A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a key the
-server does not hold, `instance_limit` when the node's live instances are at its
-limit, `answer_unsigned` for an answer that does not verify under the pin, and
-`apiary_public_key_missing` for a server without a pin. A server closes a running run
-with a signed `410` `run_closed`: the runner stops the runtime as at its time limit,
-records `reason: run_closed`, and sends nothing further.
+A refusal at the start has a code. The gateway passes the server's on to the session,
+which returns it as a `*session.Refusal` whose `From` is `apiary`: `unauthorized` for a
+key the server does not hold, `instance_limit` when the node's live instances are at
+its limit. An answer that does not verify under the pin is `answer_unsigned`, and a
+server without a pin `apiary_public_key_missing`: `gateway.Start` returns either as a
+`*accesskey.Refusal` when it fetches the configuration document, and starts no
+gateway.
+
+A server closes a running run with a signed `410` `run_closed`. The gateway ends the
+run, writes its `dev.qory.run.exited` with `reason: run_closed`, sends the server
+nothing further, and answers the session's next request with a `410`. The session
+stops the runtime as at its time limit, records the same reason in its own record, and
+returns a `Result` whose `RunClosed` is true, `ClosedBy` `apiary` and `ClosedReason`
+`run_closed`. A run the server closes before it starts is a `*session.Refusal`,
+`run_closed`, from `apiary`.
 
 ## A policy that changes while the run goes
 
-A server may answer a later batch with another digest. The runner then fetches the run
+A server may answer a later batch with another digest. The gateway then fetches the run
 configuration again, and puts it in force while the run goes, narrowed by the same node
-policy. The variables stay as they were when the run started.
+policy. Its answers to the session then carry the new run-configuration digest, and the
+session fetches the run's configuration from the gateway and records it in another
+`dev.qory.run.policy_applied`. The variables stay as they were when the run started.
 
 ## Variables
 
@@ -85,7 +102,7 @@ and for each name the run takes the value of the highest that sets it:
 
 | Source, highest first | What it is | In the spec |
 | --- | --- | --- |
-| `fixed` | the runner's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
+| `fixed` | the session's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
 | `apiary` | the server's run configuration, resolved by the server | |
 | `run` | the run's own, `qory run --env` | `Variables.Run` |
 | `machine` | the machine's, `wall.env` | `Variables.Machine` |
@@ -97,8 +114,8 @@ and for each name the run takes the value of the highest that sets it:
   server value is left out.
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
-  [`denied-variables.json`](../contracts/runner/v1/denied-variables.json), the runtime's
-  `denies`, and `Spec.Variables.Deny`. It holds the runner's own names, the proxy's, the
+  [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
+  `denies`, and `Spec.Variables.Deny`. It holds the session's own names, the proxy's, the
   trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
   computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
@@ -133,17 +150,17 @@ spec.OnVariables = func(applied session.Applied) { // once, before the agent sta
 ```
 
 `LaunchFixed` is the values the harness computes itself, and `LaunchDefaults` the values
-its author wrote as defaults; the runner applies each as its source. `HarnessHome` is an absolute path, and the runner sets `QORY_HARNESS_HOME` to it
+its author wrote as defaults; the session applies each as its source. `HarnessHome` is an absolute path, and the session sets `QORY_HARNESS_HOME` to it
 as one of its own names; a path that is not absolute, or that holds a NUL, a carriage
 return or a line feed, is an error before anything starts.
 
-Before it resolves anything, the runner refuses to pass in what stays outside. It
+Before it resolves anything, the session refuses to pass in what stays outside. It
 checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 `Variables.Run` and `Variables.Machine`.
 
 | The run passes | In | The refusal |
 | --- | --- | --- |
-| a `QORY_` variable, or one a credential is read from | a walled run | `variable_reserved` |
+| a `QORY_` variable, or one the gateway sets, such as one a credential is read from | a walled run | `variable_reserved` |
 | a value for a placeholder | any run | `placeholder_conflict` |
 
 `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
@@ -166,9 +183,9 @@ A control plane is the same server every run has:
 ## Writing a server
 
 - **The rules**: the contract's
-  [server section](../contracts/runner/v1/README.md#the-server).
+  [server section](../contracts/forager/v1/README.md#the-server).
 - **A worked example**: the public package [`receiver`](../receiver/receiver.go). It is a
-  server of the contract that is not a control plane. The runner's tests run against
+  server of the contract that is not a control plane. Forager's tests run against
   it, and it is tested against the signed fixtures.
-- **The test data**: `contracts/runner/v1/fixtures/signed/`. Any receiver is tested
+- **The test data**: `contracts/forager/v1/fixtures/signed/`. Any receiver is tested
   against it.

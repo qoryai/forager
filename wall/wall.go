@@ -1,16 +1,16 @@
 // Package wall builds the enclosure an agent runs in: a place with no route out except
-// to the session runner's proxy.
+// to the gateway.
 //
-// The session runner stays outside. It owns the proxy, the policy decision and the
-// record; a [Wall] owns only what makes a connection around the proxy fail rather than
-// succeed unseen. An adapter wraps the launch and nothing else: the session runner asks
-// the [Enclosure] where its proxy must listen, starts the wrapped command on the
+// The session and the gateway stay outside, with the proxy, the policy decision and the
+// record; a [Wall] owns only what makes a connection around the proxy fail rather
+// than succeed unseen. An adapter wraps the launch and nothing else: the session reads
+// from the [Enclosure] where the gateway must listen, starts the wrapped command on the
 // pseudo-terminal or the pipes it already owns, and closes the enclosure at exit.
 //
-// What every wall guarantees is one list, contracts/runner/v1/README.md §The wall, the
-// same for every adapter, and the conformance suite in the walltest package checks it
-// from inside the enclosure. An adapter ships when the suite passes for it. [Docker] is
-// the first.
+// What every wall guarantees is one list, contracts/forager/v1/README.md §The wall, the
+// same for every adapter, and the conformance suite in package e2e checks it from
+// inside the enclosure. An adapter ships when the suite passes for it. [Docker] is the
+// first.
 package wall
 
 import "context"
@@ -61,15 +61,15 @@ type Bind struct {
 	Path string
 	// ReadOnly says the enclosure cannot change it.
 	ReadOnly bool
-	// Helper says it is the runner's helper program, rather than a directory of the
-	// runner's.
+	// Helper says it is Forager's helper program, rather than a directory of
+	// Forager's.
 	Helper bool
 	// Pattern says Path is a pattern of [path/filepath.Match]: where the enclosure
 	// makes the directory, before it makes it.
 	Pattern bool
 }
 
-// Reaper is a wall that can remove what it left of a run whose runner died before it
+// Reaper is a wall that can remove what it left of a run whose session died before it
 // closed the enclosure. It is asked only for a run known to be over.
 type Reaper interface {
 	// Reap removes everything the wall created for the run and reports how many
@@ -91,13 +91,13 @@ type Request struct {
 	// holds dockerd; the wall starts it as the enclosure's root, on a Unix socket alone,
 	// and the agent as its user in the socket's group. It needs a Runtime that runs a
 	// daemon in a container without privileges, whose root is a user of the machine's
-	// that is not root. Experimental: see contracts/runner/v1/README.md §The wall.
+	// that is not root. Experimental: see contracts/forager/v1/README.md §The wall.
 	Docker bool
 }
 
 // Enclosure is one run's wall, built.
 type Enclosure interface {
-	// ProxyAddr is where the session runner's proxy must listen, host:port, for the
+	// ProxyAddr is where the gateway must listen, host:port, for the
 	// enclosure to reach it; port 0 leaves the port to the system.
 	ProxyAddr() string
 	// Wrap returns the launch that starts l inside the enclosure, on the terminal or
@@ -141,8 +141,8 @@ type Launch struct {
 	Socket string
 	// Mounts are the files and directories of the host the run lists: the checkout
 	// around Dir, a composed home, the run directory read-only. The enclosure shows each
-	// at the same path, and nothing of the host besides them and Dir. From the session
-	// runner, none lies inside another, and one of them holds Dir.
+	// at the same path, and nothing of the host besides them and Dir. From the session,
+	// none lies inside another, and one of them holds Dir.
 	Mounts []Mount
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.

@@ -1,6 +1,6 @@
-// Package accesskey is the access key of the runner contract, contracts/runner/v1: the
+// Package accesskey is the access key of the Forager contract, contracts/forager/v1: the
 // one credential a machine holds for its server, and everything signed with it or for
-// it. The runner signs its requests with this package, and the qory command enrols,
+// it. Forager signs its requests with this package, and the qory command enrols,
 // creates and reads keys with it, so both hold one definition of each string.
 //
 // An access key is one Ed25519 key. Its secret is one line, "qak_" and the 32-byte seed

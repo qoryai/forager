@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// Engine is what reaches the container engine a run's enclosure is in, as a runner
-// records it for another runner to ask whether the run's containers still exist: the
+// Engine is what reaches the container engine a run's enclosure is in, as a session
+// records it for another session to check whether the run's containers still exist: the
 // adapter, the command, the variables that select the engine and the engine's own id.
 // It holds no secret.
 type Engine struct {
@@ -40,7 +40,7 @@ type Engine struct {
 }
 
 // Engined is a wall whose enclosures are containers of an engine, which outlive a
-// runner that is killed before it closes them.
+// session that is killed before it closes them.
 type Engined interface {
 	// Engine is the engine the wall's enclosures are in, as the wall reaches it now.
 	Engine(ctx context.Context) Engine
@@ -75,8 +75,8 @@ var idArgs = []string{"info", "--format", "{{.ID}}"}
 // asked, since they would be another engine's.
 //
 // Every engine command of the adapter's, from then on, runs with this selection in
-// place of the runner's own, so the run's containers are on the engine recorded. With a
-// variable left out, the commands keep the runner's own environment.
+// place of Forager's own, so the run's containers are on the engine recorded. With a
+// variable left out, the commands keep Forager's own environment.
 func (d *Docker) Engine(ctx context.Context) Engine {
 	sys := d.sys
 	if sys == nil {
@@ -249,8 +249,8 @@ func runContainersExist(
 	return len(bytes.TrimSpace(out)) > 0, nil
 }
 
-// engineCommand is a command of the machine's run against a recorded engine: the
-// runner's environment without the access key's variables and without any variable
+// engineCommand is a command of the machine's run against a recorded engine:
+// Forager's environment without the access key's variables and without any variable
 // that selects an engine, and then the engine's own.
 func engineCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 	cmd := hostCommand(ctx, argv)

@@ -1,0 +1,17 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1699999000",
+    "X-Qory-Signature-Ed25519": "H1qoHyDIueByuOSUa0uHRA4Lo-EiXPz_6_CV7i-SBtrvTeWKflucoCChGQCw4UvtsgbfytGZB5n5dFbyBYVqCw"
+  },
+  "body": null,
+  "expect": 401,
+  "expect_code": "unauthorized",
+  "note": "A correct signature over a timestamp a thousand seconds before the receiver's clock. The window is three hundred seconds either way, so this is refused with an unsigned 401."
+}

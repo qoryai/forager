@@ -1,0 +1,5 @@
+{
+  "error": "internal",
+  "message": "the gateway could not start the tool files: exit status 1",
+  "from": "gateway"
+}

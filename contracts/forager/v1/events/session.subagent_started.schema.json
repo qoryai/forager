@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/session.subagent_started.schema.json",
+  "title": "dev.qory.session.subagent_started",
+  "description": "The runtime spawned a subagent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "agent_id", "agent_type"],
+  "properties": {
+    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "agent_id": {"type": "string", "minLength": 1},
+    "agent_type": {"type": "string", "minLength": 1}
+  }
+}

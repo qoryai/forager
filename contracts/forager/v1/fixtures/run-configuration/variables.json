@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "security_policy": {
+    "version": 1,
+    "egress": {
+      "mode": "enforce",
+      "allow": ["api.example", "github.com", "*.github.com"]
+    }
+  },
+  "variables": {
+    "NODE_ENV": {"value": "test"},
+    "APP_REGION": {"value": "eu-west-1"},
+    "FEATURE_FLAGS": {"value": ""},
+    "LOG_LEVEL": {"value": "info", "note": "an attribute Forager may ignore"}
+  }
+}

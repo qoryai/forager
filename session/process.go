@@ -17,7 +17,8 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/qoryai/runner/internal/chunk"
+	"github.com/qoryai/forager/session/internal/chunk"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // process is the runtime's process and where its streams go.
@@ -44,7 +45,7 @@ type process struct {
 	resized    func(cols, rows int)
 }
 
-// The size a pseudo-terminal gets when the runner's own input is not a terminal, or
+// The size a pseudo-terminal gets when Forager's own input is not a terminal, or
 // its size is unknown: the size a terminal has always been assumed to have.
 const (
 	defaultCols = 80
@@ -76,28 +77,10 @@ const DefaultStopGrace = 10 * time.Second
 // another.
 const DefaultStopSignal = "SIGTERM"
 
-// stopSignals are the signals a spec may name: the ones a program is written to leave
-// on. SIGKILL is not one, it is what follows the grace.
-var stopSignals = map[string]syscall.Signal{
-	"SIGTERM": syscall.SIGTERM,
-	"SIGINT":  syscall.SIGINT,
-	"SIGHUP":  syscall.SIGHUP,
-	"SIGQUIT": syscall.SIGQUIT,
-	"SIGUSR1": syscall.SIGUSR1,
-	"SIGUSR2": syscall.SIGUSR2,
-}
-
 // CheckStopSignal reports whether a spec may name the signal: SIGTERM, SIGINT, SIGHUP,
-// SIGQUIT, SIGUSR1 or SIGUSR2, written that way. Empty is the default and passes.
-func CheckStopSignal(name string) error {
-	if name == "" {
-		return nil
-	}
-	if _, ok := stopSignals[name]; !ok {
-		return fmt.Errorf("the stop signal %q is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", name)
-	}
-	return nil
-}
+// SIGQUIT, SIGUSR1 or SIGUSR2, written that way. Empty is the default and passes. It is
+// [runtimes.CheckStopSignal].
+func CheckStopSignal(name string) error { return runtimes.CheckStopSignal(name) }
 
 // newCmd builds the command with the context ending it: the stop signal, then SIGKILL
 // after the grace.

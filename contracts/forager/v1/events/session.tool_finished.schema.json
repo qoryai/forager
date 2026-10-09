@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/session.tool_finished.schema.json",
+  "title": "dev.qory.session.tool_finished",
+  "description": "A tool ran and returned.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "tool", "tool_use_id", "input"],
+  "properties": {
+    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "tool": {"type": "string", "minLength": 1},
+    "tool_use_id": {"type": "string", "minLength": 1},
+    "input": {"type": "object"},
+    "response": {"description": "What the tool returned; its shape is the tool's."},
+    "duration_ms": {"type": "integer", "minimum": 0},
+    "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
+    "agent_type": {"description": "The subagent's type, or the agent the session was started as.", "type": "string", "minLength": 1}
+  }
+}

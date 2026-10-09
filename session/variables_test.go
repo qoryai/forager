@@ -2,29 +2,20 @@ package session_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/qoryai/runner/runtimes"
-	"github.com/qoryai/runner/session"
+	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/server"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
 )
-
-// serveDocument makes the control serve a run configuration document as it is.
-func (c *control) serveDocument(doc, digest string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.run, c.digest = []byte(doc), digest
-}
 
 // dumpsEnv makes the spec's runtime write its environment to a file and returns the
 // file's path.
@@ -96,13 +87,29 @@ func lines(applied session.Applied) []string {
 	return out
 }
 
-// serverVariables is a run configuration with variables of every kind the runner
+// serverVariables is a run configuration with variables of every kind the session
 // treats apart: one it applies, one the node's deny entry covers, one the runtime
 // denies, one the built-in list denies, one the run sets as well, one the harness
 // computes, and one the runtime declares.
-const serverVariables = `{"version":1,"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
+const serverVariables = `{"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1"},` +
 	`"ANTHROPIC_BASE_URL":{"value":"https://elsewhere.example"},"PATH":{"value":"/nowhere"},"LOG_LEVEL":{"value":"server"},` +
 	`"CODEX_HOME":{"value":"/server/home"},"ANTHROPIC_AUTH_TOKEN":{"value":"server-credential"}}}`
+
+// answerVariables makes the gateway's run answer carry the variables of doc, a JSON
+// object with the member variables as a run configuration has it.
+func answerVariables(g *linktest.Fake, doc string) {
+	var vars struct {
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(doc), &vars); err != nil {
+		panic(err)
+	}
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["variables"] = vars.Variables
+		return linktest.Reply{Status: 200, Body: a}
+	})
+}
 
 // TestVariablesReachTheAgentByRung runs the sources of the variables end to end:
 // behind a wall, and without one when the node accepts the server's, the value of the
@@ -123,11 +130,9 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 		{"unwalled and ignore", false, session.UnwalledIgnore},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := newControl(t)
-			c.serveDocument(serverVariables, "sha256="+strings.Repeat("1", 64))
-			sp := spec(t, nil, "EDITOR=shell", "SHELL_ONLY=kept")
+			sp, g := specGateway(t, "EDITOR=shell", "SHELL_ONLY=kept")
+			answerVariables(g, serverVariables)
 			out := dumpsEnv(t, &sp)
-			sp.Server, sp.Heartbeat = c.server(), time.Second
 			sp.LaunchFixed = []string{"CODEX_HOME=/computed/home", "DOCKER_HOST=unix:///computed/docker.sock"}
 			sp.LaunchDefaults = []string{"HARNESS_PROFILE=nextjs", "BUILD_NUMBER=0", "LOG_LEVEL=harness"}
 			sp.Variables = session.Variables{
@@ -202,7 +207,7 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 					t.Errorf("%s: %q, set %v; want set and empty behind a wall alone", name, value, ok)
 				}
 			}
-			events, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
+			events, _ := os.ReadFile(filepath.Join(res.Dir, "session.jsonl"))
 			for _, value := range []string{"eu-west-1", "elsewhere.example", "/nowhere", "server-credential", "/server/home", "nextjs", "computed"} {
 				if strings.Contains(string(events), value) {
 					t.Errorf("the record contains the value %q", value)
@@ -215,16 +220,13 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 // TestWhatARunPassesInIsChecked pins the refusals of a run's own environment end to
 // end, before the variables are resolved, each a session.Refusal with its code and
 // names and no value, and OnVariables not called: behind a wall, a QORY_ variable from
-// the run, the machine or the harness, QORY_HARNESS_HOME among them, and a variable a
-// credential is read from are variable_reserved, and in any run a value for a
-// credential's placeholder from the run, the machine or the harness is
-// placeholder_conflict.
+// the run, the machine or the harness, QORY_HARNESS_HOME among them, and a variable the
+// gateway's answer reserves, what a credential is read from, are variable_reserved, and
+// in any run a value for a placeholder the answer names from the run, the machine or
+// the harness is placeholder_conflict. The run request names each, never a value.
 func TestWhatARunPassesInIsChecked(t *testing.T) {
 	t.Setenv("MODEL_SOURCE", "the-credential-held-outside")
 	secret := "a-value-no-error-quotes"
-	withCredential := func(sp *session.Spec) {
-		sp.Policy = &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Credentials: []session.PolicyCredential{{Name: "model"}}}
-	}
 	for _, tc := range []struct {
 		name  string
 		edit  func(*session.Spec)
@@ -239,22 +241,23 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 		}, "variable_reserved", []string{"QORY_HARNESS_HOME"}},
 		{"what a credential is read from", func(sp *session.Spec) { sp.LaunchFixed = []string{"MODEL_SOURCE=" + secret} }, "variable_reserved", []string{"MODEL_SOURCE"}},
 		{"a placeholder from --env", func(sp *session.Spec) {
-			withCredential(sp)
 			sp.Variables.Run = []string{"MODEL_TOKEN=" + secret}
 		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
 		{"a placeholder from wall.env", func(sp *session.Spec) {
-			withCredential(sp)
 			sp.Variables.Machine = []string{"MODEL_TOKEN=" + secret}
 		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
 		{"a placeholder from a harness default", func(sp *session.Spec) {
-			withCredential(sp)
 			sp.LaunchDefaults = []string{"MODEL_TOKEN=" + secret}
 		}, "placeholder_conflict", []string{"MODEL_TOKEN"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sp := spec(t, nil)
+			sp, g := specGateway(t)
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-			sp.Credentials = []session.Credential{{Name: "model", Env: "MODEL_SOURCE", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["placeholders"], a["reserved"] = []string{"MODEL_TOKEN"}, []string{"MODEL_SOURCE"}
+				return linktest.Reply{Status: 200, Body: a}
+			})
 			sp.OnVariables = func(session.Applied) { t.Error("OnVariables was called for a refused run") }
 			tc.edit(&sp)
 			_, err := session.Run(context.Background(), sp)
@@ -265,16 +268,21 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 			if strings.Contains(err.Error(), secret) {
 				t.Errorf("the error quotes a value: %v", err)
 			}
+			for _, raw := range g.RawRequests() {
+				if strings.Contains(string(raw), secret) {
+					t.Errorf("the run request carries a value: %s", raw)
+				}
+			}
 		})
 	}
 	// Without a wall the node's own environment is the developer's, a key included.
-	sp := spec(t, nil, "ANTHROPIC_API_KEY="+secret, "QORY_SERVER_SECRET="+secret)
+	sp := spec(t, "ANTHROPIC_API_KEY="+secret, "QORY_SERVER_SECRET="+secret)
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("an unwalled run with the developer's environment: %v", err)
 	}
 }
 
-// TestTheHarnessHome pins QORY_HARNESS_HOME: the runner sets it to the spec's
+// TestTheHarnessHome pins QORY_HARNESS_HOME: the session sets it to the spec's
 // HarnessHome, with or without a wall; without a wall it wins over a value the run
 // inherits, a value of the run's own is denied as any QORY_ name, and the record lists
 // the name, fixed. Behind a wall a value the run passes is variable_reserved
@@ -282,11 +290,11 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 // feed or a NUL, is an error before anything starts.
 func TestTheHarnessHome(t *testing.T) {
 	for _, walled := range []bool{true, false} {
-		sp := spec(t, nil)
+		sp := spec(t)
 		if walled {
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 		} else {
-			sp = spec(t, nil, "QORY_HARNESS_HOME=/inherited")
+			sp = spec(t, "QORY_HARNESS_HOME=/inherited")
 			sp.Variables.Run = []string{"QORY_HARNESS_HOME=/from-the-run"}
 		}
 		out := dumpsEnv(t, &sp)
@@ -307,7 +315,7 @@ func TestTheHarnessHome(t *testing.T) {
 		}
 	}
 	for _, home := range []string{"relative/home", "/home/agent\n/x", "/home/\x00"} {
-		sp := spec(t, nil)
+		sp := spec(t)
 		sp.HarnessHome = home
 		_, err := session.Run(context.Background(), sp)
 		var r *session.Refusal
@@ -317,94 +325,12 @@ func TestTheHarnessHome(t *testing.T) {
 	}
 }
 
-// TestTheNodesPolicyNarrowsTheServers runs a server's policy beside the node's end to
-// end: a host the server allows and the node does not is denied, the record reports
-// the hosts both allow and the node's policy by its digest, and a run configuration
-// without a policy leaves the node's in force with the run configuration's URL and
-// digest beside it.
-func TestTheNodesPolicyNarrowsTheServers(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
-	defer origin.Close()
-	c := newControl(t)
-	digest := "sha256=" + strings.Repeat("1", 64)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","localhost"]}}`, digest)
-	node := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}
-	sp := spec(t, node, "FAKE_ALLOWED_URL="+origin.URL+"/allowed", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)+"/denied")
-	sp.Server, sp.Heartbeat = c.server(), time.Second
-	res, err := runWithSettingsEnv(t, sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	evs := events(t, res)
-	pa := data(ofType(evs, "dev.qory.run.policy_applied")[0])
-	np, _ := pa["node_policy"].(map[string]any)
-	if pa["source"] != "fetched" || fmt.Sprint(pa["allow"]) != "[127.0.0.1]" || pa["run_configuration"] != digest || np == nil || !regexp.MustCompile(`^sha256=[0-9a-f]{64}$`).MatchString(fmt.Sprint(np["digest"])) {
-		t.Errorf("policy_applied %v", pa)
-	}
-	decisions := map[string]string{}
-	for _, e := range ofType(evs, "dev.qory.run.egress") {
-		decisions[fmt.Sprint(data(e)["host"])] = fmt.Sprint(data(e)["decision"])
-	}
-	if decisions["127.0.0.1"] != "allowed" || decisions["localhost"] != "denied" {
-		t.Errorf("egress %v", decisions)
-	}
-
-	c.serveDocument(`{"version":1,"variables":{"NODE_ENV":{"value":"test"}}}`, digest)
-	sp = spec(t, node)
-	sp.Server, sp.Heartbeat = c.server(), time.Second
-	res, err = session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pa = data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
-	if pa["source"] != "config" || fmt.Sprint(pa["allow"]) != "[127.0.0.1]" || pa["run_configuration"] != digest || pa["url"] != c.srv.URL+"/v1/run-configuration" || pa["node_policy"] != nil {
-		t.Errorf("policy_applied without a server's policy %v", pa)
-	}
-}
-
-// TestANarrowingThatRefusesIsNoRun pins the refusals of narrowing and of the run
-// configuration end to end: a tool the server selects that the node's policy does not
-// list is tool_unknown, a server's image other than the node's is image_unknown, and a
-// variable the schema refuses is run_configuration_invalid, whose error contains no
-// value.
-func TestANarrowingThatRefusesIsNoRun(t *testing.T) {
-	for _, tc := range []struct {
-		name, doc string
-		node      *session.Policy
-		code      string
-	}{
-		{"a tool", `{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"},"tools":[{"name":"files"}]}}`,
-			&session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Tools: []session.PolicyTool{}}, "tool_unknown"},
-		{"an image", `{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"},"image":"with-docker"}}`,
-			&session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}, Image: "base"}, "image_unknown"},
-		{"a variable", `{"version":1,"variables":{"GREETING":{"value":"a-value-no-error-quotes\nand more"}}}`, nil, "run_configuration_invalid"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newControl(t)
-			c.serveDocument(tc.doc, "sha256="+strings.Repeat("1", 64))
-			sp := spec(t, tc.node)
-			sp.Server, sp.Heartbeat = c.server(), time.Second
-			sp.Wall, sp.Image = &openWall{}, "base"
-			sp.Images = []session.Image{{Name: "base", Ref: "example.com/base:1"}, {Name: "with-docker", Ref: "example.com/docker:1", Runtime: "sysbox-runc", Docker: true}}
-			sp.Tools = []session.Tool{{Name: "files", Command: []string{os.Args[0], toolMode}, Serves: []string{"files.internal"}}}
-			_, err := session.Run(context.Background(), sp)
-			var r *session.Refusal
-			if !errors.As(err, &r) || r.Code != tc.code {
-				t.Fatalf("%v, want %s", err, tc.code)
-			}
-			if strings.Contains(err.Error(), "a-value-no-error-quotes") {
-				t.Errorf("the error quotes a value: %v", err)
-			}
-		})
-	}
-}
-
 // TestAWalledRunPassesTheRuntimesKeyItLists pins the walled run that passes the
 // runtime's credential as the machine's variable, as wall.env does: the value reaches
 // the agent as passed, and the runtime's other declared and reserved variables, which
 // neither a placeholder nor the run sets, are there empty.
 func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
-	sp := spec(t, nil)
+	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	sp.Variables.Machine = []string{"CLAUDE_CODE_OAUTH_TOKEN=a-fake-credential"}
@@ -443,7 +369,7 @@ func (p preparing) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.
 // value the harness computes and one of the machine's, which the record lists as
 // fixed, while the declared ones nothing sets are there empty.
 func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
-	sp := spec(t, nil)
+	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Runtime = preparing{claudeCode(t)}
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
@@ -481,7 +407,7 @@ func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 		func(sp *session.Spec, env []string) { sp.Variables.Machine = env },
 	} {
 		for _, entry := range []string{value, "BAD NAME=" + value, "1A=" + value, "A=" + value + "\r", "A=" + value + "\nB=c", "A=" + value + "\x00"} {
-			sp := spec(t, nil)
+			sp := spec(t)
 			set(&sp, []string{entry})
 			_, err := session.Run(context.Background(), sp)
 			if err == nil {
@@ -492,7 +418,7 @@ func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
 				t.Errorf("%q: the error quotes the value: %v", entry, err)
 			}
 		}
-		sp := spec(t, nil)
+		sp := spec(t)
 		set(&sp, []string{"ONLY_A_NAME"})
 		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ONLY_A_NAME has no value") {
 			t.Errorf("a name without a value: %v", err)

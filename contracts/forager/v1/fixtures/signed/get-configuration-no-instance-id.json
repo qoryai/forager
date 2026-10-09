@@ -1,0 +1,15 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1700000000",
+    "X-Qory-Signature-Ed25519": "pzpByr8bit-taotXH6Weujij7UCBUqboXUGmhDWdBsYK3iIeInAg-5q2G7EETpmOkBeutSAhw9bSE8y2ovqsBQ"
+  },
+  "body": null,
+  "expect": 400,
+  "expect_code": "bad_request",
+  "note": "No X-Qory-Instance-Id: the request string has an empty third line, and the signature over it verifies. The instance id is checked after verification, so the receiver answers a signed 400 bad_request."
+}

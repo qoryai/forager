@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.egress.schema.json",
+  "title": "dev.qory.run.egress",
+  "description": "One connection the session requested through the proxy, with the decision, the rule that made it and what became of it. Every connection is one event, allowed or denied. To a host the proxy terminates TLS for, every request is one event instead, with its path; to a host a tool serves, every request is a tool invocation and contains the tool.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "port", "method", "decision", "outcome", "mode", "rule"],
+  "properties": {
+    "host": {"description": "The host the session requested, as a lower-case name or an IP literal.", "type": "string", "minLength": 1},
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "method": {"description": "CONNECT for a tunnel, HTTP for a plain request through the proxy, HTTPS for a request inside a connection the proxy terminates.", "type": "string", "enum": ["CONNECT", "HTTP", "HTTPS"]},
+    "request_method": {"description": "The request's method, such as GET or POST, with HTTPS.", "type": "string", "minLength": 1},
+    "path": {"description": "The request's path, without its query, with HTTPS.", "type": "string"},
+    "path_rule": {"description": "The path entry that matched, of the policy's or the credential's, when the host has path rules; empty when none did, which is denied under enforce. wall:ambiguous-path when the path could be read two ways, denied in either mode.", "type": "string"},
+    "credential": {"description": "The name of the credential the proxy set on the request, when it set one. Never its value.", "type": "string", "minLength": 1},
+    "tool": {"description": "The name of the tool that serves the host, on a request the proxy decides by its path: passed to the tool when allowed, a tool invocation, and not when a path rule refuses it. A connection refused by its host has no tool.", "type": "string", "minLength": 1},
+    "request_id": {"description": "The proxy's own id of a request it read, with HTTP and HTTPS: what a tool receives as the Qory-Request-Id header.", "type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "status": {"description": "The status the host or the tool returned for the request, with HTTP and HTTPS, when one returned one: absent when the request was refused or not delivered.", "type": "integer", "minimum": 100, "maximum": 599},
+    "decision": {"type": "string", "enum": ["allowed", "denied"]},
+    "outcome": {"description": "What became of the connection. connected: the dial succeeded. dial_failed: allowed, and the dial failed. refused: not dialled, because the policy or the wall's guard denied it, or closed by the proxy when a new run configuration denied its host.", "type": "string", "enum": ["connected", "dial_failed", "refused"]},
+    "mode": {"description": "The policy mode the decision was made under.", "type": "string", "enum": ["observe", "enforce"]},
+    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied. Behind a wall, wall:own-address is the wall's own refusal, in either mode: the host is a link-local address, such as the metadata service, or Forager's machine with no allow entry listing it.", "type": "string"}
+  }
+}

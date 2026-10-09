@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
+  "title": "dev.qory.run.exited",
+  "description": "The run ended: the runtime exited, or the run was ended without one. The result of the run and its last event. A session's run always contains state and exit_code, failed and -1 with gateway_lost and session_lost; a run a gateway opened has no process and contains neither, gateway_lost included. The schema cannot tell the two apart, since this event does not contain opened_by: dev.qory.run.started does. It fixes state and exit_code to failed and -1 with gateway_lost and session_lost when they are present, and requires neither. The gateway's dev.qory.run.exited of a session's run that it ends with credential_expired, run_ended_at_issuer or run_closed has failed and -1 too; the session's own record of the same reason has the runtime's exit status, so the schema fixes neither for those three.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["duration_ms"],
+  "allOf": [
+    {
+      "if": {"properties": {"reason": {"enum": ["gateway_lost", "session_lost"]}}, "required": ["reason"]},
+      "then": {"properties": {"state": {"const": "failed"}, "exit_code": {"const": -1}}}
+    },
+    {
+      "if": {"properties": {"reason": {"const": "quiet"}}, "required": ["reason"]},
+      "then": {"required": ["quiet_seconds"]},
+      "else": {"not": {"required": ["quiet_seconds"]}}
+    }
+  ],
+  "properties": {
+    "state": {"description": "succeeded on exit status 0, failed otherwise, including a signal. Present on a session's run, absent on a run a gateway opened.", "type": "string", "enum": ["succeeded", "failed"]},
+    "exit_code": {"description": "The exit status, or -1 when the runtime was killed by a signal. Present on a session's run, absent on a run a gateway opened.", "type": "integer", "minimum": -1},
+    "signal": {"description": "The signal that killed the runtime, when one did: SIGKILL, SIGTERM.", "type": "string", "minLength": 1},
+    "reason": {"description": "Why the run ended other than by the runtime's own exit, when it did. timeout: the run's time limit was reached and the session stopped the runtime. run_closed: the server closed the run. Toward the server, the events endpoint answered a signed 410 run_closed, and the session stopped the runtime as at its time limit; the event is recorded in the file sink, and nothing further is sent for the run. On the gateway's link, the gateway writes the run's dev.qory.run.exited with run_closed in its record alone, and the session records its own in its record alone. gateway_lost: the gateway was lost before the runtime's exit was recorded, because Forager died, and the event is written after the run has ended, by whatever sends the record again; on a session's run exit_code is then -1 and the state failed, since the record contains no status, and on a run a gateway opened neither is present; duration_ms runs to the last event recorded. session_lost: the gateway heard nothing from the session for 3 × its heartbeat interval, or the gateway refused a batch of the session's (§The gateway's link); exit_code is -1 and the state failed, as with gateway_lost. quiet: a run with no session had no connection for the gateway's quiet period, quiet_seconds. credential_expired: the run credential's exp passed with no fresh credential for the same run key. run_ended_at_issuer: the issuer's introspection endpoint answered that the run credential is no longer active. The session writes timeout, and run_closed toward the server. The gateway writes session_lost, quiet, credential_expired and run_ended_at_issuer, and run_closed on its link: for a session's run with state failed and exit_code -1, and the session records the same reason, the code of the gateway's 410, in its own record alone. A session's batch on the link carries no reason but timeout. Absent when the runtime ended by itself or was stopped from outside Forager. state says how the runtime exited, where there is one; a receiver maps each reason to a state of its own.", "type": "string", "enum": ["timeout", "run_closed", "gateway_lost", "session_lost", "quiet", "credential_expired", "run_ended_at_issuer"]},
+    "quiet_seconds": {"description": "The quiet period the gateway applied, in seconds. Present when reason is quiet, absent otherwise.", "type": "integer", "minimum": 1},
+    "duration_ms": {"description": "Milliseconds from run.started to the run's end.", "type": "integer", "minimum": 0}
+  }
+}

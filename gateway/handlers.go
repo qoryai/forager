@@ -1,0 +1,405 @@
+package gateway
+
+import (
+	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"errors"
+	"fmt"
+	"mime"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway/internal/stream"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/server"
+)
+
+// The link's schemas, compiled once.
+var (
+	runRequestSchema = sync.OnceValues(func() (*jsonschema.Schema, error) { return contracts.Compile("link-run-request.schema.json") })
+	batchSchema      = sync.OnceValues(func() (*jsonschema.Schema, error) { return contracts.Compile("link-batch.schema.json") })
+)
+
+// validate reports whether the schema accepts the JSON document b.
+func validate(schema func() (*jsonschema.Schema, error), b []byte) bool {
+	s, err := schema()
+	if err != nil {
+		return false
+	}
+	doc, err := contracts.Decode("link.json", b)
+	if err != nil {
+		return false
+	}
+	return s.Validate(doc) == nil
+}
+
+// readRunRequest reads a run request: one JSON object in UTF-8 with each member name
+// once, which link-run-request.schema.json accepts.
+func readRunRequest(body []byte) (*server.LinkRunRequest, bool) {
+	var req server.LinkRunRequest
+	if !validate(runRequestSchema, body) || jsonv2.Unmarshal(body, &req) != nil {
+		return nil, false
+	}
+	return &req, true
+}
+
+// mediaType reports whether the request's Content-Type is want.
+func mediaType(r *http.Request, want string) bool {
+	t, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && t == want
+}
+
+// openRun answers a run request: 400 invalid_request for a body the schema refuses and
+// for a narrowing, which the local link refuses; 409 run_id_used for a run id that
+// already names a run here; the run's refusal when it does not open; else the run
+// answer.
+func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
+	if !mediaType(r, server.LinkContentType) {
+		invalid(w)
+		return
+	}
+	body, ok := readBody(r, server.MaxDocument)
+	if !ok {
+		invalid(w)
+		return
+	}
+	req, ok := readRunRequest(body)
+	if !ok || req.Narrowing != nil {
+		invalid(w)
+		return
+	}
+	g.mu.Lock()
+	if g.closing {
+		g.mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	if g.used[req.RunID] {
+		g.mu.Unlock()
+		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
+		return
+	}
+	g.used[req.RunID] = true
+	g.opens.Add(1)
+	g.mu.Unlock()
+	defer g.opens.Done()
+	lr, recorded, err := g.open(req)
+	if err != nil {
+		if !recorded {
+			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
+				// The run's record is there already: a run of another gateway's, or of
+				// this machine's before.
+				refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
+				return
+			}
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+		}
+		refuseOpen(w, err)
+		return
+	}
+	g.mu.Lock()
+	g.runs[lr.id] = lr
+	g.mu.Unlock()
+	lr.mu.Lock()
+	answer, digest := lr.answer, lr.reloadDigest
+	lr.mu.Unlock()
+	g.answerHeaders(w, digest)
+	w.Header().Set("Content-Type", server.LinkContentType)
+	w.WriteHeader(http.StatusOK)
+	w.Write(answer)
+	lr.arm()
+}
+
+// refuseOpen answers a run that did not open. A refusal passes on with its code and
+// names, and who refused: the server's with its status, apiary, whatever its code; the
+// gateway's own, gateway, a 403 for a refusal of the run's configuration Forager
+// decides and for a run without a wall whose policy needs one, wall_required. Any
+// other failure is a 500 internal. Each carries the error's text as its message, which
+// the session returns as its error, the text today's session returned; the gateway
+// itself tells the user nothing of it.
+func refuseOpen(w http.ResponseWriter, err error) {
+	var wall *refusal.NeedsWall
+	if errors.As(err, &wall) {
+		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway, err.Error())
+		return
+	}
+	var ref *accesskey.Refusal
+	if !errors.As(err, &ref) {
+		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, err.Error())
+		return
+	}
+	from := ref.From
+	if from == "" {
+		from = accesskey.FromGateway
+	}
+	status := ref.Status
+	switch {
+	case from != accesskey.FromApiary && refusal.Decides(ref.Code):
+		status = http.StatusForbidden
+	case status < 400 || status > 599:
+		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
+		status = http.StatusBadGateway
+	}
+	refuse(w, status, ref.Code, ref.Names, from, err.Error())
+}
+
+// codeInternal is the code of a run that failed to open for a reason without one.
+const codeInternal = "internal"
+
+// maxMessage is the most characters a refusal's message holds.
+const maxMessage = 8192
+
+// message is an error's text as a refusal's message holds it: tab and newline kept,
+// every other control character, C0, DEL and C1, a space, at most maxMessage
+// characters.
+func message(text string) string {
+	out := []rune(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' {
+			return ' '
+		}
+		return r
+	}, text))
+	if len(out) > maxMessage {
+		out = out[:maxMessage]
+	}
+	return string(out)
+}
+
+// answerHeaders sets the digests every answer for a run carries: the link's discovery's,
+// and the run's reload answer's, which a session fetches again when it changes.
+func (g *Gateway) answerHeaders(w http.ResponseWriter, runDigest string) {
+	w.Header().Set(server.HeaderConfiguration, g.discoveryDigest)
+	w.Header().Set(server.HeaderRunConfiguration, runDigest)
+}
+
+// reload answers a GET of a run's configuration by its run id: the reload answer as it
+// stands, 410 for a run that ended at the gateway, 400 invalid_request for a run id
+// this gateway holds no run of.
+func (g *Gateway) reload(w http.ResponseWriter, runID string) {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	if lr == nil {
+		invalid(w)
+		return
+	}
+	if code, from, ended := lr.gone(); ended {
+		gone(w, code, from, lr.st.Started())
+		return
+	}
+	lr.touch()
+	lr.mu.Lock()
+	body, digest := lr.reloadBody, lr.reloadDigest
+	lr.mu.Unlock()
+	g.answerHeaders(w, digest)
+	w.Header().Set("ETag", `"`+digest+`"`)
+	w.Header().Set("Content-Type", server.LinkContentType)
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
+}
+
+// batch answers one link batch: 202 when its events are numbered; 410 for a run that
+// ended at the gateway; 400 invalid_request for one the link refuses, which ends the
+// run with session_lost when it names one this gateway holds.
+func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
+	if !mediaType(r, server.ContentType) {
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		return
+	}
+	// A batch over the limit, one that does not decode and one whose first event names
+	// no run this gateway holds are refused without ending a run: the gateway ends a
+	// run only when it can tell which one the batch is of; otherwise the run's liveness
+	// ends it, when its session sends nothing it accepts.
+	body, ok := readBody(r, maxBatch)
+	if !ok {
+		invalid(w)
+		return
+	}
+	evs, err := stream.DecodeBatch(body)
+	if err != nil || len(evs) == 0 {
+		invalid(w)
+		return
+	}
+	g.mu.Lock()
+	lr := g.runs[evs[0].Subject]
+	g.mu.Unlock()
+	if lr == nil {
+		invalid(w)
+		return
+	}
+	lr.batch.Lock()
+	defer lr.batch.Unlock()
+	if code, from, ended := lr.gone(); ended {
+		gone(w, code, from, lr.st.Started())
+		return
+	}
+	lr.touch()
+	if why := lr.check(body, evs); why != "" {
+		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
+		invalid(w)
+		lr.end(sessionLost)
+		return
+	}
+	if _, err := lr.st.Accept(evs); err != nil {
+		if code, from, ended := lr.gone(); ended {
+			gone(w, code, from, lr.st.Started())
+			return
+		}
+		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %v; the run ends, session_lost", lr.id, err))
+		invalid(w)
+		lr.end(sessionLost)
+		return
+	}
+	final := lr.accepted(evs)
+	lr.mu.Lock()
+	digest := lr.reloadDigest
+	lr.mu.Unlock()
+	g.answerHeaders(w, digest)
+	w.WriteHeader(http.StatusAccepted)
+	if final {
+		// The session's run.exited or run.refused: the run's gateway side ends.
+		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
+	}
+}
+
+// gatewayName is a refusal's name of the form only a gateway's refusal carries.
+var gatewayName = regexp.MustCompile(`^(labels|about\.details)\.[^=]*=`)
+
+// check is why the link refuses a batch of the run's, the README's rules: empty when
+// it accepts it. Each event the gateway numbered before, by its id, is the session's
+// sending again and is not looked at twice. Called with lr.batch held.
+func (lr *linkRun) check(body []byte, evs []event.Event) string {
+	// First, before anything decodes it the lenient way: each member name once and
+	// UTF-8 throughout, so what the gateway checks is what the record and the server
+	// read, whichever copy of a name their decoder would keep.
+	if jsonv2.Unmarshal(body, new(any)) != nil {
+		return "a batch with a member name twice in one object, or not in UTF-8"
+	}
+	if !validate(batchSchema, body) {
+		return "one link-batch.schema.json refuses"
+	}
+	lr.mu.Lock()
+	seen, startedID, final := lr.seen, lr.startedID, lr.final
+	given := lr.given
+	lr.mu.Unlock()
+	fresh := map[string]bool{}
+	for _, ev := range evs {
+		if ev.Subject != lr.id || ev.Source != event.Source(lr.id) {
+			return "an event of another run"
+		}
+		if seen[ev.ID] || fresh[ev.ID] {
+			continue
+		}
+		fresh[ev.ID] = true
+		if final {
+			return "an event after the run's final event"
+		}
+		var data map[string]any
+		if raw, ok := ev.Data.(json.RawMessage); ok {
+			if json.Unmarshal(raw, &data) != nil {
+				return "an event whose data is no object"
+			}
+		}
+		switch ev.Type {
+		case event.Ping, event.RunEgress:
+			return "an event of a type the gateway writes"
+		case event.RunStarted:
+			if data["opened_by"] != event.OpenedBySession {
+				return "a run.started not opened by the session"
+			}
+			if !sameLabels(data["labels"], lr.labels) {
+				return "a run.started whose labels are not the run's"
+			}
+			if startedID != "" && startedID != ev.ID {
+				return "a second run.started"
+			}
+			startedID = ev.ID
+		case event.RunExited:
+			if reason, ok := data["reason"]; ok && reason != event.ReasonTimeout {
+				return "a run.exited with a reason the gateway decides"
+			}
+			final = true
+		case event.RunRefused:
+			if startedID != "" {
+				return "a run.refused after run.started"
+			}
+			code, _ := data["code"].(string)
+			if !refusal.Decides(code) {
+				return "a run.refused with a code the session does not decide"
+			}
+			names, _ := data["names"].([]any)
+			for _, n := range names {
+				if s, _ := n.(string); gatewayName.MatchString(s) {
+					return "a run.refused with a name only a gateway's refusal carries"
+				}
+			}
+			final = true
+		case event.PolicyApplied:
+			own := decided(data)
+			ok := false
+			for _, a := range given {
+				if reflect.DeepEqual(own, a) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return "a run.policy_applied that differs from what the gateway put in force"
+			}
+		}
+	}
+	return ""
+}
+
+// accepted records what a batch the stream numbered says of the run, and reports
+// whether its final event was among it. Called with lr.batch held.
+func (lr *linkRun) accepted(evs []event.Event) bool {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	final := false
+	for _, ev := range evs {
+		if lr.seen[ev.ID] {
+			continue
+		}
+		lr.seen[ev.ID] = true
+		switch ev.Type {
+		case event.RunStarted:
+			lr.startedID = ev.ID
+			lr.startedAt, _ = time.Parse(time.RFC3339Nano, ev.Time)
+		case event.RunExited, event.RunRefused:
+			lr.final, final = true, true
+		}
+	}
+	return final
+}
+
+// sameLabels reports whether a run.started's labels, as its data decodes, are the
+// run's: absent is none.
+func sameLabels(v any, labels map[string]string) bool {
+	got, _ := v.(map[string]any)
+	if v != nil && got == nil {
+		return false
+	}
+	if len(got) != len(labels) {
+		return false
+	}
+	for k, want := range labels {
+		if s, ok := got[k].(string); !ok || s != want {
+			return false
+		}
+	}
+	return true
+}

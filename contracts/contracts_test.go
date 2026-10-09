@@ -5,17 +5,21 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/qoryai/runner/contracts"
-	"github.com/qoryai/runner/internal/server"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/server"
 )
 
 // compile compiles every schema a test needs once.
@@ -85,16 +89,28 @@ func TestEverySchemaCompiles(t *testing.T) {
 	}
 }
 
-// TestDocumentFixturesValidate pins that every policy, server, configuration and run
-// configuration fixture passes its schema.
+// TestDocumentFixturesValidate pins that every policy, server, configuration, run
+// configuration and run credentials fixture passes its schema, the run credentials of
+// the known answers included.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-configuration.schema.json")
+		"run-configuration.schema.json", "run-credentials.schema.json")
 	dirs := map[string]string{
 		"fixtures/policy":            "policy.schema.json",
 		"fixtures/server":            "server.schema.json",
 		"fixtures/configuration":     "configuration.schema.json",
 		"fixtures/run-configuration": "run-configuration.schema.json",
+		"fixtures/run-credentials":   "run-credentials.schema.json",
+	}
+	for _, f := range []string{"one-key.json", "two-keys.json"} {
+		f = "fixtures/known-answers/run-credentials/" + f
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s["run-credentials.schema.json"].Validate(doc); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
 	}
 	for dir, schema := range dirs {
 		for _, f := range files(t, dir) {
@@ -109,25 +125,146 @@ func TestDocumentFixturesValidate(t *testing.T) {
 	}
 }
 
-// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
-// the schema its name starts with: a policy that widens, a server without its access
-// key id or its pin or with a secret, a configuration without events, a ping whose
-// interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
-// an expression. The longest schema name the file name starts with is the schema, so
-// run-configuration-variable-value-not-string is held to the run configuration and not to a
-// schema named run.
+// The schemas of the gateway's link.
+const (
+	linkDiscovery  = "link-discovery.schema.json"
+	linkRunRequest = "link-run-request.schema.json"
+	linkRunAnswer  = "link-run-answer.schema.json"
+	linkReload     = "link-reload-answer.schema.json"
+	linkBatch      = "link-batch.schema.json"
+	linkRefusal    = "link-refusal.schema.json"
+)
+
+// namedSchema returns the longest schema name, without .schema.json, that the file's
+// base name starts with followed by a dash or by .json, or "" when none does.
+func namedSchema(s map[string]*jsonschema.Schema, f string) string {
+	kind := ""
+	base := path.Base(f)
+	for name := range s {
+		prefix := strings.TrimSuffix(name, ".schema.json")
+		if (strings.HasPrefix(base, prefix+"-") || strings.HasPrefix(base, prefix+".")) &&
+			len(prefix) > len(kind) {
+			kind = prefix
+		}
+	}
+	return kind
+}
+
+// TestLinkFixturesValidate pins that every document under fixtures/link passes the schema
+// of the gateway's link its name starts with: the discovery of the local link and of a
+// separate gateway, each with its proxy address, a run request without a wall, one with a
+// wall, the names it passes and its images, and one with a narrowing as well, a run
+// answer with a wall, its placeholders, reserved names, image, applied and certificate
+// authority, one with a wall and an image but no certificate authority, one without a
+// wall and one without a policy, a reload answer with and without a policy, a batch of a
+// session's events without sequence, a batch of a run.refused with a session's own code,
+// a batch of a run.exited with timeout, and refusals from the gateway, two internal ones
+// among them, one whose message spans lines, and from apiary.
+func TestLinkFixturesValidate(t *testing.T) {
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
+	seen := map[string]bool{}
+	for _, f := range files(t, "fixtures/link") {
+		kind := namedSchema(s, f)
+		schema, ok := s[kind+".schema.json"]
+		if !ok {
+			t.Errorf("%s: no schema named by the prefix", f)
+			continue
+		}
+		seen[kind] = true
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	for name := range s {
+		if kind := strings.TrimSuffix(name, ".schema.json"); !seen[kind] {
+			t.Errorf("fixtures/link holds no %s", kind)
+		}
+	}
+}
+
+// TestLinkBatchRefusedCodesAreTheSessions pins the codes a link batch's
+// dev.qory.run.refused may carry to the codes the session decides itself: every code of
+// link-batch.schema.json's enum is one refusal.Decides reports, and every code of
+// run.refused.schema.json that refusal.Decides reports is in it.
+func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
+	read := func(name string) map[string]any {
+		b, err := fs.ReadFile(contracts.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	// at follows the keys from v, and returns nil where one is missing.
+	at := func(v any, keys ...string) any {
+		for _, k := range keys {
+			m, _ := v.(map[string]any)
+			v = m[k]
+		}
+		return v
+	}
+	var link []any
+	parts, _ := at(read(linkBatch), "$defs", "event", "allOf").([]any)
+	for _, part := range parts {
+		if at(part, "if", "properties", "type", "const") == "dev.qory.run.refused" {
+			link, _ = at(part, "then", "properties", "data", "properties", "code", "enum").([]any)
+		}
+	}
+	if len(link) == 0 {
+		t.Fatal("link-batch.schema.json holds no code enum for dev.qory.run.refused")
+	}
+	allowed := map[string]bool{}
+	for _, c := range link {
+		allowed[c.(string)] = true
+		if !refusal.Decides(c.(string)) {
+			t.Errorf("a link batch's run.refused allows %s, which the session does not decide", c)
+		}
+	}
+	all, _ := at(read("events/run.refused.schema.json"), "properties", "code", "enum").([]any)
+	for _, c := range all {
+		if refusal.Decides(c.(string)) && !allowed[c.(string)] {
+			t.Errorf("a link batch's run.refused does not allow %s, which the session decides", c)
+		}
+	}
+}
+
+// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
+// schema its name starts with: a policy that widens, a server without its access key id
+// or its pin or with a secret, a configuration without events, a ping whose interval is
+// over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
+// with an unknown one, opened by a session without its command or by a gateway with one,
+// a run.exited with an unknown reason, with quiet and no quiet_seconds or with
+// quiet_seconds and another reason, a descriptor with an expression, a link run request
+// without wall, whose run id is not lower-case or whose narrowing holds a member it does
+// not define, that passes a value with a name or whose image has no reference, a link run
+// answer without its proxy secret or applied or whose image has no reference, a link
+// reload answer with the proxy secret or the certificate authority or whose applied holds
+// variables, a link batch whose event carries a sequence, that holds a ping or a
+// run.egress, a run.started a gateway opened, a run.exited with a reason other than
+// timeout, or a run.refused with a gateway's code, run_closed, another code of the
+// server's or a name of the form <member>=<value>, a link discovery that lists a node or
+// has no heartbeat interval or proxy, a link refusal without from or with a control
+// character other than tab and newline in its message, C0, DEL or C1, and run credentials
+// with alg none or HS256, without an audience, with a label of claims and no join, a key
+// without its file, a plain http issuer, a run_key from a claim other than sub, or a
+// member the schema does not define. The longest schema name the file name starts with is
+// the schema, so run-configuration-variable-value-not-string is held to the run
+// configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
-		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json")
+		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
+		"run-credentials.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
-		kind := ""
-		for name := range s {
-			prefix := strings.TrimSuffix(name, ".schema.json")
-			if strings.HasPrefix(path.Base(f), prefix+"-") && len(prefix) > len(kind) {
-				kind = prefix
-			}
-		}
+		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]
 		if !ok {
 			t.Errorf("%s: no schema named by the prefix", f)
@@ -156,7 +293,10 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // TestRecordedRunValidates pins the recorded run directory: every line of events.jsonl
 // is an event of the contract, the sequence starts at one and is contiguous, every event
 // names the same run in source and subject, the run starts with ping or run.started and
-// ends with run.exited, and output.log is the concatenation of the run.log chunks.
+// ends with run.exited, and output.log is the concatenation of the run.log chunks. What
+// the schema cannot state, since run.exited does not contain opened_by, is pinned here: a
+// session's run.exited contains state and exit_code, and a run a gateway opened has no
+// process, so its run.exited contains neither and neither output nor a resize is recorded.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -178,6 +318,7 @@ func TestRecordedRunValidates(t *testing.T) {
 			t.Fatalf("%s: no events", dir)
 		}
 		var log []byte
+		openedBy := ""
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -190,6 +331,21 @@ func TestRecordedRunValidates(t *testing.T) {
 			if m["subject"] != run.Name() || m["source"] != "urn:qory:run:"+run.Name() {
 				t.Errorf("%s: line %d: subject %v and source %v do not name the directory",
 					dir, i+1, m["subject"], m["source"])
+			}
+			typ, _ := m["type"].(string)
+			d, _ := m["data"].(map[string]any)
+			switch {
+			case typ == "dev.qory.run.started":
+				openedBy, _ = d["opened_by"].(string)
+			case typ == "dev.qory.run.exited":
+				_, state := d["state"]
+				_, code := d["exit_code"]
+				if want := openedBy == "session"; state != want || code != want {
+					t.Errorf("%s: line %d: a run opened by %q exits with state %v and exit_code %v",
+						dir, i+1, openedBy, d["state"], d["exit_code"])
+				}
+			case openedBy == "gateway" && (typ == "dev.qory.run.log" || typ == "dev.qory.run.resized"):
+				t.Errorf("%s: line %d: %s in a run a gateway opened, which has no process", dir, i+1, typ)
 			}
 			if m["type"] == "dev.qory.run.log" {
 				chunk, err := base64Decode(m["data"].(map[string]any)["bytes"].(string))
@@ -219,7 +375,7 @@ func TestRecordedRunValidates(t *testing.T) {
 	}
 }
 
-// beyondSchema marks the refused fixtures of about whose rule only the runner checks: a
+// beyondSchema marks the refused fixtures of about whose rule only Forager checks: a
 // byte limit, the 8192 bytes of details as the event contains them, two subjects with
 // the same type and ref, a url's syntax and host, a url's user name or password, and a
 // member name twice in details.
@@ -282,7 +438,7 @@ func TestAboutFixturesValidate(t *testing.T) {
 	}
 }
 
-// TestAboutFixturesAgreeWithCheckAbout holds the runner's check to the same fixtures as
+// TestAboutFixturesAgreeWithCheckAbout holds Forager's check to the same fixtures as
 // the schema: every accepted one decodes into an About that CheckAbout passes, and every
 // refused one is refused, those marked beyond the schema included. A member About has no
 // field for has nothing to decode into, so the decoding refuses it, and only it: an
@@ -349,8 +505,14 @@ func TestBatchFixturesValidate(t *testing.T) {
 // signature is the Ed25519 one under the fixture access key secret over the request
 // string, its lines the domain, the access key id and the instance id as the headers
 // contain them, the method, the target, then the timestamp on a GET or the raw body on
-// a POST, so the published signatures cannot drift from the fixtures they sign.
+// a POST, so the published signatures cannot drift from the fixtures they sign. Under
+// -update-signed it signs the batches again instead (signBatches), after a change to a
+// body; the command is updateSignedCommand.
 func TestSignedFixtures(t *testing.T) {
+	if *updateSigned {
+		signBatches(t)
+		return
+	}
 	s := compile(t, "batch.schema.json")
 	var keys struct {
 		AccessKey struct {
@@ -425,7 +587,7 @@ func TestSignedFixtures(t *testing.T) {
 				t.Errorf("%s: header %s, which the contract does not define", f, name)
 			}
 		}
-		lines := []string{"qory-request-ed25519-v1", accessKeyID, instanceID, method, target}
+		var last string
 		switch method {
 		case "POST":
 			body, ok := m["body"].(string)
@@ -447,15 +609,16 @@ func TestSignedFixtures(t *testing.T) {
 			if err := s["batch.schema.json"].Validate(batch); err != nil {
 				t.Errorf("%s: body: %v", f, err)
 			}
-			lines = append(lines, body)
+			last = body
 		case "GET":
 			if m["body"] != nil {
 				t.Errorf("%s: a GET carries no body", f)
 			}
-			lines = append(lines, value("X-Qory-Timestamp", true))
+			last = value("X-Qory-Timestamp", true)
 		}
+		request := requestString(accessKeyID, instanceID, method, target, last)
 		sig, err := base64.RawURLEncoding.Strict().DecodeString(signature)
-		valid := err == nil && ed25519.Verify(pub, []byte(strings.Join(lines, "\n")), sig)
+		valid := err == nil && ed25519.Verify(pub, []byte(request), sig)
 		// A request a receiver verifies is signed under the fixture key: every one but a
 		// header sent twice, refused before verification, and the 401s, one of which
 		// is a correct signature over a stale timestamp.
@@ -466,7 +629,8 @@ func TestSignedFixtures(t *testing.T) {
 			}
 		case status == "401":
 		case !valid:
-			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s", f, strings.Join(lines, "\n"))
+			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s\n"+
+				"after a change to a batch's body, sign the batches again: %s", f, request, updateSignedCommand)
 		}
 		if status[0] == '2' && (accessKeyID != "ak_f1xt0re000000000" || instanceID != keys.AccessKey.InstanceID) {
 			t.Errorf("%s: accepted as %s, %s; want the fixture access key and instance", f, accessKeyID, instanceID)
@@ -476,6 +640,90 @@ func TestSignedFixtures(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("no signed fixture expects %s", want)
 		}
+	}
+}
+
+// requestString is the request string a request's signature covers: the domain, the access
+// key id and the instance id as the headers contain them, the method, the target, then the
+// timestamp of a GET or the raw body of a POST, one per line.
+func requestString(accessKeyID, instanceID, method, target, last string) string {
+	return strings.Join([]string{"qory-request-ed25519-v1", accessKeyID, instanceID, method, target, last}, "\n")
+}
+
+var updateSigned = flag.Bool("update-signed", false,
+	"sign the batches under fixtures/signed again, over their bodies as they are, and write them")
+
+// updateSignedCommand signs the batches under fixtures/signed again and checks them.
+const updateSignedCommand = "go test ./contracts -run TestSignedFixtures -update-signed && " +
+	"go test ./contracts -run TestSignedFixtures"
+
+// signedWith names the batches under fixtures/signed that carry another's signature, the
+// one that one's body is signed with: batch-tampered is batch-valid with one byte of the
+// body changed after signing.
+var signedWith = map[string]string{"batch-tampered.json": "batch-valid.json"}
+
+// signatureHeader is the signature's member in a signed fixture, as the files write it.
+var signatureHeader = regexp.MustCompile(`("X-Qory-Signature-Ed25519": )"[^"]*"`)
+
+// signBatches writes the signature of every POST under fixtures/signed again: under the
+// fixture access key secret over its own request string, its access key id and instance id
+// as its headers contain them and its body as it is, or the signature of the batch that
+// signedWith names. A GET is left as it is: its signature covers a timestamp and no body,
+// and one of them is wrong on purpose. The files are read from and written to the source
+// directory, so the embedded copy this test binary holds is the old one; the command run
+// again without -update-signed checks the new ones.
+func signBatches(t *testing.T) {
+	priv := loadKeys(t).accessKey(t)
+	dir := path.Join("forager", contracts.Version)
+	source := func(f string) ([]byte, map[string]any) {
+		b, err := os.ReadFile(path.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := contracts.Decode(f, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ := doc.(map[string]any)
+		return b, m
+	}
+	signature := map[string]string{}
+	for _, f := range files(t, "fixtures/signed") {
+		_, m := source(f)
+		if m["method"] != "POST" || signedWith[path.Base(f)] != "" {
+			continue
+		}
+		headers, _ := m["headers"].(map[string]any)
+		accessKeyID, _ := headers["X-Qory-Access-Key-Id"].(string)
+		instanceID, _ := headers["X-Qory-Instance-Id"].(string)
+		target, _ := m["target"].(string)
+		body, _ := m["body"].(string)
+		sig := ed25519.Sign(priv, []byte(requestString(accessKeyID, instanceID, "POST", target, body)))
+		signature[path.Base(f)] = base64.RawURLEncoding.EncodeToString(sig)
+	}
+	for _, f := range files(t, "fixtures/signed") {
+		sig, ok := signature[path.Base(f)]
+		if from := signedWith[path.Base(f)]; from != "" {
+			sig, ok = signature[from]
+			if !ok {
+				t.Fatalf("%s carries the signature of %s, which is no signed batch", f, from)
+			}
+		}
+		if !ok {
+			continue
+		}
+		b, _ := source(f)
+		if n := len(signatureHeader.FindAll(b, -1)); n != 1 {
+			t.Fatalf("%s: %d X-Qory-Signature-Ed25519 members; want one", f, n)
+		}
+		out := signatureHeader.ReplaceAll(b, []byte(`${1}"`+sig+`"`))
+		if string(out) == string(b) {
+			continue
+		}
+		if err := os.WriteFile(path.Join(dir, f), out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: signed again", f)
 	}
 }
 

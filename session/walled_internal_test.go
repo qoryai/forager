@@ -13,7 +13,7 @@ func TestTheRegistryIsAbsolute(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "state")
 	t.Setenv("HOME", "home")
 	dir, err := walledDir()
-	want, _ := filepath.Abs(filepath.Join("home", ".local", "state", "qory-runner", "walled"))
+	want, _ := filepath.Abs(filepath.Join("home", ".local", "state", "qory-forager", "walled"))
 	if err != nil || dir != want {
 		t.Errorf("the registry is %q, %v; want %q", dir, err, want)
 	}

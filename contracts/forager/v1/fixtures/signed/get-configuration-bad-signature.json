@@ -1,0 +1,17 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1700000000",
+    "X-Qory-Signature-Ed25519": "fwfeWwJoGgwz5Z3H6IZo-JgyCfYne5SnWnSXapaKFPxIhqrRjCKrSiYPuW1IEBfrhJH9HhbnQKVNw5Jn8bqwDg"
+  },
+  "body": null,
+  "expect": 401,
+  "expect_code": "unauthorized",
+  "note": "Signed over the request string with a line feed after the timestamp; the contract's string ends at the timestamp. A receiver that appends one accepts this and is wrong. Every 401 is unsigned."
+}

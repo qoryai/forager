@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
+  "title": "dev.qory.run.policy_applied",
+  "description": "The policy the run is pinned to, as read before the runtime started, with where it came from, and the variables the agent's process received. Emitted once at the start, and again at the sequence where a new run configuration from the server takes effect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "allow", "source"],
+  "properties": {
+    "mode": {"type": "string", "enum": ["observe", "enforce"]},
+    "allow": {"description": "The allow list in force: the policy's entries. When the node's policy narrows a server's, the hosts both allow: under enforce on both sides each side's entries the other side's list covers, each once; under enforce on one side that side's; else the server's. The hosts the harness declared do not narrow it.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "deny": {"description": "The deny list in force: the policy's entries, each denied by name in either mode, and when the node's policy narrows a server's, both sides' entries, the server's first. Absent means an empty list.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "source": {"description": "config when a policy document is passed to Forager; fetched when the policy is the security_policy of a run configuration the server returned, narrowed by the node's policy when there is one; none when there was neither and the gateway observes everything. With config or none, url and run_configuration are present when the server returned a run configuration without a security_policy.", "type": "string", "enum": ["none", "config", "fetched"]},
+    "url": {"description": "The URL the run configuration was fetched from, without its query, when the server returned one.", "type": "string", "format": "uri", "minLength": 1},
+    "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. Forager's own.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when the server returned one. The server's own and opaque: Forager never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+    "paths": {"description": "The policy's path rules, by host, when it has any: the server's, when the policy is fetched; node_policy contains the node's.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "credentials": {
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: one entry per use, where each goes, how, and the argument the policy passed. Never a secret.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "hosts", "scheme"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the secret is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
+          "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
+          "paths": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "tools": {
+      "description": "The tools the run reaches, started before the runtime: each one's name, the argument the policy passed and the hosts it serves. Fixed for the run: every further policy_applied repeats them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "hosts"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "argument": {"description": "The argument the policy's tools entry passed, such as the repository the tool is started for. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
+          "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "node_policy": {
+      "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it: the record shows both sides of every path rule.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest"],
+      "properties": {
+        "digest": {"description": "sha256= and the lower-case hex SHA-256 of the RFC 8785 serialisation of the node's policy document, the policy.schema.json document the command passes.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+        "paths": {"description": "The node's path rules, by host, when it has any. A request to a host either side lists must match an entry of each side that lists it.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
+      }
+    },
+    "variables": {
+      "description": "The run's variables by name, never a value: each name, the source whose value the run applies, and the values that lost, sorted by name. A name is listed when the server, the run, the machine or the harness's defaults set it, and when the built-in deny list leaves out a value the harness computed. A fixed name, one Forager, the wall, the runtime's preparation, a placeholder or the harness's computed values set, is listed only when it won over one of those sources, and a name of the environment the run inherits only when one of those sources set it too, so the inherited environment and Forager's own names do not fill every record. Fixed when the run starts: every further policy_applied repeats it.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "lost"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+          "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a receiver shows a name it does not know as it is. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
+          "lost": {
+            "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none. An open list, as from is.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from", "why"],
+              "properties": {
+                "from": {"$ref": "#/$defs/word"},
+                "why": {"$ref": "#/$defs/word"}
+              }
+            }
+          }
+        },
+        "if": {"not": {"required": ["from"]}},
+        "then": {"properties": {"lost": {"minItems": 1}}}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"source": {"const": "fetched"}}},
+      "then": {"required": ["url", "digest", "run_configuration"]}
+    },
+    {
+      "if": {"properties": {"source": {"const": "config"}}},
+      "then": {"required": ["digest"]}
+    },
+    {
+      "if": {"properties": {"source": {"const": "none"}}},
+      "then": {"not": {"required": ["digest"]}}
+    },
+    {
+      "if": {"anyOf": [{"required": ["url"]}, {"required": ["run_configuration"]}]},
+      "then": {"required": ["url", "run_configuration"]}
+    },
+    {
+      "if": {"required": ["node_policy"]},
+      "then": {"properties": {"source": {"const": "fetched"}}}
+    }
+  ],
+  "$defs": {
+    "word": {"type": "string", "pattern": "^[a-z][a-z_]{0,31}$"}
+  }
+}

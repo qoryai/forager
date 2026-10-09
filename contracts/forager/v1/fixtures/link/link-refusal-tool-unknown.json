@@ -1,0 +1,8 @@
+{
+  "error": "tool_unknown",
+  "names": [
+    "files"
+  ],
+  "message": "the policy selects the tool \"files\", which this machine does not define: tool_unknown: files",
+  "from": "gateway"
+}

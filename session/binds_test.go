@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // refusalOf is the refusal with the code a run returned, or fails the test.
@@ -39,7 +39,7 @@ func mkdirs(t *testing.T, dirs ...string) string {
 // walledSpec is a walled run of the fake runtime behind an open wall.
 func walledSpec(t *testing.T, w wall.Wall) session.Spec {
 	t.Helper()
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	return sp
 }
@@ -174,10 +174,10 @@ func TestNestedMountsOfTwoModesAreNoRun(t *testing.T) {
 	}
 }
 
-// TestTheRunsDirectoryIsOneOfTheRunnersFiles pins that a walled run's mount, or its
+// TestTheRunsDirectoryIsOneOfTheForagersFiles pins that a walled run's mount, or its
 // workspace, that is, holds or lies inside the runs directory is no run, the default
 // one inside the workspace included, and that a run without a wall keeps its default.
-func TestTheRunsDirectoryIsOneOfTheRunnersFiles(t *testing.T) {
+func TestTheRunsDirectoryIsOneOfTheForagersFiles(t *testing.T) {
 	sp := walledSpec(t, &openWall{})
 	parent := filepath.Dir(sp.RunsDir)
 	sp.Mounts = []wall.Mount{{Path: parent + "/"}}
@@ -197,7 +197,7 @@ func TestTheRunsDirectoryIsOneOfTheRunnersFiles(t *testing.T) {
 		t.Errorf("names %q", r.Names)
 	}
 
-	sp = spec(t, nil, "FAKE_EXIT=0")
+	sp = spec(t, "FAKE_EXIT=0")
 	sp.RunsDir = ""
 	res, err := session.Run(context.Background(), sp)
 	if err != nil || res.Dir != filepath.Join(sp.Dir, ".qory", "runs", res.RunID) {
@@ -205,25 +205,25 @@ func TestTheRunsDirectoryIsOneOfTheRunnersFiles(t *testing.T) {
 	}
 }
 
-// TestTheRegistryIsOneOfTheRunnersFiles pins that a mount of the registry of walled
+// TestTheRegistryIsOneOfTheForagersFiles pins that a mount of the registry of walled
 // runs, or of a directory above it, is no run.
-func TestTheRegistryIsOneOfTheRunnersFiles(t *testing.T) {
+func TestTheRegistryIsOneOfTheForagersFiles(t *testing.T) {
 	reg := registry(t)
 	for _, mount := range []string{reg, filepath.Dir(reg)} {
 		sp := walledSpec(t, &openWall{})
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		r := mountRefusal(t, runErr(sp))
 		if want := []string{mount, reg}; !slices.Equal(r.Names, want) ||
-			!strings.Contains(r.Detail, "where the runner lists the walled runs still going") {
+			!strings.Contains(r.Detail, "where Forager lists the walled runs still going") {
 			t.Errorf("names %q, detail %q", r.Names, r.Detail)
 		}
 	}
 }
 
-// TestALinkedRunnerFileIsKeptAsAPattern pins that a runner file passed as a pattern of
+// TestALinkedForagerFileIsKeptAsAPattern pins that a Forager file passed as a pattern of
 // one name, the way a caller keeps a link from being replaced, is refused by the
 // mount of its directory, with the pattern as passed as the refusal's second name.
-func TestALinkedRunnerFileIsKeptAsAPattern(t *testing.T) {
+func TestALinkedForagerFileIsKeptAsAPattern(t *testing.T) {
 	dir := mkdirs(t, filepath.Join(t.TempDir(), "conf"))
 	target := filepath.Join(t.TempDir(), "x.yaml")
 	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
@@ -235,7 +235,7 @@ func TestALinkedRunnerFileIsKeptAsAPattern(t *testing.T) {
 	pattern := dir + "/[x].yaml"
 	for _, mount := range []string{dir, filepath.Dir(dir)} {
 		sp := walledSpec(t, &openWall{})
-		sp.RunnerFiles = []string{pattern}
+		sp.ForagerFiles = []string{pattern}
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		r := mountRefusal(t, runErr(sp))
 		if r.Names[0] != mount || r.Names[1] != pattern {
@@ -251,7 +251,7 @@ func registry(t *testing.T) string {
 	if state == "" {
 		t.Fatal("the tests' XDG_STATE_HOME is not set")
 	}
-	return filepath.Join(state, "qory-runner", "walled")
+	return filepath.Join(state, "qory-forager", "walled")
 }
 
 // holdingWall is an open wall whose Prepare waits until it is released, so its run is
@@ -474,8 +474,8 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 	}
 }
 
-// TestAStaleEntryIsRemoved pins that an entry no runner holds, that of a run whose
-// runner died and whose engine holds no container of it, decides nothing and is
+// TestAStaleEntryIsRemoved pins that an entry no session holds, that of a run whose
+// session died and whose engine holds no container of it, decides nothing and is
 // removed.
 func TestAStaleEntryIsRemoved(t *testing.T) {
 	root := t.TempDir()
@@ -542,7 +542,7 @@ func TestRunsThatStartTogetherAreCheckedInTurn(t *testing.T) {
 	}
 }
 
-// TestARegistryOthersWriteIsRefused pins that the runner uses its registry only while
+// TestARegistryOthersWriteIsRefused pins that the session uses its registry only while
 // it is a directory of this user's that no one else writes.
 func TestARegistryOthersWriteIsRefused(t *testing.T) {
 	reg := registry(t)

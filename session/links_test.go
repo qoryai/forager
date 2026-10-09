@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/session"
-	"github.com/qoryai/runner/wall"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
-// entry is a path as the runner looks its name up: in its parent, resolved.
+// entry is a path as Forager looks its name up: in its parent, resolved.
 func entry(t *testing.T, p string) string {
 	t.Helper()
 	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
@@ -26,8 +26,8 @@ func entry(t *testing.T, p string) string {
 	return filepath.Join(parent, filepath.Base(p))
 }
 
-// link makes a symbolic link at at to to.
-func link(t *testing.T, to, at string) {
+// symlink makes a symbolic link at at to to.
+func symlink(t *testing.T, to, at string) {
 	t.Helper()
 	if err := os.Symlink(to, at); err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func link(t *testing.T, to, at string) {
 func TestAPlaceReachedThroughAnotherRunsBindIsNoRun(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	out := filepath.Join(root, "out")
-	link(t, outside, out)
+	symlink(t, outside, out)
 	first, _ := hold(t, []wall.Mount{{Path: root}}, root)
 	for _, mounts := range [][]wall.Mount{{{Path: out}}, nil} {
 		sp := walledSpec(t, &openWall{})
@@ -70,7 +70,7 @@ func TestAPlaceReachedThroughAnotherRunsBindIsNoRun(t *testing.T) {
 func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 	p, elsewhere := t.TempDir(), t.TempDir()
 	l := filepath.Join(p, "link")
-	link(t, elsewhere, l)
+	symlink(t, elsewhere, l)
 	first, _ := hold(t, nil, l)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: p}}, p
@@ -107,7 +107,7 @@ func TestAPlaceThroughALinkInAWritablePlaceIsNoRun(t *testing.T) {
 	root := t.TempDir()
 	agents := mkdirs(t, filepath.Join(t.TempDir(), "Library", "LaunchAgents"))
 	out := filepath.Join(root, "out")
-	link(t, agents, out)
+	symlink(t, agents, out)
 	for _, readOnly := range []bool{false, true} {
 		sp := walledSpec(t, &openWall{})
 		sp.Mounts = []wall.Mount{{Path: root}, {Path: out, ReadOnly: readOnly}}
@@ -122,7 +122,7 @@ func TestAPlaceThroughALinkInAWritablePlaceIsNoRun(t *testing.T) {
 func TestAWorkspaceThroughALinkInItsOwnRootIsNoRun(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	ws := filepath.Join(w, "ws")
-	link(t, outside, ws)
+	symlink(t, outside, ws)
 	hold(t, []wall.Mount{{Path: w}}, w)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}}, ws
@@ -144,19 +144,19 @@ func TestTheLinkNamedIsTheOneThatLeadsOut(t *testing.T) {
 	}
 
 	deep := filepath.Join(mkdirs(t, filepath.Join(w, "a")), "l")
-	link(t, x, deep)
+	symlink(t, x, deep)
 	place := filepath.Join(deep, "c")
 	throughLink(t, run(place), place, deep, w)
 
 	d := mkdirs(t, filepath.Join(w, "d"))
 	l1, l2 := filepath.Join(w, "l1"), filepath.Join(d, "l2")
-	link(t, d, l1)
-	link(t, x, l2)
+	symlink(t, d, l1)
+	symlink(t, x, l2)
 	place = filepath.Join(l1, "l2")
 	throughLink(t, run(place), place, l2, w)
 
 	up := filepath.Join(w, "up")
-	link(t, "a/../../x", up)
+	symlink(t, "a/../../x", up)
 	throughLink(t, run(up), up, up, w)
 }
 
@@ -167,7 +167,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 	w := t.TempDir()
 	v2 := mkdirs(t, filepath.Join(w, "v2"))
 	cur := filepath.Join(w, "current")
-	link(t, v2, cur)
+	symlink(t, v2, cur)
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: cur}}, cur
@@ -187,7 +187,7 @@ func TestALinkThatLeadsBackIntoItsPlaceIsReachedThroughIt(t *testing.T) {
 func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 	ws, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
-	link(t, outside, home)
+	symlink(t, outside, home)
 	o := &openWall{}
 	sp := walledSpec(t, o)
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: ws}, {Path: home, ReadOnly: true}}, ws
@@ -202,13 +202,13 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 	}
 }
 
-// TestALinkToTheRunnersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
-// writable place to a runs directory: it is one of the runner's files, as every place
+// TestALinkToTheForagersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
+// writable place to a runs directory: it is one of Forager's files, as every place
 // that resolves to one is.
-func TestALinkToTheRunnersFilesInsideAPlaceIsTheirs(t *testing.T) {
+func TestALinkToTheForagersFilesInsideAPlaceIsTheirs(t *testing.T) {
 	root, runs := t.TempDir(), t.TempDir()
 	to := filepath.Join(root, "records")
-	link(t, runs, to)
+	symlink(t, runs, to)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: root}, {Path: to}}, root, runs
 	if r := mountRefusal(t, runErr(sp)); !slices.Equal(r.Names, []string{to, runs}) {
@@ -224,19 +224,19 @@ func TestAChainOfLinkedPlacesIsNoRun(t *testing.T) {
 	mkdirs(t, filepath.Join(e, "ws"))
 	hold(t, []wall.Mount{{Path: e}}, e)
 	l := filepath.Join(w, "link")
-	link(t, e, l)
+	symlink(t, e, l)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: l}}, filepath.Join(e, "ws")
 	throughLink(t, runErr(sp), l, l, w)
 }
 
 // TestARunsDirectoryThroughAnotherRunsBindIsNoRun pins a runs directory that is a link
-// inside another walled run's writable bind: refused before the runner writes the
+// inside another walled run's writable bind: refused before the session writes the
 // record through it, with the runs directory exactly as passed as the first name.
 func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 	w, target := t.TempDir(), t.TempDir()
 	runs := filepath.Join(w, "runs")
-	link(t, target, runs)
+	symlink(t, target, runs)
 	first, _ := hold(t, []wall.Mount{{Path: w}}, w)
 	sp := walledSpec(t, &openWall{})
 	sp.RunsDir = runs + "/"
@@ -250,7 +250,7 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 		t.Errorf("detail %q", r.Detail)
 	}
 	if entries, _ := os.ReadDir(target); len(entries) != 0 {
-		t.Errorf("the runner wrote through the link: %v", entries)
+		t.Errorf("the session wrote through the link: %v", entries)
 	}
 
 	// A runs directory inside the other run's bind, by its path, written with a
@@ -266,17 +266,17 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 
 // TestAPlaceThroughALinkInAWritablePlaceOfItsOwn pins one run whose read-only place is
 // a link inside its own writable one: mount_through_link, as a writable one is. A runs
-// directory that is such a link is mount_contains_runner_files.
+// directory that is such a link is mount_contains_forager_files.
 func TestAPlaceThroughALinkInAWritablePlaceOfItsOwn(t *testing.T) {
 	w, outside := t.TempDir(), t.TempDir()
 	home := filepath.Join(w, "home")
-	link(t, outside, home)
+	symlink(t, outside, home)
 	sp := walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: home, ReadOnly: true}}, w
 	throughLink(t, runErr(sp), home, home, w)
 
 	runs := filepath.Join(w, "runs")
-	link(t, t.TempDir(), runs)
+	symlink(t, t.TempDir(), runs)
 	sp = walledSpec(t, &openWall{})
 	sp.Mounts, sp.Dir, sp.RunsDir = []wall.Mount{{Path: w}}, w, runs
 	r := mountRefusal(t, runErr(sp))
@@ -326,7 +326,7 @@ func (w *repointingWall) Prepare(
 func TestALinkPointedElsewhereBeforeTheWrapFailsTheRun(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
 	ws := filepath.Join(t.TempDir(), "ws")
-	link(t, a, ws)
+	symlink(t, a, ws)
 	w := &repointingWall{link: ws, to: b}
 	sp := walledSpec(t, w)
 	sp.Dir = ws
@@ -392,8 +392,8 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 		t.Fatalf("the first run ended: %+v, %v", s.res, s.err)
 	}
 	for _, c := range []struct{ mount, name, what string }{
-		{filepath.Dir(helper), helper, "the runner's helper "},
-		{dir, dir, "the runner's directory "},
+		{filepath.Dir(helper), helper, "Forager's helper "},
+		{dir, dir, "Forager's directory "},
 	} {
 		other := walledSpec(t, &openWall{})
 		other.Mounts = []wall.Mount{{Path: c.mount}}
@@ -417,9 +417,9 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 		mine := &bindingWall{binds: []wall.Bind{b}}
 		sp := walledSpec(t, mine)
 		err := runErr(sp)
-		what := "the runner's directory "
+		what := "Forager's directory "
 		if b.Helper {
-			what = "the runner's helper "
+			what = "Forager's helper "
 		}
 		want := what + b.Path + " lies inside the writable bind " + h + " of the walled run " +
 			first.RunID + ", which is still going: a walled agent of that run can change it"
@@ -470,7 +470,7 @@ func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
 	other := walledSpec(t, &openWall{})
 	other.Mounts = []wall.Mount{{Path: h}}
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
-	want := "the mount " + h + " (writable) contains the runner's helper " + helper +
+	want := "the mount " + h + " (writable) contains Forager's helper " + helper +
 		" of the walled run " + w.id +
 		", which is still going: this run's agent could change it"
 	if !slices.Equal(r.Names, []string{h, w.id, helper}) || r.Detail != want {
@@ -501,7 +501,7 @@ func TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun(t *testing.T) {
 	other := walledSpec(t, &openWall{})
 	other.Mounts = []wall.Mount{{Path: sub, ReadOnly: true}}
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
-	want := "the mount " + sub + " (read-only) lies inside the runner's directory " + dir +
+	want := "the mount " + sub + " (read-only) lies inside Forager's directory " + dir +
 		" of the walled run " + w.id + ", which is still going: a walled agent of that " +
 		"run can change it"
 	if !slices.Equal(r.Names, []string{sub, w.id, dir}) || r.Detail != want {
@@ -543,7 +543,7 @@ func TestAnotherRunsRunDirectoryIsItsAlone(t *testing.T) {
 		if !slices.Equal(r.Names, []string{c.mount, first.RunID, first.RunsDir}) ||
 			!strings.Contains(r.Detail, "(read-only)"+c.how+"the run directory ") ||
 			!strings.HasSuffix(r.Detail,
-				"which is still going: a run directory is its runner's alone") {
+				"which is still going: a run directory is its session's alone") {
 			t.Errorf("names %q, detail %q", r.Names, r.Detail)
 		}
 	}

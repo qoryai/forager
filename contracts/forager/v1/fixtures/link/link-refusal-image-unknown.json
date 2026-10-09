@@ -1,0 +1,8 @@
+{
+  "error": "image_unknown",
+  "names": [
+    "with-gpu"
+  ],
+  "message": "the policy selects the image \"with-gpu\", which this machine does not define: image_unknown: with-gpu",
+  "from": "gateway"
+}

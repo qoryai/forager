@@ -1,0 +1,9 @@
+{
+  "error": "wall_required",
+  "names": [
+    "credentials",
+    "image=base"
+  ],
+  "message": "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them",
+  "from": "gateway"
+}
