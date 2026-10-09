@@ -650,9 +650,10 @@ func TestASeparateGatewayRefusesARunDifferentFromItsCredential(t *testing.T) {
 }
 
 // TestASeparateGatewaysCredentialRefusalsReachTheSession pins run_credential_refused
-// end to end: a run credential no pinned key signed is refused, and so is a run key
-// that already had its run at the gateway, each the gateway's 401 with the text
-// qory gives, word for word, and the run never starts.
+// end to end: a run credential no pinned key signed is the gateway's 401 with the text
+// qory gives, word for word, and the run never starts. The gateway tracks run keys and
+// does not require them to be unique: a session of a run key whose run ended opens a
+// run of its own.
 func TestASeparateGatewaysCredentialRefusalsReachTheSession(t *testing.T) {
 	s := startSeparate(t)
 	forged := mintCredential(sepOtherKey(), "rk-0001", time.Now().Add(time.Hour))
@@ -665,12 +666,11 @@ func TestASeparateGatewaysCredentialRefusalsReachTheSession(t *testing.T) {
 	if _, err := session.Run(context.Background(), newSepRun(t, s.remote(fixedCredential(cred))).sp); err != nil {
 		t.Fatal(err)
 	}
-	// The same run key again, as a retry of the session with a new run id.
-	ref = refusedRun(t, newSepRun(t, s.remote(fixedCredential(cred))))
-	if ref.Code != refusals.RunCredentialRefused || ref.Status != 401 || ref.Text != runcredential.ErrRefused.Error() {
-		t.Errorf("a run key that had its run: %#v", ref)
+	// The same run key again, a session with a new run id: a run of its own.
+	if _, err := session.Run(context.Background(), newSepRun(t, s.remote(fixedCredential(cred))).sp); err != nil {
+		t.Errorf("a run key whose run ended: %v", err)
 	}
-	if runs := s.runs(); len(runs) != 1 {
+	if runs := s.runs(); len(runs) != 2 {
 		t.Errorf("the gateway's runs %v", runs)
 	}
 	s.noSecretInReports(t, forged, cred)

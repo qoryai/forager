@@ -80,6 +80,11 @@ type proxyLogin interface {
 // opened, or the gateway is closing.
 var errUnserved = errors.New("no run could serve the connection")
 
+// errNotOpened is a run of a client with no session that failed to open without a
+// refusal's code: the connection gets the 503 of [proxyNotOpened], and the next one
+// opens anew.
+var errNotOpened = errors.New("the gateway could not open the run")
+
 // refuseAll is the seam of a gateway that verifies no run credential yet: it refuses
 // every one, so nothing opens on the one address without a verifier.
 type refuseAll struct{}
@@ -189,6 +194,14 @@ const proxyRefusedText = "a valid run credential is required as the proxy passwo
 
 // proxyRefused is the answer to a proxy request whose login no run accepts.
 var proxyRefused = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"qory\"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(proxyRefusedText)) + "\r\nConnection: close\r\n\r\n" + proxyRefusedText
+
+// proxyNotOpenedText is what a client with no session reads when its run failed to
+// open without a refusal's code.
+const proxyNotOpenedText = "the gateway could not open the run; try again"
+
+// proxyNotOpened is the answer to a proxy request whose run failed to open without a
+// refusal's code: nothing spent, so the client may try again.
+var proxyNotOpened = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(proxyNotOpenedText)) + "\r\nConnection: close\r\n\r\n" + proxyNotOpenedText
 
 // proxyUnserved is the answer to a proxy request accepted for a run whose proxy the
 // gateway may not serve another machine with.
@@ -376,7 +389,9 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 	first.Body = http.NoBody
 	px, track, err := s.login(first, deadline)
 	if px == nil {
-		if errors.Is(err, errUnserved) {
+		if errors.Is(err, errNotOpened) {
+			answerAndLinger(c, proxyNotOpened)
+		} else if errors.Is(err, errUnserved) {
 			answerAndLinger(c, proxyUnserved)
 		} else {
 			answerAndLinger(c, proxyRefused)

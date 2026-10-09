@@ -76,8 +76,8 @@ type Gateway struct {
 	auth      runAuth
 	login     proxyLogin
 	authority *proxy.CA
-	// ended are the run keys whose run ended at this gateway, kept in its directory;
-	// nil without Listen.
+	// ended are the run keys the gateway refuses after the issuer's end, kept in its
+	// directory; nil without Listen.
 	ended *runcredential.Ended
 	// discovery is the link's discovery answer, and discoveryDigest its digest, the
 	// X-Qory-Configuration of every answer.
@@ -91,16 +91,17 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
-	// keys are the runs on the one address by their run key, live or ended; opening
-	// the run keys whose run is opening, each closed once it opened or failed to; and
-	// endedUntil the latest exp each ended run key was kept to by this process.
-	keys       map[runKeyID]*linkRun
+	// clientRuns are the runs of clients with no session by their run key, the one each
+	// key's connections join while it is open; opening the run keys whose client's run
+	// is opening, each closed once it opened or failed to; and endedUntil the latest exp
+	// each refused run key was kept to by this process.
+	clientRuns map[runKeyID]*linkRun
 	opening    map[runKeyID]chan struct{}
 	endedUntil map[runKeyID]time.Time
 	// spent are the runs on the one address that ended and were let go of, by their run
-	// key, kept as long as a run credential of theirs may be accepted; spentErrs and
-	// the delivery hold what they came to, for Close.
-	spent     map[runKeyID]spentRun
+	// id, kept as long as a run credential of theirs may be accepted; spentErrs and the
+	// delivery hold what they came to, for Close.
+	spent     map[string]spentRun
 	spentErrs []error
 
 	closed   chan struct{}
@@ -119,7 +120,7 @@ type Gateway struct {
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen that
 // is not loopback without TLS, TLS files it cannot read or whose certificate and key do
 // not match, TLS without a Listen, a Listen without RunCredentials or without Dir,
-// where the gateway's own certificate authority and the ended run keys are kept, and
+// where the gateway's own certificate authority and the refused run keys are kept, and
 // RunCredentials whose check fails or whose files it cannot read.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cert, err := checkService(&cfg)
@@ -159,7 +160,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
 	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
-		keys: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, spent: map[runKeyID]spentRun{}}
+		clientRuns: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
@@ -179,7 +180,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			g.login = clientLogin{g}
 		}
 		// Before the server is asked anything: a gateway that cannot keep its authority
-		// or its ended run keys does not start.
+		// or its refused run keys does not start.
 		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
 			return nil, err
 		}

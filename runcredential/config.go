@@ -1,7 +1,7 @@
 // Package runcredential is the run credential of the contract, contracts/forager/v1: the
 // configuration of the issuers a gateway accepts, its checks, the verifier of a run
 // credential, the mapping of its claims to a run's labels and about.details, the client
-// of an issuer's introspection endpoint, and the ended run keys a gateway keeps.
+// of an issuer's introspection endpoint, and the run keys a gateway refuses.
 //
 // A run credential is a JWT (RFC 7519) signed as a JWS (RFC 7515) with an asymmetric
 // key, which an issuer gives one run. [Verifier.Verify] verifies it: the serialisation
@@ -11,8 +11,8 @@
 // and the labels and the details made from the claims ([Issuer.Labels],
 // [Issuer.Details]). What a session sends beside the run credential is compared with
 // them ([Compare]). An [Introspector] asks the issuer whether a run credential is still
-// active (RFC 7662), failing closed, and [Ended] keeps the run keys whose run ended, so
-// a restart does not reopen them.
+// active (RFC 7662), failing closed, and [Ended] keeps the run keys a gateway refuses
+// after the issuer's end, so a restart refuses them too.
 //
 // The functions that read claims, beside Verify, take claims a verifier has already
 // verified, and read nothing else of the request. Every failure of a run credential is

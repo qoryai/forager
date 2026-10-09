@@ -109,9 +109,13 @@ func SetIntrospector(c *Config, active func(issuer, credential string) bool, cac
 func SetKeepSpent(c *Config, d time.Duration) { c.keepSpent = d }
 
 // Held counts what g holds of its runs: the runs, the runs on the one address by run
-// key, what the ended ones it let go of left, and the run keys it kept to an exp.
+// key, what the ended ones it let go of left, and the refused run keys it kept to an
+// exp.
 func Held(g *Gateway) (runs, keys, spent, kept int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.runs), len(g.keys), len(g.spent), len(g.endedUntil)
+	return len(g.runs), len(g.clientRuns), len(g.spent), len(g.endedUntil)
 }
+
+// SetClock sets the time g refuses a run key by, in place of the system's.
+func SetClock(c *Config, now func() time.Time) { c.clock = now }

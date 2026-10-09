@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -393,59 +394,6 @@ func TestARunRequestDifferentFromItsRunCredential(t *testing.T) {
 	}
 }
 
-// TestARunKeyOpensOneRun pins a run key's one run at a gateway: a second run request
-// of a live run's run key is 401, and so is one after its run ended, and after the
-// gateway restarts on the same directory; a run_id another run has is 409 for a fresh
-// run key; and a fresh run key opens its run after each.
-func TestARunKeyOpensOneRun(t *testing.T) {
-	dir := t.TempDir()
-	s := startVerifying(t, gateway.Config{Dir: dir}, nil, 0)
-	cred := credentialFor("rk-0001")
-	r := s.openSession(t, cred, server.LinkRunRequest{})
-	refused := func(what string, s *service, credential string, req server.LinkRunRequest) {
-		t.Helper()
-		status, b := s.tryOpenWith(t, credential, req)
-		if r := refusalOf(b); status != http.StatusUnauthorized || r["error"] != "run_credential_refused" {
-			t.Errorf("%s: %d %s", what, status, b)
-		}
-	}
-	refused("the live run's run key", s, cred, server.LinkRunRequest{})
-	// The same run_id and the same run credential, as a retry after a lost answer: the
-	// run key has a run.
-	refused("a retry", s, cred, server.LinkRunRequest{RunID: r.a.RunID})
-	// A refreshed run credential of the same run key opens nothing either.
-	refused("a refreshed run credential", s, mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil), server.LinkRunRequest{})
-	other := credentialFor("rk-0002")
-	s.secrets = append(s.secrets, other)
-	if status, b := s.tryOpenWith(t, other, server.LinkRunRequest{RunID: r.a.RunID}); status != http.StatusConflict || refusalOf(b)["error"] != "run_id_used" {
-		t.Errorf("a run_id in use: %d %s", status, b)
-	}
-	if status, b := r.post(t, cred, exited(r.a.RunID)); status != http.StatusAccepted {
-		t.Fatalf("the run.exited: %d %s", status, b)
-	}
-	eventually(t, "the run's end", func() bool {
-		status, _ := r.reload(t, cred, r.a.RunID)
-		return status == http.StatusGone
-	})
-	refused("the ended run's run key", s, cred, server.LinkRunRequest{})
-	s.openSession(t, other, server.LinkRunRequest{})
-	s.close()
-	if b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile)); err != nil || !bytes.Contains(b, []byte(`"rk-0001"`)) || !bytes.Contains(b, []byte(`"rk-0002"`)) || bytes.Contains(b, []byte(cred)) {
-		t.Errorf("the ended run keys: %s %v", b, err)
-	}
-	// A restart on the same directory reopens neither: both ended, the one at its
-	// session's end, the other at the gateway's.
-	again := startVerifying(t, gateway.Config{Dir: dir}, nil, 0)
-	refused("after a restart", again, cred, server.LinkRunRequest{})
-	refused("the other after a restart", again, other, server.LinkRunRequest{})
-	// A batch or a reload of a run key with no run here is 401: no run is reached but
-	// the run credential's.
-	if status, b := (&sessionRun{s: again}).post(t, cred, heartbeat(r.a.RunID)); status != http.StatusUnauthorized {
-		t.Errorf("a batch after a restart: %d %s", status, b)
-	}
-	again.openSession(t, credentialFor("rk-0003"), server.LinkRunRequest{})
-}
-
 // TestEveryRequestOfARunCarriesItsRunCredential pins the run credential of a run's
 // later requests: a reload or a batch with the run credential of another run key, one
 // with no run or one with a run of its own, is 401, so no run id can be probed; a
@@ -470,13 +418,16 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 	if status, body := r.post(t, stranger, heartbeat(r.a.RunID)); status != http.StatusUnauthorized {
 		t.Errorf("a batch, a run key with no run: %d %s", status, body)
 	}
-	// A batch of r's events with b's run credential is b's batch with another run's
-	// events: refused, and b ends.
-	if status, body := r.post(t, other, heartbeat(r.a.RunID)); status != http.StatusBadRequest {
-		t.Errorf("a batch of another run's events: %d %s", status, body)
+	// A batch of r's events with b's run credential reaches no run: 401, and neither
+	// run ends.
+	if status, body := r.post(t, other, heartbeat(r.a.RunID)); status != http.StatusUnauthorized {
+		t.Errorf("a batch of another run key's run: %d %s", status, body)
 	}
-	status, body := b.reload(t, other, b.a.RunID)
-	gone(t, "the run whose batch was refused", status, body, "run_closed")
+	if status, body := b.reload(t, other, b.a.RunID); status != http.StatusOK {
+		t.Errorf("the run whose run credential was presented: %d %s", status, body)
+	}
+	var status int
+	var body []byte
 	// A refreshed run credential carries the run past the first's exp.
 	refreshed := mint(issuerKey(), "rk-0001", time.Now().Add(3500*time.Millisecond), nil)
 	s.secrets = append(s.secrets, refreshed)
@@ -608,8 +559,9 @@ func runsIn(t *testing.T, dir string) []string {
 // policy_applied, and the connection's egress; a second connection, with a refreshed
 // run credential of the same run key, joins the run; the gateway's own heartbeats
 // while it lives; the run ends quiet after the quiet time with no connection, its
-// run.exited with quiet_seconds and neither state nor exit_code; and its run key's run
-// credentials are 407 from then on. Nothing secret reaches the record, the server or a
+// run.exited with quiet_seconds and neither state nor exit_code; and the next
+// connection of its run key opens a new run, of a new run id and the same run_key
+// label, with its own run.started. Nothing secret reaches the record, the server or a
 // report.
 func TestARunWithNoSession(t *testing.T) {
 	o := origin(t)
@@ -660,15 +612,21 @@ func TestARunWithNoSession(t *testing.T) {
 		rec := s.record(runID)
 		return rec[len(rec)-1].Type == event.RunExited
 	})
-	resp, conn, _ := s.proxyRequest(t, "CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\nProxy-Authorization: Basic "+base64.StdEncoding.EncodeToString([]byte("anyone:"+refreshed))+"\r\n\r\n")
-	conn.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Errorf("after the end: %d", resp.StatusCode)
+	if status, _, err := get(s.clientWith(refreshed), o.URL); err != nil || status != http.StatusOK {
+		t.Errorf("after the end: %d %v", status, err)
 	}
-	if got := runsIn(t, s.dir); len(got) != 1 {
-		t.Errorf("after the end, runs %v", got)
+	after := runsIn(t, s.dir)
+	if len(after) != 2 {
+		t.Fatalf("after the end, runs %v", after)
+	}
+	next := after[0]
+	if next == runID {
+		next = after[1]
 	}
 	s.close()
+	if again := s.record(next); len(again) < 2 || again[1].Type != event.RunStarted || !sameMap(stringMap(again[1].Data["labels"]), exampleLabels("rk-0001")) {
+		t.Errorf("the new run's record %v", types(again))
+	}
 	rec := s.record(runID)
 	got := types(rec)
 	if len(got) < 6 || !slices.Equal(got[:5], []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunEgress}) || !slices.Contains(got, event.RunHeartbeat) || got[len(got)-1] != event.RunExited {
@@ -710,7 +668,9 @@ func stringMap(v any) map[string]string {
 // credential's exp with no fresher one, credential_expired, even while a connection
 // is open; and the issuer that no longer holds it active, run_ended_at_issuer, asked
 // again while the run has connections. Each run.exited has neither state nor
-// exit_code, and the run key's run credentials are 407 after it.
+// exit_code. After credential_expired, a fresh run credential of the run key opens a
+// new run; after the issuer's end, the gateway refuses the run key, 407, even for a
+// run credential the issuer holds active.
 func TestARunWithNoSessionEnds(t *testing.T) {
 	o := origin(t)
 	in := &introspection{}
@@ -772,11 +732,17 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 	if tunnelOpen(held, host) {
 		t.Error("the tunnel relays after run_ended_at_issuer")
 	}
-	for name, credential := range map[string]string{"credential_expired": mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), "run_ended_at_issuer": ending} {
-		s.secrets = append(s.secrets, credential)
-		resp, conn, _ := s.proxyRequest(t, login(credential))
+	for name, c := range map[string]struct {
+		credential string
+		want       int
+	}{
+		"credential_expired":  {mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), http.StatusOK},
+		"run_ended_at_issuer": {mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil), http.StatusProxyAuthRequired},
+	} {
+		s.secrets = append(s.secrets, c.credential)
+		resp, conn, _ := s.proxyRequest(t, login(c.credential))
 		conn.Close()
-		if resp.StatusCode != http.StatusProxyAuthRequired {
+		if resp.StatusCode != c.want {
 			t.Errorf("after %s: %d", name, resp.StatusCode)
 		}
 	}
@@ -788,7 +754,7 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 		}
 		validEvents(t, rec)
 	}
-	if got := len(runsIn(t, s.dir)); got != 2 {
+	if got := len(runsIn(t, s.dir)); got != 3 {
 		t.Errorf("%d runs", got)
 	}
 	noSecretIn(t, s.dir, expiring, ending, inactive)
@@ -963,72 +929,11 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 	}
 }
 
-// TestACrashKeepsTheRunKey pins the run key kept from the moment its run opens: a
-// gateway started on the directory of another that is still running, as after a
-// crash that left no end behind, refuses the run key of a session's live run, 401,
-// and of a client's, 407; and a session's run that fails to open after its record
-// exists keeps its run key too.
-func TestACrashKeepsTheRunKey(t *testing.T) {
-	o := origin(t)
-	host := strings.TrimPrefix(o.URL, "http://")
-	dir := t.TempDir()
-	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
-	first := startVerifying(t, gateway.Config{Dir: dir, Server: c.server()}, nil, 0)
-	session, client := credentialFor("rk-0001"), credentialFor("rk-0002")
-	r := first.openSession(t, session, server.LinkRunRequest{})
-	// A refreshed run credential keeps the run key to its later exp at once.
-	later := time.Now().Add(3 * time.Hour)
-	refreshed := mint(issuerKey(), "rk-0001", later, nil)
-	first.secrets = append(first.secrets, refreshed)
-	if status, b := r.post(t, refreshed, heartbeat(r.a.RunID)); status != http.StatusAccepted {
-		t.Fatalf("a batch with a refreshed run credential: %d %s", status, b)
-	}
-	var kept struct {
-		Ended []struct {
-			RunKey string `json:"run_key"`
-			Until  int64
-		}
-	}
-	b, _ := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
-	json.Unmarshal(b, &kept)
-	if len(kept.Ended) != 1 || kept.Ended[0].RunKey != "rk-0001" || kept.Ended[0].Until < later.Unix() {
-		t.Errorf("the ended run keys of a live run: %s", b)
-	}
-	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+client)) + "\r\n\r\n"
-	resp, tunnel, _ := first.proxyRequest(t, login)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the client's run: %d", resp.StatusCode)
-	}
-	defer tunnel.Close()
-	// The first is not closed: a crash.
-	second := startVerifying(t, gateway.Config{Dir: dir, Server: c.server()}, nil, 0)
-	second.secrets = append(second.secrets, session, client)
-	if status, b := second.tryOpenWith(t, session, server.LinkRunRequest{}); status != http.StatusUnauthorized {
-		t.Errorf("the session's run key: %d %s", status, b)
-	}
-	resp, conn, _ := second.proxyRequest(t, login)
-	conn.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Errorf("the client's run key: %d", resp.StatusCode)
-	}
-	// A run whose record exists and that fails to open keeps its run key.
-	c.serve(`{"version":1,"egress":{"mode":"bogus"}}`, 'b')
-	failing := credentialFor("rk-0003")
-	second.secrets = append(second.secrets, failing)
-	if status, b := second.tryOpenWith(t, failing, server.LinkRunRequest{}); status != http.StatusForbidden || refusalOf(b)["error"] != "run_configuration_invalid" {
-		t.Fatalf("the failing run: %d %s", status, b)
-	}
-	if status, b := second.tryOpenWith(t, failing, server.LinkRunRequest{}); status != http.StatusUnauthorized {
-		t.Errorf("the failed run's run key: %d %s", status, b)
-	}
-}
-
 // TestARunWithNoSessionThatDoesNotOpen pins a run with no session the gateway cannot
-// open: its record, and what the server receives, hold the ping and then
-// dev.qory.run.refused with the refusal's code; the client's connection is refused;
-// and the run key is ended, so a second connection with the same run credential is
-// 407 and opens no second run.
+// open. Refused with a code, its record, and what the server receives, hold the ping
+// and then dev.qory.run.refused with that code, and the connection gets today's 500;
+// failing without a code, the connection gets the 503 that says to try again. Either
+// way the next connection of the run key opens a run.
 func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -1038,15 +943,18 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	cred := credentialFor("rk-0001")
 	s.secrets = append(s.secrets, cred)
 	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+cred)) + "\r\n\r\n"
-	resp, conn, _ := s.proxyRequest(t, login)
-	conn.Close()
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusProxyAuthRequired {
-		t.Errorf("the first connection: %d", resp.StatusCode)
+	connect := func() (*http.Response, []byte) {
+		t.Helper()
+		resp, conn, _ := s.proxyRequest(t, login)
+		defer conn.Close()
+		if resp.StatusCode == http.StatusOK {
+			return resp, nil
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
 	}
-	resp, conn, _ = s.proxyRequest(t, login)
-	conn.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Errorf("the second connection: %d", resp.StatusCode)
+	if resp, _ := connect(); resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("a refusal with a code: %d", resp.StatusCode)
 	}
 	ids := runsIn(t, s.dir)
 	if len(ids) != 1 {
@@ -1066,6 +974,20 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 		}
 		return slices.Equal(got, []string{event.Ping, event.RunRefused})
 	})
+	// Without a code: the server closes the connection unanswered.
+	c.drop.Store(true)
+	resp, b := connect()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || resp.ContentLength != int64(len(b)) || string(b) != "the gateway could not open the run; try again" {
+		t.Errorf("a failure without a code: %d %v %q", resp.StatusCode, resp.Header, b)
+	}
+	c.drop.Store(false)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'b')
+	if resp, _ := connect(); resp.StatusCode != http.StatusOK {
+		t.Errorf("the next connection: %d", resp.StatusCode)
+	}
+	if got := runsIn(t, s.dir); len(got) != 3 {
+		t.Errorf("runs %v", got)
+	}
 	s.close()
 	noSecretIn(t, s.dir, cred)
 }
@@ -1102,89 +1024,11 @@ func TestNoLinkSocketWithTheOneAddress(t *testing.T) {
 	}
 }
 
-// TestARenewTheEndedRunKeysCannotKeep pins the renew that fails closed: when the ended
-// run keys cannot be kept to a refreshed run credential's later exp, the request that
-// brought it is refused, a session's 500 internal and a client's connection the
-// unanswered 500, and the run goes on to its earlier end, credential_expired.
-func TestARenewTheEndedRunKeysCannotKeep(t *testing.T) {
-	o := origin(t)
-	host := strings.TrimPrefix(o.URL, "http://")
-	dir := t.TempDir()
-	s := startVerifying(t, gateway.Config{Dir: dir, Policy: enforce127}, nil, 0)
-	// Whole seconds, as the run credential holds its exp.
-	exp := time.Unix(time.Now().Add(2*time.Second).Unix(), 0)
-	session := mint(issuerKey(), "rk-0001", exp, nil)
-	r := s.openSession(t, session, server.LinkRunRequest{})
-	client := mint(issuerKey(), "rk-0002", exp, nil)
-	s.secrets = append(s.secrets, client)
-	login := func(credential string) string {
-		return "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+credential)) + "\r\n\r\n"
-	}
-	resp, tunnel, _ := s.proxyRequest(t, login(client))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the client's run: %d", resp.StatusCode)
-	}
-	defer tunnel.Close()
-	// The ended run keys can no longer be written.
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(dir, 0o700) })
-	later := time.Now().Add(time.Hour)
-	refreshedSession, refreshedClient := mint(issuerKey(), "rk-0001", later, nil), mint(issuerKey(), "rk-0002", later, nil)
-	s.secrets = append(s.secrets, refreshedSession, refreshedClient)
-	if status, b := r.post(t, refreshedSession, heartbeat(r.a.RunID)); status != http.StatusInternalServerError || refusalOf(b)["error"] != "internal" {
-		t.Errorf("a session's refreshed run credential: %d %s", status, b)
-	}
-	resp, conn, _ := s.proxyRequest(t, login(refreshedClient))
-	conn.Close()
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("a client's refreshed run credential: %d", resp.StatusCode)
-	}
-	// Both runs end at the earlier exp.
-	eventually(t, "the session's run's end", func() bool {
-		status, b := r.reload(t, refreshedSession, r.a.RunID)
-		return status == http.StatusGone && refusalOf(b)["error"] == "credential_expired"
-	})
-	eventually(t, "the client's run's end", func() bool {
-		for _, id := range runsIn(t, dir) {
-			if id == r.a.RunID {
-				continue
-			}
-			rec := s.record(id)
-			if last := rec[len(rec)-1]; last.Type == event.RunExited && last.Data["reason"] == "credential_expired" {
-				return true
-			}
-		}
-		return false
-	})
-	if time.Now().Before(exp) {
-		t.Error("a run ended before its earlier exp")
-	}
-	var kept struct {
-		Ended []struct {
-			RunKey string `json:"run_key"`
-			Until  int64
-		}
-	}
-	b, _ := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
-	json.Unmarshal(b, &kept)
-	if len(kept.Ended) != 2 {
-		t.Fatalf("the ended run keys: %s", b)
-	}
-	for _, e := range kept.Ended {
-		if e.Until < exp.Unix() || e.Until >= later.Unix() {
-			t.Errorf("%s kept until %d", e.RunKey, e.Until)
-		}
-	}
-}
-
 // TestAGatewayLetsGoOfEndedRuns pins the bound on what a gateway holds of the runs of
-// its one address: once a run has ended, its record is flushed and its run key is kept,
-// the gateway holds only what a later request of its run key is answered with, the 410,
-// a run id not the run's still 401; a client's run likewise, its run key's connections
-// 407; and once a run credential of an ended run can no longer be accepted, nothing of
-// it is held at all.
+// its one address: once a run has ended and its record is flushed, the gateway holds
+// only what a later request of the run is answered with, the 410, a run id not the
+// run key's still 401; a client's run likewise; and once a run credential of an ended
+// run can no longer be accepted, nothing of it is held at all.
 func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -1222,21 +1066,13 @@ func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
 	if status, b := r.post(t, r.credential, heartbeat(r.a.RunID)); status != http.StatusGone {
 		t.Errorf("a batch of a run let go of: %d %s", status, b)
 	}
-	if status, b := s.tryOpenWith(t, r.credential, server.LinkRunRequest{}); status != http.StatusUnauthorized {
-		t.Errorf("its run key again: %d %s", status, b)
-	}
-	resp, conn, _ = s.proxyRequest(t, login)
-	conn.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Errorf("the client's run key again: %d", resp.StatusCode)
-	}
 	// Past their exp, the next run to end takes what they left with it.
 	time.Sleep(time.Until(exp) + 100*time.Millisecond)
 	last := s.openSession(t, credentialFor("rk-0005"), server.LinkRunRequest{})
 	last.post(t, last.credential, exited(last.a.RunID))
 	eventually(t, "what the earlier runs left let go of", func() bool {
 		runs, keys, spent, kept := gateway.Held(s.g)
-		return runs == 0 && keys == 0 && spent == 1 && kept == 1
+		return runs == 0 && keys == 0 && spent == 1 && kept == 0
 	})
 }
 
@@ -1262,6 +1098,166 @@ func TestARefusedProxyRequestIsAnsweredInFull(t *testing.T) {
 		c.Close()
 		if err != nil || resp.StatusCode != http.StatusProxyAuthRequired || string(b) != "a valid run credential is required as the proxy password" {
 			t.Fatalf("%d: %d %q %v", i, resp.StatusCode, b, err)
+		}
+	}
+}
+
+// TestARunKeyIsNotUnique pins the gateway tracking run keys without requiring them to
+// be unique: two sessions with one run key open two runs at once, each of its own run
+// id and proxy secret and the same run_key label; a run of a run key whose run ended,
+// whose run was refused, or whose run Qory Apiary closed with its 410 opens as any
+// other; and a run id another run has is still run_id_used.
+func TestARunKeyIsNotUnique(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cred := credentialFor("rk-0001")
+	a := s.openSession(t, cred, server.LinkRunRequest{})
+	b := s.openSession(t, cred, server.LinkRunRequest{})
+	if a.a.RunID == b.a.RunID || a.a.ProxySecret == b.a.ProxySecret || a.a.Labels["run_key"] != "rk-0001" || b.a.Labels["run_key"] != "rk-0001" {
+		t.Errorf("two runs of one run key: %s %s %v %v", a.a.RunID, b.a.RunID, a.a.Labels, b.a.Labels)
+	}
+	for _, r := range []*sessionRun{a, b} {
+		if status, body := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
+			t.Errorf("a reload of %s: %d %s", r.a.RunID, status, body)
+		}
+	}
+	if status, body := s.tryOpenWith(t, cred, server.LinkRunRequest{RunID: a.a.RunID}); status != http.StatusConflict || refusalOf(body)["error"] != "run_id_used" {
+		t.Errorf("a run id in use: %d %s", status, body)
+	}
+	// After a run ended.
+	if status, body := a.post(t, cred, exited(a.a.RunID)); status != http.StatusAccepted {
+		t.Fatalf("the run.exited: %d %s", status, body)
+	}
+	after := s.openSession(t, cred, server.LinkRunRequest{})
+	// After a refused run.
+	if status, body := s.tryOpenWith(t, cred, server.LinkRunRequest{Labels: map[string]string{"repository": "other/project"}}); status != http.StatusForbidden {
+		t.Errorf("a refused run: %d %s", status, body)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"bogus"}}`, 'b')
+	if status, body := s.tryOpenWith(t, cred, server.LinkRunRequest{}); status != http.StatusForbidden || refusalOf(body)["error"] != "run_configuration_invalid" {
+		t.Errorf("a run the server's configuration refuses: %d %s", status, body)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'c')
+	s.openSession(t, cred, server.LinkRunRequest{})
+	// After Qory Apiary's 410: the run ends as always, and the run key opens a new run.
+	c.closed.Store(true)
+	eventually(t, "Qory Apiary's 410", func() bool {
+		after.post(t, cred, heartbeat(after.a.RunID))
+		status, body := after.reload(t, cred, after.a.RunID)
+		return status == http.StatusGone && refusalOf(body)["from"] == "apiary"
+	})
+	c.closed.Store(false)
+	s.openSession(t, cred, server.LinkRunRequest{})
+}
+
+// TestTheIssuersEndRefusesTheRunKey pins the one end after which the gateway refuses a
+// run key: after the issuer's end, run_ended_at_issuer, a session's run request of the
+// run key is 401 and a client's connection 407, even with a run credential the issuer
+// holds active, and so after a restart on the same directory. A run credential of the
+// run key presented then is refused and extends the refusal to its own exp; the
+// refusal lapses after the latest exp presented, and then the run key opens a new run.
+func TestTheIssuersEndRefusesTheRunKey(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	dir := t.TempDir()
+	var ahead atomic.Int64
+	clock := func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }
+	in := &introspection{}
+	start := func() *service {
+		cfg := gateway.Config{Dir: dir, Policy: enforce127}
+		gateway.SetClock(&cfg, clock)
+		return startVerifying(t, cfg, in, time.Hour)
+	}
+	s := start()
+	first := credentialFor("rk-0001")
+	r := s.openSession(t, first, server.LinkRunRequest{})
+	in.end(first)
+	status, body := r.reload(t, first, r.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	login := func(credential string) string {
+		return "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+credential)) + "\r\n\r\n"
+	}
+	refused := func(what string, s *service, credential string) {
+		t.Helper()
+		if status, body := s.tryOpenWith(t, credential, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("%s, a session: %d %s", what, status, body)
+		}
+		resp, conn, _ := s.proxyRequest(t, login(credential))
+		conn.Close()
+		if resp.StatusCode != http.StatusProxyAuthRequired {
+			t.Errorf("%s, a client: %d", what, resp.StatusCode)
+		}
+	}
+	// A run credential the issuer holds active, of a later exp: refused, and the
+	// refusal extended to its exp.
+	later := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	s.secrets = append(s.secrets, later)
+	refused("an active run credential", s, later)
+	s.close()
+	again := start()
+	again.secrets = append(again.secrets, first, later)
+	refused("after a restart", again, later)
+	// Past the first exp and its leeway, the later one still holds it.
+	ahead.Store(int64(time.Hour + 10*time.Minute))
+	refused("past the first exp", again, later)
+	// Past the latest exp presented, the run key opens a new run.
+	ahead.Store(int64(2*time.Hour + 10*time.Minute))
+	again.openSession(t, later, server.LinkRunRequest{})
+	if status, _, err := get(again.clientWith(later), o.URL); err != nil || status != http.StatusOK {
+		t.Errorf("a client past the latest exp: %d %v", status, err)
+	}
+}
+
+// TestAClientsRunOfARunKey pins the client's run of a run key: at most one is open, so
+// concurrent first connections open one run and join it; and a client never joins a
+// session's run, which only its proxy secret reaches: a client of a run key whose
+// sessions' runs are open opens its own run beside them.
+func TestAClientsRunOfARunKey(t *testing.T) {
+	o := origin(t)
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, nil, 0)
+	cred := credentialFor("rk-0001")
+	session := s.openSession(t, cred, server.LinkRunRequest{})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if status, _, err := get(s.clientWith(cred), o.URL); err != nil || status != http.StatusOK {
+				t.Errorf("a first connection: %d %v", status, err)
+			}
+		}()
+	}
+	wg.Wait()
+	runs := runsIn(t, s.dir)
+	if len(runs) != 2 {
+		t.Fatalf("runs %v", runs)
+	}
+	client := runs[0]
+	if client == session.a.RunID {
+		client = runs[1]
+	}
+	if status, body := session.reload(t, cred, session.a.RunID); status != http.StatusOK {
+		t.Errorf("the session's run: %d %s", status, body)
+	}
+	s.close()
+	n := 0
+	for _, l := range s.record(client) {
+		switch l.Type {
+		case event.RunStarted:
+			if l.Data["opened_by"] != "gateway" {
+				t.Errorf("the client's run.started %v", l.Data)
+			}
+		case event.RunEgress:
+			n++
+		}
+	}
+	if n != 8 {
+		t.Errorf("%d connections in the client's run", n)
+	}
+	for _, l := range s.record(session.a.RunID) {
+		if l.Type == event.RunEgress {
+			t.Error("a client's connection in the session's run")
 		}
 	}
 }

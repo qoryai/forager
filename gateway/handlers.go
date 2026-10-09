@@ -64,8 +64,9 @@ func mediaType(r *http.Request, want string) bool {
 
 // openRun answers a run request: 400 invalid_request for a body the schema refuses and
 // for a narrowing, which the local link refuses; on the one address 401
-// run_credential_refused for a run key that already has a run here, live or ended, or
-// whose run credential the issuer no longer holds active; 409 run_id_used for a run id
+// run_credential_refused for a run key the gateway refuses after the issuer's end,
+// until the latest exp presented, or whose run credential the issuer no longer holds
+// active; 409 run_id_used for a run id
 // that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
 // that are not the run credential's; the run's refusal when it does not open; else the
@@ -100,30 +101,22 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
+	g.opens.Add(1)
+	g.mu.Unlock()
+	defer g.opens.Done()
 	if id != nil {
-		// A run key opens one run at a gateway, live or ended.
-		k := keyOf(*id)
-		if g.keyTaken(k) {
-			g.mu.Unlock()
+		// The gateway tracks run keys and does not require them to be unique: each run
+		// request opens a run of its own, but for a run key the gateway refuses after the
+		// issuer's end.
+		if g.blocked(keyOf(*id)) {
 			g.presented(*id)
 			refuseCredential(w)
 			return
 		}
-		opened := make(chan struct{})
-		g.opening[k] = opened
-		defer func() {
-			g.mu.Lock()
-			delete(g.opening, k)
-			g.mu.Unlock()
-			close(opened)
-		}()
-	}
-	g.opens.Add(1)
-	g.mu.Unlock()
-	defer g.opens.Done()
-	if id != nil && !id.isActive(r.Context()) {
-		refuseCredential(w)
-		return
+		if !id.isActive(r.Context()) {
+			refuseCredential(w)
+			return
+		}
 	}
 	var differs *accesskey.Refusal
 	if id != nil {
@@ -142,18 +135,6 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	if id != nil {
-		// The run key is the run's from here on, kept before anything of the run is
-		// made, so a crash does not reopen it: a run that fails to open keeps it too.
-		if err := g.holdKey(keyOf(*id), id.Expires); err != nil {
-			g.mu.Lock()
-			delete(g.used, req.RunID)
-			g.mu.Unlock()
-			g.report(fmt.Sprintf("a run of the issuer %s did not open, keeping its run key: %v", id.Issuer, err))
-			refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, gatewayText(codeInternal))
-			return
-		}
-	}
 	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id})
 	if err != nil {
 		if !recorded {
@@ -172,9 +153,6 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	g.runs[lr.id] = lr
-	if lr.cred != nil {
-		g.keys[lr.cred.key] = lr
-	}
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
@@ -273,52 +251,66 @@ func (g *Gateway) localRun(runID string) *linkRun {
 	return nil
 }
 
-// credentialRun is the session's run of the run credential a request on the one
-// address carried, by its run key, live or ended; nil when there is none to go on with:
-// the 410 answered for a run the gateway has let go of, when runID is empty or the
-// run's, and otherwise the 401 run_credential_refused, when the run key has no
-// session's run at this gateway, so no run is reached but the credential's.
+// credentialRun is the session's run of the run id, live or ended, when the run
+// credential a request on the one address carried is of its run key; nil when there is
+// none to go on with: the 410 answered for a run of the run key that the gateway has
+// let go of, and otherwise the 401 run_credential_refused, so no run is reached but
+// one of the run credential's run key.
 func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
 	id, ok := identityOf(r.Context())
-	var lr *linkRun
-	if ok {
-		g.mu.Lock()
-		lr = g.keys[keyOf(id)]
-		g.mu.Unlock()
+	if !ok {
+		refuseCredential(w)
+		return nil, id
 	}
-	if lr == nil && ok {
-		if sp, spent := g.spentOf(keyOf(id)); spent && (runID == "" || runID == sp.runID) {
+	k := keyOf(id)
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	if lr != nil && lr.cred != nil && !lr.client && lr.cred.key == k {
+		return lr, id
+	}
+	if lr == nil {
+		if sp, spent := g.spentOf(runID); spent && sp.key == k {
 			g.presented(id)
 			gone(w, sp.code, sp.from, sp.started)
 			return nil, id
 		}
 	}
-	if lr == nil || lr.client {
-		if ok {
-			g.presented(id)
+	g.presented(id)
+	refuseCredential(w)
+	return nil, id
+}
+
+// hasSessionRun reports whether the run key has a session's run at this gateway, live,
+// ended, or let go of.
+func (g *Gateway) hasSessionRun(k runKeyID) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, lr := range g.runs {
+		if lr.cred != nil && !lr.client && lr.cred.key == k {
+			return true
 		}
-		refuseCredential(w)
-		return nil, id
 	}
-	return lr, id
+	for _, sp := range g.spent {
+		if sp.key == k {
+			return true
+		}
+	}
+	return false
 }
 
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
-// against its ended run key; a run credential with a later exp keeps the run going
-// until then, once the ended run keys keep its run key to it, and the request is a 500
-// internal when they cannot; and an issuer that no longer holds it active ends the run,
-// run_ended_at_issuer, which is the 410. It reports whether the request goes on.
+// against its run key when the gateway refuses it; a run credential with a later exp
+// keeps the run going until then; and an issuer that no longer holds it active ends the
+// run, run_ended_at_issuer, which is the 410. It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
 		lr.g.presented(id)
 		gone(w, code, from, lr.st.Started())
 		return false
 	}
-	if err := lr.renew(id); err != nil {
-		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, gatewayText(codeInternal))
-		return false
-	}
+	lr.renew(id)
 	if !lr.stillActive(r.Context()) {
 		if code, from, ended := lr.gone(); ended {
 			gone(w, code, from, lr.st.Started())
@@ -340,10 +332,6 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 	if s.remote {
 		var id runIdentity
 		if lr, id = g.credentialRun(w, r, runID); lr == nil {
-			return
-		}
-		if lr.id != runID {
-			refuseCredential(w)
 			return
 		}
 		if !lr.admit(w, r, id) {
@@ -373,17 +361,45 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 // batch answers one link batch: 202 when its events are numbered; 410 for a run that
 // ended at the gateway; 400 invalid_request for one the link refuses, which ends the
 // run with session_lost when it names one this gateway holds. On the one address the
-// batch is of the run credential's run: 401 run_credential_refused when its run key
-// has none here, and every 400 ends that run.
+// batch's run is one of the run credential's run key: 401 run_credential_refused, before
+// the body is read, when its run key has no session's run here, and after it when the
+// batch names a run of another run key, or none.
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 		return
 	}
 	var lr *linkRun
-	var id runIdentity
 	if s.remote {
-		if lr, id = g.credentialRun(w, r, ""); lr == nil {
+		// Before the body is read: a run credential whose run key has no session's run
+		// here reaches nothing.
+		id, ok := identityOf(r.Context())
+		if !ok || !g.hasSessionRun(keyOf(id)) {
+			if ok {
+				g.presented(id)
+			}
+			refuseCredential(w)
+			return
+		}
+	}
+	// A batch over the limit, one that does not decode and one whose first event names
+	// no run this gateway holds are refused without ending a run: the gateway ends a run
+	// only when it can tell which one the batch is of; otherwise the run's liveness ends
+	// it, when its session sends nothing it accepts. On the one address the batch's run
+	// is the run credential's run key's, or no run is reached.
+	body, ok := readBody(r, maxBatch)
+	if !ok {
+		invalid(w)
+		return
+	}
+	evs, err := stream.DecodeBatch(body)
+	if err != nil || len(evs) == 0 {
+		invalid(w)
+		return
+	}
+	if s.remote {
+		var id runIdentity
+		if lr, id = g.credentialRun(w, r, evs[0].Subject); lr == nil {
 			return
 		}
 		lr.batch.Lock()
@@ -391,30 +407,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		if !lr.admit(w, r, id) {
 			return
 		}
-	}
-	// On the local link, a batch over the limit, one that does not decode and one whose
-	// first event names no run this gateway holds are refused without ending a run: the
-	// gateway ends a run only when it can tell which one the batch is of; otherwise the
-	// run's liveness ends it, when its session sends nothing it accepts. On the one
-	// address the run credential tells.
-	refused := func(why string) {
-		invalid(w)
-		if lr != nil {
-			g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
-			lr.end(sessionLost)
-		}
-	}
-	body, ok := readBody(r, maxBatch)
-	if !ok {
-		refused("one over the limit")
-		return
-	}
-	evs, err := stream.DecodeBatch(body)
-	if err != nil || len(evs) == 0 {
-		refused("one that does not decode")
-		return
-	}
-	if !s.remote {
+	} else {
 		if lr = g.localRun(evs[0].Subject); lr == nil {
 			invalid(w)
 			return

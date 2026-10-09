@@ -62,8 +62,9 @@ type Config struct {
 	// RunCredentials are the issuers whose run credentials open a run on Listen,
 	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
 	// Start checks them as runcredential.Issuers.Check does, reading each key's file
-	// and each introspection client's secret. A run key opens one run at the gateway;
-	// the run keys whose run ended are kept in Dir, so a restart does not reopen them.
+	// and each introspection client's secret. The gateway tracks run keys and does not
+	// require them to be unique; each period of activity is a run. The run keys it
+	// refuses after the issuer's end are kept in Dir, so a restart refuses them too.
 	RunCredentials runcredential.Issuers
 	// Runs is how the gateway keeps the runs of clients with no session.
 	Runs RunsConfig
@@ -82,6 +83,9 @@ type Config struct {
 	// keepSpent, when not zero, replaces runcredential.MaxLeeway as how long past its
 	// exp the gateway keeps what an ended run of the one address left. Tests set it.
 	keepSpent time.Duration
+	// clock, when not nil, is the time the gateway refuses a run key by, in place of
+	// the system's. Tests set it.
+	clock func() time.Time
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int

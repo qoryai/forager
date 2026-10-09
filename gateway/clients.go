@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -23,12 +24,18 @@ import (
 type clientLogin struct{ g *Gateway }
 
 // login decides a proxy login of a client with no session. The password of Basic is
-// the run credential, the user name ignored, verified as every run credential is.
-// The first connection whose run key has no run at this gateway, live or ended, opens
-// one, after the issuer, when it has introspection, holds the run credential active;
-// every later one of the same run key belongs to it, its run credential extending the
-// run to its exp. A run key whose run ended, or a session's, is refused, 407, as is
-// every failure of the run credential; a run that fails to open is [errUnserved].
+// the run credential, the user name ignored, verified as every run credential is. The
+// gateway tracks run keys and does not require them to be unique; each period of
+// activity is a run. While a run of the run key is open, every connection of it joins
+// that run, its run credential extending the run to its exp; otherwise the connection
+// opens a new run, of a new run id and the same run_key label, after the issuer, when it
+// has introspection, holds the run credential active. A run that ended is never opened
+// again. A client has at most one open run per run key, and never joins a session's
+// run, which only its proxy secret reaches: a run key with sessions' runs open opens or
+// joins its client's run beside them. Every failure of the run credential is refused,
+// 407, and so is a run key the gateway refuses after the issuer's end, until the latest
+// exp presented. A run refused with a code is [errUnserved], and one that fails to open
+// without a code [errNotOpened].
 func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	g := c.g
 	password, ok := basicPassword(authorization)
@@ -47,9 +54,17 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 			g.mu.Unlock()
 			return nil, nil, errUnserved
 		}
-		if lr := g.keys[k]; lr != nil {
-			g.mu.Unlock()
-			return lr.join(ctx, id)
+		if lr := g.clientRuns[k]; lr != nil {
+			if _, _, ended := lr.gone(); !ended {
+				g.mu.Unlock()
+				px, track, err := lr.join(ctx, id)
+				if errors.Is(err, errRunEnded) {
+					// It ended as this connection joined: the next look opens anew.
+					continue
+				}
+				return px, track, err
+			}
+			delete(g.clientRuns, k)
 		}
 		if wait := g.opening[k]; wait != nil {
 			// The run key's first connection is opening its run: this one joins it.
@@ -61,10 +76,15 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 				return nil, nil, errUnserved
 			}
 		}
-		if g.keyTaken(k) {
-			g.mu.Unlock()
+		g.mu.Unlock()
+		if g.blocked(k) {
 			g.presented(id)
 			return nil, nil, runcredential.ErrRefused
+		}
+		g.mu.Lock()
+		if g.opening[k] != nil || g.clientRuns[k] != nil || g.closing {
+			g.mu.Unlock()
+			continue
 		}
 		opened = make(chan struct{})
 		g.opening[k] = opened
@@ -75,7 +95,7 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 	defer func() {
 		g.mu.Lock()
 		if lr != nil {
-			g.keys[k] = lr
+			g.clientRuns[k] = lr
 		}
 		delete(g.opening, k)
 		g.mu.Unlock()
@@ -85,16 +105,13 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 	if !id.isActive(ctx) {
 		return nil, nil, runcredential.ErrRefused
 	}
-	// The run key is the run's from here on, kept before anything of the run is made,
-	// so a crash does not reopen it.
-	if err := g.holdKey(k, id.Expires); err != nil {
-		g.report(fmt.Sprintf("a run of a client with no session did not open, keeping its run key: %v", err))
-		return nil, nil, errUnserved
-	}
 	lr, err = g.openClient(id)
 	if err != nil {
 		g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))
-		return nil, nil, errUnserved
+		if ref := (*accesskey.Refusal)(nil); errors.As(err, &ref) && ref.Code != "" {
+			return nil, nil, errUnserved
+		}
+		return nil, nil, errNotOpened
 	}
 	return lr.px, lr.track, nil
 }
@@ -119,24 +136,24 @@ func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 	return lr, nil
 }
 
-// join is a later connection of the run's run key: a run with no session takes it,
-// once its run credential extends the run and the issuer, when asked, holds it
-// active. A run that ended, and a session's run, refuse it, 407; a later exp the ended
-// run keys cannot be kept to is not served, 500, and the run goes on to its earlier end.
+// join is a later connection of the run's run key: the run takes it, once its run
+// credential extends the run and the issuer, when asked, holds it active; an issuer
+// that does not ends the run, and the connection is refused, 407. A run that has ended
+// takes none, [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
-	if _, _, ended := lr.gone(); ended || !lr.client {
-		lr.g.presented(id)
-		return nil, nil, runcredential.ErrRefused
+	if _, _, ended := lr.gone(); ended {
+		return nil, nil, errRunEnded
 	}
-	if err := lr.renew(id); err != nil {
-		// As a run that fails to open: the connection is not served.
-		return nil, nil, errUnserved
-	}
+	lr.renew(id)
 	if !lr.stillActive(ctx) {
+		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
 	return lr.px, lr.track, nil
 }
+
+// errRunEnded is a run a connection would join that has ended.
+var errRunEnded = errors.New("the run has ended")
 
 // track counts a connection of a run with no session for as long as it is open, so the
 // run is quiet only once it has none.

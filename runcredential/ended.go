@@ -18,10 +18,10 @@ import (
 // ended run keys.
 const EndedFile = "ended-run-keys.json"
 
-// Ended is the set of run keys whose run has ended at this gateway, by issuer, kept in
-// a file of the gateway's state directory so a restart does not reopen them. Each is
-// kept until its run credential's exp plus [MaxLeeway], the latest a run credential of
-// that exp is accepted under any issuer's leeway, and dropped after. It is safe for
+// Ended is the set of run keys a gateway refuses, by issuer, those whose run the issuer
+// ended, kept in a file of the gateway's state directory so a restart refuses them too.
+// Each is kept until its run credential's exp plus [MaxLeeway], the latest a run
+// credential of that exp is accepted under any issuer's leeway, and dropped after. It is safe for
 // concurrent use; one gateway alone uses a state directory.
 type Ended struct {
 	path  string
@@ -51,7 +51,8 @@ type endedEntry struct {
 // 0700, when it does not exist, and refuses one that is not a directory of this user's
 // that only this user writes. It reads [EndedFile] when it exists, a regular file that
 // others can neither read nor write, holding the array ended, and
-// refuses one it cannot read, so a gateway never starts having forgotten an ended run;
+// refuses one it cannot read, so a gateway never starts having forgotten a run key it
+// refuses;
 // the entries past their time are dropped, and the file is written again without them.
 func OpenEnded(dir string) (*Ended, error) {
 	return openEnded(dir, time.Now)
@@ -115,8 +116,7 @@ func openEnded(dir string, clock func() time.Time) (*Ended, error) {
 	return e, nil
 }
 
-// Has reports whether the run key of the issuer has ended at this gateway and is still
-// kept at now.
+// Has reports whether the gateway refuses the run key of the issuer, still kept at now.
 func (e *Ended) Has(issuer, runKey string, now time.Time) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

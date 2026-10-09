@@ -63,7 +63,9 @@ type control struct {
 	// run configuration is fetched.
 	refuse                      atomic.Int32
 	closed, closeOnFetch, limit atomic.Bool
-	fetches                     atomic.Int32
+	// drop, when set, closes every delivery's connection unanswered.
+	drop    atomic.Bool
+	fetches atomic.Int32
 
 	mu     sync.Mutex
 	run    []byte
@@ -111,6 +113,12 @@ func newControl(t *testing.T) *control {
 			if c.closeOnFetch.Load() {
 				c.closed.Store(true)
 			}
+		}
+		if c.drop.Load() && r.URL.Path == "/v1/events" {
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				conn.Close()
+			}
+			return
 		}
 		if code := c.refuse.Load(); code != 0 && r.URL.Path == "/v1/events" {
 			w.WriteHeader(int(code))
