@@ -1,0 +1,385 @@
+package gateway_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/server"
+)
+
+// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a separate
+// gateway, a heartbeat the discovery cannot announce, no place for the records.
+func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
+	dir := t.TempDir()
+	for name, cfg := range map[string]gateway.Config{
+		"an address":                  {Dir: dir, Listen: "127.0.0.1:0"},
+		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
+		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
+		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
+		"no directory":                {},
+		"a policy the schema refuses": {Dir: dir, Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "everything"}}},
+	} {
+		if g, err := gateway.Start(context.Background(), cfg); err == nil {
+			g.Close(context.Background())
+			t.Errorf("%s: started", name)
+		}
+	}
+}
+
+// TestTheLocalLink pins the link: a private directory and a socket of the user's
+// alone, the discovery on it, and a connection that opens without the secret closed
+// unanswered.
+func TestTheLocalLink(t *testing.T) {
+	h := start(t, gateway.Config{Heartbeat: 5 * time.Second})
+	l := h.g.LocalLink()
+	dir := filepath.Dir(l.Socket)
+	if !strings.HasPrefix(filepath.Base(dir), link.LinkDirPrefix) || filepath.Base(l.Socket) != link.LinkSocketName {
+		t.Errorf("socket %s", l.Socket)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != link.LinkDirMode {
+		t.Errorf("the link's directory: %v %v", fi.Mode(), err)
+	}
+	if fi, err := os.Lstat(l.Socket); err != nil || fi.Mode().Perm() != link.LinkSocketMode {
+		t.Errorf("the socket: %v %v", fi.Mode(), err)
+	}
+	if len(l.Secret) < 22 || l.Proxy != h.g.Addr() || !slices.Contains(l.Files, dir) || !slices.Contains(l.Files, h.dir) {
+		t.Errorf("local %+v", l)
+	}
+	d, err := h.link.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Events.URL != "http://localhost/v1/events" || !slices.Equal(d.Events.Types, []string{"*"}) || d.Events.IntervalSeconds != 5 ||
+		d.Run.URL != "http://localhost/v1/run-configuration" || d.Proxy == nil || d.Proxy.Address != h.g.Addr() {
+		t.Errorf("discovery %+v", d)
+	}
+	for name, open := range map[string]string{
+		"a wrong secret": "QORY-LINK " + strings.Repeat("x", len(l.Secret)) + "\nGET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n",
+		"no preamble":    "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n" + strings.Repeat("\r\n", 40),
+	} {
+		c, err := net.Dial("unix", l.Socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(c, open)
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if b, err := io.ReadAll(c); len(b) != 0 || err != nil {
+			t.Errorf("%s: answered %q, %v", name, b, err)
+		}
+		c.Close()
+	}
+	h.close()
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the link's directory after Close: %v", err)
+	}
+}
+
+// TestARunWithNoServer pins a run with files only: the answer, the session's events
+// numbered once each into the run's record, and its run.exited ending the run's
+// gateway side.
+func TestARunWithNoServer(t *testing.T) {
+	var events strings.Builder
+	h := start(t, gateway.Config{
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}},
+		Events: &syncWriter{w: &events},
+	})
+	labels := map[string]string{"repository": "example-namespace/project"}
+	a := h.open(server.LinkRunRequest{Labels: labels, Passes: []string{"HOME"}})
+	var pol map[string]any
+	if err := json.Unmarshal(a.Policy, &pol); err != nil || a.Digest == "" || pol["egress"].(map[string]any)["mode"] != "enforce" {
+		t.Errorf("policy %s, digest %q", a.Policy, a.Digest)
+	}
+	if a.CertificateAuthority != "" || len(a.ProxySecret) < 22 || a.Labels["repository"] != "example-namespace/project" || a.Applied == nil {
+		t.Errorf("answer %+v", a)
+	}
+	runID := a.RunID
+	if lines := h.record(runID); len(lines) != 0 {
+		t.Errorf("before the session's first batch: %v", types(lines))
+	}
+	first := []map[string]any{started(runID, labels), applied(runID, a.Applied), logged(runID)}
+	if d := h.post(first...); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	// The same batch again, as a session sends one whose answer it did not read.
+	if d := h.post(first...); !d.Accepted() {
+		t.Fatalf("the first batch again: %+v", d)
+	}
+	if d := h.post(heartbeat(runID), exited(runID)); !d.Accepted() {
+		t.Fatalf("the last batch: %+v", d)
+	}
+	if d := h.post(heartbeat(runID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		t.Errorf("after run.exited: %+v", d)
+	}
+	if d := h.close(); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	lines := h.record(runID)
+	want := []string{event.RunStarted, event.PolicyApplied, event.RunLog, event.RunHeartbeat, event.RunExited}
+	if !slices.Equal(types(lines), want) {
+		t.Fatalf("record %v", types(lines))
+	}
+	for i, l := range lines {
+		if l.Sequence != seq(i+1) || l.Subject != runID {
+			t.Errorf("event %d: %+v", i, l)
+		}
+	}
+	if n := strings.Count(events.String(), "\n"); n != len(want) {
+		t.Errorf("events printed: %d", n)
+	}
+}
+
+// TestRunRequestsTheLinkRefuses pins the refusals of a run request: a body the schema
+// refuses and a narrowing, invalid_request; a run id already used, run_id_used; and a
+// reload or a batch of a run the gateway does not hold.
+func TestRunRequestsTheLinkRefuses(t *testing.T) {
+	h := start(t, gateway.Config{})
+	a := h.open(server.LinkRunRequest{})
+	_, err := h.tryOpen(server.LinkRunRequest{RunID: a.RunID})
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) || r.Code != "run_id_used" || r.Status != http.StatusConflict || r.From != "gateway" {
+		t.Errorf("the same run id: %v", err)
+	}
+	c := raw(t, h.g.LocalLink())
+	id := event.NewRunID()
+	for name, body := range map[string]string{
+		"a narrowing":       `{"version":1,"run_id":"` + id + `","wall":false,"narrowing":{"egress":{"allow":["api.example"]}}}`,
+		"an unknown member": `{"version":1,"run_id":"` + id + `","wall":false,"policy":{}}`,
+		"an upper-case id":  `{"version":1,"run_id":"` + strings.ToUpper(id) + `","wall":false}`,
+		"no wall":           `{"version":1,"run_id":"` + id + `"}`,
+		"a member twice":    `{"version":1,"run_id":"` + id + `","wall":false,"wall":true}`,
+		"a pass no name":    `{"version":1,"run_id":"` + id + `","wall":false,"passes":["A B"]}`,
+		"an image no ref":   `{"version":1,"run_id":"` + id + `","wall":false,"images":{"definitions":[{"name":"a"}]}}`,
+		"an image member":   `{"version":1,"run_id":"` + id + `","wall":false,"images":{"default":"a","extra":1}}`,
+		"no JSON":           `{`,
+	} {
+		if status, body := rawPost(t, c, "/v1/run-configuration", "application/json", body); status != http.StatusBadRequest || !strings.Contains(body, `"invalid_request"`) || !strings.Contains(body, `"gateway"`) {
+			t.Errorf("%s: %d %s", name, status, body)
+		}
+	}
+	// None of those opened a run, so the id is unused still.
+	if _, err := h.tryOpen(server.LinkRunRequest{RunID: id}); err != nil {
+		t.Errorf("the id after refusals: %v", err)
+	}
+	if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", event.NewRunID()); !errors.As(err, &r) || r.Code != "invalid_request" {
+		t.Errorf("a reload of no run: %v", err)
+	}
+	if d := h.post(heartbeat(event.NewRunID())); d.Status != http.StatusBadRequest || d.Code != "invalid_request" {
+		t.Errorf("a batch of no run: %+v", d)
+	}
+	if status, _ := rawPost(t, c, "/v1/nothing", "application/json", "{}"); status != http.StatusNotFound {
+		t.Errorf("another path: %d", status)
+	}
+}
+
+// TestTheSharedProxyServesARunBySecret pins agent traffic: a connection that opens with
+// the run's proxy secret is decided by the run's policy, and each decision is the run's
+// dev.qory.run.egress, after its run.started and policy_applied; another secret is
+// refused unanswered.
+func TestTheSharedProxyServesARunBySecret(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	h := start(t, gateway.Config{Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}})
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	c := relay(h.g.Addr(), a.ProxySecret)
+	resp, err := c.Get(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "ok" {
+		t.Errorf("allowed: %d %q", resp.StatusCode, b)
+	}
+	resp, err = c.Get("http://denied.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("denied: %d", resp.StatusCode)
+	}
+	if _, err := relay(h.g.Addr(), strings.Repeat("x", len(a.ProxySecret))).Get(origin.URL); err == nil {
+		t.Error("another secret was served")
+	}
+	h.post(started(runID, nil), applied(runID, a.Applied))
+	h.post(exited(runID))
+	h.close()
+	lines := h.record(runID)
+	if want := []string{event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunEgress, event.RunExited}; !slices.Equal(types(lines), want) {
+		t.Fatalf("record %v", types(lines))
+	}
+	if lines[2].Data["host"] != "127.0.0.1" || lines[2].Data["decision"] != "allowed" || lines[3].Data["host"] != "denied.example" || lines[3].Data["decision"] != "denied" {
+		t.Errorf("egress %v %v", lines[2].Data, lines[3].Data)
+	}
+	// The run ended: its secret is refused now.
+	if _, err := c.Get(origin.URL); err == nil {
+		t.Error("an ended run's secret was served")
+	}
+}
+
+// TestBatchesTheLinkRefuses pins each of the README's batch rules: a batch that breaks
+// one is a 400 invalid_request, nothing of it is numbered, and the run ends at the
+// gateway, session_lost; every later request of the run's is a 410 run_closed from the
+// gateway.
+func TestBatchesTheLinkRefuses(t *testing.T) {
+	h := start(t, gateway.Config{})
+	labels := map[string]string{"repository": "example-namespace/project"}
+	cases := map[string]func(runID string, a *server.LinkRunAnswer) []map[string]any{
+		"another run's event": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{heartbeat(id), heartbeat(event.NewRunID())}
+		},
+		"a ping": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.Ping, map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})}
+		},
+		"an egress": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunEgress, map[string]any{"host": "a.example", "port": 443, "method": "CONNECT", "decision": "allowed", "mode": "observe", "rule": "", "outcome": "connected"})}
+		},
+		"a run.started the gateway opened": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			s := started(id, labels)
+			s["data"].(map[string]any)["opened_by"] = "gateway"
+			return []map[string]any{s}
+		},
+		"a second run.started": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{started(id, labels)}
+		},
+		"an event after run.exited": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{exited(id), heartbeat(id)}
+		},
+		"a run.exited session_lost": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			e := exited(id)
+			e["data"].(map[string]any)["reason"] = "session_lost"
+			return []map[string]any{e}
+		},
+		"a run.exited run_closed": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			e := exited(id)
+			e["data"].(map[string]any)["reason"] = "run_closed"
+			return []map[string]any{e}
+		},
+		"a policy_applied of another mode": func(id string, a *server.LinkRunAnswer) []map[string]any {
+			p := applied(id, a.Applied)
+			p["data"].(map[string]any)["mode"] = "enforce"
+			return []map[string]any{p}
+		},
+		"a policy_applied without its source": func(id string, a *server.LinkRunAnswer) []map[string]any {
+			p := applied(id, a.Applied)
+			p["data"].(map[string]any)["terminated"] = []string{"a.example"}
+			return []map[string]any{p}
+		},
+		"a run.refused of a gateway's code": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunRefused, map[string]any{"code": "run_id_used"})}
+		},
+		"a run.refused of the server's code": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunRefused, map[string]any{"code": "run_closed"})}
+		},
+		"a run.refused with a gateway's name": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunRefused, map[string]any{"code": "image_unknown", "names": []string{"labels.repository=x"}})}
+		},
+	}
+	runs := map[string]string{}
+	for name, batch := range cases {
+		a := h.open(server.LinkRunRequest{Labels: labels})
+		runs[name] = a.RunID
+		if d := h.post(started(a.RunID, labels), applied(a.RunID, a.Applied)); !d.Accepted() {
+			t.Fatalf("%s: the first batch: %+v", name, d)
+		}
+		if d := h.post(batch(a.RunID, a)...); d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+			t.Errorf("%s: %+v", name, d)
+		}
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+			t.Errorf("%s: after the refusal: %+v", name, d)
+		}
+		var r *accesskey.Refusal
+		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "run_closed" || r.From != "gateway" {
+			t.Errorf("%s: a reload after the refusal: %v", name, err)
+		}
+	}
+	// A run.started whose labels are not the run's, before any.
+	a := h.open(server.LinkRunRequest{Labels: labels})
+	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "run_closed" {
+		t.Errorf("other labels: %+v", d)
+	}
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "run_closed" {
+		t.Errorf("delivery %+v", d)
+	}
+	for name, runID := range runs {
+		lines := h.record(runID)
+		if want := []string{event.RunStarted, event.PolicyApplied, event.RunExited}; !slices.Equal(types(lines), want) {
+			t.Errorf("%s: record %v", name, types(lines))
+			continue
+		}
+		if x := lines[2].Data; x["reason"] != "session_lost" || x["state"] != "failed" || x["exit_code"] != -1.0 {
+			t.Errorf("%s: run.exited %v", name, x)
+		}
+	}
+	if lines := h.record(a.RunID); len(lines) != 0 {
+		t.Errorf("a run that never started: %v", types(lines))
+	}
+}
+
+// TestASessionThatSendsNothingIsLost pins liveness: a run whose session asks nothing
+// for the quiet time ends, session_lost, and its session's next request is a 410; one
+// that keeps asking lives.
+func TestASessionThatSendsNothingIsLost(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetQuiet(&cfg, 400*time.Millisecond)
+	h := start(t, cfg)
+	lost := h.open(server.LinkRunRequest{})
+	kept := h.open(server.LinkRunRequest{})
+	h.post(started(lost.RunID, nil))
+	h.post(started(kept.RunID, nil))
+	for range 8 {
+		time.Sleep(100 * time.Millisecond)
+		if d := h.post(heartbeat(kept.RunID)); !d.Accepted() {
+			t.Fatalf("a run that keeps asking: %+v", d)
+		}
+	}
+	if d := h.post(heartbeat(lost.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+		t.Errorf("a lost run: %+v", d)
+	}
+	h.post(exited(kept.RunID))
+	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" {
+		t.Errorf("delivery %+v", d)
+	}
+	lines := h.record(lost.RunID)
+	if l := lines[len(lines)-1]; l.Type != event.RunExited || l.Data["reason"] != "session_lost" || l.Data["exit_code"] != -1.0 || l.Data["state"] != "failed" {
+		t.Errorf("lost: %v", l)
+	}
+	if lines := h.record(kept.RunID); lines[len(lines)-1].Data["reason"] != nil {
+		t.Errorf("kept: %v", lines[len(lines)-1])
+	}
+	if !h.reported("session_lost") {
+		t.Error("the user was not told")
+	}
+}
+
+// syncWriter is a writer safe for the gateway's goroutines.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(b)
+}
+
+func seq(n int) string { return fmt.Sprintf("%010d", n) }

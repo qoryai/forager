@@ -1,0 +1,390 @@
+package gateway_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"maps"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/server"
+)
+
+const (
+	testKey      = "ak_f1xt0re000000000"
+	testInstance = "i_test"
+	testNode     = "nd_f1xt0re000000000"
+)
+
+// The keys of the tests: the access key the gateway signs with, and the control's own
+// signing key, which the gateway pins; each fresh, so no published key is used.
+var (
+	testAccessKey = mustGenerate()
+	testSigner    = mustGenerate()
+	testPin       = accesskey.Pin{{Alg: "ed25519", PublicKey: testSigner.PublicKey().String()}}
+)
+
+func mustGenerate() *accesskey.Key {
+	k, err := accesskey.Generate()
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+// control is a server of the contract for the tests: the reference receiver in front
+// of a store, whose configuration document names its own events endpoint and, when
+// the test gives it one, a run configuration it may change during a run.
+type control struct {
+	srv      *httptest.Server
+	store    *receiver.File
+	received string
+	// refuse, when set, is the status every delivery gets instead of an answer,
+	// unsigned; closed makes every run closed; closeOnFetch closes every run once the
+	// run configuration is fetched.
+	refuse                      atomic.Int32
+	closed, closeOnFetch, limit atomic.Bool
+	fetches                     atomic.Int32
+
+	mu     sync.Mutex
+	run    []byte
+	digest string
+	labels map[string]string
+}
+
+func newControl(t *testing.T) *control {
+	t.Helper()
+	received := filepath.Join(t.TempDir(), "received.jsonl")
+	store, err := receiver.OpenFile(received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &control{store: store, received: received}
+	h := &receiver.Handler{
+		Keys: func(k string) (receiver.AccessKey, bool) {
+			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey()}, k == testKey
+		},
+		Signer: testSigner,
+		Store:  store,
+		Closed: func(string) bool { return c.closed.Load() },
+		Admit:  func(string, string) bool { return !c.limit.Load() },
+		Configuration: func() ([]byte, string) {
+			pin, _ := json.Marshal(testPin)
+			doc := `{"version":1,"node_id":"` + testNode + `","apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.run != nil {
+				doc += `,"run":{"url":"` + c.srv.URL + `/v1/run-configuration"}`
+			}
+			doc += "}"
+			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
+		},
+		RunConfiguration: func(labels map[string]string) ([]byte, string, bool) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.labels = maps.Clone(labels)
+			return c.run, c.digest, c.run != nil
+		},
+	}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/run-configuration" {
+			c.fetches.Add(1)
+			if c.closeOnFetch.Load() {
+				c.closed.Store(true)
+			}
+		}
+		if code := c.refuse.Load(); code != 0 && r.URL.Path == "/v1/events" {
+			w.WriteHeader(int(code))
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(c.srv.Close)
+	t.Cleanup(func() { store.Close() })
+	return c
+}
+
+// serve makes the control serve a run configuration with the policy, under a digest
+// of the test's choosing: sha256= and 64 hex digits.
+func (c *control) serve(policy string, digest byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.run, c.digest = []byte(`{"version":1,"security_policy":`+policy+`}`), "sha256="+strings.Repeat(string(digest), 64)
+}
+
+func (c *control) server() *gateway.Server {
+	return &gateway.Server{Version: 1, URL: c.srv.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin, AccessKey: testAccessKey, InstanceID: testInstance}
+}
+
+// lines are the events the control stored, decoded.
+func (c *control) lines(t *testing.T) []recorded {
+	t.Helper()
+	return readLines(t, c.received)
+}
+
+// recorded is one event of a record, decoded.
+type recorded struct {
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Subject  string         `json:"subject"`
+	Sequence string         `json:"sequence"`
+	Data     map[string]any `json:"data"`
+}
+
+func readLines(t *testing.T, file string) []recorded {
+	t.Helper()
+	f, err := os.Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []recorded
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 4<<20)
+	for sc.Scan() {
+		var r recorded
+		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func types(lines []recorded) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.Type
+	}
+	return out
+}
+
+// harness is one gateway of a test, the session's client of its link, and what the
+// gateway reported.
+type harness struct {
+	t    *testing.T
+	g    *gateway.Gateway
+	cfg  gateway.Config
+	link *server.Link
+	dir  string
+
+	mu      sync.Mutex
+	reports []string
+	secrets []string
+	digests []server.Digests
+}
+
+// start starts a gateway with cfg, its Dir a fresh one, and a client of its link. At the
+// test's end the gateway is closed, and no line it reported holds a secret.
+func start(t *testing.T, cfg gateway.Config) *harness {
+	t.Helper()
+	h := &harness{t: t, dir: t.TempDir()}
+	cfg.Dir = h.dir
+	cfg.Report = func(line string) {
+		h.mu.Lock()
+		h.reports = append(h.reports, line)
+		h.mu.Unlock()
+		t.Log("reported: " + line)
+	}
+	h.cfg = cfg
+	g, err := gateway.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.g = g
+	h.secrets = append(h.secrets, g.LocalLink().Secret)
+	l, err := server.NewLocalLink(g.LocalLink(), accesskey.UserAgent("test"), func(d server.Digests) {
+		h.mu.Lock()
+		h.digests = append(h.digests, d)
+		h.mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.link = l
+	t.Cleanup(func() {
+		l.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		g.Close(ctx)
+		cancel()
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, line := range h.reports {
+			for _, s := range h.secrets {
+				if strings.Contains(line, s) {
+					t.Errorf("a report holds a secret: %s", line)
+				}
+			}
+		}
+	})
+	return h
+}
+
+// open opens a run on the link.
+func (h *harness) open(req server.LinkRunRequest) *server.LinkRunAnswer {
+	h.t.Helper()
+	a, err := h.tryOpen(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return a
+}
+
+func (h *harness) tryOpen(req server.LinkRunRequest) (*server.LinkRunAnswer, error) {
+	if req.RunID == "" {
+		req.RunID = event.NewRunID()
+	}
+	a, err := h.link.OpenRun(context.Background(), server.LocalOrigin+"/v1/run-configuration", req)
+	if err == nil {
+		h.mu.Lock()
+		h.secrets = append(h.secrets, a.ProxySecret)
+		h.mu.Unlock()
+	}
+	return a, err
+}
+
+// post posts one batch of the run's events.
+func (h *harness) post(evs ...map[string]any) server.Delivery {
+	h.t.Helper()
+	body, err := json.Marshal(evs)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	d, err := h.link.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return d
+}
+
+// close closes the gateway.
+func (h *harness) close() gateway.Delivery {
+	h.t.Helper()
+	d, err := h.g.Close(context.Background())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return d
+}
+
+// record is the gateway's record of a run.
+func (h *harness) record(runID string) []recorded {
+	h.t.Helper()
+	return readLines(h.t, filepath.Join(h.dir, "runs", runID, "events.jsonl"))
+}
+
+func (h *harness) reported(part string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, l := range h.reports {
+		if strings.Contains(l, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// ev is one of the session's events of the run, as a link batch carries it.
+func ev(runID, typ string, data map[string]any) map[string]any {
+	return map[string]any{
+		"specversion": "1.0", "id": event.NewID(), "source": event.Source(runID), "type": typ, "subject": runID,
+		"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(typ), "data": data,
+	}
+}
+
+func started(runID string, labels map[string]string) map[string]any {
+	data := map[string]any{"opened_by": "session", "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
+	if len(labels) > 0 {
+		data["labels"] = labels
+	}
+	return ev(runID, event.RunStarted, data)
+}
+
+// applied is the session's run.policy_applied from what the gateway decides, with the
+// session's own members.
+func applied(runID string, members json.RawMessage) map[string]any {
+	var data map[string]any
+	if err := json.Unmarshal(members, &data); err != nil {
+		panic(err)
+	}
+	data["variables"] = []any{}
+	data["harness_hosts"] = []string{"harness.example"}
+	return ev(runID, event.PolicyApplied, data)
+}
+
+func logged(runID string) map[string]any {
+	return ev(runID, event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"})
+}
+
+func heartbeat(runID string) map[string]any {
+	return ev(runID, event.RunHeartbeat, map[string]any{"elapsed_seconds": 1, "interval_seconds": 30})
+}
+
+func exited(runID string) map[string]any {
+	return ev(runID, event.RunExited, map[string]any{"state": "succeeded", "exit_code": 0, "duration_ms": 5})
+}
+
+// raw is a client of the link that sends what the session's client never would.
+func raw(t *testing.T, l link.Local) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, "unix", l.Socket)
+		if err != nil {
+			return nil, err
+		}
+		if err := link.WriteLinkPreamble(c, l.Secret); err != nil {
+			c.Close()
+			return nil, err
+		}
+		return c, nil
+	}}}
+}
+
+// rawPost posts body to path on the link and returns the status and the body.
+func rawPost(t *testing.T, c *http.Client, path, contentType, body string) (int, string) {
+	t.Helper()
+	resp, err := c.Post(server.LocalOrigin+path, contentType, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// relay is an HTTP client whose every connection goes to the gateway's proxy, opening
+// with the relay's preamble and the run's proxy secret, as the wall's relay does.
+func relay(addr, secret string) *http.Client {
+	return &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: addr}),
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			c, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := io.WriteString(c, link.Preamble(link.RelayPreamble, secret)); err != nil {
+				c.Close()
+				return nil, err
+			}
+			return c, nil
+		},
+		DisableKeepAlives: true,
+	}}
+}

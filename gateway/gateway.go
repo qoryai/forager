@@ -2,8 +2,17 @@
 // and sets credentials on it outside the agent: the proxy, the credentials it holds for
 // a run, and the tools it hands requests to.
 //
-// These are the names the session drives a gateway in its own process by. Each is the
-// gateway's own type or function under a name that says what it is for.
+// [Start] starts a gateway that serves sessions on its local link, a Unix socket of the
+// user's alone (contracts/forager/v1/README.md §The gateway's link): for each run a
+// session opens, it fetches the run's policy by its labels, decides its connections
+// through one proxy shared by every run, sets credentials and starts tools, numbers the
+// run's events, the session's and its own, as one stream, writes the stream to the run's
+// record and sends it to the server, and passes the server's close to the session.
+// [Resend] sends one run's record again.
+//
+// The other names are the ones the session drives a gateway in its own process by
+// today. Each is the gateway's own type or function under a name that says what it is
+// for.
 package gateway
 
 import (
