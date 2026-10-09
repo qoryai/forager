@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -62,22 +63,27 @@ func ended(t *testing.T, res *session.Result) (string, int) {
 }
 
 // TestTheContextsEndWhileTheRuntimeRunsIsACancel pins Cancelled for a context that ends
-// while the runtime runs, which the session stops: on its own, and in a wall.
+// once the runtime runs, which the session stops: on its own, and in a wall.
 func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
-	for name, sp := range map[string]func(t *testing.T) session.Spec{
-		"unwalled": func(t *testing.T) session.Spec { return shellSpec(t, "sleep 30") },
-		"walled": func(t *testing.T) session.Spec {
+	for name, sp := range map[string]func(t *testing.T, script string) session.Spec{
+		"unwalled": shellSpec,
+		"walled": func(t *testing.T, script string) session.Spec {
 			root := t.TempDir()
 			sp := walledSpec(t, &openWall{})
 			sp.Mounts, sp.Dir = []wall.Mount{{Path: root}}, root
-			sp.Command, sp.Args = "sh", []string{"-c", "sleep 30"}
+			sp.Command, sp.Args = "sh", []string{"-c", script}
 			return sp
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			file := filepath.Join(t.TempDir(), "pid")
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			res, err := session.Run(ctx, sp(t))
+			go func() {
+				pidOf(t, file)
+				cancel()
+			}()
+			res, err := session.Run(ctx, sp(t, fmt.Sprintf(`echo $$ > %q; exec sleep 30`, file)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,10 +183,19 @@ func TestTheTimeLimitIsNoCancel(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 
-	sp = shellSpec(t, "trap '' TERM; exec sleep 30")
-	sp.Timeout, sp.StopGrace = 300*time.Millisecond, 1500*time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	// The limit's clock starts before the runtime does: once the runtime has written
+	// its id, the limit has fallen by 300ms later, and the context ends within the
+	// grace that follows.
+	file := filepath.Join(t.TempDir(), "pid")
+	sp = shellSpec(t, fmt.Sprintf(`trap '' TERM; echo $$ > %q; exec sleep 30`, file))
+	sp.Timeout, sp.StopGrace = 300*time.Millisecond, 3*time.Second
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		pidOf(t, file)
+		time.Sleep(600 * time.Millisecond)
+		cancel()
+	}()
 	if res, err = session.Run(ctx, sp); err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +204,44 @@ func TestTheTimeLimitIsNoCancel(t *testing.T) {
 	}
 	if !res.TimedOut || res.Cancelled || res.Signal != "SIGKILL" {
 		t.Errorf("a context that ended within the limit's grace: %+v", res)
+	}
+}
+
+// TestARunClosedBeforeTheContextEndsIsNoCancel pins a run the gateway closed with a
+// 410 once its runtime runs: the run ended at the gateway, RunClosed, and is not
+// cancelled, with the context alive, or ending while the runtime has its grace to
+// leave.
+func TestARunClosedBeforeTheContextEndsIsNoCancel(t *testing.T) {
+	for name, ends := range map[string]bool{"the context alive": false, "the context ending in the grace": true} {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "pid")
+			sp, g, _ := remoteSpec(t, 0)
+			sp.Args = []string{"-c", fmt.Sprintf(`trap '' TERM; echo $$ > %q; exec sleep 30`, file)}
+			sp.StopGrace = 3 * time.Second
+			g.SetInterval(1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var once sync.Once
+			g.OnBatch(func([]map[string]any) linktest.Reply {
+				if _, err := os.Stat(file); err != nil {
+					return linktest.Reply{Status: 200}
+				}
+				if ends {
+					once.Do(func() { time.AfterFunc(300*time.Millisecond, cancel) })
+				}
+				return *gone("stopped", "cancelled", "no_longer_needed")
+			})
+			res, err := session.Run(ctx, sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (ctx.Err() != nil) != ends {
+				t.Fatalf("the context's end %v", ctx.Err())
+			}
+			if !res.RunClosed || res.Cancelled || res.TimedOut || res.Signal != "SIGKILL" {
+				t.Errorf("result %+v", res)
+			}
+		})
 	}
 }
 

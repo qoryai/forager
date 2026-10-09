@@ -380,9 +380,12 @@ A program that needs code of its own implements the interface.
   runtime: the session at the context's end, or the runtime itself at a Ctrl-C that
   reached both. In a race it is whichever the session saw first. A context that ends
   after the exit, while the gateway is asked for the outcome or the sinks close, leaves
-  it false, as do the time limit, which is `TimedOut` and never both, and a signal from
-  elsewhere while the context lasts. It is the result's alone: `dev.qory.run.exited` is
-  as it was.
+  it false, as do the time limit, which is `TimedOut`, a run the gateway closed before
+  the context ended, which is `RunClosed`, and a signal from elsewhere while the
+  context lasts: `Cancelled` is never true with `TimedOut` or with `RunClosed`. On
+  pipes, the exit is observed when the runtime's standard output and standard error
+  close: a descendant that holds them open delays it by up to the stop grace. It is
+  the result's alone: `dev.qory.run.exited` is as it was.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the

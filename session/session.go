@@ -207,9 +207,10 @@ type Result struct {
 	// that reached both. In a race it is whichever the session saw first: a context
 	// that had ended when the exit was observed makes it true. A context that ends
 	// later, while the gateway is asked for the outcome or the sinks close, leaves it
-	// false, as do the time limit, which is TimedOut, never both, and a signal from
-	// elsewhere while the context lasts. It is the result's alone: run.exited says
-	// nothing of it.
+	// false, as do the time limit, which is TimedOut, a run the gateway closed before
+	// the context ended, which is RunClosed, and a signal from elsewhere while the
+	// context lasts: Cancelled is never true with TimedOut or with RunClosed. It is the
+	// result's alone: run.exited says nothing of it.
 	Cancelled bool
 	// Undelivered is how many of the session's events the gateway did not accept.
 	Undelivered int
@@ -843,10 +844,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
 	}
 	// Whether the run was cancelled is decided the moment the runtime's exit is
-	// observed: the caller's context had ended by then, and not the limit first. What
-	// ends it later, while the gateway is asked or the sinks close, changes nothing.
+	// observed: the caller's context had ended by then, and neither the limit nor the
+	// gateway's close had ended the runtime's context first; the first end is the
+	// cause. What ends it later, while the gateway is asked or the sinks close, changes
+	// nothing.
 	var cancelled bool
-	proc.exited = func() { cancelled = ctx.Err() != nil && !errors.Is(context.Cause(limited), errTimeout) }
+	proc.exited = func() {
+		cause := context.Cause(limited)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed)
+	}
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)

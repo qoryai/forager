@@ -1132,8 +1132,9 @@ release may change what an existing document does, and says so under Upgrading.
   `Result.Cancelled`, beside `Result.TimedOut`, says the caller's context had ended
   when the session observed the runtime's exit, whoever stopped the runtime; a context
   that ends after the exit, while the gateway is asked or the sinks close, leaves it
-  false, as do the time limit and a signal from elsewhere. `dev.qory.run.exited` is
-  unchanged.
+  false, as do the time limit, `Result.TimedOut`, a run the gateway closed first,
+  `Result.RunClosed`, and a signal from elsewhere: it is never true with either.
+  `dev.qory.run.exited` is unchanged.
 - The session fetches the run's configuration from the gateway again whenever the
   gateway's answers carry a new run-configuration digest, and records it in another
   `dev.qory.run.policy_applied`.
