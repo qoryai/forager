@@ -364,8 +364,8 @@ signed `429` `rate_limited`. Its connection gets,
 as `text/plain`:
 
 - `503 Service Unavailable`, "the gateway could not open the run; try again", for a
-  failure that may pass, once the tries are spent, at once for Qory Apiary's signed
-  `410` to the ping or the run configuration, with any code or none, and for a failure
+  failure that may pass, once the tries are spent, at once for Qory Apiary's `410` to
+  the ping or the run configuration, signed or not, with any code or none, and for a failure
   with neither a code nor a status of Qory Apiary's;
 - `403 Forbidden`, "the gateway could not open the run: Qory Apiary refused it,
   \<code\>", for a code of Qory Apiary's answer, `answer_unsigned` among them;

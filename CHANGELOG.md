@@ -391,8 +391,8 @@ release may change what an existing document does, and says so under Upgrading.
   `run_closed` to a request of a run already ended is unchanged. A server's signed
   `410`, with any code or none, stops delivery: the gateway sends no further batch for
   the run and marks its record `stopped`, and the run goes on, its record keeping every
-  event. A signed `410` to the ping, or to the run configuration as a run opens, is no
-  run, and no refusal: no `410` from `apiary` crosses the link. The relay opens its
+  event. A `410` to the ping, or to the run configuration as a run opens, signed or
+  not, is no run, and no refusal: no server's `410` crosses the link. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
@@ -670,7 +670,8 @@ release may change what an existing document does, and says so under Upgrading.
   open the run; try again" for a failure that may pass, the issuer's endpoint
   unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
   signed `429` `rate_limited`, once the tries are spent, among it, at once for Qory
-  Apiary's signed `410` to the ping or the run configuration, with any code or none,
+  Apiary's `410` to the ping or the run configuration, signed or not, with any code or
+  none,
   and for one with neither a code nor a status of Qory
   Apiary's; and a `403` with one line for a reason that does not pass: "the gateway
   could not open the run: Qory Apiary refused it, \<code\>" for a code of Qory

@@ -263,7 +263,7 @@ func (g *Gateway) discard(lr *linkRun) {
 // other failure is a 500 internal. Each carries the error's text as its message, which
 // the session returns as its error, the text today's session returned; the gateway
 // itself tells the user nothing of it. A server's 410 is no refusal: it is a failure
-// without a code, so no 410 from apiary crosses the link.
+// without a code, so no 410 crosses the link from here, signed or not.
 func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
@@ -291,17 +291,18 @@ func refuseOpen(w http.ResponseWriter, err error) {
 	refuse(w, status, ref.Code, ref.Names, from, err.Error())
 }
 
-// codeless turns a server's signed 410 to a request the gateway makes as a run opens,
-// whatever its code, into the failure without a code a code-less 410 to that request
-// is, with its text: a server's 410 ends no run and refuses none, so a code-less one is
-// no [*server.AnswerError] either. Any other error is returned as it is.
+// codeless turns a server's 410 to a request the gateway makes as a run opens, signed
+// or not, whatever its code and whoever the refusal names, into the failure without a
+// code a code-less 410 to that request is, with its text: a server's 410 ends no run
+// and refuses none, so a code-less one is no [*server.AnswerError] either. Any other
+// error is returned as it is.
 func codeless(err error) error {
 	var uncoded *server.AnswerError
 	if errors.As(err, &uncoded) && uncoded.Status == http.StatusGone {
 		return errors.New(uncoded.Error())
 	}
 	var ref *accesskey.Refusal
-	if !errors.As(err, &ref) || ref.From != accesskey.FromApiary || ref.Status != http.StatusGone {
+	if !errors.As(err, &ref) || ref.Status != http.StatusGone {
 		return err
 	}
 	return fmt.Errorf("%s: status %d", ref.Detail, ref.Status)

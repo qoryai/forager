@@ -128,6 +128,9 @@ const (
 // notFoundPage is Qory Apiary's page for a path it does not know, unsigned.
 var notFoundPage = unsignedReply(404, "text/html; charset=utf-8", "<!DOCTYPE html>\n<html><head><title>Not Found</title></head><body><h1>Not Found</h1></body></html>\n")
 
+// gonePage is a page of a 410, unsigned, as a proxy in front of Qory Apiary may answer.
+var gonePage = unsignedReply(410, "text/html; charset=utf-8", "<!DOCTYPE html>\n<html><head><title>Gone</title></head><body><h1>Gone</h1></body></html>\n")
+
 // gaps are the times between the requests.
 func gaps(seen []seenRequest) []time.Duration {
 	var out []time.Duration
@@ -142,9 +145,9 @@ func gaps(seen []seenRequest) []time.Duration {
 // in a window of 6 seconds; a signed 503 or 429 rate_limited, an unsigned 5xx and no
 // answer are asked again, the ping with its delivery id and recorded once, and an
 // answer on a later try opens the run; a refusal with any other code, an unsigned
-// answer other than a 5xx, a signed answer without a code and a signed 410, with a code
-// or none, are asked once, the 410 a failure without a code; and the last try's
-// refusal is the session's, as before the tries.
+// answer other than a 5xx, a signed answer without a code and a 410, signed or not,
+// with a code or none, are asked once, the 410 a failure without a code; and the last
+// try's refusal is the session's, as before the tries.
 func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 	if waits, window := gateway.OpenTries(); !slices.Equal(waits, []time.Duration{time.Second, 2 * time.Second}) || window != 6*time.Second {
 		t.Fatalf("the waits %v and the window %v; want [1s 2s] and 6s", waits, window)
@@ -178,6 +181,10 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 		{"a ping's signed 410 without a code", eventsPath, []apiaryReply{{status: 410, signed: true}}, 1, "", 0, "", ": status 410: the server did not accept the ping"},
 		{"a run configuration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, 1, "", 0, "", ": status 410"},
 		{"a run configuration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, 1, "", 0, "", ": status 410"},
+		{"a ping's unsigned 410 without a body", eventsPath, []apiaryReply{unsignedReply(410, "", "")}, 1, "", 0, "", "/v1/events: status 410"},
+		{"a ping's unsigned 410 page", eventsPath, []apiaryReply{gonePage}, 1, "", 0, "", "/v1/events: status 410"},
+		{"a run configuration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, 1, "", 0, "", ": status 410"},
+		{"a run configuration's unsigned 410 page", runPath, []apiaryReply{gonePage}, 1, "", 0, "", ": status 410"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctl := newControl(t)
@@ -581,8 +588,8 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 // the gateway for a code it decides of the run configuration; a 403 with the status of
 // a signed answer without a code; and, once the tries are spent, the 503 that says to
 // try again for a 503 or 429 rate_limited and for an unsigned 5xx, and at once for a
-// signed 410 to the ping or the run configuration, with a code or none, which refuses
-// nothing and is in the report line alone. The record holds
+// 410 to the ping or the run configuration, signed or not, with a code or none, which
+// refuses nothing and is in the report line alone. The record holds
 // the ping and the run.refused with its code, and its status for a code from Qory
 // Apiary; a refusal without a code is in the report line alone. A 404 is asked once,
 // and the configuration document is not fetched again.
@@ -644,6 +651,14 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 		{"a run configuration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, "", 503,
 			tryAgainText, nil, 1, ": status 410"},
 		{"a run configuration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, "", 503,
+			tryAgainText, nil, 1, ": status 410"},
+		{"the ping's unsigned 410 without a body", eventsPath, []apiaryReply{unsignedReply(410, "", "")}, "", 503,
+			tryAgainText, nil, 1, "/v1/events: status 410"},
+		{"the ping's unsigned 410 page", eventsPath, []apiaryReply{gonePage}, "", 503,
+			tryAgainText, nil, 1, "/v1/events: status 410"},
+		{"a run configuration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, "", 503,
+			tryAgainText, nil, 1, ": status 410"},
+		{"a run configuration's unsigned 410 page", runPath, []apiaryReply{gonePage}, "", 503,
 			tryAgainText, nil, 1, ": status 410"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -757,13 +772,20 @@ func TestAReloadFirstLearnsTheIssuerGivesNoAnswer(t *testing.T) {
 // end when another request ended the run first: a batch's ask of the issuer, for a
 // refreshed run credential, is in flight while a reload, for the first run credential,
 // ends the run issuer_unreachable, which holds nothing; the batch's answer, active
-// false, then holds the run key all the same, so a new run request of it is refused.
+// false, then holds the run key all the same, so a new run request of it is refused,
+// until the latest exp of the run key's run credentials the gateway holds: another live
+// run's later exp, not the ended run's own.
 func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
+	now := time.Now()
 	first := credentialFor("rk-0001")
-	refreshed := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+	refreshed := mint(issuerKey(), "rk-0001", now.Add(2*time.Hour), nil)
+	live := mint(issuerKey(), "rk-0001", now.Add(3*time.Hour), nil)
+	probe := mint(issuerKey(), "rk-0001", now.Add(time.Hour+time.Minute), nil)
 	asked, release := make(chan struct{}), make(chan struct{})
 	var unreachable, gate atomic.Bool
+	var ahead atomic.Int64
 	cfg := gateway.Config{RunCredentials: realIssuers(t, true)}
+	gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
 	gateway.SetIntrospection(&cfg, func(_, credential string) (bool, error) {
 		switch {
 		case credential == first && unreachable.Load():
@@ -776,7 +798,8 @@ func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
 		return true, nil
 	}, time.Hour)
 	s := startVerifying(t, cfg, nil, 0)
-	s.secrets = append(s.secrets, refreshed)
+	s.secrets = append(s.secrets, refreshed, live, probe)
+	s.openSession(t, live, server.LinkRunRequest{})
 	r := s.openSession(t, first, server.LinkRunRequest{})
 	gate.Store(true)
 	batch := make(chan []byte, 1)
@@ -797,6 +820,18 @@ func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
 	s.secrets = append(s.secrets, other)
 	if status, b := s.tryOpenWith(t, other, server.LinkRunRequest{}); status != http.StatusUnauthorized || refusalOf(b)["error"] != "run_credential_refused" {
 		t.Errorf("a new run request of the run key: %d %s; want it refused, the run key held", status, b)
+	}
+	// Past the ended run's exp, its refreshed run credential's and their leeway, the live
+	// run's later exp holds the run key; the probe's own exp is earlier, so it extends
+	// nothing.
+	ahead.Store(int64(2*time.Hour + 10*time.Minute))
+	if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("past the ended run's exp: %d %s; want the run key held to the live run's exp", status, b)
+	}
+	// Past the live run's exp and its leeway, the run key opens a new run.
+	ahead.Store(int64(3*time.Hour + 10*time.Minute))
+	if status, b := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
+		t.Errorf("past the latest exp held: %d %s", status, b)
 	}
 	s.close()
 	if b, err := os.ReadFile(filepath.Join(s.dir, runcredential.EndedFile)); err != nil || !strings.Contains(string(b), "rk-0001") {

@@ -1238,7 +1238,7 @@ Forager reads a body's code only from a signed answer:
 |---|---|
 | 2xx, signed | accepted; Forager forgets the batch |
 | 409 to the ping, signed, such as `instance_limit` | no run, with its code |
-| 410, signed, with any code or none | stop: the server requests nothing more for this run. Forager sends no further batch and the run continues on the file sink. A signed `410` to the ping is no run: the ping was not accepted; to the run configuration as the run opens, it is a failure without a code |
+| 410, signed, with any code or none | stop: the server requests nothing more for this run. Forager sends no further batch and the run continues on the file sink. A `410` to the ping, signed or not, is no run: the ping was not accepted; to the run configuration as the run opens, signed or not, it is a failure without a code |
 | anything else, an answer that does not verify, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
 
 Every answer may contain `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
@@ -1959,7 +1959,8 @@ pass is answered `503 Service Unavailable`, `Content-Type: text/plain; charset=u
 with the body "the gateway could not open the run; try again": the issuer's
 introspection endpoint could not be reached, Qory Apiary's `5xx`, signed or not, with
 any code or none, or its signed `429` `rate_limited`, once the tries are spent, its
-signed `410` to the ping or the run configuration, with any code or none, at once, or a
+`410` to the ping or the run configuration, signed or not, with any code or none, at
+once, or a
 failure with neither a code nor a status of Qory Apiary's. One refused for a reason that does not pass is
 answered `403 Forbidden`, `Content-Type: text/plain; charset=utf-8`, with one line:
 "the gateway could not open the run: Qory Apiary refused it, \<code\>" for a code of
