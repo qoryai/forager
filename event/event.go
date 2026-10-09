@@ -68,6 +68,12 @@ const (
 	// the reason of the session's own dev.qory.run.exited after it; the gateway's record
 	// of the same end says session_lost.
 	ReasonBatchRefused = "batch_refused"
+	// ReasonIssuerUnreachable is a run whose issuer's introspection endpoint could not
+	// be reached after the gateway's tries, and ReasonIssuerAnswerInvalid one whose
+	// endpoint gave no valid answer: the gateway's 410 to the session's later requests
+	// of a live run, and the code of its refusal of a run request, a 503 and a 502.
+	ReasonIssuerUnreachable   = "issuer_unreachable"
+	ReasonIssuerAnswerInvalid = "issuer_answer_invalid"
 )
 
 // Prefix is what every type of the contract starts with; a descriptor's session types

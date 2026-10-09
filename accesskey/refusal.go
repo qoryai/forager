@@ -33,6 +33,9 @@ const (
 	CodeInstanceLimit = "instance_limit"
 	// CodeRunClosed is the server's signed 410 to an event of a run it has closed.
 	CodeRunClosed = "run_closed"
+	// CodeNotFound is the server's signed 404 to a run configuration request of a
+	// workspace with no policy.
+	CodeNotFound = "not_found"
 )
 
 // Refusal is an answer, or a decision, that means no run or no key, with its code: the
