@@ -67,6 +67,9 @@ type control struct {
 	closed, stop, closeOnFetch, limit atomic.Bool
 	// deliveries counts every request to the events endpoint, the ping's included.
 	deliveries atomic.Int32
+	// goneAfter, when not zero, answers every request to the events endpoint past that
+	// count of deliveries a signed 410 run_closed, as closed does.
+	goneAfter atomic.Int32
 	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
 	goneOnFetch atomic.Bool
 	// drop, when set, closes every delivery's connection unanswered.
@@ -150,14 +153,16 @@ func newControl(t *testing.T) *control {
 			}
 			return
 		}
+		gone := false
 		if r.URL.Path == "/v1/events" {
-			c.deliveries.Add(1)
+			n := c.deliveries.Add(1)
+			gone = c.goneAfter.Load() != 0 && n > c.goneAfter.Load()
 		}
 		if code := c.refuse.Load(); code != 0 && r.URL.Path == "/v1/events" {
 			w.WriteHeader(int(code))
 			return
 		}
-		if (c.closed.Load() && r.URL.Path == "/v1/events") || (c.goneOnFetch.Load() && r.URL.Path == "/v1/run-configuration") {
+		if gone || (c.closed.Load() && r.URL.Path == "/v1/events") || (c.goneOnFetch.Load() && r.URL.Path == "/v1/run-configuration") {
 			body := []byte(`{"error":"run_closed"}`)
 			w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)

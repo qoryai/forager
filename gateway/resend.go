@@ -32,10 +32,11 @@ type ResendConfig struct {
 // record whose ping the server never accepted, of a run that never opened, is left as
 // it is and sent nothing: NotOpened, Sent and Undelivered 0. So is a record with no
 // ping and no delivered.log, of a run that had no server, sent to one. A server that said stop during the
-// run is sent nothing. A refusal of the server's, at
+// run is sent nothing: Stopped, Sent and Undelivered 0. A refusal of the server's, at
 // its discovery, is an [*accesskey.Refusal] with its From, Code and Names. A server
 // that answers a signed 410 now is sent nothing more, and its record is marked
-// stopped: the events stay in the directory.
+// stopped: Stopped, Sent what it accepted before, and Undelivered the events not sent,
+// which stay in events.jsonl, none under undelivered/.
 func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if cfg.Version == "" {
 		cfg.Version = "dev"
@@ -62,7 +63,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if err != nil {
 		return Delivery{}, err
 	}
-	return Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed, NotOpened: res.NotOpened}, nil
+	return Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed, NotOpened: res.NotOpened, Stopped: res.Stopped}, nil
 }
 
 // ErrRunning says a run's record is still held: by an open run of a gateway's, or by

@@ -523,7 +523,7 @@ func TestCloseAndResend(t *testing.T) {
 	if _, err := relay(h.g.Addr(), lost.ProxySecret).Get("http://a.example/"); err == nil {
 		t.Error("the live run's secret was served after Close")
 	}
-	if d.Undelivered < 5 || d.RunClosed {
+	if d.Undelivered < 5 || d.RunClosed || d.Stopped {
 		t.Errorf("delivery %+v", d)
 	}
 	c.refuse.Store(0)
@@ -532,14 +532,14 @@ func TestCloseAndResend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened {
+	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened || r.Stopped {
 		t.Errorf("resend %+v", r)
 	}
 	r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", lost.RunID)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Completed || r.Sent != 2 {
+	if !r.Completed || r.Sent != 2 || r.Stopped {
 		t.Errorf("resend of the lost run %+v", r)
 	}
 	lines := h.record(lost.RunID)
@@ -553,7 +553,7 @@ func TestCloseAndResend(t *testing.T) {
 
 // TestAResendAfterAServersStop pins a resend the server answers with a signed 410,
 // run_closed among them: it stops and closes no run, the record is marked stopped, and
-// the next resend sends the server nothing and says why.
+// the next resend sends the server nothing and says why, once. Both are Stopped.
 func TestAResendAfterAServersStop(t *testing.T) {
 	c := newControl(t)
 	cfg := gateway.Config{Server: c.server()}
@@ -570,7 +570,7 @@ func TestAResendAfterAServersStop(t *testing.T) {
 	c.closed.Store(true)
 	dir := filepath.Join(h.dir, "runs", a.RunID)
 	d, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
-	if err != nil || d.RunClosed || d.ClosedBy != "" || d.Reason != "" || d.Sent != 0 {
+	if err != nil || d.RunClosed || d.ClosedBy != "" || d.Reason != "" || d.Sent != 0 || !d.Stopped {
 		t.Errorf("the resend the server answers 410: %+v, %v", d, err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "delivered.log")); err != nil || !slices.Contains(strings.Split(string(b), "\n"), "stopped") {
@@ -579,7 +579,7 @@ func TestAResendAfterAServersStop(t *testing.T) {
 	sent := c.deliveries.Load()
 	var reports []string
 	d, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir, Report: func(l string) { reports = append(reports, l) }})
-	if err != nil || d.RunClosed || d.Sent != 0 {
+	if err != nil || d != (gateway.Delivery{Stopped: true}) {
 		t.Errorf("the next resend: %+v, %v", d, err)
 	}
 	if n := c.deliveries.Load() - sent; n != 0 {
@@ -587,6 +587,65 @@ func TestAResendAfterAServersStop(t *testing.T) {
 	}
 	if len(reports) != 1 || reports[0] != "the server said stop during the run; nothing is sent" {
 		t.Errorf("the next resend reports %q", reports)
+	}
+}
+
+// TestAResendTheServerStopsMidway pins a resend the server answers a signed 410 after
+// it accepted its first batch: the delivery is Stopped, Sent the events of that batch
+// alone, which the server holds, and Undelivered the rest, which are not spooled: there
+// is no undelivered/, and they are in events.jsonl alone, which the resend left whole.
+// The stop is reported once, and no line points to undelivered/.
+func TestAResendTheServerStopsMidway(t *testing.T) {
+	c := newControl(t)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetCloseWait(&cfg, 300*time.Millisecond)
+	h := start(t, cfg)
+	a := h.open(server.LinkRunRequest{})
+	c.refuse.Store(http.StatusServiceUnavailable)
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
+	// More events than one batch holds, so the resend posts two.
+	for range 2 {
+		var logs []map[string]any
+		for range 75 {
+			logs = append(logs, logged(a.RunID))
+		}
+		h.post(logs...)
+	}
+	h.post(exited(a.RunID))
+	if d := h.close(); d.Undelivered < 150 || d.Stopped {
+		t.Fatalf("delivery %+v", d)
+	}
+	dir := filepath.Join(h.dir, "runs", a.RunID)
+	before, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owed := len(h.record(a.RunID)) - 1 // all but the ping, which the server accepted
+	c.refuse.Store(0)
+	c.goneAfter.Store(c.deliveries.Load() + 1)
+	stored := c.store.Count()
+	var reports []string
+	d, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir, Report: func(l string) { reports = append(reports, l) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Stopped || d.Sent == 0 || d.Undelivered == 0 || d.Sent+d.Undelivered != owed || d.RunClosed || d.Completed || d.NotOpened {
+		t.Errorf("the resend the server stops midway: %+v, %d owed", d, owed)
+	}
+	if n := c.store.Count() - stored; n != d.Sent {
+		t.Errorf("the server stored %d events, Sent %d", n, d.Sent)
+	}
+	if !slices.Equal(reports, []string{stopLine}) {
+		t.Errorf("reports %q", reports)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "undelivered")); !os.IsNotExist(err) {
+		t.Errorf("undelivered/ after the stop: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "events.jsonl")); string(after) != string(before) {
+		t.Error("the resend changed events.jsonl")
+	}
+	if !stopped(h, a.RunID) {
+		t.Error("the record is not marked stopped")
 	}
 }
 
