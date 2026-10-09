@@ -1,0 +1,689 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"maps"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/link"
+)
+
+// LocalOrigin is the origin of every URL of the local link: the session sends every
+// request over the link's socket, and the host names nothing else.
+const LocalOrigin = "http://localhost"
+
+// LinkContentType is the content type of a run request on the link.
+const LinkContentType = "application/json"
+
+// EndCodes are the codes of a 410 on the link, the end of a run at the gateway, which
+// the session records as the reason of its dev.qory.run.exited: the server closed the
+// run, the run credential expired with no fresh one, or its issuer reports it no longer
+// active. A 410 with another code, or none, is run_closed.
+var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer}
+
+// CodeInvalidRequest is the gateway's 400 to a request of the link its rules refuse; to
+// a batch it ends the run.
+const CodeInvalidRequest = "invalid_request"
+
+// ErrLinkPeer is the error of a local link whose socket's peer is another user than
+// this process's: the link secret is not written.
+var ErrLinkPeer = errors.New("the socket's peer is another user; the link secret is not sent")
+
+// LinkDiscovery is what the gateway answers discovery with on its link,
+// contracts/forager/v1/link-discovery.schema.json: where the session posts its events,
+// which, and every how many seconds it sends a heartbeat; where it opens a run; and
+// the gateway's proxy address. A member Forager does not know is ignored.
+type LinkDiscovery struct {
+	Version int        `json:"version"`
+	Events  LinkEvents `json:"events"`
+	Run     Endpoint   `json:"run"`
+	// Proxy is nil when the discovery names no proxy address.
+	Proxy *LinkProxy `json:"proxy,omitempty"`
+}
+
+// LinkEvents is the events section of the link's discovery.
+type LinkEvents struct {
+	URL string `json:"url"`
+	// Types are full type names, or "*" for every type.
+	Types []string `json:"types"`
+	// IntervalSeconds is the gateway's heartbeat interval: the session sends its
+	// heartbeats this often, and the gateway ends a run whose session sends nothing for
+	// three intervals.
+	IntervalSeconds int `json:"interval_seconds"`
+}
+
+// LinkProxy is the gateway's proxy: its one address, host:port, which every
+// connection opens with the relay's preamble and the run's proxy secret.
+type LinkProxy struct {
+	Address string `json:"address"`
+}
+
+// LinkRunRequest is the body of the session's POST to the run URL of the link,
+// contracts/forager/v1/link-run-request.schema.json, which opens a run.
+type LinkRunRequest struct {
+	Version int `json:"version"`
+	// RunID is the run's id, which the session chooses: a UUID in the canonical
+	// lower-case form.
+	RunID string `json:"run_id"`
+	// Wall says whether the session runs the agent behind a wall.
+	Wall bool `json:"wall"`
+	// Labels are the run's labels, as run.started reports them.
+	Labels map[string]string `json:"labels,omitempty"`
+	// About is what the run is about, as run.started reports it, [ReportedAbout].
+	About *About `json:"about,omitempty"`
+	// Narrowing is the session's narrowing of the policy, behind a separate gateway
+	// alone: the local link refuses one, and [Link.OpenRun] sends none on it.
+	Narrowing *LinkNarrowing `json:"narrowing,omitempty"`
+	// Passes are the names of the variables the run passes a value for, in what it
+	// inherits, what the harness sets and its variables: names alone, never a value.
+	// The gateway refuses a credential's or a tool's placeholder the run passes, as the
+	// session does.
+	Passes []string `json:"passes,omitempty"`
+	// Images are the images the session resolves a policy's selection against, so the
+	// gateway decides the run's image as the session does.
+	Images *LinkImages `json:"images,omitempty"`
+}
+
+// LinkNarrowing is a session's narrowing of the policy the gateway holds for its run.
+type LinkNarrowing struct {
+	Egress LinkNarrowingEgress `json:"egress"`
+}
+
+// LinkNarrowingEgress is a narrowing's egress: hosts it allows, and hosts it denies,
+// each in the grammar of the policy's egress.allow.
+type LinkNarrowingEgress struct {
+	Allow []string `json:"allow,omitempty"`
+	Deny  []string `json:"deny,omitempty"`
+}
+
+// LinkImages are the session's images: its default, the name of one of Definitions or
+// a reference, and the images the machine defines, which a policy selects by name.
+// A reference may carry a registry's credentials in its user information: neither the
+// session's client nor the gateway logs or reports one.
+type LinkImages struct {
+	Default     string      `json:"default,omitempty"`
+	Definitions []LinkImage `json:"definitions,omitempty"`
+}
+
+// LinkImage is one image: its name, empty for the default given as a reference, its
+// reference, the container runtime the wall starts it under, empty for the engine's
+// default, and whether it gives the agent a Docker daemon of its own.
+type LinkImage struct {
+	Name    string `json:"name,omitempty"`
+	Ref     string `json:"ref"`
+	Runtime string `json:"runtime,omitempty"`
+	Docker  bool   `json:"docker,omitempty"`
+}
+
+// LinkRunAnswer is what the gateway answers a run request it accepts,
+// contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
+// ignored. Its ProxySecret is never printed: fmt and log/slog show it as [redacted].
+type LinkRunAnswer struct {
+	Version int    `json:"version"`
+	RunID   string `json:"run_id"`
+	// Policy is the policy in force for the run, as policy.schema.json defines it, and
+	// Digest the hex SHA-256 of its canonical JSON; each is present with the other, and
+	// with neither the gateway observes everything.
+	Policy json.RawMessage `json:"policy,omitzero"`
+	Digest string          `json:"digest,omitempty"`
+	// Variables are the run's variables by name; nil when the answer has none.
+	Variables map[string]Variable `json:"variables,omitzero"`
+	// ProxySecret is the run's proxy secret, which opens every connection to the
+	// gateway's proxy after the relay's preamble.
+	ProxySecret string `json:"proxy_secret"`
+	// CertificateAuthority is the run's certificate authority, PEM, when the run has a
+	// wall and the gateway reads inside HTTPS for it.
+	CertificateAuthority string `json:"certificate_authority,omitempty"`
+	// Placeholders are the variables the agent sees in place of a credential or a
+	// tool's secret.
+	Placeholders []string `json:"placeholders,omitempty"`
+	// Reserved are the names of the variables the gateway sets for the run, which the
+	// session must not set.
+	Reserved []string `json:"reserved,omitempty"`
+	// Image is the image the run gets, when it has a wall.
+	Image *LinkImage `json:"image,omitempty"`
+	// Labels are the run's labels as the gateway holds them, which run.started reports.
+	Labels map[string]string `json:"labels,omitempty"`
+	// Details are the keys of about.details the run credential decides, a JSON object,
+	// which run.started reports; nil when the answer has none.
+	Details json.RawMessage `json:"details,omitzero"`
+}
+
+// Values are the answer's variables as values by name; nil when it has none.
+func (a *LinkRunAnswer) Values() map[string]string { return values(a.Variables) }
+
+// redactedSecret is what a secret is printed as.
+const redactedSecret = "[redacted]"
+
+// shownRunAnswer is a LinkRunAnswer without its methods, which fmt prints the way it
+// prints any struct.
+type shownRunAnswer LinkRunAnswer
+
+func (a LinkRunAnswer) shown() shownRunAnswer {
+	s := shownRunAnswer(a)
+	if s.ProxySecret != "" {
+		s.ProxySecret = redactedSecret
+	}
+	return s
+}
+
+// Format prints a as fmt prints a struct, under every verb and flag, with its
+// ProxySecret redacted.
+func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "server.shownRunAnswer", "server.LinkRunAnswer", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is a as %v prints it, its ProxySecret redacted.
+func (a LinkRunAnswer) String() string { return fmt.Sprintf("%v", a) }
+
+// GoString is a as %#v prints it, its ProxySecret redacted.
+func (a LinkRunAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
+
+// LogValue is a as log/slog logs it: its run id, digest and the names it carries,
+// never a variable's value, the proxy secret or the certificate.
+func (a LinkRunAnswer) LogValue() slog.Value {
+	names := slices.Sorted(maps.Keys(a.Variables))
+	return slog.GroupValue(
+		slog.String("run_id", a.RunID),
+		slog.String("digest", a.Digest),
+		slog.Any("variables", names),
+		slog.String("proxy_secret", a.shown().ProxySecret),
+		slog.Any("placeholders", a.Placeholders),
+		slog.Any("reserved", a.Reserved),
+	)
+}
+
+// LinkReloadAnswer is what the gateway answers a reload with,
+// contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
+// now, its digest and the run's variables, placeholders, reserved names and image. It
+// never holds the proxy secret or the certificate authority.
+type LinkReloadAnswer struct {
+	Version      int                 `json:"version"`
+	Policy       json.RawMessage     `json:"policy,omitzero"`
+	Digest       string              `json:"digest,omitempty"`
+	Variables    map[string]Variable `json:"variables,omitzero"`
+	Placeholders []string            `json:"placeholders,omitempty"`
+	Reserved     []string            `json:"reserved,omitempty"`
+	Image        *LinkImage          `json:"image,omitempty"`
+}
+
+// Values are the answer's variables as values by name; nil when it has none.
+func (a *LinkReloadAnswer) Values() map[string]string { return values(a.Variables) }
+
+// LinkRefusal is the body of a coded refusal on the link: the code, the names it
+// concerns, and who refused, "gateway" or "apiary", the server's refusal passed on with
+// its code and status. Without From it is the gateway's.
+type LinkRefusal struct {
+	Error string   `json:"error"`
+	Names []string `json:"names,omitempty"`
+	From  string   `json:"from,omitempty"`
+}
+
+// values are variables as values by name; nil for none.
+func values(vars map[string]Variable) map[string]string {
+	if vars == nil {
+		return nil
+	}
+	out := make(map[string]string, len(vars))
+	for name, v := range vars {
+		out[name] = v.Value
+	}
+	return out
+}
+
+// Link is the session's client of its gateway's link: discovery, the run request, the
+// reload and the delivery of the session's batches, the protocol Forager speaks toward
+// the server on the same paths, unsigned. Its transport authenticates both ends: on the
+// local link, [NewLocalLink], the socket's peer is this process's user, checked before
+// the link secret is written on each connection, and the secret opens every
+// connection. Every URL it requests must have its origin, so nothing it sends leaves
+// the link, and it follows no redirect.
+//
+// A Link never prints the link secret: fmt and log/slog show it by its socket, and no
+// error it returns contains the secret.
+type Link struct {
+	// userAgent is sent as User-Agent.
+	userAgent string
+	// origin is the scheme and host every URL of the link has.
+	origin string
+	// name is how errors name the link.
+	name string
+	// digests gets the digests of every answer of Discover, OpenRun and Reload other
+	// than a 410; nil means nobody.
+	digests func(Digests)
+	// uid is the user the local link's socket's peer must be.
+	uid  int
+	http *http.Client
+}
+
+// NewLocalLink returns the client of a gateway's local link: each connection dials
+// the Unix socket at l.Socket, checks that its peer is this process's user, and only
+// then writes the link's preamble with l.Secret, before HTTP/1.1. userAgent is sent as
+// User-Agent, [accesskey.UserAgent]; digests, when not nil, gets the digests of every
+// answer of Discover, OpenRun and Reload other than a 410, synchronously before the
+// call returns, and Deliver's are in the [Delivery] it returns. A Local without a
+// socket, or whose secret no preamble carries, is refused; nothing is dialled.
+func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link, error) {
+	if l.Socket == "" {
+		return nil, errors.New("the gateway's local link has no socket")
+	}
+	if err := link.WriteLinkPreamble(io.Discard, l.Secret); err != nil {
+		return nil, fmt.Errorf("the gateway's local link %s: %w", l.Socket, err)
+	}
+	k := &Link{userAgent: userAgent, origin: LocalOrigin, name: "the gateway's local link " + l.Socket, digests: digests, uid: os.Getuid()}
+	socket, secret := l.Socket, l.Secret
+	k.http = &http.Client{
+		Timeout: Timeout,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return k.dialLocal(ctx, socket, secret)
+			},
+			DisableCompression: true,
+			MaxIdleConns:       4,
+			IdleConnTimeout:    90 * time.Second,
+		},
+		// A 3xx is a status like any other: nothing the session sends leaves the link.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return k, nil
+}
+
+// dialLocal opens one connection of the local link: it dials the socket, checks the
+// peer's uid, and writes the preamble with the secret, in one write, within the
+// context's deadline.
+func (k *Link) dialLocal(ctx context.Context, socket, secret string) (net.Conn, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, err)
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("%s: not a Unix socket", k.name)
+	}
+	uid, err := peerUID(uc)
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("%s: the socket's peer: %w", k.name, err)
+	}
+	if uid != k.uid {
+		c.Close()
+		return nil, fmt.Errorf("%s: the peer is uid %d, this process is uid %d: %w", k.name, uid, k.uid, ErrLinkPeer)
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(link.PreambleWait)
+	}
+	c.SetWriteDeadline(deadline)
+	if err := link.WriteLinkPreamble(c, secret); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("%s: the preamble: %w", k.name, err)
+	}
+	c.SetWriteDeadline(time.Time{})
+	return c, nil
+}
+
+// Format prints k by the link it speaks to, under every verb: never its secret.
+func (k *Link) Format(f fmt.State, _ rune) { io.WriteString(f, k.String()) }
+
+// String names the link, never its secret.
+func (k *Link) String() string {
+	if k == nil {
+		return "server.Link(nil)"
+	}
+	return "server.Link{" + k.name + "}"
+}
+
+// GoString is k as %#v prints it, never its secret.
+func (k *Link) GoString() string { return k.String() }
+
+// LogValue is k as log/slog logs it: the link it speaks to, never its secret.
+func (k *Link) LogValue() slog.Value { return slog.StringValue(k.String()) }
+
+// Close closes the link's idle connections.
+func (k *Link) Close() { k.http.CloseIdleConnections() }
+
+// onLink refuses a URL that is not the link's origin and a path: on the local link,
+// http://localhost and a path, with no port, user information, query or fragment. The
+// error names what the URL is, never the URL, which could carry user information.
+func (k *Link) onLink(what, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Scheme+"://"+u.Host != k.origin ||
+		!strings.HasPrefix(u.Path, "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("%s is not %s and a path, which every URL of the link is", what, k.origin)
+	}
+	return nil
+}
+
+// linkAnswer is what the gateway answered one request on the link.
+type linkAnswer struct {
+	status  int
+	body    []byte
+	digests Digests
+}
+
+// send sends one request on the link and reads its answer, at most max bytes of body:
+// a longer one is read as no body. The request carries User-Agent and the contract
+// revision, and set's headers; no access key, instance, timestamp or signature. An
+// error is a transport failure: no answer.
+func (k *Link) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*linkAnswer, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, rd)
+	if err != nil {
+		return nil, err
+	}
+	if set != nil {
+		set(req.Header)
+	}
+	req.Header.Set("User-Agent", k.userAgent)
+	req.Header.Set(HeaderContractVersion, strconv.Itoa(Revision))
+	resp, err := k.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > max {
+		b = nil
+	}
+	one := func(name string) string {
+		if v := resp.Header.Values(name); len(v) == 1 {
+			return v[0]
+		}
+		return ""
+	}
+	return &linkAnswer{status: resp.StatusCode, body: b, digests: Digests{Configuration: one(HeaderConfiguration), RunConfiguration: one(HeaderRunConfiguration)}}, nil
+}
+
+// end is the end of the run a 410's body says, one of [EndCodes], else run_closed.
+func (a *linkAnswer) end() string {
+	if r := accesskey.ReadRefusal(a.status, a.body); r != nil && slices.Contains(EndCodes, r.Code) {
+		return r.Code
+	}
+	return accesskey.CodeRunClosed
+}
+
+// from is who refused, by the body's from: apiary when it says so, else the gateway.
+func (a *linkAnswer) from() string {
+	var doc struct {
+		From string `json:"from"`
+	}
+	if jsonv2.Unmarshal(a.body, &doc) == nil && doc.From == accesskey.FromApiary {
+		return accesskey.FromApiary
+	}
+	return accesskey.FromGateway
+}
+
+// refusal is the error of an answer that is not the one wanted: a 410 is the end of
+// the run, its code one of [EndCodes]; a coded body is its code with its names and who
+// refused; anything else names its status.
+func (a *linkAnswer) refusal(what string) error {
+	if a.status == http.StatusGone {
+		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from()}
+	}
+	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
+		r.Detail, r.From = what, a.from()
+		return r
+	}
+	return fmt.Errorf("%s: status %d", what, a.status)
+}
+
+// Ended reports the end of the run an error of the link carries: the code of a 410,
+// one of [EndCodes], which the session records as the reason of its
+// dev.qory.run.exited.
+func Ended(err error) (string, bool) {
+	var r *accesskey.Refusal
+	if errors.As(err, &r) && r.Status == http.StatusGone {
+		return r.Code, true
+	}
+	return "", false
+}
+
+// hand gives the answer's digests to the caller, unless it is a 410: a run that ended
+// has nothing to reload.
+func (k *Link) hand(a *linkAnswer) {
+	if k.digests != nil && a.status != http.StatusGone {
+		k.digests(a.digests)
+	}
+}
+
+// fetch makes one request of a document on the link, which must answer 200; it
+// validates the body against the schema and decodes it into out.
+func (k *Link) fetch(ctx context.Context, what, method, u string, body []byte, set func(http.Header), schemaName string, out any) error {
+	a, err := k.send(ctx, method, u, body, MaxDocument, set)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", what, u, err)
+	}
+	k.hand(a)
+	if a.status != http.StatusOK {
+		return a.refusal(what + " " + u)
+	}
+	if err := readLinkDocument(schemaName, a.body, out); err != nil {
+		return &DocumentError{what, u, err}
+	}
+	return nil
+}
+
+// variableName is a name placeholders and reserved list.
+var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+// readLinkDocument reads a document of the link: through encoding/json/v2 first, which
+// refuses a member name that appears twice and invalid UTF-8, then against the schema,
+// then against the rules the schema does not state. Its errors say where in the
+// document and which rule, never a value: an answer holds the run's proxy secret and
+// variables.
+func readLinkDocument(schemaName string, body []byte, out any) error {
+	var v any
+	if err := jsonv2.Unmarshal(body, &v); err != nil {
+		var syn *jsontext.SyntacticError
+		if errors.As(err, &syn) && syn.JSONPointer != "" {
+			return fmt.Errorf("it is not one JSON value in UTF-8 with each member name once, at %s", syn.JSONPointer)
+		}
+		return errors.New("it is not one JSON value in UTF-8 with each member name once")
+	}
+	doc, err := contracts.Decode("link.json", body)
+	if err != nil {
+		return errors.New("it is not JSON")
+	}
+	schema, err := contracts.Compile(schemaName)
+	if err != nil {
+		return err
+	}
+	if err := schema.Validate(doc); err != nil {
+		var ve *jsonschema.ValidationError
+		if !errors.As(err, &ve) {
+			return fmt.Errorf("%s refuses it", schemaName)
+		}
+		return fmt.Errorf("%s refuses %s", schemaName, strings.Join(leaves(ve), ", "))
+	}
+	if err := jsonv2.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("it does not decode as %s defines it and the link's members", schemaName)
+	}
+	return nil
+}
+
+// checkRunMembers refuses what the schemas do not hold: a variable's value over
+// [MaxVariableValue] bytes, a placeholder or reserved name that is no variable's, and
+// an image without a reference.
+func checkRunMembers(vars map[string]Variable, placeholders, reserved []string, image *LinkImage) error {
+	for name, v := range vars {
+		if len(v.Value) > MaxVariableValue {
+			return fmt.Errorf("the variable %s holds more than %d bytes", name, MaxVariableValue)
+		}
+	}
+	for i, name := range placeholders {
+		if !variableName.MatchString(name) {
+			return fmt.Errorf("/placeholders/%d is no variable's name", i)
+		}
+	}
+	for i, name := range reserved {
+		if !variableName.MatchString(name) {
+			return fmt.Errorf("/reserved/%d is no variable's name", i)
+		}
+	}
+	if image != nil && image.Ref == "" {
+		return errors.New("/image has no reference")
+	}
+	return nil
+}
+
+// Discover fetches the link's discovery from its well-known path. It refuses a
+// discovery whose events or run URL is not on the link, http://localhost and a path on
+// the local link, and a proxy address that is not host:port.
+func (k *Link) Discover(ctx context.Context) (*LinkDiscovery, error) {
+	u := k.origin + WellKnown
+	var d LinkDiscovery
+	if err := k.fetch(ctx, "the link's discovery", http.MethodGet, u, nil, nil, "link-discovery.schema.json", &d); err != nil {
+		return nil, err
+	}
+	if err := k.onLink("events.url", d.Events.URL); err != nil {
+		return nil, &DocumentError{"the link's discovery", u, err}
+	}
+	if err := k.onLink("run.url", d.Run.URL); err != nil {
+		return nil, &DocumentError{"the link's discovery", u, err}
+	}
+	if d.Proxy != nil {
+		if _, port, err := net.SplitHostPort(d.Proxy.Address); err != nil || port == "" {
+			return nil, &DocumentError{"the link's discovery", u, errors.New("proxy.address is not host:port")}
+		}
+	}
+	return &d, nil
+}
+
+// runIDShape is a run id's form on the link: a UUID in the canonical lower-case form.
+var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// OpenRun posts the run request to runURL, the discovery's run.url, and returns the
+// run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
+// of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
+// who refused, From.
+func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, err)
+	}
+	if !runIDShape.MatchString(req.RunID) {
+		return nil, fmt.Errorf("the run request: the run id is not a UUID in the canonical lower-case form")
+	}
+	if req.Narrowing != nil && k.origin == LocalOrigin {
+		return nil, errors.New("the run request: the local link takes no narrowing")
+	}
+	if req.Version == 0 {
+		req.Version = 1
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("the run request: %w", err)
+	}
+	var a LinkRunAnswer
+	if err := k.fetch(ctx, "the run request", http.MethodPost, runURL, body, func(h http.Header) { h.Set("Content-Type", LinkContentType) }, "link-run-answer.schema.json", &a); err != nil {
+		return nil, err
+	}
+	if a.RunID != req.RunID {
+		return nil, &DocumentError{"the run answer", runURL, errors.New("its run_id is not the request's")}
+	}
+	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
+		return nil, &DocumentError{"the run answer", runURL, err}
+	}
+	if err := CheckLabels(a.Labels); err != nil {
+		return nil, &DocumentError{"the run answer", runURL, fmt.Errorf("/labels: %w", err)}
+	}
+	if a.Details != nil {
+		if why := checkDetails(a.Details); why != "" {
+			return nil, &DocumentError{"the run answer", runURL, errors.New("/details " + why)}
+		}
+	}
+	return &a, nil
+}
+
+// Reload fetches the run's configuration again by its run id, a GET of
+// <runURL>/<runID> with no query, and returns the reload answer. A 410 is the end of
+// the run, [Ended]; a coded refusal is an [*accesskey.Refusal].
+func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAnswer, error) {
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", k.name, err)
+	}
+	if !runIDShape.MatchString(runID) {
+		return nil, errors.New("the reload: the run id is not a UUID in the canonical lower-case form")
+	}
+	u := strings.TrimSuffix(runURL, "/") + "/" + runID
+	var a LinkReloadAnswer
+	if err := k.fetch(ctx, "the reload", http.MethodGet, u, nil, nil, "link-reload-answer.schema.json", &a); err != nil {
+		return nil, err
+	}
+	if err := checkRunMembers(a.Variables, a.Placeholders, a.Reserved, a.Image); err != nil {
+		return nil, &DocumentError{"the reload answer", u, err}
+	}
+	return &a, nil
+}
+
+// Deliver posts one link batch to eventsURL, the discovery's events.url, as the
+// delivery with the given id, with the run configuration digest when it holds one, and
+// returns what the gateway answered, its Link set: a 2xx is accepted; a 410 ends the
+// run with its End, one of [EndCodes], and its From; a 400 invalid_request ends it
+// too, the gateway having ended the run, with run_closed; anything else is retried. The
+// digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
+// Timeout is an error. The body is the session's events of the run, with their ids and
+// without sequence.
+func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (Delivery, error) {
+	if err := k.onLink("the events URL", eventsURL); err != nil {
+		return Delivery{}, fmt.Errorf("%s: %w", k.name, err)
+	}
+	a, err := k.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
+		h.Set("Content-Type", ContentType)
+		h.Set(HeaderDelivery, deliveryID)
+		if runDigest != "" {
+			h.Set(HeaderRunConfiguration, runDigest)
+		}
+	})
+	if err != nil {
+		return Delivery{}, err
+	}
+	d := Delivery{Status: a.status, Link: true}
+	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
+		d.Code = r.Code
+	}
+	switch {
+	case a.status == http.StatusGone:
+		d.End, d.From = a.end(), a.from()
+	case a.status == http.StatusBadRequest && d.Code == CodeInvalidRequest:
+		// The gateway ends a run whose batch it refuses: its later requests are a 410
+		// run_closed, and the session records run_closed as after one.
+		d.End, d.From = accesskey.CodeRunClosed, a.from()
+	default:
+		d.Digests = a.digests
+	}
+	return d, nil
+}

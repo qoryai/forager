@@ -1,8 +1,11 @@
 package sink_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +17,9 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
@@ -326,4 +331,163 @@ func (r resigning) WriteHeader(status int) {
 	a := accesskey.Answer{Status: status, RequestSignature: r.sig, Body: []byte(`{"error":"run_closed"}`), Configuration: r.Header().Get(server.HeaderConfiguration), RunConfiguration: r.Header().Get(server.HeaderRunConfiguration)}
 	r.Header().Set(server.HeaderSignature, signer.SignAnswer(a))
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// linkSecret is the link secret of the link sink's tests.
+const linkSecret = "link-secret-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+
+// linkGateway is a fake gateway's link whose events endpoint answers each batch with
+// the status answer gives it, and keeps the bodies and when each arrived.
+type linkGateway struct {
+	mu     sync.Mutex
+	bodies [][]byte
+	at     []time.Time
+	answer func(n int) (int, string)
+}
+
+func (g *linkGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	g.mu.Lock()
+	g.bodies = append(g.bodies, b)
+	g.at = append(g.at, time.Now())
+	n := len(g.bodies)
+	g.mu.Unlock()
+	status, body := g.answer(n)
+	w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("b", 64))
+	w.WriteHeader(status)
+	io.WriteString(w, body)
+}
+
+func (g *linkGateway) hits() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.bodies)
+}
+
+// linkSink is a sink posting to the fake gateway's link with the link's short wait.
+func linkSink(t *testing.T, g *linkGateway, c sink.Config) *sink.Server {
+	t.Helper()
+	gw := linktest.Start(t, linkSecret, g)
+	k, err := server.NewLocalLink(gw.Local(), "qory-forager/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.Close)
+	c.To, c.Target, c.Wait, c.Link = k, sink.Target{URL: "http://localhost/v1/events", Types: []string{"*"}}, sink.LinkBatchWait, true
+	return sink.New(c)
+}
+
+// TestTheLinkSinkPostsUnnumberedBatchesAndRetries pins the session's batches to its
+// gateway: a batch waits the link's short wait, not the server's; its events are a
+// link batch, with their ids and without sequence; an answer other than a 2xx is
+// retried after the backoff with the same body; the digests of the answers reach the
+// caller; and a sink with no run directory writes no record of its deliveries.
+func TestTheLinkSinkPostsUnnumberedBatchesAndRetries(t *testing.T) {
+	g := &linkGateway{answer: func(n int) (int, string) {
+		if n == 1 {
+			return http.StatusServiceUnavailable, ""
+		}
+		return http.StatusAccepted, ""
+	}}
+	var digests atomic.Int32
+	cwd, _ := os.Getwd()
+	w := linkSink(t, g, sink.Config{OnDigests: func(d server.Digests) {
+		if d.RunConfiguration != "" {
+			digests.Add(1)
+		}
+	}})
+	e := event.NewEmitter(event.NewRunID(), nil)
+	start := time.Now()
+	ev := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30})
+	w.Write(ev)
+	waitFor(t, func() bool { return g.hits() == 2 })
+	w.Close(context.Background())
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if first := g.at[0].Sub(start); first >= sink.BatchWait/2 {
+		t.Errorf("the first batch went after %v, not the link's short wait", first)
+	}
+	if again := g.at[1].Sub(g.at[0]); again < sink.Backoff/2 {
+		t.Errorf("the retry came after %v", again)
+	}
+	if !bytes.Equal(g.bodies[0], g.bodies[1]) || bytes.Contains(g.bodies[0], []byte(`"sequence"`)) || !bytes.Contains(g.bodies[0], []byte(ev.ID)) {
+		t.Errorf("the batches %s and %s", g.bodies[0], g.bodies[1])
+	}
+	schema, err := contracts.Compile("link-batch.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := contracts.Decode("batch.json", g.bodies[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("the batch is no link batch: %v", err)
+	}
+	if digests.Load() != 2 || w.Undelivered() != 0 || w.Stopped() {
+		t.Errorf("%d digests, %d undelivered, stopped %v", digests.Load(), w.Undelivered(), w.Stopped())
+	}
+	if _, err := os.Stat(filepath.Join(cwd, sink.DeliveredFile)); err == nil {
+		t.Error("a sink with no run directory wrote the record of accepted batches")
+	}
+}
+
+// TestTheGatewaysEndOfTheRunReachesTheCaller pins an answer on the link that ends the
+// run, a 410 or a 400 invalid_request to a batch: the sink stops and tells the caller
+// once with the end code, which the session records as its run.exited reason, and who
+// ended the run; the words for the user are the caller's, so the sink reports nothing
+// itself.
+func TestTheGatewaysEndOfTheRunReachesTheCaller(t *testing.T) {
+	for _, c := range []struct {
+		status     int
+		body, want string
+	}{
+		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway"},
+		{http.StatusGone, `{"error":"run_closed","from":"apiary"}`, "run_closed apiary"},
+		{http.StatusBadRequest, `{"error":"invalid_request"}`, "run_closed gateway"},
+	} {
+		g := &linkGateway{answer: func(int) (int, string) { return c.status, c.body }}
+		var mu sync.Mutex
+		var codes, notes []string
+		var digests atomic.Int32
+		w := linkSink(t, g, sink.Config{
+			OnEnded:   func(code, from string) { mu.Lock(); codes = append(codes, code+" "+from); mu.Unlock() },
+			Report:    func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() },
+			OnDigests: func(server.Digests) { digests.Add(1) },
+		})
+		e := event.NewEmitter(event.NewRunID(), nil)
+		w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+		waitFor(t, w.RunClosed)
+		w.Write(e.Make(event.RunExited, map[string]any{"state": "failed", "reason": "run_closed"}))
+		w.Close(context.Background())
+		mu.Lock()
+		if g.hits() != 1 || !w.Stopped() || fmt.Sprint(codes) != "["+c.want+"]" || digests.Load() != 0 || w.Undelivered() != 0 {
+			t.Errorf("%d %s: %d deliveries, stopped %v, codes %v, %d digests, %d undelivered", c.status, c.body, g.hits(), w.Stopped(), codes, digests.Load(), w.Undelivered())
+		}
+		if len(notes) != 0 {
+			t.Errorf("%d %s: the sink reported the gateway's end itself: %v", c.status, c.body, notes)
+		}
+		mu.Unlock()
+	}
+}
+
+// TestALinkSinkWithoutARunDirectoryCountsWhatItCouldNotDeliver pins a link sink with
+// no run directory: what the gateway did not accept by the end is counted for the
+// caller, written nowhere, and not reported by the sink.
+func TestALinkSinkWithoutARunDirectoryCountsWhatItCouldNotDeliver(t *testing.T) {
+	g := &linkGateway{answer: func(int) (int, string) { return http.StatusServiceUnavailable, "" }}
+	var mu sync.Mutex
+	var notes []string
+	w := linkSink(t, g, sink.Config{Report: func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }})
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	waitFor(t, func() bool { return g.hits() >= 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	w.Close(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	if w.Undelivered() != 1 || len(notes) != 0 {
+		t.Errorf("%d undelivered, notes %q", w.Undelivered(), notes)
+	}
 }
