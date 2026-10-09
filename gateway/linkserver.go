@@ -137,6 +137,7 @@ func (l *linkListener) Close() error {
 	return err
 }
 
+// Addr is the link's socket.
 func (l *linkListener) Addr() net.Addr { return l.ln.Addr() }
 
 // linkConn reads through the reader the preamble was read with, which may hold the

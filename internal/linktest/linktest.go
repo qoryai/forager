@@ -102,6 +102,7 @@ func (l *listener) check(c net.Conn) {
 	}
 }
 
+// Accept is the next connection whose preamble held.
 func (l *listener) Accept() (net.Conn, error) {
 	select {
 	case c := <-l.conns:
