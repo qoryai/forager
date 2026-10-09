@@ -18,6 +18,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 )
 
@@ -152,7 +153,8 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // schema of the gateway's link its name starts with: the discovery of the local link and
 // of a separate gateway, a run request without a wall and one with a wall and a
 // narrowing, a run answer with a wall, without one and without a policy, a reload
-// answer with and without a policy, and a batch of a session's events without sequence.
+// answer with and without a policy, a batch of a session's events without sequence, and a
+// batch of a run.refused with a session's own code.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	seen := map[string]bool{}
@@ -179,24 +181,74 @@ func TestLinkFixturesValidate(t *testing.T) {
 	}
 }
 
-// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
-// the schema its name starts with: a policy that widens, a server without its access
-// key id or its pin or with a secret, a configuration without events, a ping whose
-// interval is over 300 seconds, an event with an unpadded sequence, a run.started
-// without opened_by, with an unknown one, opened by a session without its command or by
-// a gateway with one, a run.exited with an unknown reason, with quiet and no
-// quiet_seconds or with quiet_seconds and another reason, a descriptor with an
-// expression, a link run request without wall, whose run id is not lower-case or whose
-// narrowing holds a member it does not define, a link run answer without its proxy
-// secret, a link reload answer with the proxy secret or the certificate authority, a
-// link batch whose event carries a sequence, that holds a ping or a run.egress, a
-// run.started a gateway opened, or a run.exited with gateway_lost, session_lost or
-// quiet, a link discovery that lists a node or has no heartbeat interval, and run
-// credentials with alg none or HS256, without an audience, with a label of claims and
-// no join, a key without its file, a plain http issuer, a run_key from a claim other
-// than sub, or a member the schema does not define. The longest schema name the file name
-// starts with is the schema, so run-configuration-variable-value-not-string is held to
-// the run configuration and not to a schema named run.
+// TestLinkBatchRefusedCodesAreTheSessions pins the codes a link batch's
+// dev.qory.run.refused may carry to the codes the session decides itself: every code of
+// link-batch.schema.json's enum is one refusal.Decides reports, and every code of
+// run.refused.schema.json that refusal.Decides reports is in it.
+func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
+	read := func(name string) map[string]any {
+		b, err := fs.ReadFile(contracts.FS, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(b, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	// at follows the keys from v, and returns nil where one is missing.
+	at := func(v any, keys ...string) any {
+		for _, k := range keys {
+			m, _ := v.(map[string]any)
+			v = m[k]
+		}
+		return v
+	}
+	var link []any
+	parts, _ := at(read(linkBatch), "$defs", "event", "allOf").([]any)
+	for _, part := range parts {
+		if at(part, "if", "properties", "type", "const") == "dev.qory.run.refused" {
+			link, _ = at(part, "then", "properties", "data", "properties", "code", "enum").([]any)
+		}
+	}
+	if len(link) == 0 {
+		t.Fatal("link-batch.schema.json holds no code enum for dev.qory.run.refused")
+	}
+	allowed := map[string]bool{}
+	for _, c := range link {
+		allowed[c.(string)] = true
+		if !refusal.Decides(c.(string)) {
+			t.Errorf("a link batch's run.refused allows %s, which the session does not decide", c)
+		}
+	}
+	all, _ := at(read("events/run.refused.schema.json"), "properties", "code", "enum").([]any)
+	for _, c := range all {
+		if refusal.Decides(c.(string)) && !allowed[c.(string)] {
+			t.Errorf("a link batch's run.refused does not allow %s, which the session decides", c)
+		}
+	}
+}
+
+// TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
+// schema its name starts with: a policy that widens, a server without its access key id
+// or its pin or with a secret, a configuration without events, a ping whose interval is
+// over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
+// with an unknown one, opened by a session without its command or by a gateway with one,
+// a run.exited with an unknown reason, with quiet and no quiet_seconds or with
+// quiet_seconds and another reason, a descriptor with an expression, a link run request
+// without wall, whose run id is not lower-case or whose narrowing holds a member it does
+// not define, a link run answer without its proxy secret, a link reload answer with the
+// proxy secret or the certificate authority, a link batch whose event carries a sequence,
+// that holds a ping or a run.egress, a run.started a gateway opened, a run.exited with
+// gateway_lost, session_lost or quiet, or a run.refused with a gateway's code,
+// run_closed, another code of the server's or a name of the form <member>=<value>, a link
+// discovery that lists a node or has no heartbeat interval, and run credentials with alg
+// none or HS256, without an audience, with a label of claims and no join, a key without
+// its file, a plain http issuer, a run_key from a claim other than sub, or a member the
+// schema does not define. The longest schema name the file name starts with is the
+// schema, so run-configuration-variable-value-not-string is held to the run configuration
+// and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",

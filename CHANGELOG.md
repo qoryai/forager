@@ -209,39 +209,52 @@ release may change what an existing document does, and says so under Upgrading.
   `invalid_request`, `run_credential_refused`, `run_id_used`,
   `target_differs_from_credential` or `differs_from_credential`, the last two naming
   each member that differs as `<member>=<the run credential's value>`.
-  The answer, `link-run-answer.schema.json`, has `run_id`, the policy in force and its
-  `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is true, its
-  `certificate_authority`. Discovery on the link is `link-discovery.schema.json`, with
-  `events.interval_seconds`, the gateway's heartbeat interval, and no `node_id`,
-  `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`, events without
-  `sequence`, which the gateway numbers. A session writes no event the gateway or the
-  run credential decides: the gateway refuses a batch, `400` `invalid_request`, nothing
-  of it numbered, with an event of another run, a `dev.qory.ping` or a
-  `dev.qory.run.egress`, which the gateway writes, a `dev.qory.run.started` not opened
-  by the session or whose `labels` or `about.details` differ from what the gateway
-  holds or the run credential decides, a `dev.qory.run.exited` whose `reason` is
-  `gateway_lost`, `session_lost` or `quiet`, or one the gateway did not end the run
-  with, or a `dev.qory.run.policy_applied` whose `digest` is not that of the policy in
-  force the gateway gave; the schema states the types, `opened_by` and the three
-  reasons. `dev.qory.run.policy_applied` is the session's, from the run answer and a
-  reload answer whose digest changed; the gateway merges only its own
-  `dev.qory.run.egress` into a session's run, and writes `dev.qory.run.policy_applied`
-  for a run with no session. A `400` `invalid_request` to a batch is final: the session
-  stops delivering to the gateway, reports it, and the run continues on its file
-  record. A walled agent never reaches the local link's socket, and
-  an unwalled one never holds the link secret, which `qory` hands the session in
-  memory. A session's
-  heartbeats are its run's, and a session silent for 3 × the interval ends the run,
-  `session_lost`. A run that ends at the gateway is a `410` to the session's next
-  request, its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the
-  reason of `dev.qory.run.exited`. The relay opens its connections with `QORY-RELAY`
-  and the run's proxy secret, over TLS 1.3 with the link's trust between two machines,
-  and without a wall the agent's proxy URL carries the secret as its password.
-  `fixtures/link/` holds the valid documents and `fixtures/invalid/link-*` the refused
-  ones, a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened
-  and a `dev.qory.run.exited` with each of the three reasons among them. Package `link`
-  has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`, `LinkDirMode`, `LinkSocketMode`
-  and `BearerScheme`.
+  The answer, `link-run-answer.schema.json`, has `run_id`, `labels`, the run's labels as
+  the gateway holds them, the run credential's behind a separate gateway, `details`, the
+  `about.details` keys the run credential decides with its values, the policy in force
+  and its `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is
+  true, its `certificate_authority`; the session's `dev.qory.run.started` contains
+  exactly those labels, and those keys with those values. Discovery on the link is
+  `link-discovery.schema.json`, with `events.interval_seconds`, the gateway's heartbeat
+  interval, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
+  `link-batch.schema.json`, events without `sequence`, which the gateway numbers. A
+  session writes no event the gateway or the run credential decides: the gateway
+  refuses a batch, `400` `invalid_request`, nothing of it numbered, with an event of
+  another run; a `dev.qory.ping` or a `dev.qory.run.egress`, which the gateway writes; a
+  `dev.qory.run.started` not opened by the session, whose `labels` or `about.details`
+  differ from what the gateway holds or the run credential decides, or a second one; an
+  event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`; a
+  `dev.qory.run.exited` whose `reason` is `gateway_lost`, `session_lost` or `quiet`, or
+  one the gateway did not end the run with; a `dev.qory.run.policy_applied` with any
+  member the gateway decides other than it computes, every member but `harness_hosts`
+  and `variables`; or a `dev.qory.run.refused` whose code is not one of
+  `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
+  `opened_by`, the three reasons and the codes and names of `dev.qory.run.refused`. A
+  `400` `invalid_request` to a batch ends the run at the gateway: the gateway writes
+  `dev.qory.run.exited` with `session_lost`, refuses the run's proxy secret and answers
+  the session's further requests with a `410` `run_closed`; the session stops the
+  runtime and records `dev.qory.run.exited` with `run_closed` in its own record.
+  `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
+  answer whose digest changed; into a session's run the gateway merges its own
+  `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`, and it
+  writes `dev.qory.run.policy_applied` for a run with no session. A walled agent never
+  reaches the local link's socket, and an unwalled one is never given the link secret:
+  `qory` hands the session the secret in memory, never in an environment or a file, so
+  a program the agent starts does not inherit it. A session's heartbeats are its run's,
+  and a session silent for 3 × the interval ends the run, `session_lost`. A run that
+  ends at the gateway is a `410` to the session's next request and every one after it,
+  its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the reason of
+  `dev.qory.run.exited`; every `410` on the link carries `from`, `apiary` when the
+  server closed the run and `gateway` when the gateway ended it. The relay opens its
+  connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
+  link's trust between two machines, and without a wall the agent's proxy URL carries
+  the secret as its password. `fixtures/link/` holds the valid documents and
+  `fixtures/invalid/link-*` the refused ones, a run answer without `labels`, and a
+  batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
+  `dev.qory.run.exited` with each of the three reasons, and a `dev.qory.run.refused`
+  with each gateway's code, `run_closed`, a code of the server's or a name
+  `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,
+  `LinkSocketName`, `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
 
 #### Changed
 
