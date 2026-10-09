@@ -26,7 +26,7 @@ To start and configure it: [the wall](wall.md#start-a-walled-run).
 On a node, `qory run --wall docker` is started by a person, a CI job or a scheduler of
 your own. The node needs Docker.
 
-Reporting to a control plane uses the same server every run has:
+Reporting to Qory Apiary uses the same server every run has:
 
 - Qory Apiary creates the run from the first event it sees;
 - it supplies the run's policy.
