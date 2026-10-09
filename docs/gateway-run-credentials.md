@@ -300,9 +300,10 @@ to that run, a refreshed one included. The gateway reports the run itself, in th
 order: its ping; then, once it has fetched the run's policy from the control plane and
 decided the run, its `dev.qory.run.started`, with `opened_by` `gateway` and the run
 credential's labels and `about.details`, and its policy; then every connection and its
-heartbeats. A run that cannot open, say the control plane refuses the run's
-configuration or the run selects an image, gets `dev.qory.run.refused` with the
-refusal's code in place of `dev.qory.run.started`, and its run key is ended at once.
+heartbeats. A run refused with a code, say the control plane refuses the run's
+configuration or the run selects an image, gets the gateway's `dev.qory.run.refused`
+with that code in place of `dev.qory.run.started`; one that fails without a code gets
+no event. Either way its run key ends.
 
 The run ends, and the gateway writes its `dev.qory.run.exited`:
 

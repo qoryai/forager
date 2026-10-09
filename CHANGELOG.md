@@ -559,9 +559,9 @@ release may change what an existing document does, and says so under Upgrading.
   the run. The run ends after `Runs.Quiet` with no connection, `quiet`, with
   `quiet_seconds`; at its `exp`; at the issuer's word; or at the server's `410`; its
   `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
-  credentials are `407` from then on. A run that cannot open gets the gateway's
-  `dev.qory.run.refused` with the refusal's code right after its ping, and its run key
-  ends.
+  credentials are `407` from then on. A run refused with a code gets the gateway's
+  `dev.qory.run.refused` with that code, right after its ping; one that fails without
+  a code gets no event. Either way its run key ends.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
   TLS the proxy ends, so no connection relays past the run.
 - `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
