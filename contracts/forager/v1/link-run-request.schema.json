@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-run-request.schema.json",
+  "title": "Link run request",
+  "description": "The body of the session's POST to the run URL of its gateway's link, application/json, which opens a run: the run id the session chose, the run's labels, what the run is about, and behind a separate gateway the session's narrowing of the policy. A member this schema does not define is refused, invalid_request: a member the gateway does not read could be a narrowing it would drop.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_id"],
+  "properties": {
+    "version": {
+      "description": "The document format. The gateway refuses a version it does not read.",
+      "const": 1
+    },
+    "run_id": {
+      "description": "The run's id, which the session chooses on both transports: a UUID in the canonical lower-case form, the subject of every event of the run. Another form is invalid_request; an id that already names a run at this gateway, live or ended, is run_id_used.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "labels": {
+      "description": "The run's labels, as dev.qory.run.started contains them. On the local link they are the run's. Behind a separate gateway the run's labels come from the run credential alone: forge and repository must equal the credential's, else target_differs_from_credential; another label the mapping sets must equal the credential's, else differs_from_credential; a label the mapping does not set is ignored.",
+      "$ref": "events/run.started.schema.json#/properties/labels"
+    },
+    "about": {
+      "description": "What the run is about, as dev.qory.run.started contains it. It selects no policy. Behind a separate gateway a key of details the mapping sets must equal the credential's, else differs_from_credential.",
+      "$ref": "events/run.started.schema.json#/properties/about"
+    },
+    "narrowing": {
+      "description": "Behind a separate gateway alone, the session's narrowing of the policy the gateway holds for the run; on the local link it is invalid_request. It can only remove what the policy allows: allow, when present, removes every host it does not cover, and deny adds to the hosts denied. The lists have the grammar of the policy's egress.allow.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["egress"],
+      "properties": {
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "allow": {"$ref": "policy.schema.json#/properties/egress/properties/allow"},
+            "deny": {"$ref": "policy.schema.json#/properties/egress/properties/deny"}
+          }
+        }
+      }
+    }
+  }
+}

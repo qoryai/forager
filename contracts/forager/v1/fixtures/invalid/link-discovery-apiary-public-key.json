@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "events": {
+    "url": "http://localhost/v1/events",
+    "types": [
+      "*"
+    ]
+  },
+  "run": {
+    "url": "http://localhost/v1/run-configuration"
+  },
+  "apiary_public_key": [
+    {
+      "alg": "ed25519",
+      "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+  "policy": {
+    "version": 1,
+    "egress": {
+      "mode": "enforce",
+      "allow": [
+        "api.example",
+        "git.example",
+        "*.git.example"
+      ]
+    },
+    "credentials": [
+      {
+        "name": "git",
+        "argument": "example-namespace/project"
+      }
+    ]
+  },
+  "digest": "0083089af881510432ef44e416ccef8c5e84f33678e1de98411520b97f277c78",
+  "variables": {
+    "NODE_ENV": {
+      "value": "test"
+    }
+  },
+  "proxy_secret": "fixture-proxy-secret-0000000000000000000000",
+  "certificate_authority": "-----BEGIN CERTIFICATE-----\nMIIB5TCCAYugAwIBAgIUR119TkjoHNp2qszWedwOz4lFHyIwCgYIKoZIzj0EAwIw\nSDEmMCQGA1UECgwdRm9yYWdlciBnYXRld2F5LCBvbmUgcnVuIG9ubHkxHjAcBgNV\nBAMMFWZpeHR1cmUgcnVuIGF1dGhvcml0eTAeFw0yNjEwMDkwMTAwNDZaFw0yNjEw\nMTAwMTAwNDZaMEgxJjAkBgNVBAoMHUZvcmFnZXIgZ2F0ZXdheSwgb25lIHJ1biBv\nbmx5MR4wHAYDVQQDDBVmaXh0dXJlIHJ1biBhdXRob3JpdHkwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAAQE/e1hoKKuyrI2KJZMrmwyW2UJdT1yuer3Md6wQvJEITEH\nQD+G+gE7ibLoEFLB4JhcnToKsKoRYIR+KQrhNN/Lo1MwUTAdBgNVHQ4EFgQUMc4K\nP/w/PsYQkghwJtcEnzd3R0wwHwYDVR0jBBgwFoAUMc4KP/w/PsYQkghwJtcEnzd3\nR0wwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBPptP6Tsdk9NPh\nXOrgpXZBRku9egZKRUkHKNYPiUZpkAIhAMIt1DKKOriE634DUi0NxZXqq0qPH4xP\nbPydQiQVl8Ya\n-----END CERTIFICATE-----\n"
+}

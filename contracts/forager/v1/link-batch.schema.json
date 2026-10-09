@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-batch.schema.json",
+  "title": "Link batch",
+  "description": "The body of one POST of the session to the events URL of its gateway's link, application/cloudevents-batch+json: events of one run, in the session's order, never empty. Each is an event of the contract without sequence: the gateway numbers the run's stream.",
+  "type": "array",
+  "minItems": 1,
+  "items": {"$ref": "#/$defs/event"},
+  "$defs": {
+    "event": {
+      "description": "An event as event.schema.json defines it, with no sequence.",
+      "allOf": [
+        {"$ref": "cloudevents.schema.json"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["specversion", "id", "source", "type", "subject", "time", "dataschema", "data"],
+          "properties": {
+            "specversion": {"$ref": "event.schema.json#/allOf/1/properties/specversion"},
+            "id": {"$ref": "event.schema.json#/allOf/1/properties/id"},
+            "source": {"$ref": "event.schema.json#/allOf/1/properties/source"},
+            "type": {"$ref": "event.schema.json#/allOf/1/properties/type"},
+            "subject": {"$ref": "event.schema.json#/allOf/1/properties/subject"},
+            "time": {"$ref": "event.schema.json#/allOf/1/properties/time"},
+            "dataschema": {"$ref": "event.schema.json#/allOf/1/properties/dataschema"},
+            "datacontenttype": {"$ref": "event.schema.json#/allOf/1/properties/datacontenttype"},
+            "data": {"$ref": "event.schema.json#/allOf/1/properties/data"},
+            "sequence": false
+          }
+        },
+        {"$ref": "event.schema.json#/allOf/2"}
+      ]
+    }
+  }
+}

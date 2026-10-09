@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "events": {
+    "url": "http://localhost/v1/events",
+    "types": [
+      "*"
+    ]
+  },
+  "run": {
+    "url": "http://localhost/v1/run-configuration"
+  },
+  "node_id": "nd_f1xt0re000000000"
+}

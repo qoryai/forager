@@ -109,6 +109,30 @@ release may change what an existing document does, and says so under Upgrading.
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
   which rule refused the document, and never quotes a value.
+- Contract `v1` revision 1, amended in place, defines the gateway's link: §The
+  gateway's link, between a session and its gateway, by the protocol toward the server
+  on the same paths, discovery, the run configuration, the events endpoint and the `410`
+  close, over two transports. The local link is a Unix socket in `qory-link-*`, mode
+  `0700`, the socket `0600`, one of Forager's files; the session checks the socket's
+  peer is its own user and opens every connection with `QORY-LINK` and the link secret.
+  A separate gateway speaks TLS 1.3 alone, with the operator's certificate, which the
+  session verifies against the system's roots or `session.gateway.ca_file` and an
+  optional pin of its SubjectPublicKeyInfo, and every request carries
+  `Authorization: Bearer` and the run credential. Answers on the link are unsigned.
+  A run opens with a `POST` of `link-run-request.schema.json`: `run_id`, which the
+  session chooses, `labels`, `about` and, behind a separate gateway, a `narrowing` that
+  only narrows; the gateway refuses it with `invalid_request`, `run_credential_refused`,
+  `run_id_used`, `target_differs_from_credential` or `differs_from_credential`. The
+  answer, `link-run-answer.schema.json`, has `run_id`, the policy in force and its
+  `digest`, `variables`, the run's `proxy_secret` and, with a wall, its
+  `certificate_authority`. Discovery on the link is `link-discovery.schema.json`, with
+  no `node_id`, `apiary_public_key` or `secrets`; a batch is `link-batch.schema.json`,
+  events without `sequence`, which the gateway numbers. The relay opens its
+  connections with `QORY-RELAY` and the run's proxy secret, and without a wall the
+  agent's proxy URL carries it as its password. `fixtures/link/` holds the valid
+  documents and `fixtures/invalid/link-*` the refused ones. Package `link` has
+  `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`, `LinkDirMode`, `LinkSocketMode`
+  and `BearerScheme`.
 
 #### Changed
 

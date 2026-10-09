@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "events": {
+    "url": "https://gateway.example:8443/v1/events",
+    "types": [
+      "*"
+    ]
+  },
+  "run": {
+    "url": "https://gateway.example:8443/v1/run-configuration"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-discovery.schema.json",
+  "title": "Link discovery",
+  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events and where it opens a run. Unsigned: the link's transport authenticates it. It lists no node, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "events", "run"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    },
+    "events": {
+      "description": "Where the session posts its batches and which events. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
+      "$ref": "configuration.schema.json#/properties/events"
+    },
+    "run": {
+      "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
+      "$ref": "configuration.schema.json#/properties/run"
+    },
+    "node_id": false,
+    "apiary_public_key": false,
+    "secrets": false
+  }
+}
