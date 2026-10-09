@@ -660,6 +660,11 @@ release may change what an existing document does, and says so under Upgrading.
   `gateway_lost` follows it; one that holds none is cut off, as before. `gateway_lost`
   is numbered after the highest sequence of the whole events, and the file is changed
   only when `gateway_lost` is added.
+- `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
+  that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
+  its `events.jsonl`, and the `Delivery` is zero, nothing sent. Before, its ping and
+  events were posted, which reported a run that never opened. A record with no ping, of
+  a run with no server, is sent as before.
 
 ### Wall
 

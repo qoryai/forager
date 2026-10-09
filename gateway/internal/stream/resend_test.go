@@ -21,8 +21,9 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// lostRun leaves the record of a run whose gateway was lost: the ping, run.started at
-// a known time and a log two and a half seconds after it, and no run.exited.
+// lostRun leaves the record of a run whose gateway was lost: the ping, which the server
+// accepted, run.started at a known time and a log two and a half seconds after it, and
+// no run.exited.
 func lostRun(t *testing.T) string {
 	t.Helper()
 	at := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
@@ -39,7 +40,17 @@ func lostRun(t *testing.T) string {
 	log.Time = "2026-10-09T10:00:02.500Z"
 	r.Accept([]event.Event{started, log})
 	r.Close(context.Background())
+	pingAccepted(t, r.Dir())
 	return r.Dir()
+}
+
+// pingAccepted writes the delivered.log of a run whose ping, its first event, the server
+// accepted, as the gateway writes it.
+func pingAccepted(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("ping-delivery 0000000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestResendSkipsAHeldRecord pins the lock: a record whose run is open here or in
@@ -115,6 +126,7 @@ func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
 	r.Emit(event.RunStarted, map[string]any{"opened_by": event.OpenedByGateway, "forager_version": "test"})
 	r.Emit(event.RunHeartbeat, map[string]any{"elapsed_seconds": 1, "interval_seconds": 1})
 	r.Close(context.Background())
+	pingAccepted(t, r.Dir())
 	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
 	if err != nil || !res.Closed {
 		t.Fatalf("%+v, %v", res, err)
@@ -143,8 +155,9 @@ func TestResendLeavesARunThatNeverStarted(t *testing.T) {
 	r, _ := s.Open(event.NewRunID())
 	r.Ping(map[string]any{})
 	r.Close(context.Background())
+	pingAccepted(t, r.Dir())
 	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
-	if err != nil || res.Closed {
+	if err != nil || res.Closed || res.NotOpened {
 		t.Errorf("%+v, %v", res, err)
 	}
 }
@@ -201,9 +214,6 @@ func serverSink(srv *httptest.Server) func(string) Sink {
 func TestResendDeliversWhatIsOwed(t *testing.T) {
 	srv, store := station(t, nil)
 	dir := lostRun(t)
-	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("ping-delivery 0000000001\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	os.MkdirAll(filepath.Join(dir, sink.UndeliveredDir), 0o755)
 	os.WriteFile(filepath.Join(dir, sink.UndeliveredDir, "old.json"), []byte("[]"), 0o644)
 	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
@@ -281,9 +291,7 @@ func tornRun(t *testing.T) (string, [][]byte) {
 	}
 	r.Accept(evs)
 	r.Close(context.Background())
-	if err := os.WriteFile(filepath.Join(r.Dir(), sink.DeliveredFile), []byte("ping-delivery 0000000001\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	pingAccepted(t, r.Dir())
 	b, err := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
 	if err != nil {
 		t.Fatal(err)
@@ -386,5 +394,47 @@ func TestResendEndsATornLastLine(t *testing.T) {
 			}
 			exitedAfter(t, dir, before, tc.exited)
 		})
+	}
+}
+
+// TestResendSendsNothingOfARunThatNeverOpened pins a record whose ping the server never
+// accepted, so the gateway made no delivered.log: the run never opened, so nothing of
+// it is posted, the record is left as it is, and no delivered.log is made. A record
+// with no ping, of a run with no server, is sent as before.
+func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
+	srv, store := station(t, nil)
+	s := New(Config{Dir: t.TempDir()})
+	r, _ := s.Open(event.NewRunID())
+	r.Ping(map[string]any{})
+	r.Emit(event.RunRefused, map[string]any{"code": "instance_limit", "status": 409})
+	r.Close(context.Background())
+	file := filepath.Join(r.Dir(), sink.EventsFile)
+	before, _ := os.ReadFile(file)
+	// Bounded, since a server that does not take what is sent is tried until the end.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := Resend(ctx, ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.NotOpened || res.Sent != 0 || res.Undelivered != 0 || res.Closed || res.Stopped || res.RunClosed {
+		t.Errorf("result %+v", res)
+	}
+	if store.Count() != 0 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+	if after, _ := os.ReadFile(file); string(after) != string(before) {
+		t.Errorf("the record was changed:\n%s", after)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir(), sink.DeliveredFile)); !os.IsNotExist(err) {
+		t.Errorf("delivered.log: %v", err)
+	}
+
+	r, _ = s.Open(event.NewRunID())
+	r.Accept([]event.Event{sessionEvent(r.ID(), event.RunStarted, map[string]any{})})
+	r.Close(context.Background())
+	res, err = Resend(context.Background(), ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)})
+	if err != nil || res.NotOpened || !res.Closed || res.Sent != 2 {
+		t.Errorf("a run with no server: %+v, %v", res, err)
 	}
 }

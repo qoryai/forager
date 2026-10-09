@@ -1258,7 +1258,10 @@ no whole event, a write Forager did not finish, on a full disk, is skipped, and 
 whole event after it is read and sent, one the next write put on the same line
 included. A last line without its newline is made a line before
 `dev.qory.run.exited` follows it: one that holds a whole event gets its newline, and one
-that holds none is cut off. Nothing else of the file is changed. The resend fetches the
+that holds none is cut off. Nothing else of the file is changed. `delivered.log` is
+made once the server accepts the ping, its first line the ping's: a record that holds a
+ping and no `delivered.log` is of a run whose ping was never accepted, which never
+opened, and nothing of it is sent or added to it. The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
 `undelivered/` again. A receiver sees some events twice when Forager dies between an

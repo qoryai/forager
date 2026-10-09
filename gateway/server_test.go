@@ -507,3 +507,39 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 		t.Error("the record was changed before its end")
 	}
 }
+
+// TestResendSendsNothingOfARunThatNeverOpened pins a resend of the record of a run whose
+// ping the server refused: the run never opened, so nothing of it is posted, the
+// record is left as it is, and the delivery says nothing was sent.
+func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
+	c := newControl(t)
+	h := start(t, gateway.Config{Server: c.server()})
+	c.limit.Store(true)
+	id := event.NewRunID()
+	if _, err := h.tryOpen(server.LinkRunRequest{RunID: id}); err == nil {
+		t.Fatal("the server accepted the ping")
+	}
+	c.limit.Store(false)
+	dir := filepath.Join(h.dir, "runs", id)
+	before, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := types(h.record(id)); !slices.Equal(got, []string{event.Ping}) {
+		t.Fatalf("the record %v", got)
+	}
+	stored := c.store.Count()
+	r, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r != (gateway.Delivery{}) {
+		t.Errorf("resend %+v", r)
+	}
+	if n := c.store.Count(); n != stored {
+		t.Errorf("the server stored %d events, before %d", n, stored)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "events.jsonl")); string(after) != string(before) {
+		t.Errorf("the record was changed:\n%s", after)
+	}
+}
