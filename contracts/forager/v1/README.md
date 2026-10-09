@@ -1330,21 +1330,29 @@ logged, recorded or contained in an event, on the session or on the gateway.
 **On the wire.** A request on the link contains `User-Agent` and
 `X-Qory-Contract-Version`, as toward the server, and a batch its `Content-Type` and
 `X-Qory-Delivery`; there is no access key id, instance id, timestamp or signature.
-Answers on the link are unsigned: the transport authenticates them, the socket's peer
-on one machine and TLS on two. Ed25519 signing stays toward the server. A coded refusal
-is a `link-refusal.schema.json` document, the body of one toward the server with `from`,
-who refused, required: `{"error": "<code>", "names": ["…"], "from": "gateway"}`. `from`
-is `gateway` for the gateway's own refusal, and `apiary` for the server's, which the
+Answers on the link are unsigned: the transport authenticates them, the socket's peer on
+one machine and TLS on two. Ed25519 signing stays toward the server. A coded refusal is
+a `link-refusal.schema.json` document, the body of one toward the server with `from`,
+who refused, required, and `message`:
+`{"error": "<code>", "names": ["…"], "message": "…", "from": "gateway"}`. `from` is
+`gateway` for the gateway's own refusal, and `apiary` for the server's, which the
 gateway passes on with its code and status; `names` is absent when the refusal concerns
-none. The gateway refuses a run's start with a code of `refusal.Decides`, such as
-`image_unknown`, `placeholder_conflict`, `tool_unknown` or `run_configuration_invalid`,
-or with `wall_required`, each a `403` from `gateway`, and so a reload behind a separate
-gateway. A run that fails to open for a reason without a code is a `500` from `gateway`
-with the code `internal` and `message`, the error's text:
-`{"error": "internal", "message": "…", "from": "gateway"}`. `message` is up to 8192
-characters and may span lines, tab and newline its only control characters; it holds no
-secret, no run credential and no image reference. Every `410` on the link has this body (The end of
-a run at the gateway, below). A redirect is not followed.
+none. Every refusal on the link, the `403`, `409`, `400` and `410`, the server's passed
+on and the `500` `internal`, carries `message`: the text the session gives the user as
+the run's error, today's text word for word. For a refusal of the server's it names Qory
+Apiary's URL as today, such as
+`the run configuration https://apiary.example/v1/run-configuration: instance_limit (status 403)`.
+`message` is optional in the schema, and a session that reads none uses the code. The
+gateway refuses a run's start with a code of `refusal.Decides`, such as `image_unknown`,
+`placeholder_conflict`, `tool_unknown` or `run_configuration_invalid`, or with
+`wall_required`, each a `403` from `gateway`, and so a reload behind a separate gateway.
+A run that fails to open for a reason without a code is a `500` from `gateway` with the
+code `internal`: `{"error": "internal", "message": "…", "from": "gateway"}`. `message`
+is up to 8192 characters and may span lines: tab and newline are its only control
+characters, and every other C0 control character, DEL and every C1 control character,
+U+0080 to U+009F, is refused. It holds no secret, no run credential and no image
+reference. Every `410` on the link has this body (The end of a run at the gateway,
+below). A redirect is not followed.
 
 **Discovery.** `GET /.well-known/qory-configuration`, answered with a
 `link-discovery.schema.json` document: `version`, `events`, `run` and `proxy`, each
@@ -1452,10 +1460,10 @@ and `from: apiary`. The checks of the session's own image table and runtime, an 
 defined twice or a daemon without a runtime, have no code: the session makes them before
 it sends the request, as today. A refused run opens nothing: the gateway holds no
 credential, starts no tool and makes no proxy secret for it. A run that fails to open
-for a reason without a code is a `500` with `error: internal`, `from: gateway` and
-`message`, the error's text, which the session returns as its error, so the user sees
-the one line they see today. The session applies what the answer gives and decides none
-of it again.
+for a reason without a code is a `500` with `error: internal` and `from: gateway`. Every
+refusal carries `message`, the text the session gives the user as the run's error, word
+for word as today, so the user sees the line they see today. The session applies what
+the answer gives and decides none of it again.
 
 `wall_required` is a code of the link alone: a `403` from `gateway` to a run request
 whose `wall` is false and whose policy in force selects what needs a wall. Its names are
@@ -1485,7 +1493,7 @@ document:
  "digest": "<hex sha256 of the policy as canonical JSON>",
  "variables": {"NODE_ENV": {"value": "test"}},
  "placeholders": ["GIT_SECRET"],
- "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+ "reserved": ["EXAMPLE_SOURCE_KEY"],
  "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
  "applied": {"mode": "enforce", "allow": ["api.example", "git.example"], "deny": ["tracker.example"],
              "source": "fetched", "url": "https://apiary.example/v1/run-configuration",
@@ -1510,8 +1518,9 @@ document:
 - `placeholders`: the variables the agent sees in place of a credential or a tool's
   secret the gateway holds, names alone: the session sets each to a value that is no
   credential, as it sets a credential's placeholder (§Credentials). Absent means none.
-- `reserved`: the names of the variables the gateway sets for the run, which the session
-  must not set. Absent means none.
+- `reserved`: the names of the variables the machine's credentials are read from: a
+  walled run that passes one is refused with `variable_reserved`, and an unwalled run has
+  its value left out, as today. Absent means none.
 - `image`: the image the run gets, as a definition of `images` has it, `ref` required:
   the one the policy in force selects, or the machine's default, `name` absent when the
   default is a reference. Present when the request's `wall` is true. The session's
@@ -1622,12 +1631,13 @@ the runtime's. It numbers that event into the run's stream and delivers it towar
 server, except after the server's own `410` `run_closed`, where it records it in its
 record alone and sends nothing further for the run, as the session does toward the
 server (§The server). It answers the session's next request on the link, and every one
-after it, with a `410`. Every `410` on the link is a `link-refusal.schema.json` document,
-its `from` what ended the run: `{"error": "<code>", "from": "gateway"}`. `from` is
-`apiary` when the server closed the run, and the code is then `run_closed`. `from` is
-`gateway` when the gateway ended the run itself, and the code is `credential_expired`,
-the run credential expired with no fresh one; `run_ended_at_issuer`, the issuer reports
-the run credential no longer active; or `run_closed`, the gateway ended the run with
+after it, with a `410`. Every `410` on the link is a `link-refusal.schema.json`
+document, its `from` what ended the run, and its `message` the text the session gives
+the user: `{"error": "<code>", "message": "…", "from": "gateway"}`. `from` is `apiary`
+when the server closed the run, and the code is then `run_closed`. `from` is `gateway`
+when the gateway ended the run itself, and the code is `credential_expired`, the run
+credential expired with no fresh one; `run_ended_at_issuer`, the issuer reports the run
+credential no longer active; or `run_closed`, the gateway ended the run with
 `session_lost`, after the session was silent (Heartbeats and liveness, above) or after
 it refused a batch of the session's (Events, above). The session stops the runtime as at
 its time limit, records its own `dev.qory.run.exited` with that code as its `reason` in
@@ -1666,7 +1676,7 @@ digest unchanged. Behind a separate gateway, to a refusal with a code of
  "digest": "<hex sha256 of the policy as canonical JSON>",
  "variables": {"NODE_ENV": {"value": "test"}},
  "placeholders": ["GIT_SECRET"],
- "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+ "reserved": ["EXAMPLE_SOURCE_KEY"],
  "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
  "applied": {"mode": "enforce", "allow": ["api.example"], "source": "fetched",
              "url": "https://apiary.example/v1/run-configuration",
@@ -2223,7 +2233,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and `instance_limit` from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |

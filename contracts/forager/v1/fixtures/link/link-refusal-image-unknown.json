@@ -3,5 +3,6 @@
   "names": [
     "with-gpu"
   ],
+  "message": "the policy selects the image \"with-gpu\", which this machine does not define",
   "from": "gateway"
 }

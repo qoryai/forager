@@ -6,9 +6,7 @@
     "repository": "example-namespace/project"
   },
   "reserved": [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY"
+    "EXAMPLE_SOURCE_KEY"
   ],
   "image": {
     "name": "base",

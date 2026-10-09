@@ -251,12 +251,12 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // timeout, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
 // has no heartbeat interval or proxy, a link refusal without from or with a control
-// character other than tab and newline in its message, and run credentials with alg none
-// or HS256, without an audience, with a label of claims and no join, a key without its
-// file, a plain http issuer, a run_key from a claim other than sub, or a member the
-// schema does not define. The longest schema name the file name starts with is the
-// schema, so run-configuration-variable-value-not-string is held to the run configuration
-// and not to a schema named run.
+// character other than tab and newline in its message, C0, DEL or C1, and run credentials
+// with alg none or HS256, without an audience, with a label of claims and no join, a key
+// without its file, a plain http issuer, a run_key from a claim other than sub, or a
+// member the schema does not define. The longest schema name the file name starts with is
+// the schema, so run-configuration-variable-value-not-string is held to the run
+// configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",

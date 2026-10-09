@@ -3,5 +3,6 @@
   "names": [
     "GIT_SECRET"
   ],
+  "message": "GIT_SECRET is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside",
   "from": "gateway"
 }
