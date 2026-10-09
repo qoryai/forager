@@ -167,8 +167,10 @@ secret, with the run key as its `run_key` label: one run key may have several ru
 once, and one after another. Every later request of a session's run carries a run
 credential of that run's run key, and a refreshed run credential continues only its own
 run; each reload and batch also carries the run's own secret, the run answer's
-`run_secret`, so a run credential of the run key reaches no sibling run. Once the run
-has ended, its requests get the `410`, not only at `exp`. A reload or
+`run_secret`, so a run credential of the run key reaches no sibling run. The session
+never puts it in the agent's environment or the wall's; behind a wall the agent can read
+it in the run directory, where it opens nothing without the run's run credential. Once
+the run has ended, its requests get the `410`, not only at `exp`. A reload or
 a batch of a run that has ended gets its `410` even with a run credential whose `exp`
 has passed, up to 5 minutes after it, so a session whose run credential expired, under
 an issuer with no leeway too, learns the run's end; such a run credential reaches
