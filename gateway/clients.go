@@ -134,14 +134,18 @@ func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 	if err != nil {
 		return nil, err
 	}
+	if g.cfg.opened != nil {
+		g.cfg.opened()
+	}
 	k := keyOf(id)
 	g.mu.Lock()
+	g.runs[lr.id] = lr
 	if g.blocked(k) {
+		// Among the runs, so Close waits for its record.
 		g.mu.Unlock()
 		lr.end(endedAtIssuer)
 		return nil, errKeyRefused
 	}
-	g.runs[lr.id] = lr
 	g.clientRuns[k] = lr
 	g.mu.Unlock()
 	lr.arm()

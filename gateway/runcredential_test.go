@@ -1412,6 +1412,77 @@ func TestTheIssuersEndRefusesTheRunKeysLiveRuns(t *testing.T) {
 	}
 }
 
+// TestCloseWaitsForARunEndedAsItOpened pins a run that opened while the issuer ended
+// another run of its run key: it ends at once, and Close waits for its record as for
+// every run, what it left undelivered in the Delivery.
+func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
+	o := origin(t)
+	for _, client := range []bool{false, true} {
+		c := newControl(t)
+		in := &introspection{}
+		cfg := gateway.Config{Server: c.server(), Policy: enforce127}
+		gateway.SetCloseWait(&cfg, 2*time.Second)
+		var armed atomic.Bool
+		var s *service
+		var first string
+		var a *sessionRun
+		gateway.SetOpened(&cfg, func() {
+			if !armed.CompareAndSwap(true, false) {
+				return
+			}
+			// The issuer ends the other run as this one opens; once that run is let go
+			// of, the server takes nothing more.
+			in.end(first)
+			status, body := a.reload(t, first, a.a.RunID)
+			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+			eventually(t, "the ended run let go of", func() bool {
+				runs, _, _, _ := gateway.Held(s.g)
+				return runs == 0
+			})
+			c.refuse.Store(http.StatusServiceUnavailable)
+		})
+		s = startVerifying(t, cfg, in, 0)
+		first = mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
+		second := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, first, second)
+		a = s.openSession(t, first, server.LinkRunRequest{})
+		armed.Store(true)
+		if client {
+			if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+				t.Errorf("a client's connection: %d %v", status, err)
+			}
+		} else if status, body := s.tryOpenWith(t, second, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a session's run request: %d %s", status, body)
+		}
+		if armed.Load() {
+			t.Fatal("no run opened")
+		}
+		runs := runsIn(t, s.dir)
+		if len(runs) != 2 {
+			t.Fatalf("runs %v", runs)
+		}
+		ended := runs[0]
+		if ended == a.a.RunID {
+			ended = runs[1]
+		}
+		d := s.close()
+		rec := s.record(ended)
+		if client {
+			// The client's run started: its record ends with its exit, undelivered.
+			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+				t.Errorf("the client's run: the record ends %+v", last)
+			}
+			if d.Undelivered == 0 {
+				t.Errorf("delivery %+v", d)
+			}
+		} else if got := types(rec); !slices.Equal(got, []string{event.Ping}) {
+			// A session's run: its ping, which the server took as it opened, and nothing
+			// after.
+			t.Errorf("the session's run: the record %v", got)
+		}
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

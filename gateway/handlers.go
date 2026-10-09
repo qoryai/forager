@@ -160,16 +160,20 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		refuseOpen(w, err)
 		return
 	}
+	if id != nil && g.cfg.opened != nil {
+		g.cfg.opened()
+	}
 	g.mu.Lock()
+	g.runs[lr.id] = lr
 	if keyRefused() {
-		// The issuer ended a run of the run key while this one opened: it ends at once.
+		// The issuer ended a run of the run key while this one opened: it ends at once,
+		// among the runs, so Close waits for its record.
 		g.mu.Unlock()
 		lr.end(endedAtIssuer)
 		g.presented(*id)
 		refuseCredential(w)
 		return
 	}
-	g.runs[lr.id] = lr
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest

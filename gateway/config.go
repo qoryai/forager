@@ -86,6 +86,9 @@ type Config struct {
 	// clock, when not nil, is the time the gateway refuses a run key by, in place of
 	// the system's. Tests set it.
 	clock func() time.Time
+	// opened, when not nil, is called once a run on the one address opened, before the
+	// gateway looks again whether it refuses the run's run key. Tests set it.
+	opened func()
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
