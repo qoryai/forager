@@ -14,6 +14,7 @@ package refusal
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/qoryai/forager/accesskey"
 )
@@ -125,4 +126,28 @@ func ByGateway(code string, names []string, format string, a ...any) *accesskey.
 	r := New(code, names, format, a...)
 	r.From = accesskey.FromGateway
 	return r
+}
+
+// WallRequired is the gateway's link's code, and the link's alone, of a run without a
+// wall whose policy in force selects what needs one: a 403 from the gateway whose names
+// are credentials, tools and paths, each one the policy selects, or image=<name>. It is
+// not one of [Decides] and never appears in an event: the session turns it back into
+// the error it gives today, [NeedsWall].
+const WallRequired = "wall_required"
+
+// NeedsWall is a run without a wall whose policy selects what needs one, with the names
+// of [WallRequired]: credentials, tools and paths, each one the policy selects, and
+// image=<name> for an image it selects. Its Error is the text a run refused for it has
+// always had, word for word, the credentials' before the image's.
+type NeedsWall struct {
+	Names []string
+}
+
+func (e *NeedsWall) Error() string {
+	for _, n := range e.Names {
+		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
+			return fmt.Sprintf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", image)
+		}
+	}
+	return "the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them"
 }

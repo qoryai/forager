@@ -253,6 +253,9 @@ type LinkRefusal struct {
 	Error string   `json:"error"`
 	Names []string `json:"names,omitempty"`
 	From  string   `json:"from,omitempty"`
+	// Message is, on a 500 to a run request the gateway could not open for a reason
+	// without a code, the error's text as the user is told it.
+	Message string `json:"message,omitempty"`
 }
 
 // values are variables as values by name; nil for none.
@@ -465,12 +468,31 @@ func (a *linkAnswer) refusal(what string) error {
 	if a.status == http.StatusGone {
 		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from()}
 	}
+	if a.status >= http.StatusInternalServerError {
+		var doc LinkRefusal
+		if jsonv2.Unmarshal(a.body, &doc) == nil && doc.Message != "" {
+			return &StatusError{What: what, Status: a.status, Message: doc.Message}
+		}
+	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		r.Detail, r.From = what, a.from()
 		return r
 	}
-	return fmt.Errorf("%s: status %d", what, a.status)
+	return &StatusError{What: what, Status: a.status}
 }
+
+// StatusError is an answer of the link with neither the one wanted nor a code: a
+// gateway's 5xx, say, to a run it could not open, whose body may carry the error's text
+// as its user is told it, Message.
+type StatusError struct {
+	// What is the request, and Status the answer's.
+	What   string
+	Status int
+	// Message is the text of the failure the answer's body carries, empty for none.
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }
 
 // Ended reports the end of the run an error of the link carries: the code of a 410,
 // one of [EndCodes], which the session records as the reason of its

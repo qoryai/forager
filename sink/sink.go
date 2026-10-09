@@ -36,6 +36,10 @@ type Sink interface {
 const (
 	EventsFile = "events.jsonl"
 	OutputFile = "output.log"
+	// SessionFile is the session's own record of its own events, numbered as the
+	// session numbers them, beside the run's stream in EventsFile, which its gateway
+	// writes.
+	SessionFile = "session.jsonl"
 )
 
 // File writes the two record files of a run.
@@ -48,20 +52,25 @@ type File struct {
 // NewFile creates the run directory, if needed, and opens the record files in it for
 // appending. A directory that already holds an events.jsonl is refused: a run id is
 // never reused.
-func NewFile(dir string) (*File, error) {
+func NewFile(dir string) (*File, error) { return NewFileAs(dir, EventsFile) }
+
+// NewFileAs is [NewFile] with the events written to the file named events, such as
+// [SessionFile], instead of events.jsonl; a directory that already holds one of that
+// name is refused.
+func NewFileAs(dir, events string) (*File, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	events, err := os.OpenFile(filepath.Join(dir, EventsFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	record, err := os.OpenFile(filepath.Join(dir, events), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
 	output, err := os.OpenFile(filepath.Join(dir, OutputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		events.Close()
+		record.Close()
 		return nil, err
 	}
-	return &File{events: events, output: output}, nil
+	return &File{events: record, output: output}, nil
 }
 
 // Write appends the event as one line to events.jsonl and, for a log event, its bytes
