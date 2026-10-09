@@ -1787,8 +1787,8 @@ The public package `runcredential` holds the rules beyond the schema:
   over TLS of the form `token` and `token_type_hint=access_token`, with HTTP Basic as the
   client, following no redirect; active only on status 200 with one JSON object, each
   member name once, of at most 65536 bytes, whose `active` is the JSON `true`; any other
-  answer, or a failure, is not active. An answer is kept for `cache` by the SHA-256 of
-  the run credential.
+  answer, or a failure, is not active. An answer the endpoint gives is kept for `cache`
+  by the SHA-256 of the run credential, at most 4096 of them; a failure is not kept.
 - `OpenEnded` and `Ended`, the ended run keys by issuer, in a file of the gateway's state
   directory, each kept until its run credential's `exp` plus 5 minutes, so a restart
   does not reopen them.

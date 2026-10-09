@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -228,8 +229,7 @@ func TestIntrospectionCache(t *testing.T) {
 		t.Errorf("the default cache is %v; want the heartbeat interval", def.Cache())
 	}
 
-	// A failure is kept for the cache too, so a failing endpoint is not asked on every
-	// connection; it is asked again once the cache passes.
+	// A failure is kept for no one: the next caller asks again.
 	var fail atomic.Bool
 	fail.Store(true)
 	f := newEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
@@ -243,12 +243,95 @@ func TestIntrospectionCache(t *testing.T) {
 	if active, err := fi.Active(ctx, exampleCredential, now); active || err == nil {
 		t.Fatalf("a 500: %v, %v", active, err)
 	}
-	fail.Store(false)
-	if active, _ := fi.Active(ctx, exampleCredential, now.Add(5*time.Second)); active {
-		t.Error("a failure was not kept for the cache")
+	fi.mu.Lock()
+	if len(fi.answers) != 0 {
+		t.Errorf("%d answers kept of a failure", len(fi.answers))
 	}
-	if active, err := fi.Active(ctx, exampleCredential, now.Add(10*time.Second)); !active || err != nil {
-		t.Errorf("after the cache: %v, %v", active, err)
+	fi.mu.Unlock()
+	fail.Store(false)
+	if active, err := fi.Active(ctx, exampleCredential, now.Add(time.Second)); !active || err != nil {
+		t.Errorf("the next caller after a failure: %v, %v", active, err)
+	}
+	if n := f.asked.Load(); n != 2 {
+		t.Errorf("asked %d times; want twice", n)
+	}
+}
+
+// TestIntrospectionKeepsABoundedCache pins the bound on the answers kept: the answers
+// past their time go when another is kept, and while the cache is full the one that
+// would lapse first goes.
+func TestIntrospectionKeepsABoundedCache(t *testing.T) {
+	defer func(n int) { maxAnswers = n }(maxAnswers)
+	maxAnswers = 3
+	e := newEndpoint(t, answering(200, `{"active": true}`))
+	in := e.introspector(t, Introspection{Cache: d(10 * time.Second)}, IntrospectionTimeout)
+	ctx := context.Background()
+	kept := func() int {
+		in.mu.Lock()
+		defer in.mu.Unlock()
+		return len(in.answers)
+	}
+	for i := range 3 {
+		in.Active(ctx, exampleCredential+fmt.Sprint(i), now.Add(time.Duration(i)*time.Second))
+	}
+	if kept() != 3 {
+		t.Fatalf("%d kept", kept())
+	}
+	// Full: the first, which lapses first, goes for a fourth.
+	in.Active(ctx, exampleCredential+"3", now.Add(3*time.Second))
+	if kept() != 3 {
+		t.Errorf("%d kept past the cap", kept())
+	}
+	asked := e.asked.Load()
+	in.Active(ctx, exampleCredential+"1", now.Add(3*time.Second))
+	if e.asked.Load() != asked {
+		t.Error("a kept answer was asked again")
+	}
+	in.Active(ctx, exampleCredential+"0", now.Add(3*time.Second))
+	if e.asked.Load() != asked+1 {
+		t.Error("the answer that lapses first was kept past the cap")
+	}
+	// Past their time, the answers go when the next is kept.
+	in.Active(ctx, exampleCredential+"later", now.Add(time.Minute))
+	if kept() != 1 {
+		t.Errorf("%d kept past their time", kept())
+	}
+}
+
+// TestIntrospectionACallerThatGivesUp pins that the caller whose request is in flight
+// giving up, its context ending, leaves the other callers for the same run credential
+// waiting for the answer, which is kept.
+func TestIntrospectionACallerThatGivesUp(t *testing.T) {
+	release := make(chan struct{})
+	e := newEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		answering(200, `{"active": true}`)(w, r)
+	})
+	in := e.introspector(t, Introspection{}, IntrospectionTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan bool)
+	go func() {
+		active, _ := in.Active(ctx, exampleCredential, now)
+		first <- active
+	}()
+	for e.asked.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	second := make(chan bool)
+	go func() {
+		active, _ := in.Active(context.Background(), exampleCredential, now)
+		second <- active
+	}()
+	cancel()
+	if <-first {
+		t.Error("the caller that gave up is active")
+	}
+	close(release)
+	if !<-second {
+		t.Error("the other caller is not active once its first gave up")
+	}
+	if active, _ := in.Active(context.Background(), exampleCredential, now); !active || e.asked.Load() != 1 {
+		t.Errorf("the answer was not kept: asked %d times", e.asked.Load())
 	}
 }
 

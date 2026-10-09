@@ -10,7 +10,8 @@ import (
 )
 
 // activeChecker is an issuer's introspection endpoint (RFC 7662) as the gateway asks
-// it: [*runcredential.Introspector], which keeps each answer for its cache.
+// it: [*runcredential.Introspector], which keeps each answer the endpoint gives for its
+// cache.
 type activeChecker interface {
 	Active(ctx context.Context, credential string, now time.Time) (bool, error)
 	Cache() time.Duration

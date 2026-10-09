@@ -37,8 +37,8 @@ var (
 )
 
 // Introspector asks an issuer's OAuth 2.0 token introspection endpoint (RFC 7662)
-// whether a run credential is still active, and keeps each answer for the cache. It is
-// safe for concurrent use.
+// whether a run credential is still active, and keeps each answer it gives for the
+// cache. It is safe for concurrent use.
 type Introspector struct {
 	endpoint string
 	// authorization is the value of the Authorization header, HTTP Basic with the
@@ -55,9 +55,16 @@ type Introspector struct {
 // introspection is one answer, kept until until.
 type introspection struct {
 	active bool
-	err    error
 	until  time.Time
 }
+
+// MaxIntrospectionAnswers is how many answers an [Introspector] keeps at once: past it,
+// the answer that would lapse first goes, so the cache does not grow with the run
+// credentials a gateway has seen.
+const MaxIntrospectionAnswers = 4096
+
+// maxAnswers is [MaxIntrospectionAnswers], which a test lowers.
+var maxAnswers = MaxIntrospectionAnswers
 
 // introspectionCall is a request in flight, which other callers for the same run
 // credential wait for.
@@ -141,45 +148,70 @@ func (c *Introspector) Cache() time.Duration { return c.cache }
 // false with an error, so the check fails closed. The error is a constant text, which
 // names neither the run credential nor the client secret.
 //
-// An answer is kept for [Introspector.Cache] by the SHA-256 of the run credential, and
-// the endpoint is asked again only once it is older; callers for the same run
-// credential while a request is in flight wait for its answer. A request whose ctx ends
-// first is false, and is not kept.
+// An answer the endpoint gave, active or not, is kept for [Introspector.Cache] by the
+// SHA-256 of the run credential, at most [MaxIntrospectionAnswers] of them, and the
+// endpoint is asked again only once it is older; a failure to ask, or an answer that is
+// not one, is kept for no one, and the next caller asks again. Callers for the same run
+// credential while a request is in flight wait for its answer. The request is made for
+// all of them, whatever becomes of the caller that started it: a caller whose ctx ends
+// first is false, alone, and the others still get the answer.
 func (c *Introspector) Active(ctx context.Context, credential string, now time.Time) (bool, error) {
 	key := sha256.Sum256([]byte(credential))
 	c.mu.Lock()
-	if a, ok := c.answers[key]; ok && now.Before(a.until) {
-		c.mu.Unlock()
-		return a.active, a.err
-	}
-	if f, ok := c.inflight[key]; ok {
-		c.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.active, f.err
-		case <-ctx.Done():
-			return false, errIntrospectionUnreachable
+	if a, ok := c.answers[key]; ok {
+		if now.Before(a.until) {
+			c.mu.Unlock()
+			return a.active, nil
 		}
+		delete(c.answers, key)
 	}
-	f := &introspectionCall{done: make(chan struct{})}
-	c.inflight[key] = f
-	for k, a := range c.answers {
-		if !now.Before(a.until) {
-			delete(c.answers, k)
-		}
+	f, ok := c.inflight[key]
+	if !ok {
+		f = &introspectionCall{done: make(chan struct{})}
+		c.inflight[key] = f
+		go c.call(f, key, credential, now)
 	}
 	c.mu.Unlock()
+	select {
+	case <-f.done:
+		return f.active, f.err
+	case <-ctx.Done():
+		return false, errIntrospectionUnreachable
+	}
+}
 
-	f.active, f.err = c.ask(ctx, credential)
-
+// call makes the request f stands for, bounded by the client's own timeout and by no
+// caller's context, and keeps its answer when it is one.
+func (c *Introspector) call(f *introspectionCall, key [sha256.Size]byte, credential string, now time.Time) {
+	f.active, f.err = c.ask(context.Background(), credential)
 	c.mu.Lock()
 	delete(c.inflight, key)
-	if ctx.Err() == nil {
-		c.answers[key] = introspection{active: f.active, err: f.err, until: now.Add(c.cache)}
+	if f.err == nil {
+		c.keep(key, introspection{active: f.active, until: now.Add(c.cache)}, now)
 	}
 	c.mu.Unlock()
 	close(f.done)
-	return f.active, f.err
+}
+
+// keep keeps an answer: the answers past their time at now go first, and while the
+// cache is full, the one that would lapse first. Called with c.mu held.
+func (c *Introspector) keep(key [sha256.Size]byte, a introspection, now time.Time) {
+	for k, kept := range c.answers {
+		if !now.Before(kept.until) {
+			delete(c.answers, k)
+		}
+	}
+	for len(c.answers) >= maxAnswers {
+		var first [sha256.Size]byte
+		var at time.Time
+		for k, kept := range c.answers {
+			if at.IsZero() || kept.until.Before(at) {
+				first, at = k, kept.until
+			}
+		}
+		delete(c.answers, first)
+	}
+	c.answers[key] = a
 }
 
 // ask makes one introspection request (RFC 7662 §2.1) and reads its answer (§2.2).

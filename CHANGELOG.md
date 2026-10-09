@@ -211,10 +211,13 @@ release may change what an existing document does, and says so under Upgrading.
   `runcredential.IntrospectionTimeout`, 10 seconds. It is active only on status 200 with
   one JSON object, each member name once, of at most
   `runcredential.MaxIntrospectionAnswer`, 65536 bytes, whose `active` is the JSON
-  `true`; any other answer, or a failure, is not active. Each answer, a failure
-  included, is kept for the issuer's `cache`, or the heartbeat interval, by the SHA-256
-  of the run credential, and callers for the same run credential share one request. Its
-  errors name neither the run credential nor the secret.
+  `true`; any other answer, or a failure, is not active. Each answer the endpoint gives,
+  active or not, is kept for the issuer's `cache`, or the heartbeat interval, by the
+  SHA-256 of the run credential, at most `runcredential.MaxIntrospectionAnswers`, 4096,
+  the one that lapses first going when it is full; a failure is kept for no one, and the
+  next caller asks again. Callers for the same run credential share one request, which
+  a caller that gives up does not end for the others. Its errors name neither the run
+  credential nor the secret.
 - `runcredential.OpenEnded` and `runcredential.Ended` keep the ended run keys by issuer
   in `ended-run-keys.json` of the gateway's state directory, mode 0600, written
   atomically, in a directory of mode 0700 that only its user writes. Each is kept until

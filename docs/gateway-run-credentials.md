@@ -209,9 +209,10 @@ of the answer.
 
 The gateway asks before it opens a run. For a session's run it asks again on each of
 the session's requests; for a run with no session, at most every `cache` while the run
-has connections, or had one since it last asked. It keeps each answer for `cache`, a failure included, by the SHA-256 of
-the run credential, never by the run credential itself, so a refreshed run credential is
-asked about anew. `cache` defaults to the run's heartbeat interval, at which Qory already
+has connections, or had one since it last asked. It keeps each answer the endpoint
+gives, active or not, for `cache`, by the SHA-256 of the run credential, never by the
+run credential itself, so a refreshed run credential is asked about anew; it keeps at
+most 4096, and none of a failure to ask, which the next request asks again. `cache` defaults to the run's heartbeat interval, at which Qory already
 reports a run alive, so an ended run is noticed within one heartbeat.
 
 Neither the run credential nor the client secret appears in the gateway's errors or
