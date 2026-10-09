@@ -10,6 +10,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,8 +153,12 @@ type ending struct {
 // runEnd is how a run ended at the gateway, as its later requests learn it: the code and
 // the from of its 410, and the state and the reason of the gateway's
 // dev.qory.run.exited of it, the state empty for an end that writes none, run_closed,
-// and the reason for one without a reason.
-type runEnd struct{ code, from, state, reason string }
+// and the reason for one without a reason; quietSeconds is the quiet period of a run
+// with no session that ended quiet.
+type runEnd struct {
+	code, from, state, reason string
+	quietSeconds              int
+}
 
 // sessionLost ends a run whose session the gateway no longer hears: its later requests
 // are a 410 session_lost.
@@ -197,7 +202,7 @@ func (e ending) given() (outcome, reason string) {
 
 // runEnd is how the ending answers the run's later requests.
 func (e ending) runEnd() runEnd {
-	return runEnd{code: e.code, from: e.from, state: e.state, reason: e.reason}
+	return runEnd{code: e.code, from: e.from, state: e.state, reason: e.reason, quietSeconds: e.quietSeconds}
 }
 
 // checkUnreachable ends a run on the one address whose run credential could not be
@@ -216,31 +221,52 @@ const (
 )
 
 // reasonWords are the words a person reads of Forager's own reasons of
-// dev.qory.run.exited where a line says how a run ended; any other reason is the run's
-// starter's, read with spaces for its underscores.
+// dev.qory.run.exited where a line says how a run ended, those Qory Apiary shows; any
+// other reason is the run's starter's, read with spaces for its underscores. quiet's
+// words go on with its quiet period, [quietWords].
 var reasonWords = map[string]string{
 	event.ReasonTimeout:                    "time limit reached",
 	event.ReasonQuiet:                      "no activity",
-	event.ReasonCredentialExpired:          "the run credential expired",
+	event.ReasonCredentialExpired:          "permission to run expired",
 	event.ReasonStopped:                    "no outcome given",
-	event.ReasonSessionLost:                "the session stopped responding",
+	event.ReasonSessionLost:                "stopped responding",
 	event.ReasonGatewayLost:                "end not recorded",
 	event.ReasonBatchRefused:               "events refused",
-	event.ReasonCredentialCheckUnreachable: "the run credential could not be checked: no answer",
-	event.ReasonCredentialCheckInvalid:     "the run credential could not be checked: no valid answer",
+	event.ReasonCredentialCheckUnreachable: "couldn't check whether the run may go on: no answer",
+	event.ReasonCredentialCheckInvalid:     "couldn't check whether the run may go on: unreadable answer",
 }
 
-// endWords is how a line says a run ended, with state and reason: the state, and the
-// reason's words after a comma when it has one.
-func endWords(state, reason string) string {
-	if reason == "" {
-		return state
+// endWords is how a line says a run ended: the state, and the reason's words after a
+// comma when it has one; quiet with the quiet period, quietSeconds, "no activity for 30
+// minutes" say.
+func endWords(end runEnd) string {
+	if end.reason == "" {
+		return end.state
 	}
-	words, ok := reasonWords[reason]
+	words, ok := reasonWords[end.reason]
 	if !ok {
-		words = strings.ReplaceAll(reason, "_", " ")
+		words = strings.ReplaceAll(end.reason, "_", " ")
 	}
-	return state + ", " + words
+	if end.reason == event.ReasonQuiet && end.quietSeconds > 0 {
+		words += " for " + quietWords(end.quietSeconds)
+	}
+	return end.state + ", " + words
+}
+
+// quietWords is a quiet period as a person reads it: whole hours, else whole minutes,
+// else seconds, "30 minutes" say.
+func quietWords(seconds int) string {
+	n, unit := seconds, "second"
+	switch {
+	case seconds%3600 == 0:
+		n, unit = seconds/3600, "hour"
+	case seconds%60 == 0:
+		n, unit = seconds/60, "minute"
+	}
+	if n != 1 {
+		unit += "s"
+	}
+	return strconv.Itoa(n) + " " + unit
 }
 
 // opening is how a run opens: on the one address with the run credential's identity,
@@ -707,7 +733,7 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 
 // endAsStarterSaid ends the run as its starter said, e, and tells the operator.
 func (lr *linkRun) endAsStarterSaid(e ending) {
-	lr.g.report(fmt.Sprintf("run %s: its run credential is no longer valid; the run ends: %s", lr.id, endWords(e.state, e.reason)))
+	lr.g.report(fmt.Sprintf("run %s: its run credential is no longer valid; the run ends: %s", lr.id, endWords(e.runEnd())))
 	lr.end(e)
 }
 

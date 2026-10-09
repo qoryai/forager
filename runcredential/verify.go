@@ -143,7 +143,7 @@ func (v *Verifier) VerifyExpired(raw string, now time.Time) (*Verified, error) {
 // verify is [Verifier.Verify], or with expired [Verifier.VerifyExpired].
 func (v *Verifier) verify(raw string, now time.Time, expired bool) (*Verified, error) {
 	if v == nil || len(v.issuers) == 0 {
-		return nil, refuseAt("header", "no issuer")
+		return nil, refuseAt("header", "no starter")
 	}
 	header, payload, input, sig, err := split(raw)
 	if err != nil {
@@ -183,7 +183,7 @@ func (v *Verifier) verify(raw string, now time.Time, expired bool) (*Verified, e
 	}
 	if len(verified) == 0 {
 		if best == nil {
-			best = refuseAt("header", "no issuer selected a key")
+			best = refuseAt("header", "no starter's key was selected")
 		}
 		return nil, best
 	}
@@ -200,7 +200,7 @@ func (v *Verifier) verify(raw string, now time.Time, expired bool) (*Verified, e
 		}
 	}
 	if vi == nil {
-		return nil, refuseAt("claims", "iss is not the issuer whose key verified the signature")
+		return nil, refuseAt("claims", "iss is not that of the starter whose key verified the signature")
 	}
 	i := &vi.issuer
 	checkAt := now

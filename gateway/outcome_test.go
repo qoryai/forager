@@ -813,3 +813,32 @@ func TestARunIsNotLostWhileItsStarterIsAsked(t *testing.T) {
 		t.Errorf("reports %q", got)
 	}
 }
+
+// TestTheWordsOfARunsEnd pins the words a person reads of each ending, in a 410's
+// message and a report line: those of Forager's codes, quiet with its quiet period, a
+// starter's code with spaces for its underscores, and the state alone with no reason.
+func TestTheWordsOfARunsEnd(t *testing.T) {
+	for _, c := range []struct {
+		state, reason string
+		quiet         int
+		want          string
+	}{
+		{"cancelled", "timeout", 0, "cancelled, time limit reached"},
+		{"cancelled", "quiet", 1800, "cancelled, no activity for 30 minutes"},
+		{"cancelled", "quiet", 3600, "cancelled, no activity for 1 hour"},
+		{"cancelled", "quiet", 90, "cancelled, no activity for 90 seconds"},
+		{"cancelled", "credential_expired", 0, "cancelled, permission to run expired"},
+		{"cancelled", "stopped", 0, "cancelled, no outcome given"},
+		{"failed", "session_lost", 0, "failed, stopped responding"},
+		{"failed", "gateway_lost", 0, "failed, end not recorded"},
+		{"failed", "batch_refused", 0, "failed, events refused"},
+		{"failed", "credential_check_unreachable", 0, "failed, couldn't check whether the run may go on: no answer"},
+		{"failed", "credential_check_invalid", 0, "failed, couldn't check whether the run may go on: unreadable answer"},
+		{"succeeded", "all_checks_passed", 0, "succeeded, all checks passed"},
+		{"failed", "", 0, "failed"},
+	} {
+		if got := gateway.EndWords(c.state, c.reason, c.quiet); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.state, c.reason, got, c.want)
+		}
+	}
+}

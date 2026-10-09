@@ -60,16 +60,6 @@ type RunEnd struct {
 	State, Reason string
 }
 
-// reservedReasons are Forager's own reasons of dev.qory.run.exited and the three old
-// names Forager never writes: the gateway drops a starter's reason that is one of them,
-// so an outcome answer that carries one is not valid.
-var reservedReasons = []string{
-	event.ReasonTimeout, event.ReasonQuiet, event.ReasonCredentialExpired, event.ReasonStopped,
-	event.ReasonSessionLost, event.ReasonGatewayLost, event.ReasonBatchRefused,
-	event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid, event.ReasonRunClosed,
-	"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid",
-}
-
 // CodeInvalidRequest is the gateway's 400 to a request of the link its rules refuse; to
 // a batch it ends the run.
 const CodeInvalidRequest = "invalid_request"
@@ -924,7 +914,7 @@ func (k *Link) Outcome(ctx context.Context, runURL, runID string) (LinkOutcome, 
 		}
 		return LinkOutcome{}, &DocumentError{"the outcome answer", k.at(u), err}
 	}
-	if slices.Contains(reservedReasons, o.Reason) {
+	if event.Reserved(o.Reason) {
 		o.Reason = ""
 	}
 	return o, nil

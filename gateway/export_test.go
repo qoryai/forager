@@ -195,3 +195,9 @@ func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 // OpenTries are the gateway's own waits between the tries of Qory Apiary as a run
 // opens, and its window.
 func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
+
+// EndWords is how a line says a run ended with the state and the reason, a quiet run's
+// quiet period in seconds.
+func EndWords(state, reason string, quietSeconds int) string {
+	return endWords(runEnd{state: state, reason: reason, quietSeconds: quietSeconds})
+}

@@ -394,8 +394,8 @@ const (
 // checkWords are the words of the 410's message of a run whose run credential could not
 // be checked.
 var checkWords = map[string]string{
-	"credential_check_unreachable": "the run credential could not be checked: no answer",
-	"credential_check_invalid":     "the run credential could not be checked: no valid answer",
+	"credential_check_unreachable": "couldn't check whether the run may go on: no answer",
+	"credential_check_invalid":     "couldn't check whether the run may go on: unreadable answer",
 }
 
 // TestAnIssuerWithNoAnswerAtOpen pins a run whose issuer's introspection endpoint gives

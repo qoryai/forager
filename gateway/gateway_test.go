@@ -587,7 +587,7 @@ func TestASessionThatSendsNothingIsLost(t *testing.T) {
 		t.Errorf("a lost run: %+v", d)
 	}
 	b, _ := json.Marshal([]map[string]any{heartbeat(lost.RunID)})
-	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the run has ended: failed, the session stopped responding" || got["state"] != "failed" || got["reason"] != "session_lost" {
+	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the run has ended: failed, stopped responding" || got["state"] != "failed" || got["reason"] != "session_lost" {
 		t.Errorf("a lost run's 410: %d %v", status, got)
 	}
 	h.post(exited(kept.RunID))

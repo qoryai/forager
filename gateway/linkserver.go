@@ -300,7 +300,7 @@ func invalid(w http.ResponseWriter) {
 func gone(w http.ResponseWriter, end runEnd) {
 	text := "the run has ended"
 	if end.state != "" {
-		text += ": " + endWords(end.state, end.reason)
+		text += ": " + endWords(end)
 	}
 	answerRefusal(w, http.StatusGone, linkRefusal{Error: end.code, Message: message(text), From: end.from, State: end.state, Reason: end.reason})
 }
