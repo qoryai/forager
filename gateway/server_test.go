@@ -134,7 +134,7 @@ func TestAServersStopEndsNoRun(t *testing.T) {
 	if n := c.deliveries.Load() - sent; n != 0 {
 		t.Errorf("%d requests reached the server after its 410", n)
 	}
-	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
+	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
 		t.Errorf("reports %q", got)
 	}
 }
@@ -173,7 +173,7 @@ func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	if got := types(c.lines(t)); !slices.Equal(got, []string{event.Ping}) {
 		t.Errorf("the server holds %v", got)
 	}
-	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
+	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
 		t.Errorf("reports %q", got)
 	}
 }
