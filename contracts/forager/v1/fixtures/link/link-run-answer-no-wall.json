@@ -19,5 +19,10 @@
     }
   },
   "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4",
+  "reserved": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
   "proxy_secret": "fixture-proxy-secret-0000000000000000000001"
 }

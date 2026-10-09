@@ -199,41 +199,70 @@ release may change what an existing document does, and says so under Upgrading.
   optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's
   public key in base64, and every request carries `Authorization: Bearer` and a run
   credential whose `sub` is the run's run key. Answers on the link are unsigned, and
-  carry the digest headers of a reload. A reload is a `GET` of `<run.url>/<run_id>`,
-  answered with `link-reload-answer.schema.json`, the policy in force, its `digest` and
-  `variables`, never the proxy secret or the certificate authority; on the local link
-  the link secret authorises it. A run opens with a `POST` of
-  `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
-  `labels`, `about` and, behind a separate gateway, a `narrowing` that only narrows;
-  the request is one-shot per `run_id`, and the gateway refuses it with
-  `invalid_request`, `run_credential_refused`, `run_id_used`,
+  carry the digest headers of a reload. A coded refusal on the link is
+  `link-refusal.schema.json`, `error`, `names` and `from`, required, `gateway` or
+  `apiary`, the server's refusal passed on with its code and status; every `410` on the
+  link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
+  `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
+  `placeholders`, `reserved` and `image`, never the proxy secret or the certificate
+  authority; on the local link the link secret authorises it. A run opens with a `POST`
+  of `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
+  `labels`, `about`, `passes`, the names of the variables the run passes a value for,
+  never a value, `images`, the session's `default` and `definitions`, each with `name`,
+  `ref`, `runtime` and `docker`, whose references the gateway never logs or reports
+  since one may carry a registry's credentials, and, behind a separate gateway, a
+  `narrowing` that only narrows; the request is one-shot per `run_id`, and the gateway
+  refuses it with `invalid_request`, `run_credential_refused`, `run_id_used`,
   `target_differs_from_credential` or `differs_from_credential`, the last two naming
-  each member that differs as `<member>=<the run credential's value>`.
+  each member that differs as `<member>=<the run credential's value>`. With `passes`
+  and `images` the gateway decides the run, and each reload, as the session decides it
+  today and in the same order, before it sets anything: the policy in force, what needs
+  a wall, the image, `image_unknown`, the credentials and the tools, and
+  `placeholder_conflict` for a placeholder the run passes a value for, each refused
+  with a `403`, the session's code of `refusal.Decides` and `from: gateway`, while the
+  server's refusals pass through with their own status and `from: apiary`; a refused
+  reload leaves the policy in force. A start without a wall whose policy selects what
+  needs one is `wall_required`, a `403` from `gateway` and a code of the link alone,
+  named `credentials`, `tools`, `paths` or `image=<name>`: the session turns it back into
+  today's error and writes no event for it, so it is not in `refusal.Decides` or in
+  `dev.qory.run.refused`'s codes. On one machine the gateway applies a reload itself and
+  reports a failed one with today's text; a failure without a code, other tools, another
+  image, or an image or credentials that need a wall, never reaches the link, whose
+  reload answers the policy in force with its digest unchanged. The session still checks
+  its own image table and runtime before it sends the request, and leaves out of
+  `passes` a name outside the variable-name grammar.
   The answer, `link-run-answer.schema.json`, has `run_id`, `labels`, the run's labels as
   the gateway holds them, the run credential's behind a separate gateway, `details`, the
   `about.details` keys the run credential decides with its values, the policy in force
-  and its `digest`, `variables`, the run's `proxy_secret` and, exactly when `wall` is
-  true, its `certificate_authority`; the session's `dev.qory.run.started` contains
-  exactly those labels, and those keys with those values. Discovery on the link is
+  and its `digest`, `variables`, `placeholders`, the variables the agent sees in place of
+  a credential or a tool's secret, `reserved`, the variables the gateway sets and the
+  session must not, `image`, the image the run gets when it has a wall, the run's
+  `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
+  reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
+  wall with a server always; the session's `dev.qory.run.started` contains exactly
+  those labels, and those keys with those values. Discovery on the link is
   `link-discovery.schema.json`, with `events.interval_seconds`, the gateway's heartbeat
-  interval, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
+  interval, `proxy.address`, the gateway's proxy as `host:port`, on loopback on one
+  machine, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
   `link-batch.schema.json`, events without `sequence`, which the gateway numbers. A
   session writes no event the gateway or the run credential decides: the gateway
   refuses a batch, `400` `invalid_request`, nothing of it numbered, with an event of
   another run; a `dev.qory.ping` or a `dev.qory.run.egress`, which the gateway writes; a
   `dev.qory.run.started` not opened by the session, whose `labels` or `about.details`
   differ from what the gateway holds or the run credential decides, or a second one; an
-  event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`; a
-  `dev.qory.run.exited` whose `reason` is `gateway_lost`, `session_lost` or `quiet`, or
-  one the gateway did not end the run with; a `dev.qory.run.policy_applied` with any
+  event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`, or a
+  `dev.qory.run.refused` after its `dev.qory.run.started`; a `dev.qory.run.exited` with
+  a `reason` other than `timeout`, since the gateway writes the event of every other
+  reason itself; a `dev.qory.run.policy_applied` with any
   member the gateway decides other than it computes, every member but `harness_hosts`
   and `variables`; or a `dev.qory.run.refused` whose code is not one of
   `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
-  `opened_by`, the three reasons and the codes and names of `dev.qory.run.refused`. A
+  `opened_by`, `timeout` as the one reason and the codes and names of
+  `dev.qory.run.refused`. A
   `400` `invalid_request` to a batch ends the run at the gateway: the gateway writes
   `dev.qory.run.exited` with `session_lost`, refuses the run's proxy secret and answers
   the session's further requests with a `410` `run_closed`; the session stops the
-  runtime and records `dev.qory.run.exited` with `run_closed` in its own record.
+  runtime and records `dev.qory.run.exited` with `run_closed` in its own record alone.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
   `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`, and it
@@ -241,17 +270,25 @@ release may change what an existing document does, and says so under Upgrading.
   reaches the local link's socket, and an unwalled one is never given the link secret:
   `qory` hands the session the secret in memory, never in an environment or a file, so
   a program the agent starts does not inherit it. A session's heartbeats are its run's,
-  and a session silent for 3 × the interval ends the run, `session_lost`. A run that
-  ends at the gateway is a `410` to the session's next request and every one after it,
-  its code `run_closed`, `credential_expired` or `run_ended_at_issuer` the reason of
-  `dev.qory.run.exited`; every `410` on the link carries `from`, `apiary` when the
-  server closed the run and `gateway` when the gateway ended it. The relay opens its
+  and a session silent for 3 × the interval ends the run, `session_lost`. When the
+  gateway ends a session's run, with `session_lost`, `credential_expired`,
+  `run_ended_at_issuer` or the server's `run_closed`, it writes the run's
+  `dev.qory.run.exited` itself, `failed` and `-1`, and delivers it toward the server,
+  except after the server's own `410`, where it records it in its record alone. It
+  answers the session's next request and every one after it with a `410`, whose code
+  the session records as the reason of its own `dev.qory.run.exited`, in its own record
+  alone, posting nothing more: `run_closed` from `apiary` when the server closed the
+  run, and from `gateway` `credential_expired`, `run_ended_at_issuer`, or `run_closed`
+  after `session_lost`, from silence or a refused batch. Every `410` on the link carries
+  `from`. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
-  the secret as its password. `fixtures/link/` holds the valid documents and
-  `fixtures/invalid/link-*` the refused ones, a run answer without `labels`, and a
-  batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
-  `dev.qory.run.exited` with each of the three reasons, and a `dev.qory.run.refused`
+  the secret as its password. `fixtures/link/` holds the valid documents, refusals from
+  `gateway` and from `apiary` among them, and `fixtures/invalid/link-*` the refused
+  ones, a discovery without `proxy`, a run request that passes a value with a name or
+  whose image has no `ref`, a run answer without `labels` or whose image has no `ref`, a
+  refusal without `from`, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
+  `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
   `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,
   `LinkSocketName`, `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
@@ -355,16 +392,19 @@ release may change what an existing document does, and says so under Upgrading.
   `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
   version of what opened the run, and `host` is the agent's machine's. A gateway-opened
   run's `labels`, `run_key` among them, and `about.details` come from the run
-  credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost` and `quiet`,
-  which the gateway writes, and `credential_expired` and `run_ended_at_issuer`, the
-  gateway's for a run with no session and the session's after the link ends its run
-  with that code, beside `timeout`, `run_closed` and `gateway_lost`; `quiet_seconds`,
-  the quiet period the gateway applied, is present with `quiet` alone. `state` and
-  `exit_code` are optional: a session's run contains both, `failed` and `-1` with
-  `gateway_lost` and `session_lost`, and a run a gateway opened neither, `gateway_lost`
-  included; the schema fixes them to `failed` and `-1` with those two reasons when they
-  are present, and requires neither. The contract no longer says the
-  state is `failed` with each reason; a receiver maps each reason to a state of its own.
+  credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, the
+  session was silent or the gateway refused a batch of its, `quiet`,
+  `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
+  `timeout`, `run_closed` and `gateway_lost`; when the gateway ends a session's run it
+  writes the run's `dev.qory.run.exited`, and the session records the same reason in its
+  own record alone. `quiet_seconds`, the quiet period the gateway applied, is present
+  with `quiet` alone. `state` and `exit_code` are optional: a session's run contains
+  both, `failed` and `-1` with `gateway_lost` and `session_lost` and in every
+  `dev.qory.run.exited` the gateway writes for it, and a run a gateway opened neither,
+  `gateway_lost` included; the schema fixes them to `failed` and `-1` with
+  `gateway_lost` and `session_lost` when they are present, and requires neither. The
+  contract no longer says the state is `failed` with each reason; a receiver maps each
+  reason to a state of its own.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
   the fixtures contains `opened_by` `session`, and the four batches under
   `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
