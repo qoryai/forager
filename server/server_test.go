@@ -349,9 +349,8 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 
 // TestRefusalsAreCoded pins the codes a run start reads: an unsigned 401 is
 // unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
-// instance_limit to the ping is instance_limit, and a signed 410 run_closed to a
-// delivery closes the run while a signed 410 without that code stops the deliveries
-// alone. A 401 that carries a signature is unauthorized all the same. A signed code and
+// instance_limit to the ping is instance_limit, and a signed 410 to a delivery, with
+// run_closed or without a code, stops the deliveries and closes no run. A 401 that carries a signature is unauthorized all the same. A signed code and
 // an unauthorized are From apiary; an answer_unsigned is From none.
 func TestRefusalsAreCoded(t *testing.T) {
 	v := newVerified(t)
@@ -379,7 +378,7 @@ func TestRefusalsAreCoded(t *testing.T) {
 	}
 	v.status, v.code = 410, "run_closed"
 	d, err := c.Deliver(context.Background(), events, "d4", []byte("[]"), "")
-	if err != nil || !d.Closed() || !d.Stop() || d.Accepted() || d.Code != "run_closed" {
+	if err != nil || d.Closed() || !d.Stop() || d.Accepted() || d.Code != "run_closed" {
 		t.Errorf("410 run_closed: %+v %v", d, err)
 	}
 	v.code = ""
@@ -410,6 +409,22 @@ func TestRefusalsAreCoded(t *testing.T) {
 	})
 	if _, _, err := uc.Discover(context.Background()); code(err) != accesskey.CodeUnauthorized {
 		t.Errorf("discovery answered 401: %v", err)
+	}
+}
+
+// TestASigned410ToThePingIsNoRun pins a signed 410 to the ping, with run_closed or
+// without a code: the server would record nothing of the run, so the ping is not
+// accepted, ErrNotAccepted with no code, whatever the 410's code was.
+func TestASigned410ToThePingIsNoRun(t *testing.T) {
+	for _, c := range []string{"run_closed", ""} {
+		v := newVerified(t)
+		events := v.srv.URL + "/v1/events"
+		v.status, v.code = 410, c
+		err := v.client().Ping(context.Background(), events, "d1", []byte("[]"))
+		var r *accesskey.Refusal
+		if want := "ping " + events + ": status 410: the server did not accept the ping"; !errors.Is(err, server.ErrNotAccepted) || errors.As(err, &r) || err.Error() != want {
+			t.Errorf("410 %q to the ping: %v, want %q", c, err, want)
+		}
 	}
 }
 

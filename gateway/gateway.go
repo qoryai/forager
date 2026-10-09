@@ -7,7 +7,7 @@
 // session opens, it fetches the run's policy by its labels, decides its connections
 // through one proxy shared by every run, sets credentials and starts tools, numbers the
 // run's events, the session's and its own, as one stream, writes the stream to the run's
-// record and sends it to the server, and passes the server's close to the session.
+// record and sends it to the server until the server answers 410, which ends no run.
 // [Resend] sends one run's record again.
 //
 // Start, Resend and the types they take and give are the package's whole surface: a

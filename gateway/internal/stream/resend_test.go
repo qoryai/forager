@@ -162,8 +162,8 @@ func mustGenerate() *accesskey.Key {
 	return k
 }
 
-// station is the reference receiver, which closes the runs closed says.
-func station(t *testing.T, closed func(string) bool) (*httptest.Server, *receiver.File) {
+// station is the reference receiver, which wants nothing more of the runs stop says.
+func station(t *testing.T, stop func(string) bool) (*httptest.Server, *receiver.File) {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
 	if err != nil {
@@ -175,7 +175,7 @@ func station(t *testing.T, closed func(string) bool) (*httptest.Server, *receive
 		},
 		Signer:        signer,
 		Store:         store,
-		Closed:        closed,
+		Stop:          stop,
 		Configuration: func() ([]byte, string) { return []byte("{}"), "sha256=configuration" },
 	}
 	srv := httptest.NewServer(h)
@@ -189,7 +189,7 @@ func serverSink(srv *httptest.Server) func(string) Sink {
 	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
 	client := &server.Client{Config: &server.Config{Version: 1, URL: srv.URL, AccessKeyID: "ak_f1xt0re000000000", ApiaryPublicKey: pin}, Key: accessKey, InstanceID: "i_test", UserAgent: "qory-forager/test"}
 	return func(dir string) Sink {
-		return sink.NewServer(client, sink.Target{URL: srv.URL + receiver.DefaultEventsPath, Types: []string{"*"}}, dir, nil, nil, nil)
+		return sink.NewServer(client, sink.Target{URL: srv.URL + receiver.DefaultEventsPath, Types: []string{"*"}}, dir, nil, nil)
 	}
 }
 
@@ -208,7 +208,7 @@ func TestResendDeliversWhatIsOwed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Closed || res.Sent != 3 || res.Undelivered != 0 || res.Stopped || res.RunClosed {
+	if !res.Closed || res.Sent != 3 || res.Undelivered != 0 || res.Stopped {
 		t.Errorf("result %+v", res)
 	}
 	if store.Count() != 3 {
@@ -248,16 +248,28 @@ func TestResendHonoursTheFilterAndTheStop(t *testing.T) {
 	}
 }
 
-// TestResendReportsARunClosed pins that a server that closes the run when it is sent
-// again says so in the result, and the events stay in the record directory.
-func TestResendReportsARunClosed(t *testing.T) {
-	srv, _ := station(t, func(string) bool { return true })
+// TestResendStopsAndMarksStopped pins a server that answers a signed 410 when the
+// record is sent again: the resend stops, says so in the result, and marks the record
+// stopped, so the next resend sends nothing; the events stay in the record directory.
+func TestResendStopsAndMarksStopped(t *testing.T) {
+	srv, store := station(t, func(string) bool { return true })
 	dir := lostRun(t)
 	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv)})
-	if err != nil || !res.RunClosed || res.Sent != 0 {
+	if err != nil || !res.Stopped || res.Sent != 0 {
 		t.Errorf("%+v, %v", res, err)
+	}
+	if _, stopped, err := sink.Delivered(dir); err != nil || !stopped {
+		t.Errorf("the record is not marked stopped: %v", err)
 	}
 	if rec := readRecord(t, dir); len(rec) != 4 {
 		t.Errorf("the record: %v", types(rec))
+	}
+	var reports []string
+	res, err = Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
+	if err != nil || !res.Stopped || res.Sent != 0 || store.Count() != 0 {
+		t.Errorf("again: %+v, %v, stored %d", res, err, store.Count())
+	}
+	if len(reports) != 1 || reports[0] != "the server said stop during the run; nothing is sent" {
+		t.Errorf("again: reports %q", reports)
 	}
 }

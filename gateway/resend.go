@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 
-	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/sink"
 )
@@ -30,8 +29,8 @@ type ResendConfig struct {
 // no accepted batch contained is posted, in order and in the run's own batches, until
 // the server accepts it or ctx ends. A server that said stop during the run is sent
 // nothing. A refusal of the server's, at its discovery, is an [*accesskey.Refusal] with
-// its From, Code and Names. A server that closes the run now, a signed 410 run_closed,
-// is RunClosed, from apiary: the events stay in the directory.
+// its From, Code and Names. A server that answers a signed 410 now is sent nothing
+// more, and its record is marked stopped: the events stay in the directory.
 func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if cfg.Version == "" {
 		cfg.Version = "dev"
@@ -51,18 +50,14 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 		}
 		rc.Wants = conf.Wants
 		rc.Sink = func(dir string) stream.Sink {
-			return sink.NewServer(client, sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, dir, cfg.Report, nil, nil)
+			return sink.NewServer(client, sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, dir, cfg.Report, nil)
 		}
 	}
 	res, err := stream.Resend(ctx, rc)
 	if err != nil {
 		return Delivery{}, err
 	}
-	d := Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed}
-	if res.RunClosed {
-		d.RunClosed, d.ClosedBy, d.Reason = true, accesskey.FromApiary, accesskey.CodeRunClosed
-	}
-	return d, nil
+	return Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed}, nil
 }
 
 // ErrRunning says a run's record is still held: by an open run of a gateway's, or by

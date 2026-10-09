@@ -92,63 +92,116 @@ func TestARunWithAServer(t *testing.T) {
 	}
 }
 
-// TestTheServerClosesARun pins the server's 410: the run ends at the gateway, which
-// records run.exited run_closed in its record alone, and the session's next request is
-// a 410 run_closed from apiary; Close says who closed it.
-func TestTheServerClosesARun(t *testing.T) {
+// stopLine is the gateway's report of a server's signed 410: the one line a stop
+// gets, whatever its code.
+const stopLine = "the server answered 410; no further batch is sent for this run, which goes on"
+
+// TestAServersStopEndsNoRun pins a server's signed 410 during a run, run_closed among
+// them: the gateway sends the server nothing more and reports it once, but the run goes
+// on. The session's batches get 202 and are in the record, the run ends with the
+// session's own run.exited, and Close says no run was closed.
+func TestAServersStopEndsNoRun(t *testing.T) {
 	c := newControl(t)
 	h := start(t, gateway.Config{Server: c.server()})
 	a := h.open(server.LinkRunRequest{})
 	runID := a.RunID
 	h.post(started(runID, nil), applied(runID, a.Applied))
 	c.closed.Store(true)
-	h.post(logged(runID))
-	eventually(t, "the session's 410", func() bool {
-		d := h.post(heartbeat(runID))
-		if d.Status == http.StatusGone && (d.End != "run_closed" || d.From != "apiary") {
-			t.Errorf("410 %+v", d)
+	if d := h.post(logged(runID)); d.Status != http.StatusAccepted {
+		t.Errorf("the batch the server answers 410: %+v", d)
+	}
+	eventually(t, "the stop's report", func() bool { return h.reported(stopLine) })
+	sent := c.deliveries.Load()
+	for range 3 {
+		if d := h.post(heartbeat(runID)); d.Status != http.StatusAccepted || d.End != "" {
+			t.Errorf("a batch after the server's 410: %+v", d)
 		}
-		return d.Status == http.StatusGone
-	})
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "apiary" || d.Reason != "run_closed" {
+	}
+	if d := h.post(exited(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("the run.exited after the server's 410: %+v", d)
+	}
+	if d := h.close(); d != (gateway.Delivery{}) {
 		t.Errorf("delivery %+v", d)
 	}
 	lines := h.record(runID)
-	if l := lines[len(lines)-1]; l.Type != event.RunExited || l.Data["reason"] != "run_closed" || l.Data["state"] != "failed" || l.Data["exit_code"] != -1.0 {
-		t.Errorf("record ends %v", l)
+	want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunHeartbeat, event.RunHeartbeat, event.RunHeartbeat, event.RunExited}
+	if !slices.Equal(types(lines), want) {
+		t.Fatalf("record %v", types(lines))
 	}
-	if got := c.lines(t); got[len(got)-1].Type == event.RunExited {
-		t.Error("the server was sent the gateway's run.exited")
+	if l := lines[len(lines)-1]; l.Data["state"] != "succeeded" || l.Data["reason"] != nil {
+		t.Errorf("the record ends with %v, not the session's run.exited", l)
 	}
-	// The user is told once, in today's words.
-	if got := h.reportsWith("closed the run"); len(got) != 1 || !strings.Contains(got[0], "the server closed the run with a signed 410 run_closed; the run ends, and no further batch is sent") {
+	if n := c.deliveries.Load() - sent; n != 0 {
+		t.Errorf("%d requests reached the server after its 410", n)
+	}
+	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
 		t.Errorf("reports %q", got)
 	}
 }
 
-// TestTheServerClosesARunBeforeItStarts pins a close before run.started: the run ends
-// at the gateway with run.refused run_closed in its record, as today's session records
-// it, and the session hears 410 run_closed from apiary.
-func TestTheServerClosesARunBeforeItStarts(t *testing.T) {
+// TestAServersStopAsTheRunOpensOpensIt pins a server that answers 410 from the moment
+// the gateway fetched the run configuration, after it accepted the ping: the run opens
+// with its run answer, the server saw the ping, and the run goes on with no further
+// batch sent.
+func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
 	c.closeOnFetch.Store(true)
 	h := start(t, gateway.Config{Server: c.server()})
-	runID := h.open(server.LinkRunRequest{}).RunID
-	h.post(heartbeat(runID))
-	eventually(t, "the session's 410", func() bool {
-		d := h.post(heartbeat(runID))
-		return d.Status == http.StatusGone && d.From == "apiary"
-	})
-	// The 410's message is the error today's session returned.
-	b, _ := json.Marshal([]map[string]any{heartbeat(runID)})
-	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["message"] != "the server closed the run before it started: run_closed (status 410)" || got["from"] != "apiary" {
-		t.Errorf("the 410: %d %v", status, got)
+	a, err := h.tryOpen(server.LinkRunRequest{})
+	if err != nil || a.RunID == "" {
+		t.Fatalf("the run answer %+v, %v", a, err)
 	}
-	h.close()
-	lines := h.record(runID)
-	if l := lines[len(lines)-1]; l.Type != event.RunRefused || l.Data["code"] != "run_closed" || l.Data["status"] != 410.0 {
-		t.Errorf("record %v, ends %v", types(lines), l)
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); d.Status != http.StatusAccepted {
+		t.Errorf("the run.started: %+v", d)
+	}
+	eventually(t, "the stop's report", func() bool { return h.reported(stopLine) })
+	if d := h.post(heartbeat(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("a batch after the server's 410: %+v", d)
+	}
+	if d := h.post(exited(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("the run.exited after the server's 410: %+v", d)
+	}
+	if d := h.close(); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunHeartbeat, event.RunExited}
+	if got := types(h.record(runID)); !slices.Equal(got, want) {
+		t.Errorf("record %v", got)
+	}
+	if got := types(c.lines(t)); !slices.Equal(got, []string{event.Ping}) {
+		t.Errorf("the server holds %v", got)
+	}
+}
+
+// TestASigned410ToThePingIsNoRun pins a server's signed 410 to the ping, with
+// run_closed or without a code: the server would record nothing of the run, so it does
+// not open. The gateway answers 500 internal, the ping not accepted, and records no
+// run.refused.
+func TestASigned410ToThePingIsNoRun(t *testing.T) {
+	for _, code := range []string{"run_closed", ""} {
+		c := newControl(t)
+		h := start(t, gateway.Config{Server: c.server()})
+		if code == "" {
+			c.stop.Store(true)
+		} else {
+			c.closed.Store(true)
+		}
+		runID := event.NewRunID()
+		want := "ping " + c.srv.URL + "/v1/events: status 410: the server did not accept the ping"
+		status, got := h.refusalOf("/v1/run-configuration", openBody(runID))
+		if status != http.StatusInternalServerError || got["error"] != "internal" || got["message"] != want || got["from"] != "gateway" {
+			t.Errorf("410 %q to the ping: %d %v, want 500 internal: %q", code, status, got, want)
+		}
+		var se *server.StatusError
+		if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &se) || se.Status != http.StatusInternalServerError || se.Message != want {
+			t.Errorf("410 %q to the ping: the session's error %v", code, err)
+		}
+		h.close()
+		if got := types(h.record(runID)); slices.Contains(got, event.RunRefused) || slices.Contains(got, event.RunStarted) {
+			t.Errorf("410 %q to the ping: record %v", code, got)
+		}
 	}
 }
 
@@ -454,5 +507,44 @@ func TestCloseAndResend(t *testing.T) {
 	}
 	if _, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", event.NewRunID())}); err == nil {
 		t.Error("a resend of no record")
+	}
+}
+
+// TestAResendAfterAServersStop pins a resend the server answers with a signed 410,
+// run_closed among them: it stops and closes no run, the record is marked stopped, and
+// the next resend sends the server nothing and says why.
+func TestAResendAfterAServersStop(t *testing.T) {
+	c := newControl(t)
+	cfg := gateway.Config{Server: c.server()}
+	gateway.SetCloseWait(&cfg, 300*time.Millisecond)
+	h := start(t, cfg)
+	a := h.open(server.LinkRunRequest{})
+	c.refuse.Store(http.StatusServiceUnavailable)
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), logged(a.RunID))
+	h.post(exited(a.RunID))
+	if d := h.close(); d.Undelivered < 4 {
+		t.Fatalf("delivery %+v", d)
+	}
+	c.refuse.Store(0)
+	c.closed.Store(true)
+	dir := filepath.Join(h.dir, "runs", a.RunID)
+	d, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
+	if err != nil || d.RunClosed || d.ClosedBy != "" || d.Reason != "" || d.Sent != 0 {
+		t.Errorf("the resend the server answers 410: %+v, %v", d, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "delivered.log")); err != nil || !slices.Contains(strings.Split(string(b), "\n"), "stopped") {
+		t.Errorf("the record is not marked stopped: %q, %v", b, err)
+	}
+	sent := c.deliveries.Load()
+	var reports []string
+	d, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir, Report: func(l string) { reports = append(reports, l) }})
+	if err != nil || d.RunClosed || d.Sent != 0 {
+		t.Errorf("the next resend: %+v, %v", d, err)
+	}
+	if n := c.deliveries.Load() - sent; n != 0 {
+		t.Errorf("the next resend made %d deliveries", n)
+	}
+	if len(reports) != 1 || reports[0] != "the server said stop during the run; nothing is sent" {
+		t.Errorf("the next resend reports %q", reports)
 	}
 }

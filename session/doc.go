@@ -26,7 +26,7 @@
 //   - posts its events to the gateway in batches, heartbeats every interval the
 //     discovery announces, records them in its own record, session.jsonl, fetches the
 //     policy again when an answer's digest says another is in force, and ends the run
-//     when the gateway or the server closes it
+//     when the gateway closes it
 //   - takes the harness's reports over a local socket and maps them, with the
 //     runtime's structured output, to session events through the runtime's descriptor
 //
