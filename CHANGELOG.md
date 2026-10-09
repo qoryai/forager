@@ -800,8 +800,8 @@ release may change what an existing document does, and says so under Upgrading.
   machine also holds `delivered.log`, what the gateway accepted of `session.jsonl` by the
   session's sequence, and `stopped` when the gateway ended the run, and `undelivered/`,
   the session's batches the gateway did not accept; neither holds the run credential.
-  It also holds `run-secret`, the run's `run_secret`, mode 0600, written when the run
-  opens and removed once nothing is owed.
+  Behind a separate gateway alone, it also holds `run-secret`, the run's `run_secret`,
+  mode 0600, written when the run opens and removed once nothing is owed.
   `Result.Undelivered` counts the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
   `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's

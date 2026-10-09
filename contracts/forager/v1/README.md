@@ -907,8 +907,8 @@ and `undelivered/` toward the server. The session's machine holds `session.jsonl
 - `undelivered/`: the session's batches the gateway has not accepted, when there are
   any.
 
-Neither holds the run credential. `run-secret`: the run's `run_secret`, mode 0600,
-written when the run opens; it is removed once nothing is owed.
+Neither holds the run credential. `run-secret`: behind a separate gateway, the run's
+`run_secret`, mode 0600, written when the run opens; it is removed once nothing is owed.
 
 `fixtures/run/<id>/` are such directories, recorded. Qory Apiary's CI replays them.
 

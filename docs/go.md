@@ -192,10 +192,10 @@ res, err := session.Run(ctx, session.Spec{
   variables there.
 - The run directory on the session's machine holds the session's record,
   `session.jsonl` and `output.log`, and what the gateway accepted of it, `delivered.log`,
-  and the batches it did not, `undelivered/`, and the run's `run_secret`, `run-secret`,
-  mode 0600, written when the run opens and removed once nothing is owed. The gateway's
-  record, `events.jsonl`, with its own delivery state toward the server, is on the
-  gateway's machine ([where the record is](events.md#where-the-record-is)).
+  and the batches it did not, `undelivered/`, and, behind a separate gateway, the run's
+  `run_secret`, `run-secret`, mode 0600, written when the run opens and removed once
+  nothing is owed. The gateway's record, `events.jsonl`, with its own delivery state
+  toward the server, is on the gateway's machine ([where the record is](events.md#where-the-record-is)).
 - The discovery must list URLs of the gateway's origin alone, and name the gateway's one
   address, the URL's host and port, as its proxy; the loopback check of the local link
   does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
