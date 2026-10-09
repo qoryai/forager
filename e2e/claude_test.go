@@ -66,7 +66,7 @@ func TestDockerClaudeCodeThroughTheWall(t *testing.T) {
 	for _, kv := range RecorderEnv() {
 		args = append(args, "--env", kv)
 	}
-	args = append(append(args, "--entrypoint", "/walltest", "busybox:stable"), RecorderArgs...)
+	args = append(append(args, "--entrypoint", "/walltest", "public.ecr.aws/docker/library/busybox:stable"), RecorderArgs...)
 	if out, err := exec.Command(command, args...).CombinedOutput(); err != nil {
 		t.Fatalf("the recorder: %v: %s", err, out)
 	}
