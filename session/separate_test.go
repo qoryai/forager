@@ -449,7 +449,8 @@ func TestTheRefreshedRunCredentialCarriesTheRun(t *testing.T) {
 // TestARunCredentialThatExpiresEndsTheRun pins credential_expired end to end: with no
 // fresh run credential by its exp, the gateway ends the run, and the session, at its
 // next request's 410, stops the runtime as at its time limit and records its own
-// run.exited with credential_expired, the run closed by the gateway.
+// run.exited cancelled with credential_expired, as the 410 says, the run closed by the
+// gateway.
 func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 	s := startSeparate(t)
 	cred := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Second))
@@ -460,17 +461,17 @@ func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "failed" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
+	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "cancelled" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
 		t.Errorf("result %+v after %s", res, time.Since(start))
 	}
 	own := events(t, res)
 	exited := ofType(own, "dev.qory.run.exited")
-	if len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" {
+	if len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" || data(exited[0])["state"] != "cancelled" {
 		t.Errorf("the session's run.exited %v", exited)
 	}
 	s.close(t)
 	rec := s.record(t, res.RunID)
-	if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "credential_expired" {
+	if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "credential_expired" || data(last)["state"] != "cancelled" {
 		t.Errorf("the gateway's record ends %v", last)
 	}
 	r.noSecretIn(t, s, res.RunID, cred)
@@ -491,10 +492,10 @@ func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "failed" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
+	if !res.RunClosed || res.ClosedReason != "credential_expired" || res.State != "cancelled" || res.Reason != "credential_expired" || time.Since(start) > 20*time.Second {
 		t.Errorf("result %+v after %s", res, time.Since(start))
 	}
-	if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" {
+	if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != "credential_expired" || data(exited[0])["state"] != "cancelled" {
 		t.Errorf("the session's run.exited %v", exited)
 	}
 	r.noSecretIn(t, s, res.RunID, cred)
@@ -504,8 +505,8 @@ func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
 // run on the one address, over TLS: a session it hears nothing from for three heartbeat
 // intervals gets a 410 session_lost, and one whose batch it refused a 410
 // batch_refused. The session stops the runtime, its result says the gateway closed the
-// run with that code, and its record ends with run.exited of that reason, while the
-// gateway's says session_lost for both.
+// run with that code, and its record and the gateway's end with run.exited of that
+// reason.
 func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 	for _, cause := range []string{"session_lost", "batch_refused"} {
 		t.Run(cause, func(t *testing.T) {
@@ -580,7 +581,7 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 			}
 			s.close(t)
 			rec := s.record(t, res.RunID)
-			if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "session_lost" {
+			if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != cause {
 				t.Errorf("the gateway's record ends %v", last)
 			}
 			r.noSecretIn(t, s, res.RunID, cred)

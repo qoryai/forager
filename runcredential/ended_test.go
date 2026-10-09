@@ -1,6 +1,7 @@
 package runcredential
 
 import (
+	jsonv2 "encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,5 +222,115 @@ func TestOpenEndedRefuses(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, EndedFile), []byte(`{"ended": []}`), 0o600)
 	if e, err := OpenEnded(dir); err != nil || e.Has(exampleIssuer, "rk-0001", now) {
 		t.Errorf("an empty document: %v", err)
+	}
+}
+
+// TestEndedKeepsTheOutcome pins how a run key's run ended: kept with the outcome and the
+// reason its first hold gave, which a later hold of it, with or without one, leaves as
+// they are, and a restart reads again; a hold past its time takes a new one; and the
+// file holds them as members a gateway before them refuses.
+func TestEndedKeepsTheOutcome(t *testing.T) {
+	dir := t.TempDir()
+	clock := now
+	at := func() time.Time { return clock }
+	e, err := openEnded(dir, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := now.Add(10 * time.Minute)
+	if err := e.AddOutcome(exampleIssuer, "rk-0001", exp, "succeeded", "all_checks_passed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddOutcome(exampleIssuer, "rk-0001", exp.Add(time.Hour), "failed", "checks_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Add(exampleIssuer, "rk-0001", exp.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Add(exampleIssuer, "rk-0002", exp); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddOutcome(exampleIssuer, "rk-0002", exp, "cancelled", "no_longer_needed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddOutcome(exampleIssuer, "rk-0003", exp, "cancelled", "timeout"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, e *Ended) {
+		t.Helper()
+		for _, c := range []struct{ key, outcome, reason string }{
+			{"rk-0001", "succeeded", "all_checks_passed"},
+			{"rk-0002", "", ""},
+			{"rk-0003", "cancelled", ""},
+		} {
+			if o, r, ok := e.Outcome(exampleIssuer, c.key, now); !ok || o != c.outcome || r != c.reason {
+				t.Errorf("%s: %s: %q %q %v", what, c.key, o, r, ok)
+			}
+		}
+		if !e.Has(exampleIssuer, "rk-0001", exp.Add(2*time.Hour)) {
+			t.Errorf("%s: the later exp is not kept", what)
+		}
+	}
+	check("as added", e)
+	b, _ := os.ReadFile(filepath.Join(dir, EndedFile))
+	if !strings.Contains(string(b), `"outcome": "succeeded"`) || !strings.Contains(string(b), `"reason": "all_checks_passed"`) {
+		t.Errorf("the file: %s", b)
+	}
+	// A gateway before the outcome reads each entry with three members, and refuses
+	// any other.
+	type before struct {
+		Ended *[]struct {
+			Issuer string `json:"issuer"`
+			RunKey string `json:"run_key"`
+			Until  int64  `json:"until"`
+		} `json:"ended"`
+	}
+	if err := jsonv2.Unmarshal(b, new(before), jsonv2.RejectUnknownMembers(true)); err == nil {
+		t.Error("a gateway before the outcome reads the file")
+	}
+	again, err := openEnded(dir, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("after a restart", again)
+	// Past its time, a run key's next hold has the outcome of its own.
+	clock = exp.Add(MaxLeeway)
+	if err := again.AddOutcome(exampleIssuer, "rk-0002", exp.Add(time.Hour), "failed", "checks_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if o, r, ok := again.Outcome(exampleIssuer, "rk-0002", clock); !ok || o != "failed" || r != "checks_failed" {
+		t.Errorf("a new hold after the last lapsed: %q %q %v", o, r, ok)
+	}
+}
+
+// TestOpenEndedRefusesAnOutcomeNoStarterGives pins the check of the file's outcome and
+// reason when it is read: one a run's starter could not give is no entry this gateway
+// wrote, and the file is refused.
+func TestOpenEndedRefusesAnOutcomeNoStarterGives(t *testing.T) {
+	entry := func(members string) string {
+		return `{"ended": [{"issuer": "https://issuer.example", "run_key": "rk-0001", "until": 1700000600` + members + `}]}`
+	}
+	for name, content := range map[string]string{
+		"an unknown outcome":        entry(`, "outcome": "lost"`),
+		"a reason without outcome":  entry(`, "reason": "checks_failed"`),
+		"a reserved reason":         entry(`, "outcome": "cancelled", "reason": "stopped"`),
+		"an old name":               entry(`, "outcome": "cancelled", "reason": "issuer_unreachable"`),
+		"a reason that is no code":  entry(`, "outcome": "failed", "reason": "Checks failed"`),
+		"an outcome that is no str": entry(`, "outcome": 1`),
+	} {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, EndedFile), []byte(content), 0o600)
+		if _, err := openEnded(dir, func() time.Time { return time.Unix(1700000000, 0) }); err == nil {
+			t.Errorf("%s: OpenEnded accepts it", name)
+		}
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, EndedFile), []byte(entry(`, "outcome": "failed", "reason": "checks_failed"`)), 0o600)
+	e, err := openEnded(dir, func() time.Time { return time.Unix(1700000000, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, r, ok := e.Outcome("https://issuer.example", "rk-0001", time.Unix(1700000000, 0)); !ok || o != "failed" || r != "checks_failed" {
+		t.Errorf("a good entry: %q %q %v", o, r, ok)
 	}
 }

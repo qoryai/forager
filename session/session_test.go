@@ -70,7 +70,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
+	// The roots of the process are the authority of the tests' starters, read before
+	// anything verifies a certificate.
+	removeAuthority, err := trustStarters()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
+	removeAuthority()
 	os.RemoveAll(state)
 	os.Exit(code)
 }

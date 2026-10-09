@@ -251,7 +251,9 @@ func TestIssuerCheck(t *testing.T) {
 			i.LabelMapping.Forge = Source{Claim: "forge"}
 			i.LabelMapping.Repository = Source{Claim: "project"}
 		}, ""},
-		{"an issuer over http", func(i *Issuer) { i.Issuer = "http://issuer.example" }, "not an https URL"},
+		{"no issuer", func(i *Issuer) { i.Issuer = "" }, `an entry has no "issuer" key`},
+		{"an issuer over http", func(i *Issuer) { i.Issuer = "http://issuer.example" }, `the "issuer" key: "http://issuer.example" is not an https URL`},
+		{"no audience, named by its starter", func(i *Issuer) { i.Audience = "" }, "the starter https://issuer.example: no audience"},
 		{"an issuer with a query", func(i *Issuer) { i.Issuer = "https://issuer.example/?a=b" }, "not an https URL"},
 		{"an issuer with a fragment", func(i *Issuer) { i.Issuer = "https://issuer.example/#a" }, "not an https URL"},
 		{"an issuer with a user", func(i *Issuer) { i.Issuer = "https://user@issuer.example" }, "not an https URL"},
@@ -264,8 +266,8 @@ func TestIssuerCheck(t *testing.T) {
 		{"no key", func(i *Issuer) { i.Keys = nil }, "no key"},
 		{"a key's alg outside the algorithms", func(i *Issuer) {
 			i.Keys = []Key{{Alg: ES256, PublicKeyFile: "es256.pem"}}
-		}, "not among the issuer's algorithms"},
-		{"a key's alg HS256", func(i *Issuer) { i.Keys[0].Alg = "HS256" }, "not among the issuer's algorithms"},
+		}, "not among the starter's algorithms"},
+		{"a key's alg HS256", func(i *Issuer) { i.Keys[0].Alg = "HS256" }, "not among the starter's algorithms"},
 		{"two keys, one without a kid", func(i *Issuer) {
 			i.Algorithms = []string{RS256, ES256}
 			i.Keys = []Key{{KID: "a", Alg: RS256, PublicKeyFile: "rs256.pem"}, {Alg: ES256, PublicKeyFile: "es256.pem"}}
@@ -468,15 +470,15 @@ func TestIssuersCheck(t *testing.T) {
 	if err := (Issuers{issuer(), other}).Check(read); err != nil {
 		t.Errorf("two issuers: %v", err)
 	}
-	if err := (Issuers{issuer(), issuer()}).Check(read); err == nil || !strings.Contains(err.Error(), "appears twice") {
+	if err := (Issuers{issuer(), issuer()}).Check(read); err == nil || err.Error() != "run_credentials: the starter https://issuer.example appears twice" {
 		t.Errorf("the same issuer twice: %v", err)
 	}
-	if err := (Issuers{}).Check(read); err == nil {
-		t.Error("no issuer passes")
+	if err := (Issuers{}).Check(read); err == nil || err.Error() != "run_credentials: no starter" {
+		t.Errorf("no issuer: %v", err)
 	}
 	bad := issuer()
 	bad.Issuer, bad.Audience = "https://issuer-b.example", ""
-	if err := (Issuers{issuer(), bad}).Check(read); err == nil || !strings.Contains(err.Error(), "run credentials[1]") {
+	if err := (Issuers{issuer(), bad}).Check(read); err == nil || !strings.Contains(err.Error(), "run_credentials[1]") {
 		t.Errorf("a bad second issuer: %v", err)
 	}
 	if err := issuer().Check(nil); err == nil {

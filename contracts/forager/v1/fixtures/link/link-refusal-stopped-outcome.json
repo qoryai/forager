@@ -1,6 +1,6 @@
 {
   "error": "stopped",
-  "message": "the gateway refused the run: stopped",
+  "message": "the run has ended: failed, checks failed",
   "from": "gateway",
   "state": "failed",
   "reason": "checks_failed"

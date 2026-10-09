@@ -366,7 +366,7 @@ func (w *Server) deliver(batch []queued) {
 				})
 				return
 			}
-			w.report(fmt.Sprintf("the server answered %d; no further batch is sent for this run, which goes on", d.Status))
+			w.report("the server wants no more events of this run; the run goes on")
 			return
 		}
 		if w.ctx.Err() != nil || !w.sleep(w.ctx, backoff) {

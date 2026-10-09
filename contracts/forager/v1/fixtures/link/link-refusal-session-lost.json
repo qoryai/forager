@@ -1,6 +1,6 @@
 {
   "error": "session_lost",
-  "message": "the gateway refused the run: session_lost",
+  "message": "the run has ended: failed, stopped responding",
   "from": "gateway",
   "state": "failed",
   "reason": "session_lost"

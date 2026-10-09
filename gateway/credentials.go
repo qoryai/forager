@@ -15,9 +15,10 @@ import (
 
 // activeChecker is an issuer's introspection endpoint (RFC 7662) as the gateway asks
 // it: [*runcredential.Introspector], which keeps each answer the endpoint gives for its
-// cache.
+// cache, and asks past it at a runtime's exit.
 type activeChecker interface {
-	Active(ctx context.Context, credential string, now time.Time) (bool, error)
+	Answer(ctx context.Context, credential string, now time.Time) (runcredential.Answer, error)
+	AnswerNow(ctx context.Context, credential string, now time.Time) (runcredential.Answer, error)
 	Cache() time.Duration
 }
 
@@ -49,7 +50,7 @@ func newCredentialVerifier(cfg *Config, heartbeat time.Duration) (*credentialVer
 		}
 		in, err := runcredential.NewIntrospector(*i.Introspection, os.ReadFile, heartbeat)
 		if err != nil {
-			return nil, fmt.Errorf("run credentials: issuer %s: %w", i.Issuer, err)
+			return nil, fmt.Errorf("run_credentials: the starter %s: %w", i.Issuer, err)
 		}
 		cv.intro[i.Issuer] = in
 	}
@@ -67,15 +68,19 @@ func (c *credentialVerifier) authenticate(_ context.Context, credential string) 
 	}
 	id := runIdentity{Issuer: ver.Issuer, RunKey: ver.RunKey, Labels: ver.Labels, Details: ver.Details, Expires: ver.Expires}
 	if a := c.intro[ver.Issuer]; a != nil {
-		id.active = func(ctx context.Context) error {
+		id.active = func(ctx context.Context, now bool) error {
 			// Any answer but active, and a failure to ask, is not active: the check
 			// fails closed.
-			ok, err := a.Active(ctx, credential, time.Now())
+			ask := a.Answer
+			if now {
+				ask = a.AnswerNow
+			}
+			answer, err := ask(ctx, credential, time.Now())
 			if err != nil {
 				return err
 			}
-			if !ok {
-				return errInactive
+			if !answer.Active {
+				return &inactive{outcome: answer.Outcome, reason: answer.Reason}
 			}
 			return nil
 		}
@@ -102,27 +107,39 @@ type runKeyID struct{ issuer, runKey string }
 // keyOf is the run key of a run credential's run.
 func keyOf(id runIdentity) runKeyID { return runKeyID{id.Issuer, id.RunKey} }
 
-// errInactive is the issuer's answer that it no longer holds the run credential active.
-var errInactive = errors.New("the issuer no longer holds the run credential active")
+// errInactive is the starter's answer that the run credential is no longer active, which
+// every [*inactive] is.
+var errInactive = errors.New("the run credential is no longer valid")
 
-// checkActive asks whether the issuer still holds the run credential active: nil when
-// it does, and for an issuer without introspection; errInactive when it answered that
-// it does not; [runcredential.ErrIssuerUnreachable] or an error that is
+// inactive is the starter's answer that the run credential is no longer active, with
+// how the starter says its run ended: its outcome and its reason, each empty for none,
+// by the rules of [runcredential.StarterOutcome].
+type inactive struct{ outcome, reason string }
+
+func (*inactive) Error() string { return errInactive.Error() }
+
+// Is reports the answer as errInactive.
+func (*inactive) Is(target error) bool { return target == errInactive }
+
+// checkActive asks whether the starter still holds the run credential active: nil when
+// it does, and for an issuer without introspection; an [*inactive] when it answered
+// that it does not; [runcredential.ErrIssuerUnreachable] or an error that is
 // [runcredential.ErrAnswerInvalid] when it gave no answer, or none that is valid; or
 // ctx's error.
 func (id runIdentity) checkActive(ctx context.Context) error {
 	if id.active == nil {
 		return nil
 	}
-	return id.active(ctx)
+	return id.active(ctx, false)
 }
 
 // The gateway tracks run keys and does not require them to be unique; each period of
-// activity is a run. It refuses a run key only after the issuer's end of a run of it:
-// after stopped, the gateway refuses the run key until the latest exp of
-// the run credentials of the run key it still holds, and of any presented during the
-// hold. Those run keys are kept in the gateway's directory, so a restart
-// refuses them too.
+// activity is a run. It refuses a run key only after the starter's end of a run of it,
+// stopped or the outcome the starter gave: the gateway refuses the run key until the
+// latest exp of the run credentials of the run key it still holds, and of any presented
+// during the hold, and ends each of its runs as the starter said. Those run keys are kept
+// in the gateway's directory with how their run ended, so a restart refuses them too, and
+// ends them the same way.
 
 // blocked reports whether the gateway refuses the run key, after the issuer's end.
 func (g *Gateway) blocked(k runKeyID) bool {
@@ -139,22 +156,35 @@ func (g *Gateway) now() time.Time {
 }
 
 // blocks reports whether an ending is the one after which the gateway refuses the run
-// key: the issuer's end.
+// key: the starter's end, the 410 stopped, whether the starter gave an outcome or not.
 func (e ending) blocks() bool { return e.code == event.ReasonStopped }
+
+// heldEnding is how a run of a run key the gateway holds ends: as the starter said when
+// the hold began, its outcome and reason, or cancelled and stopped when it gave none.
+func (g *Gateway) heldEnding(k runKeyID) ending {
+	if g.ended != nil {
+		if outcome, reason, ok := g.ended.Outcome(k.issuer, k.runKey, g.now()); ok {
+			return starterEnding(outcome, reason)
+		}
+	}
+	return stopped
+}
 
 // keepRetry is how often the gateway writes the refused run keys again while a write
 // of them has failed.
 const keepRetry = 5 * time.Second
 
 // holdKey keeps a run key among the refused run keys, in the gateway's directory,
-// until exp, so that neither this gateway nor another started on its directory, after
-// a crash as after a stop, opens a run of it before then. The gateway refuses the run
+// until exp, with the outcome and the reason the starter gave, each empty for none, which
+// a run key already held keeps from its first hold, so that neither this gateway nor
+// another started on its directory, after a crash as after a stop, opens a run of it
+// before then, and each ends its runs the same way. The gateway refuses the run
 // key in this process whether or not the write succeeds. A run key whose write failed
 // is written again by each later hold of it, and every [keepRetry] until a write
 // succeeds, which holds every run key refused in memory, and is reported; a gateway that
 // is closing leaves the last try to Close, which reports the run keys still not written. first reports a failure for a run key whose write had
 // not failed since the last that succeeded.
-func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
+func (g *Gateway) holdKey(k runKeyID, exp time.Time, outcome, reason string) (first bool, err error) {
 	if g.ended == nil {
 		return false, nil
 	}
@@ -167,7 +197,7 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	if held {
 		return false, nil
 	}
-	err = g.ended.Add(k.issuer, k.runKey, exp)
+	err = g.ended.AddOutcome(k.issuer, k.runKey, exp, outcome, reason)
 	g.mu.Lock()
 	if err != nil {
 		defer g.mu.Unlock()
@@ -201,7 +231,7 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	}
 	g.mu.Unlock()
 	if recovered {
-		g.report(fmt.Sprintf("the run keys the issuer ended are written to %s again", g.endedPath()))
+		g.report(fmt.Sprintf("the run keys of ended runs are written to %s again", g.endedPath()))
 	}
 	return false, nil
 }
@@ -232,7 +262,7 @@ func (g *Gateway) keepAgain() {
 	closing := g.closing
 	g.mu.Unlock()
 	if ok && !closing {
-		g.holdKey(k, exp)
+		g.holdKey(k, exp, "", "")
 	}
 }
 
@@ -243,7 +273,7 @@ func (g *Gateway) keepAgainFor(k runKeyID) {
 	exp, ok := g.unkept[k]
 	g.mu.Unlock()
 	if ok {
-		g.holdKey(k, exp)
+		g.holdKey(k, exp, "", "")
 	}
 }
 
@@ -261,7 +291,7 @@ func (g *Gateway) keepOnClose() int {
 	k, exp, ok := g.unkeptKey()
 	g.mu.Unlock()
 	if ok {
-		g.holdKey(k, exp)
+		g.holdKey(k, exp, "", "")
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -298,9 +328,9 @@ func (g *Gateway) heldTo(k runKeyID, exp time.Time) time.Time {
 // endKey is [Gateway.holdKey], a run key's first failure reported, the run key's issuer
 // and nothing of the run credential; its retries are not. The gateway refuses the run
 // key in this process either way.
-func (g *Gateway) endKey(k runKeyID, exp time.Time) {
-	if first, err := g.holdKey(k, exp); first {
-		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
+func (g *Gateway) endKey(k runKeyID, exp time.Time, outcome, reason string) {
+	if first, err := g.holdKey(k, exp, outcome, reason); first {
+		g.report(fmt.Sprintf("keeping the run key of an ended run, for the run credentials of %s: %v", k.issuer, err))
 	}
 }
 
@@ -308,10 +338,10 @@ func (g *Gateway) endKey(k runKeyID, exp time.Time) {
 // flushed: how a later request of the run is answered, until a run credential of it can
 // no longer be accepted.
 type spentRun struct {
-	key        runKeyID
-	code, from string
-	started    bool
-	until      time.Time
+	key     runKeyID
+	end     runEnd
+	started bool
+	until   time.Time
 	// secretSum is the SHA-256 of the run's secret, which still names it.
 	secretSum [sha256.Size]byte
 }
@@ -323,7 +353,7 @@ type spentRun struct {
 // past that time go too, so neither grows with the runs a gateway has served. A gateway
 // that is closing keeps every run for Close.
 func (g *Gateway) retire(lr *linkRun, k runKeyID, exp time.Time) {
-	code, from, _ := lr.gone()
+	end, _ := lr.gone()
 	started := lr.st.Started()
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -350,11 +380,9 @@ func (g *Gateway) retire(lr *linkRun, k runKeyID, exp time.Time) {
 		delete(g.clientRuns, k)
 	}
 	delete(g.runs, lr.id)
-	g.spent[lr.id] = spentRun{key: k, code: code, from: from, started: started, until: exp.Add(keep), secretSum: lr.runSecretSum}
+	g.spent[lr.id] = spentRun{key: k, end: end, started: started, until: exp.Add(keep), secretSum: lr.runSecretSum}
 	g.delivery.Undelivered += lr.result.Undelivered
-	if lr.closed && !g.delivery.RunClosed {
-		g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
-	}
+	g.closedRun(lr)
 	if lr.err != nil {
 		g.spentErrs = append(g.spentErrs, lr.err)
 	}
@@ -378,6 +406,17 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 // latest exp held or presented. A run key the gateway does not refuse is left as it is.
 func (g *Gateway) presented(id runIdentity) {
 	if k := keyOf(id); g.blocked(k) {
-		g.endKey(k, id.Expires)
+		g.endKey(k, id.Expires, "", "")
 	}
+}
+
+// closedRun adds a run that ended at the gateway before its session ended it to the
+// gateway's delivery, when it is the first: who closed it, and the state and the reason
+// of the gateway's dev.qory.run.exited of it. Called with g.mu held, or at Close.
+func (g *Gateway) closedRun(lr *linkRun) {
+	if !lr.closed || g.delivery.RunClosed {
+		return
+	}
+	end, _ := lr.gone()
+	g.delivery.RunClosed, g.delivery.ClosedReason, g.delivery.State, g.delivery.Reason = true, end.code, end.state, end.reason
 }

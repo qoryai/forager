@@ -1,4 +1,4 @@
-# How an issuer integrates with the Qory gateway
+# How a run's starter works with the Qory gateway
 
 A gateway that serves other machines opens a run only for a **run credential**: a signed
 statement, from an issuer the operator trusts, that names a run key and its target. This
@@ -253,8 +253,8 @@ reads nothing else of the answer but `qory_outcome` and `qory_reason`, below.
 
 | When the gateway asks | `credential_check_unreachable` | `credential_check_invalid` |
 |---|---|---|
-| A session's run request | `503`, "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again" | `502`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
-| A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
+| A session's run request | `503`, "the run did not start: its run credential could not be checked; try again" | `502`, "the run did not start: its run credential could not be checked" |
+| A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the run did not start: its run credential could not be checked" |
 | A session's reload or batch | the run ends; `410` `credential_check_unreachable` | the run ends; `410` `credential_check_invalid` |
 | A client's run, asked again while it has connections | the run ends | the run ends |
 
@@ -487,7 +487,11 @@ the session asks the gateway once how the starter says the run ended, and the ga
 asks the endpoint at most once per run, not from its cache, and answers within about 6
 seconds, the 4 seconds in which its tries start and one more try of 2 seconds, or with
 `{}`; a run on the local link is never asked, and the local link answers the ask with
-`400` `invalid_request` (the contract's §The gateway's link, The outcome at the exit).
+`400` `invalid_request` (the contract's §The gateway's link, The outcome at the exit). An
+answer that the run credential is no longer active leaves that run 30 seconds to end
+with its own `dev.qory.run.exited` of the answer; when they pass, the gateway ends the
+run itself as the starter said, never `session_lost`, and within them the answer wins
+over the run credential's `exp`.
 
 Behind a separate gateway the session's machine keeps, beside the session's record,
 what the gateway accepted of it, `delivered.log`, and the batches it did not,
@@ -519,7 +523,7 @@ gateway, and it is never sent to Qory Apiary. Inside a wall the agent never sees
 it: the relay adds the run's own proxy secret to every connection instead, which the
 gateway issued for this run when it verified the run credential.
 
-## Testing an issuer
+## Testing a starter
 
 The contract publishes known answers under
 [`fixtures/known-answers/run-credentials/`](../contracts/forager/v1/fixtures/known-answers/run-credentials/):

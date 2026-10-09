@@ -381,14 +381,22 @@ func connectWith(t *testing.T, s *service, head string) (int, string, string, ne
 	return resp.StatusCode, resp.Header.Get("Content-Type"), string(b), nil
 }
 
-// The texts a session and a client read when the issuer's introspection endpoint gave
-// no answer, or none that is valid, and when the gateway could not open a client's run.
+// The texts a session and a client read when the run credential could not be checked,
+// the introspection endpoint giving no answer, or none that is valid, and when the
+// gateway could not open a client's run.
 const (
-	unreachableText = "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again"
-	invalidText     = "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer"
+	unreachableText = "the run did not start: its run credential could not be checked; try again"
+	invalidText     = "the run did not start: its run credential could not be checked"
 	tryAgainText    = "the gateway could not open the run; try again"
 	plainText       = "text/plain; charset=utf-8"
 )
+
+// checkWords are the words of the 410's message of a run whose run credential could not
+// be checked.
+var checkWords = map[string]string{
+	"credential_check_unreachable": "couldn't check whether the run may go on: no answer",
+	"credential_check_invalid":     "couldn't check whether the run may go on: unreadable answer",
+}
 
 // TestAnIssuerWithNoAnswerAtOpen pins a run whose issuer's introspection endpoint gives
 // no answer, or none that is valid, when it would open: the session's run request gets
@@ -416,7 +424,7 @@ func TestAnIssuerWithNoAnswerAtOpen(t *testing.T) {
 		report        string
 	}{
 		{"unreachable", runcredential.ErrIssuerUnreachable, http.StatusServiceUnavailable, "credential_check_unreachable", unreachableText,
-			http.StatusServiceUnavailable, tryAgainText, "a run of a client with no session did not open: the issuer's introspection endpoint could not be reached"},
+			http.StatusServiceUnavailable, tryAgainText, "a run of a client with no session did not open: the introspection endpoint could not be reached"},
 		{"no valid answer", answerInvalid("the introspection endpoint answered status 401"), http.StatusBadGateway, "credential_check_invalid", invalidText,
 			http.StatusForbidden, invalidText, "a run of a client with no session did not open: the introspection endpoint answered status 401"},
 	} {
@@ -461,8 +469,8 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 		code   string
 		report string
 	}{
-		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable", "the introspection endpoint could not be reached; the run ends, credential_check_unreachable"},
-		{answerInvalid("the introspection endpoint answered status 401"), "credential_check_invalid", "the introspection endpoint answered status 401; the run ends, credential_check_invalid"},
+		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable", "its run credential could not be checked: the introspection endpoint could not be reached; the run ends: failed"},
+		{answerInvalid("the introspection endpoint answered status 401"), "credential_check_invalid", "its run credential could not be checked: the introspection endpoint answered status 401; the run ends: failed"},
 	} {
 		t.Run(c.code, func(t *testing.T) {
 			issuer := &issuerAnswers{}
@@ -475,12 +483,12 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 			issuer.set(false, c.err)
 			status, b := r.post(t, cred, heartbeat(r.a.RunID))
 			gone(t, "the batch", status, b, c.code)
-			if msg := refusalOf(b)["message"]; msg != "the gateway refused the run: "+c.code {
-				t.Errorf("the 410's message %q", msg)
+			if r := refusalOf(b); r["message"] != "the run has ended: failed, "+checkWords[c.code] || r["state"] != "failed" || r["reason"] != c.code {
+				t.Errorf("the 410 %v", r)
 			}
 			status, b = r.reload(t, cred, r.a.RunID)
 			gone(t, "a later reload", status, b, c.code)
-			if got := s.reportsWith("the run ends, " + c.code); len(got) != 1 || got[0] != "run "+r.a.RunID+": "+c.report {
+			if got := s.reportsWith("its run credential could not be checked"); len(got) != 1 || got[0] != "run "+r.a.RunID+": "+c.report {
 				t.Errorf("reports %q", got)
 			}
 			noHold(t, s.dir)
@@ -517,9 +525,9 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 		text, report string
 	}{
 		{runcredential.ErrIssuerUnreachable, "credential_check_unreachable", http.StatusServiceUnavailable, tryAgainText,
-			"the introspection endpoint could not be reached; the run ends, credential_check_unreachable"},
+			"its run credential could not be checked: the introspection endpoint could not be reached; the run ends: failed"},
 		{answerInvalid("the introspection endpoint answered status 400"), "credential_check_invalid", http.StatusForbidden, invalidText,
-			"the introspection endpoint answered status 400; the run ends, credential_check_invalid"},
+			"its run credential could not be checked: the introspection endpoint answered status 400; the run ends: failed"},
 	} {
 		for _, how := range []string{"a later connection", "the periodic ask"} {
 			t.Run(c.code+", "+how, func(t *testing.T) {
@@ -556,7 +564,7 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 					rec := s.record(ids[0])
 					return rec[len(rec)-1].Type == event.RunExited
 				})
-				if got := s.reportsWith("the run ends, " + c.code); len(got) != 1 || got[0] != "run "+ids[0]+": "+c.report {
+				if got := s.reportsWith("its run credential could not be checked"); len(got) != 1 || got[0] != "run "+ids[0]+": "+c.report {
 					t.Errorf("reports %q", got)
 				}
 				noHold(t, s.dir)
@@ -753,8 +761,8 @@ func TestAReloadFirstLearnsTheIssuerGivesNoAnswer(t *testing.T) {
 			issuer.set(false, c.err)
 			status, b := r.reload(t, cred, r.a.RunID)
 			gone(t, "the reload", status, b, c.code)
-			if msg := refusalOf(b)["message"]; msg != "the gateway refused the run: "+c.code {
-				t.Errorf("the 410's message %q", msg)
+			if r := refusalOf(b); r["message"] != "the run has ended: failed, "+checkWords[c.code] || r["state"] != "failed" || r["reason"] != c.code {
+				t.Errorf("the 410 %v", r)
 			}
 			status, b = r.post(t, cred, heartbeat(r.a.RunID))
 			gone(t, "a later batch", status, b, c.code)

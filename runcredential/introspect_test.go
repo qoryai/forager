@@ -580,7 +580,7 @@ func TestIntrospectionThatNeverAnswers(t *testing.T) {
 	if active || !errors.Is(err, ErrIssuerUnreachable) || errors.Is(err, ErrAnswerInvalid) {
 		t.Fatalf("Active = %v, %v; want ErrIssuerUnreachable", active, err)
 	}
-	if err.Error() != "the issuer's introspection endpoint could not be reached" {
+	if err.Error() != "the introspection endpoint could not be reached" {
 		t.Errorf("the error %q", err)
 	}
 	if n := e.asked.Load(); n != 3 {
@@ -737,5 +737,96 @@ func TestIntrospectionTriesOnceForEveryCaller(t *testing.T) {
 	}
 	if n := e.asked.Load(); n != 3 {
 		t.Errorf("asked %d times; want one sequence of 3 tries", n)
+	}
+}
+
+// TestIntrospectionReadsTheStartersOutcome pins qory_outcome and qory_reason: read of an
+// inactive answer alone; an outcome other than succeeded, failed and cancelled counts
+// as none, and drops the reason with it; a reason that is no code of the pattern, or one
+// of Forager's reserved codes, is dropped and the outcome kept; a member that is no
+// string is none; and neither makes the answer invalid.
+func TestIntrospectionReadsTheStartersOutcome(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		want       Answer
+	}{
+		{"an outcome and a reason", `{"active": false, "qory_outcome": "succeeded", "qory_reason": "all_checks_passed"}`, Answer{Outcome: "succeeded", Reason: "all_checks_passed"}},
+		{"failed", `{"active": false, "qory_outcome": "failed", "qory_reason": "checks_failed"}`, Answer{Outcome: "failed", Reason: "checks_failed"}},
+		{"cancelled", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "no_longer_needed"}`, Answer{Outcome: "cancelled", Reason: "no_longer_needed"}},
+		{"an outcome alone", `{"active": false, "qory_outcome": "failed"}`, Answer{Outcome: "failed"}},
+		{"nothing", `{"active": false}`, Answer{}},
+		{"a reason alone", `{"active": false, "qory_reason": "checks_failed"}`, Answer{}},
+		{"an unknown outcome", `{"active": false, "qory_outcome": "lost", "qory_reason": "checks_failed"}`, Answer{}},
+		{"an outcome of another case", `{"active": false, "qory_outcome": "Succeeded"}`, Answer{}},
+		{"an outcome that is no string", `{"active": false, "qory_outcome": true, "qory_reason": "checks_failed"}`, Answer{}},
+		{"a reserved reason", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "timeout"}`, Answer{Outcome: "cancelled"}},
+		{"an old name", `{"active": false, "qory_outcome": "cancelled", "qory_reason": "run_ended_at_issuer"}`, Answer{Outcome: "cancelled"}},
+		{"run_closed", `{"active": false, "qory_outcome": "failed", "qory_reason": "run_closed"}`, Answer{Outcome: "failed"}},
+		{"a reason of upper case", `{"active": false, "qory_outcome": "failed", "qory_reason": "Checks_failed"}`, Answer{Outcome: "failed"}},
+		{"a reason with a space", `{"active": false, "qory_outcome": "failed", "qory_reason": "checks failed"}`, Answer{Outcome: "failed"}},
+		{"a reason too long", `{"active": false, "qory_outcome": "failed", "qory_reason": "a` + strings.Repeat("b", 64) + `"}`, Answer{Outcome: "failed"}},
+		{"a reason that is no string", `{"active": false, "qory_outcome": "failed", "qory_reason": 1}`, Answer{Outcome: "failed"}},
+		{"an active answer's members", `{"active": true, "qory_outcome": "failed", "qory_reason": "checks_failed"}`, Answer{Active: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEndpoint(t, answering(200, c.body))
+			got, err := e.introspector(t, Introspection{}, IntrospectionTimeout).Answer(context.Background(), exampleCredential, now)
+			if err != nil || got != c.want {
+				t.Errorf("%+v, %v; want %+v", got, err, c.want)
+			}
+		})
+	}
+}
+
+// TestIntrospectionAnswerNowAsksPastTheCache pins the ask at a runtime's exit: AnswerNow
+// asks the endpoint whatever the cache holds, and the answer it gets is kept for the
+// callers of Answer after it.
+func TestIntrospectionAnswerNowAsksPastTheCache(t *testing.T) {
+	var inactive atomic.Bool
+	e := newEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		if inactive.Load() {
+			answering(200, `{"active": false, "qory_outcome": "cancelled", "qory_reason": "no_longer_needed"}`)(w, r)
+			return
+		}
+		answering(200, `{"active": true}`)(w, r)
+	})
+	in := e.introspector(t, Introspection{Cache: d(30 * time.Second)}, IntrospectionTimeout)
+	ctx := context.Background()
+	if a, err := in.Answer(ctx, exampleCredential, now); !a.Active || err != nil {
+		t.Fatalf("%+v, %v", a, err)
+	}
+	inactive.Store(true)
+	if a, err := in.Answer(ctx, exampleCredential, now.Add(time.Second)); !a.Active || err != nil || e.asked.Load() != 1 {
+		t.Fatalf("from the cache: %+v, %v, asked %d", a, err, e.asked.Load())
+	}
+	want := Answer{Outcome: "cancelled", Reason: "no_longer_needed"}
+	if a, err := in.AnswerNow(ctx, exampleCredential, now.Add(2*time.Second)); a != want || err != nil || e.asked.Load() != 2 {
+		t.Fatalf("AnswerNow: %+v, %v, asked %d", a, err, e.asked.Load())
+	}
+	if a, err := in.Answer(ctx, exampleCredential, now.Add(3*time.Second)); a != want || err != nil || e.asked.Load() != 2 {
+		t.Errorf("after AnswerNow: %+v, %v, asked %d", a, err, e.asked.Load())
+	}
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := in.AnswerNow(ended, exampleCredential, now); !errors.Is(err, context.Canceled) {
+		t.Errorf("a context that ended: %v", err)
+	}
+}
+
+// TestStarterOutcome pins the rules of the starter's two members on their own.
+func TestStarterOutcome(t *testing.T) {
+	for _, c := range []struct{ outcome, reason, wantOutcome, wantReason string }{
+		{"succeeded", "all_checks_passed", "succeeded", "all_checks_passed"},
+		{"cancelled", "", "cancelled", ""},
+		{"failed", "stopped", "failed", ""},
+		{"failed", "batch_refused", "failed", ""},
+		{"failed", "issuer_answer_invalid", "failed", ""},
+		{"", "checks_failed", "", ""},
+		{"lost", "checks_failed", "", ""},
+		{"failed", "9lives", "failed", ""},
+	} {
+		if o, r := StarterOutcome(c.outcome, c.reason); o != c.wantOutcome || r != c.wantReason {
+			t.Errorf("StarterOutcome(%q, %q) = %q, %q", c.outcome, c.reason, o, r)
+		}
 	}
 }

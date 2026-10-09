@@ -77,7 +77,7 @@ func (i Issuer) SelectKey(header map[string]any) (int, error) {
 		return 0, refuse("alg is not a string")
 	}
 	if !supported(alg) || !slices.Contains(i.Algorithms, alg) {
-		return 0, refuse("alg is not among the issuer's algorithms")
+		return 0, refuse("alg is not among the starter's algorithms")
 	}
 	if _, ok := header["crit"]; ok {
 		return 0, refuse("crit is present")
@@ -104,7 +104,7 @@ func (i Issuer) SelectKey(header map[string]any) (int, error) {
 		}
 	} else {
 		if len(i.Keys) != 1 {
-			return 0, refuse("no kid, and the issuer pins more than one key")
+			return 0, refuse("no kid, and the starter pins more than one key")
 		}
 		n = 0
 	}
@@ -139,10 +139,10 @@ const maxNumericDate = 253402300799
 // year 9999: a float64, a json.Number, an int or an int64 as a JSON decoder gives it.
 func (i Issuer) CheckClaims(claims map[string]any, now time.Time) error {
 	if i.Issuer == "" {
-		return refuse("the issuer is empty")
+		return refuse("the starter's issuer is empty")
 	}
 	if i.Audience == "" {
-		return refuse("the issuer has no audience")
+		return refuse("the starter has no audience")
 	}
 	leeway := i.LeewayOrDefault()
 	if leeway < 0 || leeway > MaxLeeway {
@@ -178,7 +178,7 @@ func (i Issuer) CheckClaims(claims map[string]any, now time.Time) error {
 		}
 	}
 	if iss, ok := claims["iss"].(string); !ok || iss != i.Issuer {
-		return refuse("iss is not the issuer")
+		return refuse("iss is not the starter's")
 	}
 	if !audience(claims["aud"], i.Audience) {
 		return refuse("aud does not contain the audience")

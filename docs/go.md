@@ -134,10 +134,14 @@ endpoint no longer holds the run credential active, or the starter ended another
 the same run key so, `stopped`; when the run credential could not be checked, the
 introspection endpoint unreachable after the gateway's tries,
 `credential_check_unreachable`, or its answer not valid, `credential_check_invalid`,
-neither of which holds the run key. The gateway writes its `dev.qory.run.exited`, with
-the state of that end; a session's later requests get the `410` with that code in
-`Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
-connection, `quiet`. After `stopped`, the gateway refuses every request of a
+neither of which holds the run key. A starter that answers with an outcome,
+`qory_outcome` and `qory_reason`, ends the run with that state and reason in place of
+`cancelled` and `stopped`. The gateway writes its `dev.qory.run.exited`, with the state
+and the reason of that end; a session's later requests get the `410` with that code,
+`stopped` for every end of the starter's, and that state and reason. `Close` returns
+a `Delivery`: `RunClosed` and `ClosedReason`, the code of that `410`, of the first run
+that ended so, and `State` and `Reason`, those of the gateway's `dev.qory.run.exited`.
+A run with no session also ends after `Runs.Quiet` with no connection, `quiet`. After `stopped`, the gateway refuses every request of a
 run of the run key until the latest `exp` of the run credentials of the key the gateway
 still holds, and of any presented during the hold, plus `runcredential.MaxLeeway`, 5
 minutes.

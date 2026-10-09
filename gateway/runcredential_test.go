@@ -1628,7 +1628,7 @@ func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
 	in.end(first)
 	status, body := r.reload(t, first, r.a.RunID)
 	gone(t, "the issuer's end", status, body, "stopped")
-	if !s.reported("keeping the run key of a run of the issuer") {
+	if !s.reported("keeping the run key of an ended run, for the run credentials of") {
 		t.Error("the failed write was not reported")
 	}
 	eventually(t, "the run let go of", func() bool {
@@ -1710,10 +1710,10 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 			t.Errorf("a run request of the run key: %d %s", status, body)
 		}
 	}
-	const line = "keeping the run key of a run of the issuer"
+	const line = "keeping the run key of an ended run, for the run credentials of"
 	recovered := func(s *service) {
 		t.Helper()
-		want := "the run keys the issuer ended are written to " + filepath.Join(s.dir, runcredential.EndedFile) + " again"
+		want := "the run keys of ended runs are written to " + filepath.Join(s.dir, runcredential.EndedFile) + " again"
 		if got := s.reportsWith("are written to"); len(got) != 1 || got[0] != want {
 			t.Errorf("the recovery reported %q, want %q", got, want)
 		}
@@ -1769,7 +1769,7 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 	// A Close that still cannot write them.
 	s = failing(time.Hour)
 	s.close()
-	want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+	want := "closing with 1 run keys of ended runs not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
 	if got := s.reportsWith("closing with"); len(got) != 1 || got[0] != want {
 		t.Errorf("Close reported %q, want %q", got, want)
 	}
@@ -1917,7 +1917,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			status, body := neverRun.reload(t, never, neverRun.a.RunID)
 			gone(t, "the issuer's end of the run key never written", status, body, "stopped")
 		}
-		if !s.reported("keeping the run key of a run of the issuer") {
+		if !s.reported("keeping the run key of an ended run, for the run credentials of") {
 			t.Fatal("no write failed")
 		}
 		s.close()
@@ -1928,7 +1928,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			}
 			continue
 		}
-		want := "closing with 1 run keys the issuer ended not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
+		want := "closing with 1 run keys of ended runs not written to " + filepath.Join(s.dir, runcredential.EndedFile) + ": a restart would not refuse them"
 		if len(got) != 1 || got[0] != want {
 			t.Errorf("Close reported %q, want %q", got, want)
 		}
