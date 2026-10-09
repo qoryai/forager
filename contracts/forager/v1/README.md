@@ -1567,7 +1567,14 @@ session sends no ping on the link, and a link batch holds none.
 answer's `applied`, and again from the `applied` of a reload answer whose digest
 changed, at the sequence where the new configuration takes effect, adding `variables`
 and `harness_hosts`, since only the session has the run's resolved variables and the
-harness's hosts. For a run with no session the gateway writes it. The session
+harness's hosts. From the moment a reload puts a new policy in force on the run's
+proxy, the gateway holds every `dev.qory.run.egress` of the run, those of the tunnels the
+policy closed first, then each connection decided after, and numbers them right after
+the session's `dev.qory.run.policy_applied` of that policy, so no connection under a
+policy precedes its event (§The server, Reload, rule 1); a connection the gateway saw
+before the switch keeps its place, and when the run ends before the session writes the
+event, what is held comes right before the run's final event. For a run with no session
+the gateway writes `dev.qory.run.policy_applied` itself. The session
 keeps its own file record of its own events, numbered as today (§The record files): that
 record is the session's, not the run's stream. The gateway keeps the record of what it
 sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The

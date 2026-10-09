@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -322,6 +323,69 @@ func TestAReloadRecordsTheTunnelsItClosesAfterItsPolicyApplied(t *testing.T) {
 				t.Errorf("the egress follows the policy_applied %v", lines[i-1].Data)
 			}
 		})
+	}
+}
+
+// TestANewConnectionAfterAReloadFollowsItsPolicyApplied pins today's order of a
+// reload for every connection, not only the tunnels it closes: a connection the new
+// policy decides, made before the session writes that policy's run.policy_applied, is
+// recorded after it; one decided before the reload keeps its place.
+func TestANewConnectionAfterAReloadFollowsItsPolicyApplied(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	h.post(started(runID, nil), applied(runID, a.Applied))
+	agent := relay(h.g.Addr(), a.ProxySecret)
+	get := func(want int) {
+		t.Helper()
+		resp, err := agent.Get(origin.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("GET %s: %d, want %d", origin.URL, resp.StatusCode, want)
+		}
+	}
+	get(http.StatusOK)
+	c.serve(`{"version":1,"egress":{"mode":"observe","deny":["127.0.0.1"]}}`, 'b')
+	h.post(logged(runID))
+	eventually(t, "the reload", func() bool {
+		d := h.post(heartbeat(runID))
+		return d.Accepted() && d.Digests.RunConfiguration != first
+	})
+	// The agent connects under the new policy before the session has written its event.
+	get(http.StatusForbidden)
+	denied := func(l recorded) bool { return l.Type == event.RunEgress && l.Data["decision"] == "denied" }
+	if slices.ContainsFunc(h.record(runID), denied) {
+		t.Errorf("a connection under the new policy is recorded before its policy_applied: %v", types(h.record(runID)))
+	}
+	r, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.post(applied(runID, r.Applied), logged(runID))
+	h.post(exited(runID))
+	h.close()
+	lines := h.record(runID)
+	i := slices.IndexFunc(lines, denied)
+	if i < 1 || lines[i].Data["host"] != "127.0.0.1" || !slices.Equal(anyStrings(lines[i-1].Data["deny"]), []string{"127.0.0.1"}) {
+		t.Fatalf("record %v", types(lines))
+	}
+	if got, want := types(lines[i-1:]), []string{event.PolicyApplied, event.RunEgress, event.RunLog, event.RunExited}; !slices.Equal(got, want) {
+		t.Errorf("after the reload %v, want %v", got, want)
+	}
+	// The connection before the reload kept its place, before the reload's log.
+	before := slices.IndexFunc(lines, func(l recorded) bool { return l.Type == event.RunEgress && l.Data["decision"] == "allowed" })
+	if want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunLog}; before != 3 || !slices.Equal(types(lines[:5]), want) {
+		t.Errorf("before the reload %v", types(lines))
 	}
 }
 
