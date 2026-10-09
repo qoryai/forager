@@ -125,12 +125,28 @@ func TestOpenEndedRefuses(t *testing.T) {
 		"an unknown member": `{"ended": [], "other": 1}`,
 		"a member twice":    `{"ended": [], "ended": []}`,
 		"no run key":        `{"ended": [{"issuer": "https://issuer.example", "until": 1700000600}]}`,
+		"null":              `null`,
+		"an empty object":   `{}`,
+		"ended null":        `{"ended": null}`,
+		"an entry null":     `{"ended": [null]}`,
 		"an unknown entry":  `{"ended": [{"issuer": "https://issuer.example", "run_key": "rk-0001", "until": 1700000600, "x": 1}]}`,
 	} {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, EndedFile), []byte(content), 0o600)
 		if _, err := OpenEnded(dir); err == nil {
 			t.Errorf("%s: OpenEnded accepts it", name)
+		}
+	}
+	// A file others may read or write.
+	for _, mode := range []os.FileMode{0o640, 0o604, 0o620, 0o602, 0o666} {
+		dir := t.TempDir()
+		f := filepath.Join(dir, EndedFile)
+		os.WriteFile(f, []byte(`{"ended": []}`), 0o600)
+		if err := os.Chmod(f, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenEnded(dir); err == nil || !strings.Contains(err.Error(), "by others than its owner") {
+			t.Errorf("a file of mode %o: %v", mode, err)
 		}
 	}
 	// A symbolic link in place of the file.

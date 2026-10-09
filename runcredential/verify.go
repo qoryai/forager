@@ -45,7 +45,10 @@ type Verified struct {
 	// Expires is the claim exp. The run credential is refused from Expires plus the
 	// issuer's leeway on.
 	Expires time.Time
-	// Claims are the signed claims, decoded with every number a float64.
+	// Claims are the signed claims, decoded with every number a float64. They hold every
+	// claim value the run credential carries, personal data among them: never log or
+	// record them, or pass them beyond the gateway; Labels and Details are what a run
+	// carries.
 	Claims map[string]any
 	// Labels are the run's labels, forge, repository and run_key ([Issuer.Labels]).
 	Labels map[string]string

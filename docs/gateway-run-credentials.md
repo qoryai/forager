@@ -108,7 +108,10 @@ The issuer signs with one of three algorithms
 - `RS256`: RSASSA-PKCS1-v1_5 with SHA-256, under an RSA key of at least 2048 bits; the
   signature is as long as the key's modulus;
 - `ES256`: ECDSA with SHA-256 under a P-256 key, the signature `R` and `S`, 32 bytes each,
-  64 bytes in all and not ASN.1, each of `R` and `S` in [1, n-1], n the order of P-256;
+  64 bytes in all and not ASN.1, each of `R` and `S` in [1, n-1], n the order of P-256.
+  ECDSA accepts two forms of each signature, `S` and n - `S`, so one run credential has
+  two byte forms, and a cache keyed by its bytes, such as introspection's, may hold an
+  entry for each;
 - `EdDSA`: Ed25519 ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html)), a signature
   of 64 bytes. Ed448 is not accepted.
 

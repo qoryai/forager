@@ -34,9 +34,10 @@ type Ended struct {
 // endedKey is a run key of an issuer.
 type endedKey struct{ issuer, runKey string }
 
-// endedDocument is the file's content.
+// endedDocument is the file's content. Ended is a pointer so a document without the
+// array, or with null in its place, is told from an empty one, and refused.
 type endedDocument struct {
-	Ended []endedEntry `json:"ended"`
+	Ended *[]endedEntry `json:"ended"`
 }
 
 // endedEntry is one ended run key, kept until Until, in seconds since the epoch.
@@ -48,7 +49,8 @@ type endedEntry struct {
 
 // OpenEnded opens the ended run keys of the state directory dir. It makes dir, mode
 // 0700, when it does not exist, and refuses one that is not a directory of this user's
-// that only this user writes. It reads [EndedFile] when it exists, a regular file, and
+// that only this user writes. It reads [EndedFile] when it exists, a regular file that
+// others can neither read nor write, holding the array ended, and
 // refuses one it cannot read, so a gateway never starts having forgotten an ended run;
 // the entries past their time are dropped, and the file is written again without them.
 func OpenEnded(dir string) (*Ended, error) {
@@ -82,16 +84,18 @@ func openEnded(dir string, clock func() time.Time) (*Ended, error) {
 		return nil, fmt.Errorf("the ended run keys: %w", err)
 	case !fi.Mode().IsRegular():
 		return nil, fmt.Errorf("the ended run keys: %s is not a regular file", e.path)
+	case fi.Mode().Perm()&0o077 != 0:
+		return nil, fmt.Errorf("the ended run keys: %s is readable or writable by others than its owner", e.path)
 	}
 	b, err := os.ReadFile(e.path)
 	if err != nil {
 		return nil, fmt.Errorf("the ended run keys: %w", err)
 	}
 	var doc endedDocument
-	if err := jsonv2.Unmarshal(b, &doc, jsonv2.RejectUnknownMembers(true)); err != nil {
+	if err := jsonv2.Unmarshal(b, &doc, jsonv2.RejectUnknownMembers(true)); err != nil || doc.Ended == nil {
 		return nil, fmt.Errorf("the ended run keys: %s is not a document of ended run keys", e.path)
 	}
-	for _, x := range doc.Ended {
+	for _, x := range *doc.Ended {
 		if x.Issuer == "" || x.RunKey == "" {
 			return nil, fmt.Errorf("the ended run keys: %s holds an entry without an issuer or a run key", e.path)
 		}
@@ -152,17 +156,18 @@ func (e *Ended) prune(now time.Time) {
 // write writes the file atomically: a file of mode 0600 beside it, synced, renamed over
 // it, and the directory synced.
 func (e *Ended) write() error {
-	doc := endedDocument{Ended: []endedEntry{}}
+	list := []endedEntry{}
 	for k, until := range e.entries {
-		doc.Ended = append(doc.Ended, endedEntry{Issuer: k.issuer, RunKey: k.runKey, Until: until.Unix()})
+		list = append(list, endedEntry{Issuer: k.issuer, RunKey: k.runKey, Until: until.Unix()})
 	}
-	sort.Slice(doc.Ended, func(a, b int) bool {
-		x, y := doc.Ended[a], doc.Ended[b]
+	sort.Slice(list, func(a, b int) bool {
+		x, y := list[a], list[b]
 		if x.Issuer != y.Issuer {
 			return x.Issuer < y.Issuer
 		}
 		return x.RunKey < y.RunKey
 	})
+	doc := endedDocument{Ended: &list}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("the ended run keys: %w", err)
