@@ -221,9 +221,16 @@ release may change what an existing document does, and says so under Upgrading.
   `placeholder_conflict` for a placeholder the run passes a value for, each refused
   with a `403`, the session's code of `refusal.Decides` and `from: gateway`, while the
   server's refusals pass through with their own status and `from: apiary`; a refused
-  reload leaves the policy in force. The session still checks its own image table and
-  runtime before it sends the request, and leaves out of `passes` a name outside the
-  variable-name grammar.
+  reload leaves the policy in force. A start without a wall whose policy selects what
+  needs one is `wall_required`, a `403` from `gateway` and a code of the link alone,
+  named `credentials`, `tools`, `paths` or `image=<name>`: the session turns it back into
+  today's error and writes no event for it, so it is not in `refusal.Decides` or in
+  `dev.qory.run.refused`'s codes. On one machine the gateway applies a reload itself and
+  reports a failed one with today's text; a failure without a code, other tools, another
+  image, or an image or credentials that need a wall, never reaches the link, whose
+  reload answers the policy in force with its digest unchanged. The session still checks
+  its own image table and runtime before it sends the request, and leaves out of
+  `passes` a name outside the variable-name grammar.
   The answer, `link-run-answer.schema.json`, has `run_id`, `labels`, the run's labels as
   the gateway holds them, the run credential's behind a separate gateway, `details`, the
   `about.details` keys the run credential decides with its values, the policy in force

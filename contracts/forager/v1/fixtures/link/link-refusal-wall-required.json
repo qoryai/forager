@@ -1,0 +1,8 @@
+{
+  "error": "wall_required",
+  "names": [
+    "credentials",
+    "image=base"
+  ],
+  "from": "gateway"
+}
