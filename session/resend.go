@@ -52,6 +52,10 @@ type ResendResult struct {
 	RunClosed bool
 	ClosedBy  string
 	Reason    string
+	// NotOpened says the record holds no delivered.log: the run never opened at the
+	// gateway, so nothing of it is sent, and the record is left as it is. A record
+	// that owes nothing has a delivered.log, and NotOpened false.
+	NotOpened bool
 }
 
 // Resend sends the gateway what a run's session did not deliver to it, from the run
@@ -62,8 +66,10 @@ type ResendResult struct {
 // until the gateway accepts it or ctx ends, and what it still has not accepted is under
 // undelivered/ again, unless the gateway ended the run. The events the session records in its own record alone are not
 // sent: a run.exited the gateway decides and a run.refused of a code the session does
-// not decide. A record that owes nothing, and one of a run that never opened at the
-// gateway, which has no delivered.log, are sent nothing, and no request is made.
+// not decide. A record that owes nothing is sent nothing, and no request is made. A
+// record with no delivered.log is of a run that never opened at the gateway, a run
+// refused at its run request say: it is NotOpened, left as it is, and sent nothing,
+// with no request.
 //
 // The record is never completed: a session that was lost leaves its run's end to the
 // gateway, which writes it itself. A record still held by its session is [ErrRunning].
@@ -102,7 +108,7 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	defer unlock()
 	if _, err := os.Stat(filepath.Join(spec.Dir, sink.DeliveredFile)); errors.Is(err, fs.ErrNotExist) {
 		// The link's sink never started: the run never opened at the gateway.
-		return ResendResult{}, nil
+		return ResendResult{NotOpened: true}, nil
 	} else if err != nil {
 		return ResendResult{}, err
 	}

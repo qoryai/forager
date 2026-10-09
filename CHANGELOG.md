@@ -767,8 +767,8 @@ release may change what an existing document does, and says so under Upgrading.
   `ForagerVersion` and `Report`, and no `Server`, `Wall` or `RunnerVersion`: a record on
   one machine is `gateway.Resend`'s, and what a wall left is the caller's to remove,
   `(*wall.Docker).Reap`. `Resend` returns a `ResendResult` value with `Sent`,
-  `Undelivered`, `RunClosed`, `ClosedBy` and `Reason`, and no `RunID`, `Closed` or
-  `Reaped`: the session completes no record.
+  `Undelivered`, `RunClosed`, `ClosedBy`, `Reason` and `NotOpened`, and no `RunID`,
+  `Closed` or `Reaped`: the session completes no record.
 - The session's own record is `session.jsonl` and `output.log` in the run directory;
   the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
   toward the server. Behind a separate gateway, the session's run directory on its own
@@ -836,8 +836,10 @@ release may change what an existing document does, and says so under Upgrading.
   takes that `delivered.log` does not name is posted in order, in the link's batches,
   until the gateway accepts it or the context ends, and what it does not accept is under
   `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
-  sent. A record that owes nothing, and one of a run that never opened at the gateway,
-  are sent nothing, with no request. A run the gateway has ended answers with its `410`:
+  sent. A record that owes nothing is sent nothing, with no request. A record with no
+  `delivered.log`, of a run that never opened at the gateway, a run refused at its run
+  request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
+  the gateway has ended answers with its `410`:
   `RunClosed`, with `ClosedBy` and `Reason`, and nothing more is sent. The gateway's
   `401` `run_credential_refused`, which an expired run credential gets at the discovery,
   and its `403` `target_differs_from_credential` and `differs_from_credential` are a

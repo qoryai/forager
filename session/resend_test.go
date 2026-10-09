@@ -102,7 +102,7 @@ func sessionLines(t *testing.T, dir string) []byte {
 // credential's 403, each a refusal from the gateway that leaves the events spooled,
 // the gateway the run spoke to takes every event the session recorded and posted, its
 // record ending with the session's own run.exited; the run directory then owes
-// nothing, and a resend again makes no request at all.
+// nothing, and a resend again makes no request at all and is not NotOpened.
 func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 	t.Parallel()
 	// Three heartbeat intervals outlast the session's close and the resends.
@@ -147,7 +147,7 @@ func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 		t.Error("the resend changed session.jsonl")
 	}
 	again, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || got.NotOpened || n.Load() != 0 {
 		t.Errorf("a resend of a record that owes nothing: %+v %v, %d requests", got, err, n.Load())
 	}
 	s.close(t)
@@ -273,7 +273,8 @@ func TestAResendOfARunClosedDuringItsSessionPostsNoOwnEvent(t *testing.T) {
 
 // TestAResendOfARunRefusedAtOpenSendsNothing pins a run the gateway refused at its
 // run request: its record holds the session's run.refused and no delivered.log, since
-// the run never opened at the gateway, so the resend makes no request at all.
+// the run never opened at the gateway, so the resend is NotOpened and makes no request
+// at all.
 func TestAResendOfARunRefusedAtOpenSendsNothing(t *testing.T) {
 	t.Parallel()
 	s := startSeparate(t)
@@ -290,7 +291,7 @@ func TestAResendOfARunRefusedAtOpenSendsNothing(t *testing.T) {
 		t.Fatal("a run refused at open has a delivered.log")
 	}
 	asked, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, dir, asked)); err != nil || got != (session.ResendResult{}) || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, dir, asked)); err != nil || got != (session.ResendResult{NotOpened: true}) || n.Load() != 0 {
 		t.Errorf("the resend %+v %v, %d requests", got, err, n.Load())
 	}
 }

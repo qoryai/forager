@@ -231,9 +231,13 @@ res, err := session.Resend(ctx, session.ResendSpec{
 - Every event of `session.jsonl` the link takes that `delivered.log` does not name is
   posted to the discovery's events URL, in order, in the link's batches, until the
   gateway accepts it or `ctx` ends; what it still has not accepted is under
-  `undelivered/` again, unless the gateway ended the run. The events the session records in its own record alone are not
-  sent. A record that owes nothing, and one of a run that never opened at the gateway,
-  which has no `delivered.log`, are sent nothing, with no request.
+  `undelivered/` again, unless the gateway ended the run. The events the session
+  records in its own record alone are not sent. A record that owes nothing is sent
+  nothing, with no request.
+- A record with no `delivered.log` is of a run that never opened at the gateway, a run
+  refused at its run request say: `ResendResult.NotOpened` says so, the record is left
+  as it is, and nothing is sent, with no request. A record that owes nothing has a
+  `delivered.log`, and `NotOpened` false.
 - `ResendResult` has `Sent`, the events the gateway accepted now, and `Undelivered`,
   those it still has not. `RunClosed` says the gateway had ended the run: its `410`,
   with `ClosedBy` and `Reason` as `Result` has them; nothing more is sent, and the
