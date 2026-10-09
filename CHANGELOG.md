@@ -204,7 +204,7 @@ release may change what an existing document does, and says so under Upgrading.
   `apiary`, the server's refusal passed on with its code and status; every `410` on the
   link is one. A reload is a `GET` of `<run.url>/<run_id>`, answered with
   `link-reload-answer.schema.json`, the policy in force, its `digest`, `variables`,
-  `placeholders`, `reserved` and `image`, never the proxy secret or the certificate
+  `placeholders`, `reserved`, `image` and `applied`, never the proxy secret or the certificate
   authority; on the local link the link secret authorises it. A run opens with a `POST`
   of `link-run-request.schema.json`: `run_id`, which the session chooses, `wall`,
   `labels`, `about`, `passes`, the names of the variables the run passes a value for,
@@ -236,7 +236,9 @@ release may change what an existing document does, and says so under Upgrading.
   `about.details` keys the run credential decides with its values, the policy in force
   and its `digest`, `variables`, `placeholders`, the variables the agent sees in place of
   a credential or a tool's secret, `reserved`, the variables the gateway sets and the
-  session must not, `image`, the image the run gets when it has a wall, the run's
+  session must not, `image`, the image the run gets when it has a wall, `applied`,
+  required, the members of `dev.qory.run.policy_applied` the gateway decides, every one
+  but `variables` and `harness_hosts`, which the session adds to write its own, the run's
   `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
   reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
   wall with a server always; the session's `dev.qory.run.started` contains exactly
@@ -253,9 +255,10 @@ release may change what an existing document does, and says so under Upgrading.
   event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`, or a
   `dev.qory.run.refused` after its `dev.qory.run.started`; a `dev.qory.run.exited` with
   a `reason` other than `timeout`, since the gateway writes the event of every other
-  reason itself; a `dev.qory.run.policy_applied` with any
-  member the gateway decides other than it computes, every member but `harness_hosts`
-  and `variables`; or a `dev.qory.run.refused` whose code is not one of
+  reason itself; a `dev.qory.run.policy_applied` that is not the `applied` of an answer
+  of this run with the session's `harness_hosts` and `variables` added, any policy the
+  gateway has put in force for the run matching, so a batch in flight during a reload
+  is not refused; or a `dev.qory.run.refused` whose code is not one of
   `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
   `opened_by`, `timeout` as the one reason and the codes and names of
   `dev.qory.run.refused`. A
@@ -286,8 +289,9 @@ release may change what an existing document does, and says so under Upgrading.
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
   `gateway` and from `apiary` among them, and `fixtures/invalid/link-*` the refused
   ones, a discovery without `proxy`, a run request that passes a value with a name or
-  whose image has no `ref`, a run answer without `labels` or whose image has no `ref`, a
-  refusal without `from`, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
+  whose image has no `ref`, a run answer without `labels` or `applied` or whose image
+  has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
+  `from`, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
   `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
   `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,

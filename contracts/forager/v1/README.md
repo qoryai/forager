@@ -1480,6 +1480,9 @@ document:
  "placeholders": ["GIT_SECRET"],
  "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
  "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
+ "applied": {"mode": "enforce", "allow": ["api.example", "git.example"], "deny": ["tracker.example"],
+             "source": "fetched", "url": "https://apiary.example/v1/run-configuration",
+             "digest": "<hex sha256 of the policy as canonical JSON>", "run_configuration": "sha256=<hex>"},
  "proxy_secret": "<the run's proxy secret>",
  "certificate_authority": "-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n"}
 ```
@@ -1506,6 +1509,11 @@ document:
   the one the policy in force selects, or the machine's default, `name` absent when the
   default is a reference. Present when the request's `wall` is true. The session's
   `dev.qory.run.started` reports it (§Images).
+- `applied`, required: the members of `dev.qory.run.policy_applied` the gateway decides
+  for the policy in force, every member but `variables` and `harness_hosts`, each
+  present exactly when the gateway's is, under the rules of
+  `events/run.policy_applied.schema.json`. The session's `dev.qory.run.policy_applied`
+  is this object with its own `variables` and `harness_hosts` added (Events, below).
 - `proxy_secret`, required: the run's proxy secret (Agent traffic, below), 22 to 256
   characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, which a URL's password and the relay's
   preamble carry as they are.
@@ -1529,9 +1537,10 @@ session sends again is not numbered twice, and it delivers the stream to the ser
 its access key. The gateway is the node toward the server, so it sends the ping; the
 session sends no ping on the link, and a link batch holds none.
 `dev.qory.run.policy_applied` is the session's: the session writes it from the run
-answer, and again from a reload answer whose digest changed, at the sequence where the
-new configuration takes effect, since only the session has the run's resolved variables
-and the harness's hosts. For a run with no session the gateway writes it. The session
+answer's `applied`, and again from the `applied` of a reload answer whose digest
+changed, at the sequence where the new configuration takes effect, adding `variables`
+and `harness_hosts`, since only the session has the run's resolved variables and the
+harness's hosts. For a run with no session the gateway writes it. The session
 keeps its own file record of its own events, numbered as today (§The record files): that
 record is the session's, not the run's stream. The gateway keeps the record of what it
 sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The
@@ -1563,12 +1572,14 @@ its events:
   carries only its own `dev.qory.run.exited`, the runtime's exit or its time limit, and
   the gateway writes the event of every other reason itself (The end of a run at the
   gateway, below);
-- is a `dev.qory.run.policy_applied` with a member the gateway decides that differs from
-  what the gateway computes for the policy in force it gave the run: `mode`, `allow`,
-  `deny`, `source`, `url`, `digest`, `run_configuration`, `node_policy`, `paths`,
-  `credentials`, `tools`, `image` and `terminated`, each present exactly when the
-  gateway's is and equal to it. Only `harness_hosts` and `variables`, the variables'
-  names and their sources, are the session's;
+- is a `dev.qory.run.policy_applied` that is not `applied` from an answer of this run,
+  the run answer's or a reload answer's, with the session's own two members added:
+  every member the gateway decides, `mode`, `allow`, `deny`, `source`, `url`,
+  `digest`, `run_configuration`, `node_policy`, `paths`, `credentials`, `tools`,
+  `image` and `terminated`, present exactly when that `applied` holds it and equal to
+  it. Only `harness_hosts` and `variables`, the variables' names and their sources, are
+  the session's. The gateway accepts one that matches any policy it has put in force
+  for the run, so a batch in flight during a reload is not refused;
 - is a `dev.qory.run.refused` whose `code` is not one the session decides itself, the
   codes of `refusal.Decides`: `run_configuration_invalid`, `tool_unknown`,
   `image_unknown`, `variable_reserved`, `placeholder_conflict`,
@@ -1625,8 +1636,8 @@ Reload): a different run-configuration digest means it fetches the run's configu
 again and applies it, and the same digest means the policy in force is unchanged. The
 answer is a `200`, `application/json`, with `X-Qory-Run-Configuration` and `ETag`, whose
 body is a `link-reload-answer.schema.json` document: `version`, the policy in force with
-its `digest`, `variables`, `placeholders`, `reserved` and `image`, as the run answer has
-them. It never contains `proxy_secret` or `certificate_authority`, which the run answer
+its `digest`, `variables`, `placeholders`, `reserved`, `image` and `applied`, required,
+as the run answer has them. It never contains `proxy_secret` or `certificate_authority`, which the run answer
 alone gives, once. The gateway decides a reload with the run request's `passes` and
 `images`, as the session decides one today and in the same order, before it sets
 anything. A run configuration it refuses fails the reload, and the policy in force
@@ -1649,7 +1660,10 @@ with its own status and `from: apiary`.
  "variables": {"NODE_ENV": {"value": "test"}},
  "placeholders": ["GIT_SECRET"],
  "reserved": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
- "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"}}
+ "image": {"name": "base", "ref": "registry.example/agents/base@sha256:…", "runtime": "sysbox-runc"},
+ "applied": {"mode": "enforce", "allow": ["api.example"], "source": "fetched",
+             "url": "https://apiary.example/v1/run-configuration",
+             "digest": "<hex sha256 of the policy as canonical JSON>", "run_configuration": "sha256=<hex>"}}
 ```
 
 Behind a separate gateway, the reload carries a run credential whose `sub` is the run's
@@ -2202,7 +2216,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, a reload answer with and without a policy, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown` and `wall_required` from `gateway`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown` and `wall_required` from `gateway`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |

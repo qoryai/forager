@@ -5,5 +5,10 @@
     "forge": "example-forge",
     "repository": "example-namespace/project"
   },
+  "applied": {
+    "mode": "observe",
+    "allow": [],
+    "source": "none"
+  },
   "proxy_secret": "fixture-proxy-secret-0000000000000000000002"
 }

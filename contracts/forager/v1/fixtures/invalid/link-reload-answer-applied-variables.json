@@ -13,10 +13,24 @@
       ]
     }
   },
+  "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4",
   "variables": {
     "NODE_ENV": {
       "value": "test"
     }
+  },
+  "placeholders": [
+    "GIT_SECRET"
+  ],
+  "reserved": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "image": {
+    "name": "base",
+    "ref": "registry.example/agents/base@sha256:4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
+    "runtime": "sysbox-runc"
   },
   "applied": {
     "mode": "enforce",
@@ -30,6 +44,13 @@
     "source": "fetched",
     "url": "https://apiary.example/v1/run-configuration",
     "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4",
-    "run_configuration": "sha256=5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    "run_configuration": "sha256=5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "variables": [
+      {
+        "name": "NODE_ENV",
+        "from": "apiary",
+        "lost": []
+      }
+    ]
   }
 }

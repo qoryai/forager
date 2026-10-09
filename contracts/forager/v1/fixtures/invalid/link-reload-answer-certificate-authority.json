@@ -19,5 +19,19 @@
       "value": "test"
     }
   },
-  "certificate_authority": "-----BEGIN CERTIFICATE-----\nMIIB5TCCAYugAwIBAgIUR119TkjoHNp2qszWedwOz4lFHyIwCgYIKoZIzj0EAwIw\nSDEmMCQGA1UECgwdRm9yYWdlciBnYXRld2F5LCBvbmUgcnVuIG9ubHkxHjAcBgNV\nBAMMFWZpeHR1cmUgcnVuIGF1dGhvcml0eTAeFw0yNjEwMDkwMTAwNDZaFw0yNjEw\nMTAwMTAwNDZaMEgxJjAkBgNVBAoMHUZvcmFnZXIgZ2F0ZXdheSwgb25lIHJ1biBv\nbmx5MR4wHAYDVQQDDBVmaXh0dXJlIHJ1biBhdXRob3JpdHkwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAAQE/e1hoKKuyrI2KJZMrmwyW2UJdT1yuer3Md6wQvJEITEH\nQD+G+gE7ibLoEFLB4JhcnToKsKoRYIR+KQrhNN/Lo1MwUTAdBgNVHQ4EFgQUMc4K\nP/w/PsYQkghwJtcEnzd3R0wwHwYDVR0jBBgwFoAUMc4KP/w/PsYQkghwJtcEnzd3\nR0wwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBPptP6Tsdk9NPh\nXOrgpXZBRku9egZKRUkHKNYPiUZpkAIhAMIt1DKKOriE634DUi0NxZXqq0qPH4xP\nbPydQiQVl8Ya\n-----END CERTIFICATE-----\n"
+  "certificate_authority": "-----BEGIN CERTIFICATE-----\nMIIB5TCCAYugAwIBAgIUR119TkjoHNp2qszWedwOz4lFHyIwCgYIKoZIzj0EAwIw\nSDEmMCQGA1UECgwdRm9yYWdlciBnYXRld2F5LCBvbmUgcnVuIG9ubHkxHjAcBgNV\nBAMMFWZpeHR1cmUgcnVuIGF1dGhvcml0eTAeFw0yNjEwMDkwMTAwNDZaFw0yNjEw\nMTAwMTAwNDZaMEgxJjAkBgNVBAoMHUZvcmFnZXIgZ2F0ZXdheSwgb25lIHJ1biBv\nbmx5MR4wHAYDVQQDDBVmaXh0dXJlIHJ1biBhdXRob3JpdHkwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAAQE/e1hoKKuyrI2KJZMrmwyW2UJdT1yuer3Md6wQvJEITEH\nQD+G+gE7ibLoEFLB4JhcnToKsKoRYIR+KQrhNN/Lo1MwUTAdBgNVHQ4EFgQUMc4K\nP/w/PsYQkghwJtcEnzd3R0wwHwYDVR0jBBgwFoAUMc4KP/w/PsYQkghwJtcEnzd3\nR0wwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBPptP6Tsdk9NPh\nXOrgpXZBRku9egZKRUkHKNYPiUZpkAIhAMIt1DKKOriE634DUi0NxZXqq0qPH4xP\nbPydQiQVl8Ya\n-----END CERTIFICATE-----\n",
+  "applied": {
+    "mode": "enforce",
+    "allow": [
+      "api.example",
+      "git.example"
+    ],
+    "deny": [
+      "tracker.example"
+    ],
+    "source": "fetched",
+    "url": "https://apiary.example/v1/run-configuration",
+    "digest": "fba84d8241c88aa4214824cc7bb83ad149d7076d92d183808220842ad75240d4",
+    "run_configuration": "sha256=5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+  }
 }
