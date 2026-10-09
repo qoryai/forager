@@ -345,7 +345,7 @@ func TestTheRemoteLinkChecksThePin(t *testing.T) {
 
 // TestTheRemoteLinkPassesTheGatewaysRefusalsOn pins the refusals of a separate gateway
 // as the local link's: the code, the status, the names and who refused, and the
-// refusal's message as its text, word for word.
+// refusal's message as its text, word for word; to a batch, in the Delivery's Refusal.
 func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 	for _, c := range []struct {
 		status int
@@ -359,7 +359,7 @@ func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 	} {
 		g := startRemote(t, nil)
 		g.refusal = func(w http.ResponseWriter, r *http.Request) bool {
-			if r.URL.Path != "/v1/run-configuration" {
+			if r.URL.Path != "/v1/run-configuration" && r.URL.Path != "/v1/events" {
 				return false
 			}
 			names := ""
@@ -374,6 +374,11 @@ func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != c.code || r.Status != c.status || r.From != accesskey.FromGateway || fmt.Sprint(r.Names) != fmt.Sprint(c.names) || err.Error() != c.text {
 			t.Errorf("%s: %#v", c.code, err)
+		}
+		// A batch's answer carries the same refusal, which a resend stops on.
+		dl, err := k.Deliver(context.Background(), g.url()+"/v1/events", "d", []byte("[]"), "")
+		if r := dl.Refusal; err != nil || dl.Accepted() || dl.Stop() || dl.Code != c.code || r == nil || r.Code != c.code || r.Status != c.status || r.From != accesskey.FromGateway || fmt.Sprint(r.Names) != fmt.Sprint(c.names) || r.Error() != c.text {
+			t.Errorf("%s: the batch's answer %+v %v", c.code, dl, err)
 		}
 	}
 }

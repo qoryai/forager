@@ -493,3 +493,31 @@ func TestALinkSinkWithoutARunDirectoryCountsWhatItCouldNotDeliver(t *testing.T) 
 		t.Errorf("%d undelivered, notes %q", w.Undelivered(), notes)
 	}
 }
+
+// TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence pins the resend of a
+// session's record to its gateway: a line of session.jsonl goes as the link carries it,
+// with its id and data and without its sequence, and the record of accepted batches in
+// the run directory names it by the session's sequence.
+func TestALinkSinkResendsTheSessionsLinesWithoutTheirSequence(t *testing.T) {
+	g := &linkGateway{answer: func(int) (int, string) { return http.StatusAccepted, "" }}
+	dir := t.TempDir()
+	w := linkSink(t, g, sink.Config{Spool: dir})
+	ev := event.NewEmitter(event.NewRunID(), nil).Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30})
+	line, err := ev.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Resend(context.Background(), line, ev.Sequence) {
+		t.Fatal("the resend was not queued")
+	}
+	w.Close(context.Background())
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.bodies) != 1 || bytes.Contains(g.bodies[0], []byte(`"sequence"`)) || !bytes.Contains(g.bodies[0], []byte(ev.ID)) || !bytes.Contains(g.bodies[0], []byte(`"elapsed_seconds":30`)) {
+		t.Fatalf("the batches %q", g.bodies)
+	}
+	accepted, stopped, err := sink.Delivered(dir)
+	if err != nil || stopped || !accepted[ev.Sequence] || len(accepted) != 1 {
+		t.Errorf("delivered %v, stopped %v, %v", accepted, stopped, err)
+	}
+}

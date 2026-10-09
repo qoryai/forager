@@ -561,6 +561,10 @@ type Delivery struct {
 	From string
 	// Digests are the digests a signed answer, or an answer on the link, contains.
 	Digests Digests
+	// Refusal is, on the link, a coded answer other than a 2xx as the refusal it is:
+	// its code, status, names, who refused and its message. Nil for any other answer,
+	// and always toward the server.
+	Refusal *accesskey.Refusal
 }
 
 // Authentic reports whether the answer is one to read: signed under the pin toward the

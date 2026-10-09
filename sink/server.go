@@ -241,9 +241,31 @@ func (w *Server) Write(ev *event.Event) error {
 }
 
 // Resend queues a line events.jsonl already holds, waiting for room in the queue: what
-// is sent again has no session to delay. It reports false once the sink stopped or the
-// context ended. It is not called together with Close.
+// is sent again has no session to delay. On the link the line is one of the session's
+// record, session.jsonl, and goes without its sequence, as the link carries it; a line
+// that does not decode as an event is not queued. It reports false once the sink
+// stopped or the context ended. It is not called together with Close.
 func (w *Server) Resend(ctx context.Context, line []byte, seq string) bool {
+	if w.link {
+		var ev struct {
+			SpecVersion string          `json:"specversion"`
+			ID          string          `json:"id"`
+			Source      string          `json:"source"`
+			Type        string          `json:"type"`
+			Subject     string          `json:"subject"`
+			Time        string          `json:"time"`
+			DataSchema  string          `json:"dataschema"`
+			Data        json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Type == "" {
+			return true
+		}
+		b, err := json.Marshal(unnumbered{ev.SpecVersion, ev.ID, ev.Source, ev.Type, ev.Subject, ev.Time, ev.DataSchema, ev.Data})
+		if err != nil {
+			return true
+		}
+		line = b
+	}
 	w.mu.Lock()
 	over := w.stopped || w.closed
 	w.mu.Unlock()

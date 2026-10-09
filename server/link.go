@@ -761,8 +761,8 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 // delivery with the given id, with the run configuration digest when it holds one, and
 // returns what the gateway answered, its Link set: a 2xx is accepted; a 410 ends the
 // run with its End, one of [EndCodes], and its From; a 400 invalid_request ends it
-// too, the gateway having ended the run, with batch_refused; anything else is retried. The
-// digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
+// too, the gateway having ended the run, with batch_refused; anything else is retried. A
+// coded answer other than a 2xx is also its Refusal. The digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
 // Timeout is an error. The body is the session's events of the run, with their ids and
 // without sequence.
 func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (Delivery, error) {
@@ -782,6 +782,13 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 	d := Delivery{Status: a.status, Link: true}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 		d.Code = r.Code
+		if a.status < 200 || a.status > 299 {
+			// The answer as the refusal it is: its code, names, who refused and its
+			// message as the user is told it.
+			if ref, ok := a.refusal("the events " + k.at(eventsURL)).(*accesskey.Refusal); ok {
+				d.Refusal = ref
+			}
+		}
 	}
 	switch {
 	case a.status == http.StatusGone:
