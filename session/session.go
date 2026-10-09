@@ -990,9 +990,13 @@ func placeholders(names []string) []string {
 	return out
 }
 
+// envRunCredential is the variable qory may read a run credential from. qory takes it
+// out of the agent's environment; the session does too, whatever brought it.
+const envRunCredential = "QORY_RUN_CREDENTIAL_SECRET"
+
 // environment is the session's environment: base with Forager's variables set,
-// replacing any of the same names, and without the access key's variables, whichever
-// of them brought one.
+// replacing any of the same names, and without the access key's variables or the run
+// credential's, whichever of them brought one.
 func environment(base []string, sets ...[]string) []string {
 	var extra []string
 	for _, s := range sets {
@@ -1010,7 +1014,10 @@ func environment(base []string, sets ...[]string) []string {
 			out = append(out, kv)
 		}
 	}
-	return accesskey.WithoutVariables(append(out, extra...))
+	return slices.DeleteFunc(accesskey.WithoutVariables(append(out, extra...)), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return name == envRunCredential
+	})
 }
 
 // heartbeat emits run.heartbeat every interval, its elapsed seconds counted from

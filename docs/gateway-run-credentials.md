@@ -352,9 +352,10 @@ label such as `run_key` or an `about.details` key such as `requester`, with anot
 the gateway refuses it with `differs_from_credential`. Each refusal names the member and
 the run credential's value, `labels.<key>=<value>` or `about.details.<key>=<value>`.
 
-qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment. A variable
-an issuer itself sets for the run, `QORY_RUN_CREDENTIAL_SECRET` or any other, is the
-operator's to deny through the node's variables policy.
+qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
+leaves it out too, whatever brought it, a variable of the run's among them. Any other
+variable an issuer itself sets for the run is the operator's to deny through the node's
+variables policy.
 
 ## One opaque refusal
 

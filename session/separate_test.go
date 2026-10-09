@@ -350,13 +350,17 @@ func denied(rec []map[string]any, host string) int {
 // batch carry it, read from its file; the run's labels and details are the
 // credential's; the agent's request reaches the gateway's proxy over TLS through the
 // session's forwarder, with the run's proxy secret as its proxy URL's password, and is
-// denied there; and neither the run credential nor the proxy secret is in a record or
+// denied there; the agent's environment holds no QORY_RUN_CREDENTIAL_SECRET, though the
+// session's did; and neither the run credential nor the proxy secret is in a record or
 // a report.
 func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 	s := startSeparate(t)
 	first := credentialOf("rk-0001")
 	_, read := credentialFile(t, first)
 	r := newSepRun(t, s.remote(read))
+	// The variable qory may read the run credential from, left in the session's own
+	// environment: the agent's has none of it.
+	r.sp.Env = append(r.sp.Env, "QORY_RUN_CREDENTIAL_SECRET="+first)
 	res, err := session.Run(context.Background(), r.sp)
 	if err != nil {
 		t.Fatal(err)
@@ -376,6 +380,9 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 	host, _, _ := net.SplitHostPort(proxy.Host)
 	if proxy.Scheme != "http" || host != "127.0.0.1" || proxy.User.Username() != "qory" || link.CheckSecret(password) != nil || len(password) < 22 {
 		t.Errorf("the agent's proxy URL is %s on %s, user %q, a password of %d characters", proxy.Scheme, proxy.Host, proxy.User.Username(), len(password))
+	}
+	if _, ok := env["QORY_RUN_CREDENTIAL_SECRET"]; ok {
+		t.Error("the agent's environment holds QORY_RUN_CREDENTIAL_SECRET")
 	}
 	for k, v := range env {
 		if strings.Contains(v, first) {

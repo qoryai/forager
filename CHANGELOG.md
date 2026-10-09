@@ -876,7 +876,8 @@ release may change what an existing document does, and says so under Upgrading.
   credential, and every headless session, start Claude Code as before.
 - No tool, credential program or agent receives `QORY_ACCESS_KEY_SECRET`,
   `QORY_ACCESS_KEY_ID` or `QORY_APIARY_PUBLIC_KEY`: the session leaves them out of every
-  environment it starts a program with.
+  environment it starts a program with. Nor does an agent, walled or not, receive
+  `QORY_RUN_CREDENTIAL_SECRET`, whatever brought it.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
   document is read and before the ping, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.
