@@ -74,6 +74,7 @@ func TestTheOutcomeAtTheExitSetsTheStateAndTheReason(t *testing.T) {
 		"the same as the exit":     {0, map[string]any{"state": "succeeded", "reason": "all_checks_passed"}, "succeeded", "all_checks_passed"},
 		"a reason that is no code": {0, map[string]any{"state": "failed", "reason": "Checks failed"}, "failed", ""},
 		"a reserved reason":        {3, map[string]any{"state": "cancelled", "reason": "timeout"}, "cancelled", ""},
+		"interrupted, reserved":    {0, map[string]any{"state": "cancelled", "reason": "interrupted"}, "cancelled", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g, reports := remoteSpec(t, c.exit)
@@ -187,7 +188,7 @@ func TestTheLocalLinkAsksNoOutcome(t *testing.T) {
 
 // TestARunNotEndedByItselfAsksNoOutcome pins the runs whose runtime did not exit by
 // itself: one stopped at its time limit is cancelled with timeout; one the caller's
-// context stopped is decided by its exit; one the gateway's 410 closed is recorded
+// context stopped is cancelled with interrupted; one the gateway's 410 closed is recorded
 // as the 410 says. None of them asks, behind a separate gateway, whatever the
 // starter would answer.
 func TestARunNotEndedByItselfAsksNoOutcome(t *testing.T) {
@@ -201,7 +202,7 @@ func TestARunNotEndedByItselfAsksNoOutcome(t *testing.T) {
 		}, "cancelled", "timeout"},
 		"the caller's context": {func(sp *session.Spec, _ *linktest.Fake) (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), 500*time.Millisecond)
-		}, "failed", ""},
+		}, "cancelled", "interrupted"},
 		"the gateway's 410": {func(sp *session.Spec, g *linktest.Fake) (context.Context, context.CancelFunc) {
 			g.OnBatch(func([]map[string]any) linktest.Reply { return *gone("stopped", "cancelled", "no_longer_needed") })
 			return context.WithCancel(context.Background())

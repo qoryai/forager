@@ -45,9 +45,17 @@ func pidOf(t *testing.T, file string) int {
 	return 0
 }
 
-// ended is the state and the exit code of the record's run.exited, which Cancelled
-// leaves as they are.
+// ended is the state and the exit code of the record's run.exited, which has no member
+// of Cancelled's own.
 func ended(t *testing.T, res *session.Result) (string, int) {
+	t.Helper()
+	state, _, code := endedWith(t, res)
+	return state, code
+}
+
+// endedWith is the state, the reason and the exit code of the record's run.exited,
+// which has no member of Cancelled's own.
+func endedWith(t *testing.T, res *session.Result) (string, string, int) {
 	t.Helper()
 	exited := ofType(events(t, res), "dev.qory.run.exited")
 	if len(exited) != 1 {
@@ -59,11 +67,16 @@ func ended(t *testing.T, res *session.Result) (string, int) {
 	}
 	code, _ := d["exit_code"].(float64)
 	state, _ := d["state"].(string)
-	return state, int(code)
+	reason, _ := d["reason"].(string)
+	if signal, _ := d["signal"].(string); signal != res.Signal {
+		t.Errorf("run.exited's signal %q, the result's %q", signal, res.Signal)
+	}
+	return state, reason, int(code)
 }
 
 // TestTheContextsEndWhileTheRuntimeRunsIsACancel pins Cancelled for a context that ends
-// once the runtime runs, which the session stops: on its own, and in a wall.
+// once the runtime runs, which the session stops: on its own, and in a wall. run.exited
+// is cancelled with interrupted, with the signal that killed the runtime.
 func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 	for name, sp := range map[string]func(t *testing.T, script string) session.Spec{
 		"unwalled": shellSpec,
@@ -90,8 +103,11 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 			if !res.Cancelled || res.TimedOut || res.Signal != "SIGTERM" {
 				t.Errorf("result %+v", res)
 			}
-			if state, code := ended(t, res); state != "failed" || code != -1 {
-				t.Errorf("run.exited %s %d", state, code)
+			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != -1 {
+				t.Errorf("run.exited %s %s %d", state, reason, code)
+			}
+			if res.State != "cancelled" || res.Reason != "interrupted" {
+				t.Errorf("result %+v", res)
 			}
 		})
 	}
@@ -100,7 +116,7 @@ func TestTheContextsEndWhileTheRuntimeRunsIsACancel(t *testing.T) {
 // TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled pins a Ctrl-C that reaches the
 // runtime and the caller at once: the runtime leaves at its own SIGINT, not at the
 // session's stop, which it ignores, and the context had ended when its exit was
-// observed.
+// observed: cancelled with interrupted, and its own exit status.
 func TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "pid")
 	sp := shellSpec(t, fmt.Sprintf(`trap '' TERM; trap 'sleep 0.3; exit 130' INT; echo $$ > %q; while :; do sleep 0.05; done`, file))
@@ -120,8 +136,8 @@ func TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled(t *testing.T) {
 	if !res.Cancelled || res.TimedOut || res.ExitCode != 130 || res.Signal != "" {
 		t.Errorf("result %+v", res)
 	}
-	if state, code := ended(t, res); state != "failed" || code != 130 {
-		t.Errorf("run.exited %s %d", state, code)
+	if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != 130 {
+		t.Errorf("run.exited %s %s %d", state, reason, code)
 	}
 }
 
@@ -238,8 +254,11 @@ func TestARunClosedBeforeTheContextEndsIsNoCancel(t *testing.T) {
 			if (ctx.Err() != nil) != ends {
 				t.Fatalf("the context's end %v", ctx.Err())
 			}
-			if !res.RunClosed || res.Cancelled || res.TimedOut || res.Signal != "SIGKILL" {
+			if !res.RunClosed || res.Cancelled || res.TimedOut || res.Signal != "SIGKILL" || res.State != "cancelled" || res.Reason != "no_longer_needed" {
 				t.Errorf("result %+v", res)
+			}
+			if state, reason, _ := endedWith(t, res); state != "cancelled" || reason != "no_longer_needed" {
+				t.Errorf("run.exited %s %s", state, reason)
 			}
 		})
 	}
@@ -277,5 +296,100 @@ func TestANormalExitIsNeitherCancelledNorTimedOut(t *testing.T) {
 	}
 	if res.Cancelled || res.TimedOut || res.ExitCode != 0 || res.State != "succeeded" {
 		t.Errorf("result %+v", res)
+	}
+}
+
+// TestAStopFromWhereTheRunWasStartedIsInterrupted pins a Ctrl-C while the runtime runs,
+// the context's end, however the runtime leaves at the session's stop: exit 0, its own
+// 130 at the stop signal SIGINT, killed by SIGTERM, or killed by SIGKILL after the
+// grace. Each is recorded cancelled with interrupted, the runtime's own exit status and
+// signal kept, Run returns its result with no error, and Cancelled is true. Behind a
+// separate gateway the same is posted, and nothing is asked.
+func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
+	for name, c := range map[string]struct {
+		script, stop string
+		grace        time.Duration
+		code         int
+		signal       string
+		remote       bool
+	}{
+		"exit 0 at the stop":                   {script: `trap 'exit 0' TERM; echo $$ > %q; while :; do sleep 0.05; done`, code: 0},
+		"exit 0 at the stop, behind a gateway": {script: `trap 'exit 0' TERM; echo $$ > %q; while :; do sleep 0.05; done`, code: 0, remote: true},
+		"130 at its own SIGINT":                {script: `trap 'exit 130' INT; echo $$ > %q; while :; do sleep 0.05; done`, stop: "SIGINT", code: 130},
+		"killed by SIGTERM":                    {script: `echo $$ > %q; exec sleep 30`, code: -1, signal: "SIGTERM"},
+		"killed by SIGKILL":                    {script: `trap '' TERM; echo $$ > %q; while :; do sleep 0.05; done`, grace: 300 * time.Millisecond, code: -1, signal: "SIGKILL"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "pid")
+			script := fmt.Sprintf(c.script, file)
+			var sp session.Spec
+			var g *linktest.Fake
+			if c.remote {
+				sp, g, _ = remoteSpec(t, 0)
+				sp.Args = []string{"-c", script}
+				g.OnOutcome(func(string) linktest.Reply {
+					return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+				})
+			} else {
+				sp = shellSpec(t, script)
+			}
+			sp.StopSignal, sp.StopGrace = c.stop, c.grace
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				pidOf(t, file)
+				cancel()
+			}()
+			res, err := session.Run(ctx, sp)
+			if err != nil {
+				t.Fatalf("Run returned %v", err)
+			}
+			if !res.Cancelled || res.TimedOut || res.RunClosed || res.State != "cancelled" || res.Reason != "interrupted" || res.ExitCode != c.code || res.Signal != c.signal {
+				t.Errorf("result %+v, want cancelled interrupted with exit %d %q", res, c.code, c.signal)
+			}
+			if state, reason, code := endedWith(t, res); state != "cancelled" || reason != "interrupted" || code != c.code {
+				t.Errorf("run.exited %s %s %d", state, reason, code)
+			}
+			if c.remote {
+				if got := g.Outcomes(); len(got) != 0 {
+					t.Errorf("the outcome was asked for %v", got)
+				}
+				posted := ofType(g.Events(), "dev.qory.run.exited")
+				if len(posted) != 1 || data(posted[0])["state"] != "cancelled" || data(posted[0])["reason"] != "interrupted" {
+					t.Errorf("the gateway received run.exited %v", posted)
+				}
+			}
+		})
+	}
+}
+
+// TestTheTimeLimitIsTheStopSignal pins the time limit's rule: a runtime the limit's
+// stop signal reached is cancelled with timeout, TimedOut, also one that exits 0 at it,
+// which Run returns as a result with no error; one that exited by itself before the
+// limit's signal, whose output stayed open past the limit, is decided by its exit.
+func TestTheTimeLimitIsTheStopSignal(t *testing.T) {
+	for name, c := range map[string]struct {
+		script        string
+		state, reason string
+		code          int
+		timedOut      bool
+	}{
+		"exit 0 at the limit's stop":     {`trap 'exit 0' TERM; while :; do sleep 0.05; done`, "cancelled", "timeout", 0, true},
+		"exit 3 before the limit's stop": {`(sleep 1) & exit 3`, "failed", "", 3, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp := shellSpec(t, c.script)
+			sp.Timeout = 300 * time.Millisecond
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatalf("Run returned %v", err)
+			}
+			if res.TimedOut != c.timedOut || res.Cancelled || res.State != c.state || res.Reason != c.reason || res.ExitCode != c.code || res.Signal != "" {
+				t.Errorf("result %+v, want %s %q with exit %d", res, c.state, c.reason, c.code)
+			}
+			if state, reason, code := endedWith(t, res); state != c.state || reason != c.reason || code != c.code {
+				t.Errorf("run.exited %s %s %d", state, reason, code)
+			}
+		})
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,9 @@ type process struct {
 	// exited is called the moment the runtime's exit is observed, when Wait returns,
 	// before what it wrote last is flushed; nil for nothing.
 	exited func()
+	// stopped is set once the stop signal reached the process, at the end of the
+	// context it runs under, before its exit was observed.
+	stopped atomic.Bool
 }
 
 // The size a pseudo-terminal gets when Forager's own input is not a terminal, or
@@ -86,12 +90,18 @@ const DefaultStopSignal = "SIGTERM"
 func CheckStopSignal(name string) error { return runtimes.CheckStopSignal(name) }
 
 // newCmd builds the command with the context ending it: the stop signal, then SIGKILL
-// after the grace.
+// after the grace. A stop signal that reaches the process sets stopped.
 func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, p.command, p.args...)
 	cmd.Env = p.env
 	cmd.Dir = p.dir
-	cmd.Cancel = func() error { return cmd.Process.Signal(p.stop) }
+	cmd.Cancel = func() error {
+		err := cmd.Process.Signal(p.stop)
+		if err == nil {
+			p.stopped.Store(true)
+		}
+		return err
+	}
 	cmd.WaitDelay = p.grace
 	return cmd
 }
@@ -221,6 +231,12 @@ func status(cmd *exec.Cmd, err error) (exitStatus, error) {
 	}
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
+		// A process that exits 0 once the context's end has stopped it is given as the
+		// context's error, or as ErrWaitDelay when its output stayed open past the grace,
+		// in place of its status: it exited, and 0 is its status.
+		if cmd.ProcessState != nil && cmd.ProcessState.Success() && stoppedErr(err) {
+			return exitStatus{code: 0}, nil
+		}
 		return exitStatus{}, err
 	}
 	st := exitStatus{code: exit.ExitCode()}
@@ -229,6 +245,12 @@ func status(cmd *exec.Cmd, err error) (exitStatus, error) {
 		st.signal = "SIG" + signalName(ws.Signal())
 	}
 	return st, nil
+}
+
+// stoppedErr reports whether Wait's error is the context's end or the grace's, which
+// Wait gives for a process that exited 0 after the stop.
+func stoppedErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay)
 }
 
 func signalName(s syscall.Signal) string {
