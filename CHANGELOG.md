@@ -29,9 +29,11 @@ release may change what an existing document does, and says so under Upgrading.
 - `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`,
   `event.CredentialIssuer` and `event.CredentialNone`, the values of `credential`, and
   `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
-  `ReasonQuiet`, `ReasonCredentialExpired` and `ReasonRunEndedAtIssuer`, the reasons of
-  `dev.qory.run.exited`. The session's `dev.qory.run.started` contains `opened_by`
-  `session`, and the `credential` of the gateway's run answer.
+  `ReasonQuiet`, `ReasonCredentialExpired`, `ReasonRunEndedAtIssuer` and
+  `ReasonBatchRefused`, the reasons of `dev.qory.run.exited`; `batch_refused` is the
+  gateway's `410` to a session whose batch it refused, and the reason the session
+  records in its own record after it. The session's `dev.qory.run.started` contains
+  `opened_by` `session`, and the `credential` of the gateway's run answer.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
