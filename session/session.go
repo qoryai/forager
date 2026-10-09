@@ -202,9 +202,10 @@ type Result struct {
 	ClosedBy string
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
 	// as the gateway answered it: run_closed, credential_expired or
-	// run_ended_at_issuer; from the gateway, session_lost when it heard nothing from
-	// the session for three heartbeat intervals, and batch_refused when it refused a
-	// batch of the session's.
+	// run_ended_at_issuer; from the gateway, issuer_unreachable when its issuer's
+	// introspection endpoint could not be reached, issuer_answer_invalid when it gave no
+	// valid answer, session_lost when it heard nothing from the session for three
+	// heartbeat intervals, and batch_refused when it refused a batch of the session's.
 	ClosedReason string
 }
 

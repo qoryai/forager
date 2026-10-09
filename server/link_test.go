@@ -350,19 +350,22 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 
 // TestA410OnTheLinkEndsTheRun pins the end of a run at the gateway: a 410 on any
 // request carries its code, run_closed, credential_expired, run_ended_at_issuer,
-// session_lost or batch_refused, and run_closed for another code or none, and who ended it, apiary when the body says so
+// issuer_unreachable, issuer_answer_invalid, session_lost or batch_refused, and
+// run_closed for another code or none, and who ended it, apiary when the body says so
 // and the gateway otherwise; it hands on no digests; and a batch's 410 ends the run
 // with the code.
 func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 	for body, want := range map[string][2]string{
-		`{"error":"run_closed","from":"apiary"}`:           {"run_closed", accesskey.FromApiary},
-		`{"error":"run_closed","from":"gateway"}`:          {"run_closed", accesskey.FromGateway},
-		`{"error":"credential_expired","from":"gateway"}`:  {"credential_expired", accesskey.FromGateway},
-		`{"error":"run_ended_at_issuer","from":"gateway"}`: {"run_ended_at_issuer", accesskey.FromGateway},
-		`{"error":"session_lost","from":"gateway"}`:        {"session_lost", accesskey.FromGateway},
-		`{"error":"batch_refused","from":"gateway"}`:       {"batch_refused", accesskey.FromGateway},
-		`{"error":"something_else"}`:                       {"run_closed", accesskey.FromGateway},
-		``:                                                 {"run_closed", accesskey.FromGateway},
+		`{"error":"run_closed","from":"apiary"}`:             {"run_closed", accesskey.FromApiary},
+		`{"error":"run_closed","from":"gateway"}`:            {"run_closed", accesskey.FromGateway},
+		`{"error":"credential_expired","from":"gateway"}`:    {"credential_expired", accesskey.FromGateway},
+		`{"error":"run_ended_at_issuer","from":"gateway"}`:   {"run_ended_at_issuer", accesskey.FromGateway},
+		`{"error":"issuer_unreachable","from":"gateway"}`:    {"issuer_unreachable", accesskey.FromGateway},
+		`{"error":"issuer_answer_invalid","from":"gateway"}`: {"issuer_answer_invalid", accesskey.FromGateway},
+		`{"error":"session_lost","from":"gateway"}`:          {"session_lost", accesskey.FromGateway},
+		`{"error":"batch_refused","from":"gateway"}`:         {"batch_refused", accesskey.FromGateway},
+		`{"error":"something_else"}`:                         {"run_closed", accesskey.FromGateway},
+		``:                                                   {"run_closed", accesskey.FromGateway},
 	} {
 		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, http.StatusGone, body) }))
 		k, digests := newLink(t, g)
