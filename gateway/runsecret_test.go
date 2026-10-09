@@ -258,7 +258,7 @@ func TestABatchTheLinkRefusesEndsTheRunOfItsSecret(t *testing.T) {
 			if status, r := localRequest(t, h, http.MethodPost, "/v1/events", c.body(b.RunID), []string{a.RunSecret}); status != http.StatusBadRequest || r["error"] != "invalid_request" {
 				t.Errorf("the batch: %d %v", status, r)
 			}
-			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", a.RunID, c.why)
+			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: failed", a.RunID, c.why)
 			if !h.reported(line) {
 				t.Errorf("no line %q in %q", line, h.reportsWith(a.RunID))
 			}
@@ -275,7 +275,7 @@ func TestABatchTheLinkRefusesEndsTheRunOfItsSecret(t *testing.T) {
 			if status, _, got := remoteRequest(t, s, cred, http.MethodPost, "/v1/events", c.body(b.a.RunID), []string{a.a.RunSecret}); status != http.StatusBadRequest || refusalOf([]byte(got))["error"] != "invalid_request" {
 				t.Errorf("the batch: %d %s", status, got)
 			}
-			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", a.a.RunID, c.why)
+			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: failed", a.a.RunID, c.why)
 			if !s.reported(line) {
 				t.Errorf("no line %q in %q", line, s.reportsWith(a.a.RunID))
 			}

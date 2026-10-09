@@ -10,6 +10,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,11 +87,19 @@ type linkRun struct {
 	// it asks nothing for the gateway's quiet time.
 	last  time.Time
 	timer *time.Timer
-	// ended says the run ended at the gateway: endCode and endFrom are its 410, and
-	// closed says it was not the session that ended it.
-	ended            bool
-	endCode, endFrom string
-	closed           bool
+	// ended says the run ended at the gateway: how is its 410, and the state and the
+	// reason of the gateway's dev.qory.run.exited of it, and closed says it was not the
+	// session that ended it.
+	ended  bool
+	how    runEnd
+	closed bool
+	// exit is the ask of the run's starter at its runtime's exit, made once: nil until the
+	// session asks. Once its answer says the run credential is no longer active, the run
+	// is ending: it may still end with its own dev.qory.run.exited until window, when
+	// windowEnd ends it as the starter said.
+	exit      *exitAsk
+	window    time.Time
+	windowEnd *time.Timer
 	// discarded says the run's session gave up before it had the run answer: the run
 	// ends as if it never opened, [Gateway.discard].
 	discarded bool
@@ -118,11 +127,12 @@ type runCred struct {
 
 	// The rest is held under the run's mu. expires is the latest exp of a run
 	// credential presented for the run, and expiry the timer that ends the run then;
-	// active asks the issuer of the latest run credential presented, nil for an issuer
-	// without introspection, and cache is how long its answer holds.
+	// active asks the starter of the latest run credential presented, from the answer
+	// it keeps or now, nil for an issuer without introspection, and cache is how long
+	// its answer holds.
 	expires time.Time
 	expiry  *time.Timer
-	active  func(context.Context) error
+	active  func(ctx context.Context, now bool) error
 	cache   time.Duration
 }
 
@@ -139,6 +149,12 @@ type ending struct {
 	quietSeconds int
 }
 
+// runEnd is how a run ended at the gateway, as its later requests learn it: the code and
+// the from of its 410, and the state and the reason of the gateway's
+// dev.qory.run.exited of it, the state empty for an end that writes none, run_closed,
+// and the reason for one without a reason.
+type runEnd struct{ code, from, state, reason string }
+
 // sessionLost ends a run whose session the gateway no longer hears: its later requests
 // are a 410 session_lost.
 var sessionLost = ending{reason: event.ReasonSessionLost, state: stateFailed, code: event.ReasonSessionLost, from: accesskey.FromGateway, closed: true}
@@ -147,19 +163,42 @@ var sessionLost = ending{reason: event.ReasonSessionLost, state: stateFailed, co
 // more is written of it.
 var sessionGone = ending{code: event.ReasonSessionLost, from: accesskey.FromGateway}
 
-// batchRefused ends a run whose session's batch the gateway refused: its record says
-// session_lost, as for a session it no longer hears, and its later requests are a 410
-// batch_refused.
-var batchRefused = ending{reason: event.ReasonSessionLost, state: stateFailed, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
+// batchRefused ends a run whose session's batch the gateway refused, failed: its record
+// says batch_refused, and its later requests are a 410 batch_refused.
+var batchRefused = ending{reason: event.ReasonBatchRefused, state: stateFailed, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
 
 // credentialExpired ends a run on the one address whose run credential's exp passed
 // with no fresh one, cancelled; stopped one whose starter no longer holds its run
-// credential active, or ended another run of its run key, cancelled, since the starter
-// gave no outcome.
+// credential active, or ended another run of its run key, and gave no outcome,
+// cancelled.
 var (
 	credentialExpired = ending{reason: event.ReasonCredentialExpired, state: stateCancelled, code: event.ReasonCredentialExpired, from: accesskey.FromGateway, closed: true}
 	stopped           = ending{reason: event.ReasonStopped, state: stateCancelled, code: event.ReasonStopped, from: accesskey.FromGateway, closed: true}
 )
+
+// starterEnding ends a run whose starter no longer holds its run credential active, or
+// ended another run of its run key, as the starter said: its outcome and its reason,
+// which may be empty; stopped when it gave no outcome. Its 410 is stopped either way.
+func starterEnding(outcome, reason string) ending {
+	if outcome == "" {
+		return stopped
+	}
+	return ending{reason: reason, state: outcome, code: event.ReasonStopped, from: accesskey.FromGateway, closed: true}
+}
+
+// given is the outcome and the reason the starter gave of the starter's end, each empty
+// for none; both empty for any other ending.
+func (e ending) given() (outcome, reason string) {
+	if e.code != event.ReasonStopped || e.reason == event.ReasonStopped {
+		return "", ""
+	}
+	return e.state, e.reason
+}
+
+// runEnd is how the ending answers the run's later requests.
+func (e ending) runEnd() runEnd {
+	return runEnd{code: e.code, from: e.from, state: e.state, reason: e.reason}
+}
 
 // checkUnreachable ends a run on the one address whose run credential could not be
 // checked because the introspection endpoint could not be reached after the tries, and
@@ -172,9 +211,37 @@ var (
 
 // The states of the dev.qory.run.exited the gateway writes.
 const (
-	stateFailed    = "failed"
-	stateCancelled = "cancelled"
+	stateFailed    = event.StateFailed
+	stateCancelled = event.StateCancelled
 )
+
+// reasonWords are the words a person reads of Forager's own reasons of
+// dev.qory.run.exited where a line says how a run ended; any other reason is the run's
+// starter's, read with spaces for its underscores.
+var reasonWords = map[string]string{
+	event.ReasonTimeout:                    "time limit reached",
+	event.ReasonQuiet:                      "no activity",
+	event.ReasonCredentialExpired:          "the run credential expired",
+	event.ReasonStopped:                    "no outcome given",
+	event.ReasonSessionLost:                "the session stopped responding",
+	event.ReasonGatewayLost:                "end not recorded",
+	event.ReasonBatchRefused:               "events refused",
+	event.ReasonCredentialCheckUnreachable: "the run credential could not be checked: no answer",
+	event.ReasonCredentialCheckInvalid:     "the run credential could not be checked: no valid answer",
+}
+
+// endWords is how a line says a run ended, with state and reason: the state, and the
+// reason's words after a comma when it has one.
+func endWords(state, reason string) string {
+	if reason == "" {
+		return state
+	}
+	words, ok := reasonWords[reason]
+	if !ok {
+		words = strings.ReplaceAll(reason, "_", " ")
+	}
+	return state + ", " + words
+}
 
 // opening is how a run opens: on the one address with the run credential's identity,
 // and with no session, for a client's proxy login.
@@ -525,7 +592,12 @@ func (lr *linkRun) expire() {
 		return
 	}
 	lr.mu.Unlock()
-	lr.g.report(fmt.Sprintf("run %s: its run credential expired with no fresh one; the run ends, credential_expired", lr.id))
+	if lr.ending() {
+		// The starter's answer at the runtime's exit wins: the run ends as it says, when
+		// its window closes, if not before.
+		return
+	}
+	lr.g.report(fmt.Sprintf("run %s: its run credential expired with no fresh one; the run ends: %s", lr.id, credentialExpired.state))
 	lr.end(credentialExpired)
 }
 
@@ -577,14 +649,15 @@ func (lr *linkRun) renew(id runIdentity) {
 	}
 }
 
-// stillActive asks the issuer whether the latest run credential presented for the run
+// stillActive asks the starter whether the latest run credential presented for the run
 // is still active, and returns nil when the run goes on. It ends the run otherwise and
 // returns why: credential_check_unreachable for [runcredential.ErrIssuerUnreachable],
-// credential_check_invalid for [runcredential.ErrAnswerInvalid], and stopped for any
-// other answer but active. An answer that the run credential
-// is no longer active holds the run key whatever else ended the run meanwhile. A
-// request that went, or a run that ended, while the issuer was asked is the context's
-// error, and the run is left as it is. An issuer without introspection is never asked.
+// credential_check_invalid for [runcredential.ErrAnswerInvalid], and for the answer
+// that it is no longer active, as the starter said: its outcome and its reason, or
+// cancelled and stopped. An answer that the run credential is no longer active holds
+// the run key whatever else ended the run meanwhile. A request that went, or a run that
+// ended, while the starter was asked is the context's error, and the run is left as it
+// is. An issuer without introspection is never asked.
 func (lr *linkRun) stillActive(ctx context.Context) error {
 	lr.mu.Lock()
 	active := lr.cred.active
@@ -593,18 +666,19 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	if active == nil {
 		return nil
 	}
-	err := active(ctx)
+	err := active(ctx, false)
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, errInactive) {
-		// The issuer's end holds the run key even when the run ended otherwise while it
+	var in *inactive
+	if errors.As(err, &in) {
+		// The starter's end holds the run key even when the run ended otherwise while it
 		// was asked, credential_check_unreachable at another request's say, which holds
 		// nothing.
 		lr.mu.Lock()
 		key, expires := lr.cred.key, lr.cred.expires
 		lr.mu.Unlock()
-		lr.g.endKey(key, lr.g.heldTo(key, expires))
+		lr.g.endKey(key, lr.g.heldTo(key, expires), in.outcome, in.reason)
 	}
 	if ctx.Err() != nil || lr.ctx.Err() != nil {
 		// The request went, or the run ended, while the issuer was asked: no answer,
@@ -616,16 +690,146 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	}
 	switch {
 	case errors.Is(err, runcredential.ErrIssuerUnreachable):
-		lr.g.report(fmt.Sprintf("run %s: the introspection endpoint could not be reached; the run ends, credential_check_unreachable", lr.id))
+		lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: the introspection endpoint could not be reached; the run ends: %s", lr.id, checkUnreachable.state))
 		lr.end(checkUnreachable)
 	case errors.Is(err, runcredential.ErrAnswerInvalid):
-		lr.g.report(fmt.Sprintf("run %s: %v; the run ends, credential_check_invalid", lr.id, err))
+		lr.g.report(fmt.Sprintf("run %s: its run credential could not be checked: %v; the run ends: %s", lr.id, err, checkInvalid.state))
 		lr.end(checkInvalid)
 	default:
-		lr.g.report(fmt.Sprintf("run %s: its run credential is no longer valid; the run ends, stopped", lr.id))
-		lr.end(stopped)
+		e := stopped
+		if in != nil {
+			e = starterEnding(in.outcome, in.reason)
+		}
+		lr.endAsStarterSaid(e)
 	}
 	return err
+}
+
+// endAsStarterSaid ends the run as its starter said, e, and tells the operator.
+func (lr *linkRun) endAsStarterSaid(e ending) {
+	lr.g.report(fmt.Sprintf("run %s: its run credential is no longer valid; the run ends: %s", lr.id, endWords(e.state, e.reason)))
+	lr.end(e)
+}
+
+// exitAsk is the ask of a run's starter at its runtime's exit, which the session makes
+// once, before it writes its dev.qory.run.exited: done is closed once it is answered,
+// and the rest is set under the run's mu before. inactive says the starter answered that
+// the run credential is no longer active, and state and reason are the outcome and the
+// reason it gave then, each empty for none: the outcome answer, {} without a state.
+type exitAsk struct {
+	done          chan struct{}
+	inactive      bool
+	state, reason string
+}
+
+// exitWindow is how long after the starter's answer at its runtime's exit that the run
+// credential is no longer active the run that asked may still end with its own
+// dev.qory.run.exited.
+const exitWindow = 30 * time.Second
+
+// ending is how the run ends when its window closes, or a request of it the window does
+// not take comes: as its starter said, cancelled and stopped when it gave no outcome.
+func (x *exitAsk) ending() ending { return starterEnding(x.state, x.reason) }
+
+// closing is the run's ask at its exit whose answer said the run credential is no longer
+// active, nil for none, and whether its window is still open: the run is then ending,
+// and may end with its own dev.qory.run.exited.
+func (lr *linkRun) closing() (*exitAsk, bool) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	x := lr.exit
+	if x == nil || lr.window.IsZero() {
+		return nil, false
+	}
+	return x, !lr.ended && time.Now().Before(lr.window)
+}
+
+// ending reports whether the run is ending after its starter's answer at its exit, its
+// window open: no other end but the starter's comes to it meanwhile.
+func (lr *linkRun) ending() bool {
+	_, open := lr.closing()
+	return open
+}
+
+// outcomeAnswer is the answer the run's ask at its exit stored, once it is answered:
+// the outcome and the reason the starter gave, the state empty for none; ok is false
+// before the ask is answered, and when no one asked.
+func (lr *linkRun) outcomeAnswer() (state, reason string, ok bool) {
+	lr.mu.Lock()
+	x := lr.exit
+	lr.mu.Unlock()
+	if x == nil {
+		return "", "", false
+	}
+	select {
+	case <-x.done:
+	default:
+		return "", "", false
+	}
+	return x.state, x.reason, true
+}
+
+// askAtExit is the session's ask at its runtime's exit of how the run's starter says
+// the run ended: the starter is asked once per run, now and not from the answer kept,
+// and every ask of the run waits for that one, and gets the answer it stored. Nil when
+// ctx ends first.
+func (lr *linkRun) askAtExit(ctx context.Context) *exitAsk {
+	lr.mu.Lock()
+	x := lr.exit
+	if x == nil {
+		x = &exitAsk{done: make(chan struct{})}
+		lr.exit = x
+		go lr.answerAtExit(x, lr.cred.active)
+	}
+	lr.mu.Unlock()
+	select {
+	case <-x.done:
+		return x
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// answerAtExit asks the starter, with active, how the run ended, and stores its answer
+// in x. An answer that the run credential is no longer active holds the run key, as on
+// any request of the run's, with the outcome and the reason the starter gave, and the
+// run that asked is ending: it may end with its own dev.qory.run.exited until its window
+// closes, when it ends as the starter said. An answer active, no answer and one that is
+// not valid store {}, and change nothing: the runtime's exit decides. An issuer without
+// introspection is not asked.
+func (lr *linkRun) answerAtExit(x *exitAsk, active func(context.Context, bool) error) {
+	defer close(x.done)
+	if active == nil {
+		return
+	}
+	var in *inactive
+	if err := active(lr.g.base, true); !errors.As(err, &in) {
+		return
+	}
+	window := exitWindow
+	if lr.g.cfg.exitWindow != 0 {
+		window = lr.g.cfg.exitWindow
+	}
+	// The run that asked is ending before the run key is held, so the hold ends none of
+	// its requests but as its window says.
+	lr.mu.Lock()
+	x.inactive, x.state, x.reason = true, in.outcome, in.reason
+	if !lr.ended {
+		lr.window = time.Now().Add(window)
+		lr.windowEnd = time.AfterFunc(window, func() { lr.endAsAnswered(x) })
+	}
+	key, expires := lr.cred.key, lr.cred.expires
+	lr.mu.Unlock()
+	lr.g.endKey(key, lr.g.heldTo(key, expires), in.outcome, in.reason)
+}
+
+// endAsAnswered ends the run as its starter answered at its exit, x: the window closed,
+// or a request of the run that the window does not take came.
+func (lr *linkRun) endAsAnswered(x *exitAsk) {
+	if _, ended := lr.gone(); ended {
+		return
+	}
+	lr.endAsStarterSaid(x.ending())
 }
 
 // release lets go of what the run holds on the gateway's side: its secret and proxy
@@ -673,29 +877,35 @@ func (lr *linkRun) watch() {
 		return
 	}
 	lr.mu.Unlock()
-	lr.g.report(fmt.Sprintf("run %s: its session sent nothing for %s; the run ends, session_lost", lr.id, lr.g.quiet))
+	if lr.ending() {
+		// The run ends as its starter said when its window closes, never session_lost.
+		return
+	}
+	lr.g.report(fmt.Sprintf("run %s: its session sent nothing for %s; the run ends: %s", lr.id, lr.g.quiet, sessionLost.state))
 	lr.end(sessionLost)
 }
 
 // gone reports how the run ended at the gateway, when it has.
-func (lr *linkRun) gone() (code, from string, ended bool) {
+func (lr *linkRun) gone() (runEnd, bool) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
-	return lr.endCode, lr.endFrom, lr.ended
+	return lr.how, lr.ended
 }
 
 // end ends the run at the gateway, once: the session's later requests are a 410, and
 // in the background its secret is refused, its proxy, tools and credentials go, the
-// gateway's own run.exited is numbered when the ending writes one, and its stream is
+// gateway's own run.exited is numbered when the ending has a state, and its stream is
 // flushed and closed. It never blocks, but to keep the run key the gateway refuses
-// after the issuer's end.
+// after the starter's end.
 func (lr *linkRun) end(e ending) {
+	outcome, reason := e.given()
 	if e.blocks() {
-		// After the issuer's end, the gateway refuses the run key until the latest exp of
-		// the run credentials of the run key it still holds, and of any presented during
-		// the hold, kept in its directory so a restart refuses it too: kept before the
-		// run is seen to end, so no request that sees the end opens a run of it.
-		// Outside the run's lock, which is taken under the gateway's.
+		// After the starter's end, the gateway refuses the run key until the latest exp
+		// of the run credentials of the run key it still holds, and of any presented
+		// during the hold, kept in its directory with how the run ended, so a restart
+		// refuses it too: kept before the run is seen to end, so no request that sees the
+		// end opens a run of it. Outside the run's lock, which is taken under the
+		// gateway's.
 		lr.mu.Lock()
 		live := !lr.ended && lr.opened && lr.cred != nil
 		var key runKeyID
@@ -705,7 +915,7 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.mu.Unlock()
 		if live {
-			lr.g.endKey(key, lr.g.heldTo(key, expires))
+			lr.g.endKey(key, lr.g.heldTo(key, expires), outcome, reason)
 		}
 	}
 	lr.mu.Lock()
@@ -713,8 +923,8 @@ func (lr *linkRun) end(e ending) {
 		lr.mu.Unlock()
 		return
 	}
-	lr.ended, lr.endCode, lr.endFrom, lr.closed = true, e.code, e.from, e.closed
-	for _, t := range []*time.Timer{lr.timer, lr.quiet} {
+	lr.ended, lr.how, lr.closed = true, e.runEnd(), e.closed
+	for _, t := range []*time.Timer{lr.timer, lr.quiet, lr.windowEnd} {
 		if t != nil {
 			t.Stop()
 		}
@@ -732,7 +942,7 @@ func (lr *linkRun) end(e ending) {
 	lr.mu.Unlock()
 	if lr.cred != nil && e.blocks() {
 		// A run credential with a later exp presented since: the refusal lasts to it.
-		lr.g.endKey(key, lr.g.heldTo(key, expires))
+		lr.g.endKey(key, lr.g.heldTo(key, expires), outcome, reason)
 	}
 	go func() {
 		defer close(lr.done)
@@ -744,13 +954,16 @@ func (lr *linkRun) end(e ending) {
 			lr.cancel()
 			return
 		}
-		if e.reason != "" {
+		if e.state != "" {
 			if lr.st.Started() {
 				var ran int64
 				if !startedAt.IsZero() {
 					ran = max(time.Since(startedAt).Milliseconds(), 0)
 				}
-				data := map[string]any{"state": e.state, "reason": e.reason, "duration_ms": ran}
+				data := map[string]any{"state": e.state, "duration_ms": ran}
+				if e.reason != "" {
+					data["reason"] = e.reason
+				}
 				if !lr.client {
 					// A session's run: the gateway holds no exit status of its runtime.
 					data["exit_code"] = -1
@@ -764,7 +977,7 @@ func (lr *linkRun) end(e ending) {
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
 		if lr.cred != nil {
-			// Flushed: the gateway lets go of it. After the issuer's end, the refused run
+			// Flushed: the gateway lets go of it. After the starter's end, the refused run
 			// keys refuse its run key whether or not they could be written.
 			lr.g.retire(lr, key, expires)
 		}

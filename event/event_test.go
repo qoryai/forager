@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,8 +85,62 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 		}
 	}
 	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
-	if got := fmt.Sprint(state["enum"]); got != "[succeeded failed cancelled]" {
-		t.Errorf("run.exited's state enum is %s; want succeeded, failed and cancelled", got)
+	if got, want := fmt.Sprint(state["enum"]), fmt.Sprint([]string{event.StateSucceeded, event.StateFailed, event.StateCancelled}); got != want {
+		t.Errorf("run.exited's state enum is %s; the constants are %s", got, want)
+	}
+}
+
+// TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
+// schema of run.exited names in its reason's description, and those link-batch.schema.json
+// refuses beside timeout, and event.StarterReason to the reason's pattern less them: a
+// starter's code is any other code.
+func TestTheReservedCodesAreTheContracts(t *testing.T) {
+	doc, err := contracts.Document("events/run.exited.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)
+	description := reason["description"].(string)
+	_, rest, _ := strings.Cut(description, "Forager's own codes are reserved: ")
+	listed, _, _ := strings.Cut(rest, ", which Forager never writes")
+	var want []string
+	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
+		want = append(want, w)
+	}
+	if len(want) != 13 {
+		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
+	}
+	for _, code := range want {
+		if !event.Reserved(code) || event.StarterReason(code) {
+			t.Errorf("%s is reserved, and no starter's", code)
+		}
+	}
+	pattern := regexp.MustCompile(reason["pattern"].(string))
+	for _, code := range []string{"all_checks_passed", "checks_failed", "no_longer_needed", "a", "a" + strings.Repeat("b", 63),
+		"", "A", "1a", "_a", "a-b", "a b", "a" + strings.Repeat("b", 64), "a\n", "\u00e9t\u00e9"} {
+		if got, want := event.StarterReason(code), pattern.MatchString(code) && !slices.Contains(want, code); got != want {
+			t.Errorf("StarterReason(%q) = %v, want %v", code, got, want)
+		}
+		if event.Reserved(code) {
+			t.Errorf("%q is reserved", code)
+		}
+	}
+	batch, err := contracts.Document("link-batch.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(batch)
+	m := regexp.MustCompile(`\{"not":\{"enum":\[([^\]]*)\]\}\}`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("link-batch.schema.json refuses no list of reasons")
+	}
+	var refused []string
+	json.Unmarshal([]byte("["+string(m[1])+"]"), &refused)
+	refused = append(refused, event.ReasonTimeout)
+	slices.Sort(refused)
+	sorted := slices.Sorted(slices.Values(want))
+	if !slices.Equal(refused, sorted) {
+		t.Errorf("link-batch.schema.json refuses %v beside timeout; the reserved codes are %v", refused, sorted)
 	}
 }
 

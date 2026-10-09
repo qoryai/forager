@@ -69,9 +69,9 @@ const (
 	// ReasonStopped is a run whose starter answered that its run credential is no
 	// longer active and gave no outcome, or that ended another run of the same run key.
 	ReasonStopped = "stopped"
-	// ReasonBatchRefused is the gateway's 410 to a session whose batch it refused, and
-	// the reason of the session's own dev.qory.run.exited after it; the gateway's record
-	// of the same end says session_lost.
+	// ReasonBatchRefused is a run whose session's batch the gateway refused, failed: the
+	// gateway's 410 to the session's later requests, the reason of the gateway's own
+	// dev.qory.run.exited, and of the session's in its own record after it.
 	ReasonBatchRefused = "batch_refused"
 	// ReasonCredentialCheckUnreachable is a run whose run credential could not be
 	// checked because the introspection endpoint could not be reached after the
@@ -81,6 +81,49 @@ const (
 	ReasonCredentialCheckUnreachable = "credential_check_unreachable"
 	ReasonCredentialCheckInvalid     = "credential_check_invalid"
 )
+
+// The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
+// it was stopped before it said how it went. They are the outcomes a run's starter may
+// give too.
+const (
+	StateSucceeded = "succeeded"
+	StateFailed    = "failed"
+	StateCancelled = "cancelled"
+)
+
+// IsState reports whether s is a state of dev.qory.run.exited.
+func IsState(s string) bool {
+	return s == StateSucceeded || s == StateFailed || s == StateCancelled
+}
+
+// reserved are the reasons of dev.qory.run.exited that are Forager's: its own codes,
+// and the three old names it never writes.
+var reserved = map[string]bool{
+	ReasonTimeout: true, ReasonQuiet: true, ReasonCredentialExpired: true, ReasonStopped: true,
+	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true,
+	ReasonCredentialCheckUnreachable: true, ReasonCredentialCheckInvalid: true, ReasonRunClosed: true,
+	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
+}
+
+// Reserved reports whether a reason is one of Forager's reserved codes: its own, or one
+// of the old names run_ended_at_issuer, issuer_unreachable and issuer_answer_invalid.
+func Reserved(reason string) bool { return reserved[reason] }
+
+// StarterReason reports whether a reason may be a run's starter's: a code of the
+// pattern of dev.qory.run.exited's reason, ^[a-z][a-z0-9_]{0,63}$, and none of
+// Forager's reserved codes.
+func StarterReason(reason string) bool {
+	if len(reason) == 0 || len(reason) > 64 || reason[0] < 'a' || reason[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(reason); i++ {
+		c := reason[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return !Reserved(reason)
+}
 
 // Prefix is what every type of the contract starts with; a descriptor's session types
 // carry it too.

@@ -216,6 +216,8 @@ func (g *Gateway) handler(s *side) http.Handler {
 			g.discover(s, w, r)
 		case r.URL.Path == runPath && r.Method == http.MethodPost:
 			g.openRun(s, w, r)
+		case outcomePath(r.URL.Path) != "" && r.Method == http.MethodGet:
+			g.outcome(s, w, r, outcomePath(r.URL.Path))
 		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
 			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
 		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
@@ -226,6 +228,20 @@ func (g *Gateway) handler(s *side) http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
+}
+
+// outcomePath is the run id of the path of an ask at a runtime's exit, <run path>/<run
+// id>/outcome, a run id with no slash; empty for any other path.
+func outcomePath(path string) string {
+	rest, ok := strings.CutPrefix(path, runPath+"/")
+	if !ok {
+		return ""
+	}
+	runID, ok := strings.CutSuffix(rest, "/outcome")
+	if !ok || runID == "" || strings.Contains(runID, "/") {
+		return ""
+	}
+	return runID
 }
 
 // discover answers the link's discovery: 400 invalid_request on the one address to a
@@ -243,18 +259,26 @@ func (g *Gateway) discover(s *side, w http.ResponseWriter, r *http.Request) {
 }
 
 // linkRefusal is the body of a refusal on the link, link-refusal.schema.json: the code,
-// the names it concerns, the text the user reads of it, and who refused.
+// the names it concerns, the text the user reads of it, and who refused; and of a 410
+// that ends a run, the state and the reason of the gateway's dev.qory.run.exited of it.
 type linkRefusal struct {
 	Error   string   `json:"error"`
 	Names   []string `json:"names,omitempty"`
 	Message string   `json:"message,omitempty"`
 	From    string   `json:"from"`
+	State   string   `json:"state,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
 }
 
 // refuse answers a coded refusal: the code, its names, who refused, and text, the
 // error's text the session returns, as the message holds it.
 func refuse(w http.ResponseWriter, status int, code string, names []string, from, text string) {
-	b, _ := json.Marshal(linkRefusal{Error: code, Names: names, Message: message(text), From: from})
+	answerRefusal(w, status, linkRefusal{Error: code, Names: names, Message: message(text), From: from})
+}
+
+// answerRefusal answers the refusal ref with status.
+func answerRefusal(w http.ResponseWriter, status int, ref linkRefusal) {
+	b, _ := json.Marshal(ref)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(status)
 	w.Write(b)
@@ -270,9 +294,15 @@ func invalid(w http.ResponseWriter) {
 }
 
 // gone answers the 410 of a run that ended at the gateway: its code, and who ended it,
-// always the gateway, since a server's 410 ends no run.
-func gone(w http.ResponseWriter, code, from string) {
-	refuse(w, http.StatusGone, code, nil, from, gatewayText(code))
+// always the gateway, since a server's 410 ends no run; and of an end that ended the run,
+// the state and the reason of the gateway's dev.qory.run.exited of it, which its message
+// says.
+func gone(w http.ResponseWriter, end runEnd) {
+	text := "the run has ended"
+	if end.state != "" {
+		text += ": " + endWords(end.state, end.reason)
+	}
+	answerRefusal(w, http.StatusGone, linkRefusal{Error: end.code, Message: message(text), From: end.from, State: end.state, Reason: end.reason})
 }
 
 // readBody reads at most max bytes of a request's body; a longer one is no body.

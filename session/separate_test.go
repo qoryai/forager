@@ -504,8 +504,8 @@ func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
 // run on the one address, over TLS: a session it hears nothing from for three heartbeat
 // intervals gets a 410 session_lost, and one whose batch it refused a 410
 // batch_refused. The session stops the runtime, its result says the gateway closed the
-// run with that code, and its record ends with run.exited of that reason, while the
-// gateway's says session_lost for both.
+// run with that code, and its record and the gateway's end with run.exited of that
+// reason.
 func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 	for _, cause := range []string{"session_lost", "batch_refused"} {
 		t.Run(cause, func(t *testing.T) {
@@ -580,7 +580,7 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 			}
 			s.close(t)
 			rec := s.record(t, res.RunID)
-			if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "session_lost" {
+			if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != cause {
 				t.Errorf("the gateway's record ends %v", last)
 			}
 			r.noSecretIn(t, s, res.RunID, cred)

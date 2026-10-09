@@ -373,7 +373,8 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 		t.Errorf("reports %q", got)
 	}
 	h.post(started(runID, nil), applied(runID, a.Applied))
-	// The session's own exit at its time limit is the one reason its batch carries.
+	// The session's own exit at its time limit is the one reason of Forager's its batch
+	// carries.
 	timedOut := exited(runID)
 	timedOut["data"].(map[string]any)["reason"] = "timeout"
 	timedOut["data"].(map[string]any)["state"] = "cancelled"
@@ -396,8 +397,8 @@ func TestTheSharedProxyServesARunBySecret(t *testing.T) {
 
 // TestBatchesTheLinkRefuses pins each of the README's batch rules: a batch that breaks
 // one is a 400 invalid_request, nothing of it is numbered, and the run ends at the
-// gateway, session_lost; every later request of the run's is a 410 run_closed from the
-// gateway.
+// gateway, failed with batch_refused; every later request of the run's is a 410
+// batch_refused from the gateway, with that state and reason.
 func TestBatchesTheLinkRefuses(t *testing.T) {
 	h := start(t, gateway.Config{})
 	labels := map[string]string{"repository": "example-namespace/project"}
@@ -474,7 +475,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			t.Errorf("%s: after the refusal: %+v", name, d)
 		}
 		b, _ := json.Marshal([]map[string]any{heartbeat(a.RunID)})
-		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "batch_refused" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: batch_refused" {
+		if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "batch_refused" || got["from"] != "gateway" || got["message"] != "the run has ended: failed, events refused" || got["state"] != "failed" || got["reason"] != "batch_refused" {
 			t.Errorf("%s: the 410's message: %d %v", name, status, got)
 		}
 		var r *accesskey.Refusal
@@ -547,7 +548,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 	if d := h.post(issuerStarted(b.RunID, labels)); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("an issuer's credential on the local link: %+v", d)
 	}
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "batch_refused" {
+	if d := h.close(); !d.RunClosed || d.ClosedReason != "batch_refused" || d.State != "failed" || d.Reason != "batch_refused" {
 		t.Errorf("delivery %+v", d)
 	}
 	for name, runID := range runs {
@@ -556,7 +557,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			t.Errorf("%s: record %v", name, types(lines))
 			continue
 		}
-		if x := lines[2].Data; x["reason"] != "session_lost" || x["state"] != "failed" || x["exit_code"] != -1.0 {
+		if x := lines[2].Data; x["reason"] != "batch_refused" || x["state"] != "failed" || x["exit_code"] != -1.0 {
 			t.Errorf("%s: run.exited %v", name, x)
 		}
 	}
@@ -586,11 +587,11 @@ func TestASessionThatSendsNothingIsLost(t *testing.T) {
 		t.Errorf("a lost run: %+v", d)
 	}
 	b, _ := json.Marshal([]map[string]any{heartbeat(lost.RunID)})
-	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the gateway refused the run: session_lost" {
+	if status, got := h.refusalOf("/v1/events", string(b)); status != http.StatusGone || got["error"] != "session_lost" || got["from"] != "gateway" || got["message"] != "the run has ended: failed, the session stopped responding" || got["state"] != "failed" || got["reason"] != "session_lost" {
 		t.Errorf("a lost run's 410: %d %v", status, got)
 	}
 	h.post(exited(kept.RunID))
-	if d := h.close(); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != "session_lost" {
+	if d := h.close(); !d.RunClosed || d.ClosedReason != "session_lost" || d.State != "failed" || d.Reason != "session_lost" {
 		t.Errorf("delivery %+v", d)
 	}
 	lines := h.record(lost.RunID)
@@ -600,8 +601,8 @@ func TestASessionThatSendsNothingIsLost(t *testing.T) {
 	if lines := h.record(kept.RunID); lines[len(lines)-1].Data["reason"] != nil {
 		t.Errorf("kept: %v", lines[len(lines)-1])
 	}
-	if !h.reported("session_lost") {
-		t.Error("the user was not told")
+	if line := "run " + lost.RunID + ": its session sent nothing for 400ms; the run ends: failed"; !h.reported(line) {
+		t.Errorf("the user was not told %q", line)
 	}
 }
 

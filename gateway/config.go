@@ -107,6 +107,10 @@ type Config struct {
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration
 	openWindow time.Duration
+	// exitWindow, when set, replaces exitWindow, how long a run whose starter answered
+	// its ask at its exit that the run credential is no longer active may still end
+	// with its own exit. Tests set it.
+	exitWindow time.Duration
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
@@ -194,14 +198,25 @@ type Delivery struct {
 	// is under the run's record directory's undelivered/; a stop during a resend spools
 	// nothing. For a resend they are all still in the record's events.jsonl.
 	Undelivered int
-	// RunClosed says the run ended at the gateway before its session ended it: ClosedBy
-	// says who, always "gateway", since a server's 410 ends no run, and Reason the code
-	// of the 410 the session's later requests get: session_lost when it heard nothing
-	// from the session for 3 heartbeat intervals, batch_refused when it refused a batch,
-	// and behind a separate gateway credential_expired or stopped.
-	RunClosed bool
-	ClosedBy  string
-	Reason    string
+	// RunClosed says a run ended at the gateway before its session ended it, the first
+	// that did for Close, since a server's 410 ends no run; ClosedReason is the code of
+	// the gateway's 410 its session's later requests get: session_lost when it heard
+	// nothing from the session for 3 heartbeat intervals, batch_refused when it refused a
+	// batch, and behind a separate gateway credential_expired,
+	// credential_check_unreachable, credential_check_invalid, and stopped when the run's
+	// starter ended it.
+	RunClosed    bool
+	ClosedReason string
+	// State and Reason are how the run ended, where the gateway knows it: the state and
+	// the reason of the dev.qory.run.exited the gateway wrote of it, Reason empty when
+	// that has none. For Close, of the run RunClosed is of: failed with session_lost,
+	// failed with batch_refused, cancelled with credential_expired, failed with
+	// credential_check_unreachable or credential_check_invalid, and, ended by its
+	// starter, the outcome and the reason the starter gave, or cancelled with stopped
+	// when it gave no outcome. For a resend, failed with gateway_lost, with Completed.
+	// Empty otherwise.
+	State  string
+	Reason string
 	// Sent is how many events a resend delivered now, and Completed says a resend
 	// recorded the run's exit, gateway_lost, which its record did not hold. Zero for
 	// Close.

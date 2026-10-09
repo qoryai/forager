@@ -455,9 +455,8 @@ func (c gatedConn) Write(b []byte) (int, error) {
 // TestARealGatewaysCloseCarriesItsCause pins the gateway's own end of a session's run
 // end to end: a session it hears nothing from for three heartbeat intervals gets a 410
 // session_lost, and one whose batch it refused a 410 batch_refused. The runtime is
-// stopped, the result says the gateway closed the run with that code, and the
-// session's record ends with run.exited of that reason, while the gateway's says
-// session_lost for both.
+// stopped, the result says the gateway closed the run with that code, and both the
+// session's record and the gateway's end with run.exited of that reason.
 func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 	for _, cause := range []string{"session_lost", "batch_refused"} {
 		t.Run(cause, func(t *testing.T) {
@@ -524,13 +523,13 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 			if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != cause || res.State != "failed" || res.TimedOut {
 				t.Errorf("result %+v", res)
 			}
-			if d := rg.close(t); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != cause {
+			if d := rg.close(t); !d.RunClosed || d.ClosedReason != cause || d.State != "failed" || d.Reason != cause {
 				t.Errorf("delivery %+v", d)
 			}
 			for name, want := range map[string]struct {
 				evs    []map[string]any
 				reason string
-			}{"the session's": {events(t, res), cause}, "the gateway's": {record(t, res), "session_lost"}} {
+			}{"the session's": {events(t, res), cause}, "the gateway's": {record(t, res), cause}} {
 				if l := want.evs[len(want.evs)-1]; l["type"] != "dev.qory.run.exited" || data(l)["reason"] != want.reason {
 					t.Errorf("%s record ends %v", name, l)
 				}

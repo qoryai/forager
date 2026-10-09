@@ -532,14 +532,14 @@ func TestCloseAndResend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened || r.Stopped {
+	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened || r.Stopped || r.State != "" || r.Reason != "" {
 		t.Errorf("resend %+v", r)
 	}
 	r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", lost.RunID)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Completed || r.Sent != 2 || r.Stopped {
+	if !r.Completed || r.Sent != 2 || r.Stopped || r.State != "failed" || r.Reason != "gateway_lost" {
 		t.Errorf("resend of the lost run %+v", r)
 	}
 	lines := h.record(lost.RunID)
@@ -570,7 +570,7 @@ func TestAResendAfterAServersStop(t *testing.T) {
 	c.closed.Store(true)
 	dir := filepath.Join(h.dir, "runs", a.RunID)
 	d, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
-	if err != nil || d.RunClosed || d.ClosedBy != "" || d.Reason != "" || d.Sent != 0 || !d.Stopped {
+	if err != nil || d.RunClosed || d.ClosedReason != "" || d.Reason != "" || d.Sent != 0 || !d.Stopped {
 		t.Errorf("the resend the server answers 410: %+v, %v", d, err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "delivered.log")); err != nil || !slices.Contains(strings.Split(string(b), "\n"), "stopped") {
