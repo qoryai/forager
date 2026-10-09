@@ -94,6 +94,10 @@ func rel(module, path string) (string, bool) {
 	return strings.CutPrefix(path, module+"/")
 }
 
+// testFixture reports whether a package of the core's is a fixture any part's tests
+// may import, and no part's code: a fake gateway's link.
+func testFixture(rel string) bool { return rel == "internal/linktest" }
+
 func TestThePartsImportWhatTheRulesAllow(t *testing.T) {
 	module, pkgs := list(t)
 	if len(pkgs) == 0 {
@@ -111,6 +115,9 @@ func TestThePartsImportWhatTheRulesAllow(t *testing.T) {
 				continue
 			}
 			seen[to] = true
+			if testFixture(to) && !slices.Contains(p.Imports, imp) {
+				continue
+			}
 			if !allowed(from, to) {
 				t.Errorf("%s imports %s, which the import rules forbid", from, to)
 			}

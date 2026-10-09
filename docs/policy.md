@@ -39,7 +39,7 @@ them. See [credentials](credentials.md), [tools](credentials.md#tools) and
 A run has one policy. It comes from one of three places:
 
 - **The machine's policy.** For `qory`, the `gateway.egress` section of `forager.yaml`,
-  below. From Go, `Policy` in the spec.
+  below. From Go, `Policy` in the gateway's `gateway.Config`.
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/forager/v1/README.md#the-policy).
   - It narrows the machine's `gateway.egress`, and never widens it.
@@ -47,10 +47,10 @@ A run has one policy. It comes from one of three places:
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
-  section. Then the session fetches the run configuration, with the run's labels. Its
+  section. Then the gateway fetches the run configuration, with the run's labels. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
-The node's policy is `Spec.Policy`, the policy Forager is passed: for `qory`, the
+The node's policy is `gateway.Config.Policy`, the policy Forager is passed: for `qory`, the
 machine's `gateway.egress` with the run's own under it. Which one applies:
 
 | Forager has            | The policy is                                                           |
@@ -115,9 +115,11 @@ A denied connection is:
 
 The session goes on. A denial never ends a session.
 
-Of what Forager does, only a time limit ends a session: `Timeout` in the spec. At the
-limit, the runtime is stopped, and `dev.qory.run.exited` records the reason. The session
-stops the runtime the same way when the caller's context ends.
+Of what the session does itself, only a time limit ends a session: `Timeout` in the
+spec. At the limit, the runtime is stopped, and `dev.qory.run.exited` records the
+reason. The session stops the runtime the same way when the caller's context ends, and
+when the gateway or the server closes the run. See
+[the server](server.md#when-the-server-refuses-or-closes-a-run).
 
 ## Hosts the harness declares
 

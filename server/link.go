@@ -254,6 +254,10 @@ type LinkRefusal struct {
 	Error string   `json:"error"`
 	Names []string `json:"names,omitempty"`
 	From  string   `json:"from,omitempty"`
+	// Message is the refusal's text as its user is told it: on a run request the
+	// gateway did not open, the error the run would have returned had the session
+	// opened it itself.
+	Message string `json:"message,omitempty"`
 }
 
 // values are variables as values by name; nil for none.
@@ -462,16 +466,42 @@ func (a *linkAnswer) from() string {
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
 // the run, its code one of [EndCodes]; a coded body is its code with its names and who
 // refused; anything else names its status.
+//
+// A refusal's message, the text its user is told, is its Text, so its Error says it
+// word for word. A 5xx whose code is internal, or that has none, is a failure without
+// a code: a StatusError with the message.
 func (a *linkAnswer) refusal(what string) error {
+	var doc LinkRefusal
+	jsonv2.Unmarshal(a.body, &doc)
 	if a.status == http.StatusGone {
-		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from()}
+		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from(), Text: doc.Message}
+	}
+	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
+		return &StatusError{What: what, Status: a.status, Message: doc.Message}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
-		r.Detail, r.From = what, a.from()
+		r.Detail, r.From, r.Text = what, a.from(), doc.Message
 		return r
 	}
-	return fmt.Errorf("%s: status %d", what, a.status)
+	return &StatusError{What: what, Status: a.status, Message: doc.Message}
 }
+
+// CodeInternal is the code of a gateway's 500 to a run it could not open for a reason
+// without a code of its own.
+const CodeInternal = "internal"
+
+// StatusError is an answer of the link with neither the one wanted nor a code: a
+// gateway's 5xx, say, to a run it could not open, whose body may carry the error's text
+// as its user is told it, Message.
+type StatusError struct {
+	// What is the request, and Status the answer's.
+	What   string
+	Status int
+	// Message is the text of the failure the answer's body carries, empty for none.
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }
 
 // Ended reports the end of the run an error of the link carries: the code of a 410,
 // one of [EndCodes], which the session records as the reason of its

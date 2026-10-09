@@ -22,7 +22,7 @@ server. The example is in [the policy](policy.md#in-forageryaml).
   secret and pin as `QORY_ACCESS_KEY_ID`, `QORY_ACCESS_KEY_SECRET` and
   `QORY_APIARY_PUBLIC_KEY`.
 - The run's policy comes from the server, when the server offers one. The node's
-  policy, `Spec.Policy`, narrows it. See
+  policy, `gateway.Config.Policy`, narrows it. See
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
 - With `gateway.server` set, the run starts only when the server answers the fetch and
@@ -32,50 +32,67 @@ server. The example is in [the policy](policy.md#in-forageryaml).
 
 ## How Forager uses the server
 
-A `session.Server` in the spec defines the server the session reports to. The session:
+The gateway reports to the server; the session never speaks to it. A
+`gateway.Server` in `gateway.Config` defines the server. The gateway:
 
-1. fetches the server's configuration document, with a signed `GET` of
+1. fetches the server's configuration document when it starts, with a signed `GET` of
    `/.well-known/qory-configuration`;
-2. posts the events that document selects to the URL it defines, signed, after a
-   ping that announces the heartbeat interval; heartbeats run from the accepted ping;
-3. when the document contains a run configuration, fetches it, with every label of the
-   run as its query. Its `security_policy`, narrowed by the node's policy, is the run's
-   policy. Its `variables` are the server's variables for the run.
+2. for each run a session asks it for, fetches the run configuration when the document
+   contains one, with every label of the run as its query. Its `security_policy`,
+   narrowed by the node's policy, is the run's policy. Its `variables` are the server's
+   variables for the run. The gateway answers the session's run request with what
+   follows of them;
+3. posts the events the document selects to the URL it defines, signed, after a ping
+   that announces the heartbeat interval: the session's, which it receives on its
+   link and numbers, and its own.
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
-request, and the session reads an answer only once it verifies under the pin. The
+request, and the gateway reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
-The spec holds what identifies the run to the server:
+`gateway.Server` holds what identifies the run to the server:
 
-- `Spec.AccessKey` is the access key, an `*accesskey.Key` held from its secret, which
-  the caller reads. It signs every request. A `Server` needs it.
-- `Spec.InstanceID` is this instance's id: `qory` reads it from its instance-id file.
-  It is sent in `X-Qory-Instance-Id` and signed into every request. A `Server` needs
-  it, and it matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
-- `Spec.InstanceName` is this instance's display name, sent in `X-Qory-Instance-Name`
-  on every request, unsigned. It matches the same pattern; empty sends none.
-- `Spec.Discovered`, when not nil, is called once the configuration document is read
-  and verified, before the ping, with a `session.Discovery`: `NodeID`, the id of the
-  access key's node, `nd_`, or node pool, `np_`; and `Secrets`, true when the document
-  lists a `secrets` section, which it does for an access key allowed stored secrets.
-  `qory` prints the node id. An error it returns is no run, and nothing more is sent.
+- `AccessKey` is the access key, an `*accesskey.Key` held from its secret, which the
+  caller reads. It signs every request.
+- `InstanceID` is this instance's id: `qory` reads it from its instance-id file. It is
+  sent in `X-Qory-Instance-Id` and signed into every request, and it matches
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+- `InstanceName` is this instance's display name, sent in `X-Qory-Instance-Name` on
+  every request, unsigned. It matches the same pattern; empty sends none.
+
+`gateway.Config.Discovered`, when not nil, is called once the configuration document is
+read and verified, before `gateway.Start` returns, with a `gateway.Discovery`: `NodeID`,
+the id of the access key's node, `nd_`, or node pool, `np_`; and `Secrets`, true when
+the document lists a `secrets` section, which it does for an access key allowed stored
+secrets. `qory` prints the node id. An error it returns is no gateway, and nothing
+more is sent.
 
 ## When the server refuses or closes a run
 
-A refusal at the start has a code, `session.Refusal` in Go: `unauthorized` for a key the
-server does not hold, `instance_limit` when the node's live instances are at its
-limit, `answer_unsigned` for an answer that does not verify under the pin, and
-`apiary_public_key_missing` for a server without a pin. A server closes a running run
-with a signed `410` `run_closed`: the session stops the runtime as at its time limit,
-records `reason: run_closed`, and sends nothing further.
+A refusal at the start has a code. The gateway passes the server's on to the session,
+which returns it as a `*session.Refusal` whose `From` is `apiary`: `unauthorized` for a
+key the server does not hold, `instance_limit` when the node's live instances are at
+its limit. An answer that does not verify under the pin is `answer_unsigned`, and a
+server without a pin `apiary_public_key_missing`: `gateway.Start` returns either as a
+`*accesskey.Refusal` when it fetches the configuration document, and starts no
+gateway.
+
+A server closes a running run with a signed `410` `run_closed`. The gateway ends the
+run, writes its `dev.qory.run.exited` with `reason: run_closed`, sends the server
+nothing further, and answers the session's next request with a `410`. The session
+stops the runtime as at its time limit, records the same reason in its own record, and
+returns a `Result` whose `RunClosed` is true, `ClosedBy` `apiary` and `ClosedReason`
+`run_closed`. A run the server closes before it starts is a `*session.Refusal`,
+`run_closed`, from `apiary`.
 
 ## A policy that changes while the run goes
 
-A server may answer a later batch with another digest. The session then fetches the run
+A server may answer a later batch with another digest. The gateway then fetches the run
 configuration again, and puts it in force while the run goes, narrowed by the same node
-policy. The variables stay as they were when the run started.
+policy. Its answers to the session then carry the new run-configuration digest, and the
+session fetches the run's configuration from the gateway and records it in another
+`dev.qory.run.policy_applied`. The variables stay as they were when the run started.
 
 ## Variables
 
@@ -143,7 +160,7 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 
 | The run passes | In | The refusal |
 | --- | --- | --- |
-| a `QORY_` variable, or one a credential is read from | a walled run | `variable_reserved` |
+| a `QORY_` variable, or one the gateway sets, such as one a credential is read from | a walled run | `variable_reserved` |
 | a value for a placeholder | any run | `placeholder_conflict` |
 
 `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a

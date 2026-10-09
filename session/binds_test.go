@@ -39,7 +39,7 @@ func mkdirs(t *testing.T, dirs ...string) string {
 // walledSpec is a walled run of the fake runtime behind an open wall.
 func walledSpec(t *testing.T, w wall.Wall) session.Spec {
 	t.Helper()
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	return sp
 }
@@ -197,7 +197,7 @@ func TestTheRunsDirectoryIsOneOfTheForagersFiles(t *testing.T) {
 		t.Errorf("names %q", r.Names)
 	}
 
-	sp = spec(t, nil, "FAKE_EXIT=0")
+	sp = spec(t, "FAKE_EXIT=0")
 	sp.RunsDir = ""
 	res, err := session.Run(context.Background(), sp)
 	if err != nil || res.Dir != filepath.Join(sp.Dir, ".qory", "runs", res.RunID) {

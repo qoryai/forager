@@ -12,10 +12,11 @@ nothing.
 ```
  the node                                              elsewhere
 ┌─────────────────────────────────────────────────────┐
-│ qory run: the session, outside the wall             │
-│   policy ─▶ proxy ─▶ decides, records, dials ───────┼──▶ the hosts the policy allows
+│ qory run, outside the wall                          │
+│   the gateway: policy ─▶ proxy ─▶ decides, dials ───┼──▶ the hosts the policy allows
 │   events ─▶ <runs directory>/<id>/events.jsonl      │
 │          └▶ events, signed ─────────────────────────┼──▶ the server: your control plane
+│   the session ─▶ the gateway's link: run, events    │
 │      ▲ proxy      ▲ hooks       ▲ terminal          │
 │══════╪════════════╪═════════════╪════ the wall ═════│
 │  ┌───┴───┐   ┌────┴─────────────┴────────────────┐  │
@@ -26,8 +27,9 @@ nothing.
 ```
 
 - The agent's container is on a network with no route out.
-- The one peer it reaches is the relay. The relay copies a fixed port to the proxy, and
-  decides nothing. It forwards no packet between its networks.
+- The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
+  proxy, opening every connection with the run's proxy secret, and decides nothing. It
+  forwards no packet between its networks.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs
@@ -44,8 +46,8 @@ nothing.
   `mount_contains_forager_files`: the directory of `forager.yaml` with the access key
   secret, the programs Forager starts outside the wall, their configuration. See
   [Forager's files](#foragers-files).
-- The session, the policy and the access key secret stay outside, on the node.
-  The record is written from outside.
+- The session and the gateway, with the policy, the credentials and the access key
+  secret, stay outside, on the node. The record is written from outside.
 
 What every wall guarantees is in the contract's
 [wall section](../contracts/forager/v1/README.md#the-wall). The
@@ -162,10 +164,14 @@ is the container.
 ## From Go
 
 A [`wall.Wall`](../wall/wall.go) in the spec starts the runtime in an enclosure. Its only
-route out leads to the proxy.
+route out leads to the gateway's proxy.
 
-- The session, the policy and the access key secret stay outside.
+- The session and the gateway, with the policy and the access key secret, stay outside.
 - The run's record is read-only inside.
+- The session asks the gateway for a walled run, with the machine's images. The run
+  answer names the image the run starts in, the run's certificate authority, which the
+  enclosure trusts, and the placeholders the enclosure gets in place of the gateway's
+  credentials. The run's proxy secret goes to the wall's relay alone.
 
 The Docker adapter uses the `docker` command, and whatever engine it reaches:
 
@@ -193,7 +199,7 @@ res, err := session.Run(ctx, session.Spec{
 		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
 	Forwarder: []string{wall.HelperPath, "forward"},
-	Events:    os.Stdout,                         // every event as a JSON line, as well
+	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
 })
 ```
 
@@ -206,7 +212,7 @@ refused.
 A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
 Forager's files. Such a run returns a `*session.Refusal` with the code
 `mount_contains_forager_files`, and `Names` holds the mount, then Forager's file. The
-check comes before the server is contacted and before anything starts, `Local` included.
+check comes before the gateway is contacted and before anything starts.
 An agent that changes a program Forager starts outside the wall, or reads the access
 key secret, has left the wall. The check covers `Spec.Mounts` and the workspace; the
 run directory and the hook socket's directory, which the session shows the enclosure
@@ -214,14 +220,19 @@ itself, are the run's own, and lie in Forager's files. Forager's files are:
 
 - `Spec.ForagerFiles`, the absolute paths the caller lists as its own. `qory` lists the
   directory of `forager.yaml`, with the access key secret.
-- The directory of every credential program and every tool program the machine defines,
-  found in `PATH` as the gateway starts it, and the directory of the file a link to one
-  leads to. A program's neighbours, an interpreter or a module, are covered with it.
-- The file a credential with `File` is read from.
-- The private directories of the tools' sockets, this run's and every other run's on
-  the machine, which are made in the system's temporary directory when the tools
-  start: a mount that contains that directory is refused, whether or not the run has
-  tools.
+- The gateway's own files, which it hands the session with its local link,
+  `link.Local.Files`, each with what it is:
+  - the directory of every credential program and every tool program the machine
+    defines, found in `PATH` as the gateway starts it, and the directory of the file a
+    link to one leads to. A program's neighbours, an interpreter or a module, are
+    covered with it;
+  - the file a credential with `File` is read from;
+  - the private directories of the tools' sockets, this run's and every other run's on
+    the machine, which are made in the system's temporary directory when the tools
+    start: a mount that contains that directory is refused, whether or not the run has
+    tools;
+  - the gateway's link directory, the pattern of every gateway's, the gateway's
+    directory, `gateway.Config.Dir`, and where it keeps the runs' records.
 - The private directories in the system's temporary directory where every run on the
   machine makes its record socket, `qory-run-*`, and where the Docker wall writes a
   run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
@@ -364,7 +375,7 @@ looked up in its parent, so two binds of one root are allowed.
   run 0199f0e2-7c1a-7d3e-8b9a-0123456789ab, which is still going: a walled agent of that
   run can change it", or "Forager's directory …" for a directory.
 
-  The check comes before the server is contacted, and the run leaves the registry when
+  The check comes before the gateway is contacted, and the run leaves the registry when
   it ends, however it ends, unless its wall could not be removed.
 
 A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
@@ -392,9 +403,10 @@ So the wall needs no image of its own.
 
 ## Images
 
-The machine defines the images a run may start in. The run's policy selects one by name,
-with `image`, as it selects credentials and tools. Without a selection, the run starts
-in `Image`.
+The machine defines the images a run may start in, `Spec.Images`, and the session sends
+them with a walled run's request. The run's policy selects one by name, with `image`, as
+it selects credentials and tools; the gateway resolves the selection and its answer
+names the image. Without a selection, the run starts in `Image`.
 
 `qory` reads `wall.images` from `forager.yaml`: named images, each with a `ref`, and a
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run

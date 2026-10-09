@@ -62,7 +62,7 @@ func TestTheLocalLink(t *testing.T) {
 	if fi, err := os.Lstat(l.Socket); err != nil || fi.Mode().Perm() != link.LinkSocketMode {
 		t.Errorf("the socket: %v %v", fi.Mode(), err)
 	}
-	if len(l.Secret) < 22 || l.Proxy != h.g.Addr() || !slices.Contains(l.Files, dir) || !slices.Contains(l.Files, h.dir) {
+	if len(l.Secret) < 22 || l.Proxy != h.g.Addr() || !slices.Contains(l.Files, link.File{Path: dir, What: "the gateway's link directory"}) || !slices.Contains(l.Files, link.File{Path: h.dir, What: "the gateway's directory"}) {
 		t.Errorf("local %+v", l)
 	}
 	d, err := h.link.Discover(context.Background())

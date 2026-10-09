@@ -240,42 +240,52 @@ func (g *Gateway) LocalLink() link.Local {
 	}
 }
 
-// files are the gateway's own files: the link's directory and the pattern of every
-// gateway's, the files and the program directories of the machine's credentials and
-// tools, the pattern of the tools' socket directories, and where the runs' records are.
-func (g *Gateway) files() []string {
-	out := []string{g.dir, filepath.Join(os.TempDir(), link.LinkDirPrefix+"*")}
+// files are the gateway's own files, each with the phrase a refused mount names it by:
+// the directories of the machine's credentials' and tools' programs and the
+// credentials' files, the pattern of the tools' socket directories, then the link's
+// directory and the pattern of every gateway's, the gateway's directory, and where the
+// runs' records are. The first ones come in the order a session checked them in before
+// the gateway was apart from it, so a mount that holds several is refused as it was.
+func (g *Gateway) files() []link.File {
+	var out []link.File
 	for _, c := range g.cfg.Credentials {
 		if len(c.Adapter) > 0 {
-			out = append(out, program.Dirs(c.Adapter[0])...)
+			for _, d := range program.Dirs(c.Adapter[0]) {
+				out = append(out, link.File{Path: d, What: "the directory of the credential " + c.Name + "'s program"})
+			}
 		}
 		if c.File != "" {
-			out = append(out, c.File)
+			out = append(out, link.File{Path: c.File, What: "the file the credential " + c.Name + " is read from"})
 		}
 	}
 	for _, t := range g.cfg.Tools {
 		if len(t.Command) > 0 {
-			out = append(out, program.Dirs(t.Command[0])...)
+			for _, d := range program.Dirs(t.Command[0]) {
+				out = append(out, link.File{Path: d, What: "the directory of the tool " + t.Name + "'s program"})
+			}
 		}
 	}
-	out = append(out, tool.SocketDirs())
+	out = append(out,
+		link.File{Path: tool.SocketDirs(), What: "where the tools' sockets are made"},
+		link.File{Path: g.dir, What: "the gateway's link directory"},
+		link.File{Path: filepath.Join(os.TempDir(), link.LinkDirPrefix+"*"), What: "where the gateways' links are made"})
 	if g.cfg.Dir != "" {
-		out = append(out, g.cfg.Dir)
+		out = append(out, link.File{Path: g.cfg.Dir, What: "the gateway's directory"})
 	}
 	if g.cfg.RunDir != nil {
 		// The directory the record directories are made in, named by the record
 		// directory of a run id no run has.
 		const none = "00000000-0000-0000-0000-000000000000"
 		if dir := g.cfg.RunDir(none); filepath.Base(dir) == none {
-			out = append(out, filepath.Dir(dir))
+			out = append(out, link.File{Path: filepath.Dir(dir), What: "where the run directories are kept"})
 		} else if dir != "" {
-			out = append(out, dir)
+			out = append(out, link.File{Path: dir, What: "where the run directories are kept"})
 		}
 	}
-	var unique []string
-	for _, p := range out {
-		if p != "" && !slices.Contains(unique, p) {
-			unique = append(unique, p)
+	var unique []link.File
+	for _, f := range out {
+		if f.Path != "" && !slices.ContainsFunc(unique, func(u link.File) bool { return u.Path == f.Path }) {
+			unique = append(unique, f)
 		}
 	}
 	return unique

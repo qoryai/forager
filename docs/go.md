@@ -11,26 +11,46 @@ Forager:
 - observes and enforces egress through a proxy it owns;
 - keeps its own credentials out of the session;
 - heartbeats while the session runs;
+- keeps the policy, the credentials, the tools and the access key in a gateway, which
+  the session speaks to over a local link;
 - reports the session's output and its own observations as CloudEvents: to files
   always, to a server when one is configured;
 - optionally, starts the agent behind a wall, a container with no route out except to
   that proxy.
 
-## One entry point
+## Two entry points
 
-The module is a library with one entry point. A caller builds a
-[`session.Spec`](../session/session.go): the program to start, and how. It gets a
-[`session.Result`](../session/session.go) back once the runtime has exited and the sinks
-are flushed:
+The module is a library with two entry points: the gateway and the session.
+
+- A caller starts a gateway, [`gateway.Start`](../gateway/start.go), with a
+  [`gateway.Config`](../gateway/config.go): the machine's policy, its credentials and
+  tools, the server it reports to, and where each run's record goes. The gateway holds
+  all of it: the proxy, the policy, the credentials, the tools and the access key.
+- It then builds a [`session.Spec`](../session/session.go): the program to start, and
+  how, and the gateway it speaks to, `session.LocalGateway(g.LocalLink())`. The session
+  holds no policy, no credential and no server. It speaks to the gateway alone, over the
+  gateway's local link (the contract's
+  [§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
+- It gets a [`session.Result`](../session/session.go) back once the runtime has exited
+  and the session's events are flushed to the gateway. Closing the gateway flushes the
+  run's stream to the server.
 
 ```go
+g, err := gateway.Start(ctx, gateway.Config{
+	Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: hosts}},
+	Server: nil,                                  // files only; a *gateway.Server reports as well
+	Dir:    stateDir,                             // the gateway's directory; runs/<id> is each run's record
+})
+if err != nil {                                   // no gateway, no run
+	return err
+}
+defer g.Close(ctx)                                // delivers the runs' last events
 rt, err := catalog.Lookup("claude", "")           // a runtime by its name, see below
 res, err := session.Run(ctx, session.Spec{
 	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"--settings", settings, "-p", "Reply pong."},
-	Policy:    &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: hosts}},
-	Server:    nil,                               // files only; a *session.Server reports as well
+	Gateway:   session.LocalGateway(g.LocalLink()), // the link's secret stays in this process
 	Forwarder: []string{exe, "forward"},          // the hook command, see below
 })
 if err != nil {                                   // the run did not start
@@ -41,6 +61,40 @@ os.Exit(res.ExitCode)                             // the runtime's status; res.D
 
 [`session/example_test.go`](../session/example_test.go) is the example above, compiled
 with the tests.
+
+## The session and its gateway
+
+For each run the session, over the gateway's link:
+
+1. asks the gateway's discovery where the run request, the events and the proxy are,
+   and the heartbeat interval;
+2. sends the run request: the run id, whether the run is walled, its labels, what it is
+   about, the names, never the values, of the variables it passes a value for, and,
+   behind a wall, the machine's images;
+3. applies the run answer: the proxy secret goes to the session's forwarder, or behind a
+   wall to the wall's relay, and never into the agent's environment; behind a wall, the
+   run's certificate authority and the placeholders go into the enclosure; the image is
+   the one the answer names; the variables the gateway sets are not the session's to
+   set;
+4. records `dev.qory.run.started` with the gateway's labels and
+   `dev.qory.run.policy_applied` with the members the gateway decides, its own
+   variables and the harness's hosts beside them, and posts every event of the run to
+   the gateway, a heartbeat every interval among them;
+5. fetches the run's configuration again whenever the gateway's answers carry a new
+   run-configuration digest, and records it in another `dev.qory.run.policy_applied`;
+6. ends the run when the gateway or the server closes it: a `410` on the link, or the
+   gateway's `400` to a batch.
+
+The agent reaches the gateway's proxy through the session's forwarder, on loopback.
+Every connection to the proxy opens with the relay's preamble and the run's proxy
+secret: without a wall the forwarder writes it, behind one the wall's relay does.
+
+A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
+with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
+the refusal's `message`, the text such a run always returned, such as
+`ping https://qory.example/v1/events: instance_limit (status 409)`. A run whose policy
+needs a wall and has none returns the error such a run always had, and so does a run
+the gateway could not open for a reason without a code.
 
 ## The runtime
 
@@ -79,9 +133,16 @@ A program that needs code of its own implements the interface.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
-- `Server` defines the server the run reports to. See [the server](server.md).
-- `Policy` is the node's policy. Without a server's policy it is the run's; with one it
-  narrows it. See [the policy](policy.md#the-node-narrows-the-servers-policy).
+- `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
+  link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The link's secret stays
+  in the process's memory: a `session.Gateway` is printed and logged by its socket
+  alone. The zero `Gateway` is no run. The server the run reports to and the node's
+  policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
+  [the server](server.md) and
+  [the policy](policy.md#the-node-narrows-the-servers-policy).
+- `Labels` and `About` go to the gateway in the run request. `dev.qory.run.started` has
+  the labels the gateway answers with, and in `about.details` the details the gateway
+  decides, such as those a run credential's claims set.
 - The variables come from several sources, and for each name the highest wins. See
   [variables](server.md#variables).
   - `LaunchFixed` is the values the harness computes itself. They win over every source
@@ -97,8 +158,24 @@ A program that needs code of its own implements the interface.
     the agent starts.
 - A run refused before it starts returns a `*session.Refusal`, with the contract's code
   and the names it concerns. `errors.As` finds it.
-- `Events` is any stream that gets every event as well. See
-  [the record](events.md#following-a-run).
+- The stream that gets every event as well is the gateway's, `gateway.Config.Events`.
+  See [the record](events.md#following-a-run).
+
+## The result
+
+`session.Result` is what the run came to, as the session knows it:
+
+- `RunID`, and `Dir`, the run directory with the session's record. See
+  [the record](events.md#where-the-record-is).
+- `ExitCode`, `Signal` and `State`, the runtime's; `TimedOut` when it was stopped at
+  `Timeout`.
+- `Undelivered`, how many of the session's events the gateway did not accept.
+- `RunClosed` when the run was closed from outside: `ClosedBy` says who, `apiary`, the
+  server, or `gateway`, and `ClosedReason` the code, `run_closed`, `credential_expired`
+  or `run_ended_at_issuer`. The runtime was stopped as at its time limit.
+
+What reached the server is the gateway's to say: `(*gateway.Gateway).Close` returns a
+`gateway.Delivery`.
 
 The whole sequence, every event type and every file are in the
 [contract](../contracts/forager/v1/README.md).
@@ -133,8 +210,8 @@ with `e2e` to check them together.
     name and the modes of both.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.
-  - `session.Run` takes a launch spec, with the policy, the server and the wall as
-    values, and returns the exit status.
+  - `session.Run` takes a launch spec, with the gateway and the wall as values, and
+    returns the exit status. It speaks to the gateway over its local link alone.
   - `session.Forward` is the hook forwarder behind it.
   - `session/runtimes/`: the runtime. `runtimes.Runtime` is the interface between the
     session and the program it runs: how a launch is prepared, what the program's records
@@ -146,8 +223,9 @@ with `e2e` to check them together.
     - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
   - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
     and `variables`.
-- `gateway/`: the proxy, the credentials and the tools, in `gateway/internal/`.
-  Package `gateway` holds the types and functions the session drives them by.
+- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, with the
+  proxy, the credentials and the tools in `gateway/internal/`, and reports every run to
+  the server.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.
@@ -166,7 +244,9 @@ holds the imports to these rules:
 
 - The core imports no part.
 - `gateway` and `wall` import the core.
-- `session` imports the core, `wall` for the interface, and package `gateway`.
+- `session` imports the core and `wall` for the interface. Its tests import package
+  `gateway` too, to run a session against a real one, and `internal/linktest`, a fake
+  gateway's link.
 - Only `e2e` imports `session`, and it imports every part.
 - No part imports the core's `internal/` packages, or another part's.
 

@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"github.com/qoryai/forager/gateway"
 	"os"
 	"path/filepath"
 	"slices"
@@ -100,7 +101,7 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		if got := session.Overlap(mount, p("a/b")); got != "" {
 			t.Errorf("Overlap = %q", got)
 		}
-		sp := spec(t, nil, "FAKE_EXIT=0")
+		sp := spec(t, "FAKE_EXIT=0")
 		sp.Wall, sp.Image, sp.ForagerFiles = &openWall{}, "example.com/agent:1", []string{p("a/b")}
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		err := runErr(sp)
@@ -174,13 +175,12 @@ func runErr(sp session.Spec) error {
 
 // TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
 // contains a Forager file's directory: it names the mount, then Forager's path, the
-// server is never contacted, the wall builds nothing and no run directory is made.
+// gateway is never contacted, the wall builds nothing and no run directory is made.
 func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
-	c := newControl(t)
 	parent, dir := foragerDir(t)
 	w := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
-	sp.Wall, sp.Image, sp.Server = w, "example.com/agent:1", c.server()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: parent, ReadOnly: true}}
 	sp.ForagerFiles = []string{dir}
 	r := mountRefusal(t, runErr(sp))
@@ -190,8 +190,8 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	if !strings.Contains(r.Detail, "the mount "+parent+" contains "+dir) {
 		t.Errorf("detail %q", r.Detail)
 	}
-	if n := c.hits.Load(); n != 0 {
-		t.Errorf("the server got %d requests", n)
+	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
+		t.Errorf("the gateway got %d connections", n)
 	}
 	if w.req.RunID != "" || w.wrapped {
 		t.Errorf("the wall was prepared or wrapped: %+v", w.req)
@@ -229,7 +229,7 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 	_, dir := foragerDir(t)
 	w := &openWall{}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: t.TempDir(), ReadOnly: true}}
 	sp.ForagerFiles = []string{dir}
@@ -238,7 +238,7 @@ func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 		t.Fatalf("a walled run beside Forager's files: %+v, %v", res, err)
 	}
 
-	sp = spec(t, nil, "FAKE_EXIT=0")
+	sp = spec(t, "FAKE_EXIT=0")
 	sp.Mounts = []wall.Mount{{Path: "/"}}
 	sp.ForagerFiles = []string{dir}
 	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
@@ -246,13 +246,15 @@ func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 	}
 }
 
-// TestAMountOfAToolsProgramIsNoRun pins that the directory of a tool's program is one
-// of Forager's files, whether or not the run's policy selects the tool, and so is
-// the directory a link to the program leads to.
-func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "bin")
-	libexec := filepath.Join(t.TempDir(), "libexec")
-	for _, d := range []string{bin, libexec} {
+// TestAMountOfTheGatewaysFilesIsNoRun pins that the files a gateway hands out with its
+// link are Forager's files, refused in the words a run was always refused in: the
+// directory of a tool's program and the one a link to it leads to, the file a
+// credential is read from, and, in a mount that contains the system's temporary
+// directory, the private directories the tools' sockets are made in, whatever the
+// gateway's tools.
+func TestAMountOfTheGatewaysFilesIsNoRun(t *testing.T) {
+	bin, libexec, creds := filepath.Join(t.TempDir(), "bin"), filepath.Join(t.TempDir(), "libexec"), filepath.Join(t.TempDir(), "creds")
+	for _, d := range []string{bin, libexec, creds} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -263,30 +265,35 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	if err := os.Symlink(filepath.Join(libexec, "files-tool"), filepath.Join(bin, "files-tool")); err != nil {
 		t.Fatal(err)
 	}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	key := filepath.Join(creds, "model.key")
+	if err := os.WriteFile(key, []byte("a-credential-of-the-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
-	sp.Tools = []session.Tool{{Name: "files", Command: []string{filepath.Join(bin, "files-tool")}, Serves: []string{"files.tools.internal"}}}
-	for _, mount := range []string{filepath.Dir(bin), libexec} {
-		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: mount}}
-		r := mountRefusal(t, runErr(sp))
-		if r.Names[0] != mount || !strings.Contains(r.Detail, "the tool files's program") {
-			t.Errorf("mount %s: names %q, detail %q", mount, r.Names, r.Detail)
+	startGateway(t, &sp, gateway.Config{
+		Tools:       []gateway.Tool{{Name: "files", Command: []string{filepath.Join(bin, "files-tool")}, Serves: []string{"files.tools.internal"}}},
+		Credentials: []gateway.Credential{{Name: "model", File: key, Hosts: []string{"api.model.example"}, Scheme: "bearer"}},
+	})
+	real := func(p string) string { r, _ := filepath.EvalSymlinks(p); return r }
+	for _, c := range []struct{ mount, detail string }{
+		{filepath.Dir(bin), "the mount " + filepath.Dir(bin) + " contains " + bin + ", the directory of the tool files's program"},
+		{libexec, "the mount " + libexec + " is " + real(libexec) + ", the directory of the tool files's program"},
+		{creds, "the mount " + creds + " contains " + key + ", the file the credential model is read from"},
+	} {
+		sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: c.mount}}
+		if r := mountRefusal(t, runErr(sp)); r.Names[0] != c.mount || r.Detail != c.detail {
+			t.Errorf("mount %s: names %q, detail\n %q\nwant\n %q", c.mount, r.Names, r.Detail, c.detail)
 		}
 	}
 
-	// A mount that contains the system's temporary directory contains the private
-	// directory a tool's socket is made in.
-	sp.Tools[0].Command = []string{"/bin/sh"}
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	startGateway(t, &sp, gateway.Config{})
 	sp.Mounts = []wall.Mount{{Path: os.TempDir()}}
-	r := mountRefusal(t, runErr(sp))
-	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
-	}
-	// So does a run without tools: another run's tools have their sockets there too.
-	sp.Tools = nil
-	r = mountRefusal(t, runErr(sp))
-	if r.Names[0] != os.TempDir() || !strings.HasSuffix(r.Names[1], "qory-tool-*") {
-		t.Errorf("names %q, detail %q", r.Names, r.Detail)
+	want := "the mount " + os.TempDir() + " contains " + filepath.Join(os.TempDir(), "qory-tool-*") + ", where the tools' sockets are made"
+	if r := mountRefusal(t, runErr(sp)); r.Names[0] != os.TempDir() || r.Detail != want {
+		t.Errorf("names %q, detail\n %q\nwant\n %q", r.Names, r.Detail, want)
 	}
 }
 
@@ -294,7 +301,7 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 // a plain error, not a refusal, walled or not.
 func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
-		sp := spec(t, nil, "FAKE_EXIT=0")
+		sp := spec(t, "FAKE_EXIT=0")
 		sp.ForagerFiles = []string{p}
 		_, err := session.Run(context.Background(), sp)
 		var r *session.Refusal
@@ -308,7 +315,7 @@ func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 // Forager's: the Docker adapter's helper among them.
 func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	helpers := filepath.Join(t.TempDir(), "helpers")
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &wall.Docker{Helper: filepath.Join(helpers, "qory"), RelayArgs: []string{"relay"}}, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: filepath.Dir(helpers), ReadOnly: true}}
 	r := mountRefusal(t, runErr(sp))
@@ -338,7 +345,7 @@ func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 	parent, dir := foragerDir(t)
 	link := filepath.Join(t.TempDir(), "later")
 	w := &swappingWall{link: link, to: parent}
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	sp.Mounts = []wall.Mount{{Path: sp.Dir}, {Path: link}}
 	sp.ForagerFiles = []string{dir}
@@ -357,7 +364,7 @@ func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 // of the temporary directory while another run's exist is refused, and so is a mount
 // of one of them, or of a file in one.
 func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {
-	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp := spec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
