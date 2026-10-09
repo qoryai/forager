@@ -151,7 +151,9 @@ credentials may live with `max_lifetime`: `exp` minus `iat` is then at most that
 run credential without `iat` is refused.
 
 A run credential that expires mid-run is replaced by a fresh one for the same run key,
-and the run goes on. Without one, the run ends at `exp`, `credential_expired`: the
+and the run goes on. The fresh one names the same target and details: one whose labels
+or `about.details` differ from the run's is refused, `403`, and a client's connection
+with it `407`. Without one, the run ends at `exp`, `credential_expired`: the
 gateway writes its `dev.qory.run.exited`, and a session's later requests get `410`
 with that code. A refreshed run credential with an earlier `exp` does not shorten the
 run.

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/qoryai/forager/link"
 	"io"
 	"net"
@@ -1435,5 +1436,51 @@ func TestAnExpiredRunCredentialLearnsItsRunsEnd(t *testing.T) {
 		if status, body := req(); status != http.StatusUnauthorized || refusalOf(body)["error"] != "run_credential_refused" {
 			t.Errorf("%s: %d %s", name, status, body)
 		}
+	}
+}
+
+// TestARefreshedRunCredentialIsOfTheRunsTarget pins a refreshed run credential of a
+// run's run key whose labels or about.details differ from the run's: a reload or a
+// batch with it is 403, target_differs_from_credential for the repository and
+// differs_from_credential for a detail, each named with the run credential's value, a
+// detail it leaves out among them, and the run goes on; a client's connection with it
+// is 407.
+func TestARefreshedRunCredentialIsOfTheRunsTarget(t *testing.T) {
+	o := origin(t)
+	s := startVerifying(t, gateway.Config{Policy: enforce127}, nil, 0)
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	exp := time.Now().Add(2 * time.Hour)
+	for _, c := range []struct {
+		name, code, names string
+		changes           map[string]any
+	}{
+		{"another repository", "target_differs_from_credential", "[labels.repository=example-namespace/other]", map[string]any{"project": "other"}},
+		{"another requester", "differs_from_credential", "[about.details.requester=someone-else]", map[string]any{"requester": "someone-else"}},
+		{"no requester", "differs_from_credential", "[about.details.requester=]", map[string]any{"requester": nil}},
+	} {
+		refreshed := mint(issuerKey(), "rk-0001", exp, c.changes)
+		s.secrets = append(s.secrets, refreshed)
+		for what, send := range map[string]func() (int, []byte){
+			"a reload": func() (int, []byte) { return r.reload(t, refreshed, r.a.RunID) },
+			"a batch":  func() (int, []byte) { return r.post(t, refreshed, heartbeat(r.a.RunID)) },
+		} {
+			status, body := send()
+			got := refusalOf(body)
+			if status != http.StatusForbidden || got["error"] != c.code || fmt.Sprint(got["names"]) != c.names || got["from"] != "gateway" {
+				t.Errorf("%s, %s: %d %s", c.name, what, status, body)
+			}
+		}
+		if status, _, err := get(s.clientWith(credentialFor("rk-0002")), o.URL); err != nil || status != http.StatusOK {
+			t.Fatalf("the client's run: %d %v", status, err)
+		}
+		other := mint(issuerKey(), "rk-0002", exp, c.changes)
+		s.secrets = append(s.secrets, other)
+		if status, _, err := get(s.clientWith(other), o.URL); err != nil || status != http.StatusProxyAuthRequired {
+			t.Errorf("%s, a client's connection: %d %v", c.name, status, err)
+		}
+	}
+	if status, body := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
+		t.Errorf("the run after: %d %s", status, body)
 	}
 }

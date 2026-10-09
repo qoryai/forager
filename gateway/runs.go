@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -397,6 +400,37 @@ func (lr *linkRun) expire() {
 	lr.mu.Unlock()
 	lr.g.report(fmt.Sprintf("run %s: its run credential expired with no fresh one; the run ends, credential_expired", lr.id))
 	lr.end(credentialExpired)
+}
+
+// differs is the refusal of a run credential presented for the run whose labels or
+// about.details differ from the run's, which its first run credential made: a forge or
+// a repository that differs is target_differs_from_credential, any other label or key
+// of about.details differs_from_credential, a key the run has and the run credential
+// leaves out among them, each named with the run credential's value. Nil when they are
+// the same.
+func (lr *linkRun) differs(id runIdentity) *accesskey.Refusal {
+	details := map[string]any{}
+	for k, v := range lr.cred.details {
+		details[k] = v
+	}
+	if ref := runcredential.Compare(lr.labels, details, id.Labels, id.Details); ref != nil {
+		return ref
+	}
+	var names []string
+	for _, k := range slices.Sorted(maps.Keys(lr.labels)) {
+		if _, ok := id.Labels[k]; !ok {
+			names = append(names, "labels."+k+"=")
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(lr.cred.details)) {
+		if _, ok := id.Details[k]; !ok {
+			names = append(names, "about.details."+k+"=")
+		}
+	}
+	if len(names) > 0 {
+		return refusal.New(refusal.DiffersFromCredential, names, "the run credential leaves out a key of the run's")
+	}
+	return nil
 }
 
 // renew takes a run credential presented for the run, verified, of its run key: one

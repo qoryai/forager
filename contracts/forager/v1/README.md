@@ -1826,7 +1826,11 @@ unique; each period of activity is a run, of its own run id, with the run key as
 `run_key` label. Each run request of a session opens a run of its own, so one run key
 may have several runs at once, and one after another; every later request of a
 session's run carries a run credential of that run's run key, and a refreshed run
-credential continues only its own run. A reload or a batch of a session's run that
+credential continues only its own run. A refreshed run credential's labels and
+`about.details` are the run's: one whose `forge` or `repository` differs is `403`
+`target_differs_from_credential`, and one whose other label or key of `about.details`
+differs, or is left out, `403` `differs_from_credential`, each named with the run
+credential's value, and the run goes on; to a client's connection it is `407`. A reload or a batch of a session's run that
 has ended is answered with its `410` for a run credential of its run key whose `exp`
 has passed, less than 5 minutes before, its signature and every other claim verified as
 always, so the session learns the run's end, `credential_expired` under an issuer with

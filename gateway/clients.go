@@ -164,6 +164,10 @@ func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func
 	if _, _, ended := lr.gone(); ended {
 		return nil, nil, errRunEnded
 	}
+	if lr.differs(id) != nil {
+		// A refreshed run credential is of the run's own target and details.
+		return nil, nil, runcredential.ErrRefused
+	}
 	lr.renew(id)
 	if !lr.stillActive(ctx) {
 		lr.g.presented(id)

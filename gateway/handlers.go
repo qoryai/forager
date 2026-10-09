@@ -354,6 +354,11 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		gone(w, code, from, lr.st.Started())
 		return false
 	}
+	if ref := lr.differs(id); ref != nil {
+		// A refreshed run credential is of the run's own target and details.
+		refuse(w, http.StatusForbidden, ref.Code, ref.Names, accesskey.FromGateway, gatewayText(ref.Code))
+		return false
+	}
 	lr.renew(id)
 	if !lr.stillActive(r.Context()) {
 		if code, from, ended := lr.gone(); ended {

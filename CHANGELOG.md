@@ -558,8 +558,10 @@ release may change what an existing document does, and says so under Upgrading.
   and does not require them to be unique; each period of activity is a run: every run
   request opens a run of its own, of its own run id and proxy secret, with the run key
   as its `run_key` label. Every later request of the run carries a run credential of
-  its run key, a refreshed one carrying only its own run to its `exp`; one of another
-  run key is `401`, so no run id can be probed, and a batch is of the run its first
+  its run key, a refreshed one carrying only its own run to its `exp`, its labels and
+  `about.details` the run's, else `403` `target_differs_from_credential` or
+  `differs_from_credential`, and a client's connection `407`; one of another run key
+  is `401`, so no run id can be probed, and a batch is of the run its first
   event names. A batch over the limit, or one that does not decode, is a `400` that
   ends no run.
   The run ends at its latest `exp` with no fresher run credential,
