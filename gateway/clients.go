@@ -85,6 +85,12 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 	if !id.isActive(ctx) {
 		return nil, nil, runcredential.ErrRefused
 	}
+	// The run key is the run's from here on, kept before anything of the run is made,
+	// so a crash does not reopen it.
+	if err := g.holdKey(k, id.Expires); err != nil {
+		g.report(fmt.Sprintf("a run of a client with no session did not open, keeping its run key: %v", err))
+		return nil, nil, errUnserved
+	}
 	lr, err = g.openClient(id)
 	if err != nil {
 		g.report(fmt.Sprintf("a run of a client with no session did not open: %v", err))

@@ -266,10 +266,13 @@ release may change what an existing document does, and says so under Upgrading.
   never a value, `images`, the session's `default` and `definitions`, each with `name`,
   `ref`, `runtime` and `docker`, whose references the gateway never logs or reports
   since one may carry a registry's credentials, and, behind a separate gateway, a
-  `narrowing` that only narrows; the request is one-shot per `run_id`, and the gateway
-  refuses it with `invalid_request`, `run_credential_refused`, `run_id_used`,
-  `target_differs_from_credential` or `differs_from_credential`, the last two naming
-  each member that differs as `<member>=<the run credential's value>`. With `passes`
+  `narrowing` that only narrows; the request is one-shot per `run_id`. Behind a
+  separate gateway the run credential is decided first, a refused one `401`
+  `run_credential_refused` before the body is read; then the gateway refuses the
+  request in order with `invalid_request`, `run_credential_refused` for a run key that
+  has a run, `run_id_used`, and `target_differs_from_credential` or
+  `differs_from_credential`, the last two naming each member that differs as
+  `<member>=<the run credential's value>`. With `passes`
   and `images` the gateway decides the run, and each reload, as the session decides it
   today and in the same order, before it sets anything: the policy in force, what needs
   a wall, the image, `image_unknown`, the credentials and the tools, and
@@ -527,8 +530,10 @@ release may change what an existing document does, and says so under Upgrading.
   mapping sets `403` `differs_from_credential`, each naming the run credential's value;
   its `run.started` must carry the same `about.details`. A run key opens one run at a
   gateway: a second run request of it, live or ended, is `401`
-  `run_credential_refused`, and the gateway keeps each ended run key in
-  `ended-run-keys.json` in its directory, so a restart does not reopen it. Every later
+  `run_credential_refused`, and the gateway keeps the run key in
+  `ended-run-keys.json` in its directory from the moment its run opens, before the
+  answer, to its latest `exp`, so neither a restart nor a crash reopens it, and a run
+  that fails to open keeps it too. Every later
   request of the run carries a run credential of its run key, a refreshed one carrying
   the run to its `exp`; one of another run key is `401`, so no run id can be probed.
   The run ends at its latest `exp` with no fresher run credential,
@@ -536,9 +541,12 @@ release may change what an existing document does, and says so under Upgrading.
   credential active, `run_ended_at_issuer`: the gateway writes its
   `dev.qory.run.exited`, and every later request gets the `410` with that code. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
-  its start and on each reload. The local link reaches none of the one address's runs.
+  its start and on each reload; it opens none of the gateway's own addresses, which
+  only the policy before it opens, when it enforces and names the host itself. The local link reaches none of the one address's runs.
 - A client with no session sets the gateway's one address as its HTTPS proxy, its run
-  credential the password of Basic in `Proxy-Authorization`. The first connection of a
+  credential the password of Basic in `Proxy-Authorization`; every failure of its login
+  is the same `407`, with `Proxy-Authenticate: Basic realm="qory"` and the text "a
+  valid run credential is required as the proxy password". The first connection of a
   run key with no run opens one, of the gateway's own run id, decided as a walled run:
   the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
   the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
@@ -547,7 +555,11 @@ release may change what an existing document does, and says so under Upgrading.
   the run. The run ends after `Runs.Quiet` with no connection, `quiet`, with
   `quiet_seconds`; at its `exp`; at the issuer's word; or at the server's `410`; its
   `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
-  credentials are `407` from then on.
+  credentials are `407` from then on. A run that cannot open gets the gateway's
+  `dev.qory.run.refused` with the refusal's code right after its ping, and its run key
+  ends.
+- A run's end closes every tunnel of its proxy, at both ends, and the connections whose
+  TLS the proxy ends, so no connection relays past the run.
 - `gateway.Config.TLS`, the operator's certificate and key: the one address speaks TLS
   1.3 alone. A plain listener is allowed on loopback alone. `Start` refuses a `Listen`
   that is not `host:port`, one that is not loopback without `TLS`, certificate and key

@@ -613,7 +613,8 @@ func (s *service) proxyRequest(t *testing.T, head string) (*http.Response, net.C
 
 // TestTheProxyLogin pins the proxy for a client with no session on the one address: a
 // CONNECT or an absolute-form request without a login the seam accepts is 407 with
-// Proxy-Authenticate: Basic realm="qory" and nothing more; with one, it reaches the
+// Proxy-Authenticate: Basic realm="qory" and one line of text, the same for every
+// failure; with one, it reaches the
 // proxy the seam answers, which decides it by its policy.
 func TestTheProxyLogin(t *testing.T) {
 	o := origin(t)
@@ -662,7 +663,7 @@ func TestTheProxyLogin(t *testing.T) {
 		resp, c, _ := s.proxyRequest(t, head)
 		b, _ := io.ReadAll(resp.Body)
 		c.Close()
-		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` || len(b) != 0 {
+		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || resp.ContentLength != int64(len(b)) || string(b) != "a valid run credential is required as the proxy password" {
 			t.Errorf("%s: %d %v %q", name, resp.StatusCode, resp.Header, b)
 		}
 	}

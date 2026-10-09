@@ -119,7 +119,8 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
   zero.
 - `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
   `authority/ca.pem`, which the machines of the clients with no session trust, and the
-  run keys whose runs ended, `ended-run-keys.json`, so a restart does not reopen them.
+  run key of each run from the moment it opens, `ended-run-keys.json`, so neither a
+  restart nor a crash reopens it.
 
 A run of the one address ends as a local run does, and also at its run credential's
 `exp` with no fresher one, `credential_expired`, and when the issuer's introspection no

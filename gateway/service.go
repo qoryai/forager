@@ -183,8 +183,12 @@ const (
 // open between requests: the session's client keeps one as long.
 const serviceIdle = 90 * time.Second
 
+// proxyRefusedText is what a client with no session reads of a 407, the same for every
+// failure of its login.
+const proxyRefusedText = "a valid run credential is required as the proxy password"
+
 // proxyRefused is the answer to a proxy request whose login no run accepts.
-const proxyRefused = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"qory\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+var proxyRefused = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"qory\"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(proxyRefusedText)) + "\r\nConnection: close\r\n\r\n" + proxyRefusedText
 
 // proxyUnserved is the answer to a proxy request accepted for a run whose proxy the
 // gateway may not serve another machine with.

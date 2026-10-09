@@ -142,6 +142,18 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
+	if id != nil {
+		// The run key is the run's from here on, kept before anything of the run is
+		// made, so a crash does not reopen it: a run that fails to open keeps it too.
+		if err := g.holdKey(keyOf(*id), id.Expires); err != nil {
+			g.mu.Lock()
+			delete(g.used, req.RunID)
+			g.mu.Unlock()
+			g.report(fmt.Sprintf("a run of the issuer %s did not open, keeping its run key: %v", id.Issuer, err))
+			refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, gatewayText(codeInternal))
+			return
+		}
+	}
 	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id})
 	if err != nil {
 		if !recorded {

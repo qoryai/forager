@@ -97,22 +97,37 @@ func (g *Gateway) keyTaken(k runKeyID) bool {
 	return g.ended != nil && g.ended.Has(k.issuer, k.runKey, time.Now())
 }
 
-// endKey keeps the run key of a run that ended among the ended run keys, until its run
-// credential's exp, so neither this gateway nor its restart opens it again. A failure
-// is reported, the run key's issuer and nothing of the run credential.
-func (g *Gateway) endKey(k runKeyID, exp time.Time) {
+// holdKey keeps a run key among the ended run keys, in the gateway's directory, until
+// exp, so that neither this gateway nor another started on its directory, after a crash
+// as after a stop, opens it again: written when its run opens, before the session hears
+// the answer or the client's first byte is relayed, and again for each later exp. The
+// live run itself is found first ([Gateway.keyTaken]), so it goes on.
+func (g *Gateway) holdKey(k runKeyID, exp time.Time) error {
 	if g.ended == nil {
-		return
+		return nil
 	}
 	g.mu.Lock()
-	if !exp.After(g.endedUntil[k]) {
-		g.mu.Unlock()
-		return
-	}
-	g.endedUntil[k] = exp
+	held := !exp.After(g.endedUntil[k])
 	g.mu.Unlock()
+	if held {
+		return nil
+	}
 	if err := g.ended.Add(k.issuer, k.runKey, exp); err != nil {
-		g.report(fmt.Sprintf("a run of the issuer %s ended, and keeping its run key: %v", k.issuer, err))
+		return err
+	}
+	g.mu.Lock()
+	if exp.After(g.endedUntil[k]) {
+		g.endedUntil[k] = exp
+	}
+	g.mu.Unlock()
+	return nil
+}
+
+// endKey is [Gateway.holdKey], a failure reported, the run key's issuer and nothing of
+// the run credential.
+func (g *Gateway) endKey(k runKeyID, exp time.Time) {
+	if err := g.holdKey(k, exp); err != nil {
+		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
 	}
 }
 
