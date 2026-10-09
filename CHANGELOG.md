@@ -299,9 +299,10 @@ release may change what an existing document does, and says so under Upgrading.
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
-  `gateway` and from `apiary` among them, most with today's text as their `message`
-  and an `instance_limit` from `apiary` with Qory Apiary's URL in it, and `fixtures/invalid/link-*` the refused
-  ones, a discovery without `proxy`, a run request that passes a value with a name or
+  `gateway` and from `apiary` among them, most with today's text as their `message`,
+  the gateway's with the `: <code>: <names>` tail, and the signed `409`
+  `instance_limit` to the ping from `apiary` with Qory Apiary's URL in it, and
+  `fixtures/invalid/link-*` the refused ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
   `from` or with a control character other than tab and newline in its `message`, a

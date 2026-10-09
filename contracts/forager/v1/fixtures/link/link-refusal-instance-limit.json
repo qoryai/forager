@@ -1,5 +1,5 @@
 {
   "error": "instance_limit",
-  "message": "the run configuration https://apiary.example/v1/run-configuration: instance_limit (status 403)",
+  "message": "ping https://apiary.example/v1/events: instance_limit (status 409)",
   "from": "apiary"
 }
