@@ -105,6 +105,22 @@ release may change what an existing document does, and says so under Upgrading.
   `About` to these rules and returns the first failure as a `*session.AboutError`, its
   `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
   before it contacts the server, and an `About` it refuses is no run.
+- Contract `v1` revision 1, amended in place, gains the refusals of a gateway that
+  verifies a run credential, the one an issuer gives a run: `run_credential_refused`,
+  one opaque answer for every failure of the run credential and for a run key that
+  already opened a run at this gateway, with no names; `target_differs_from_credential`,
+  a session whose label `forge` or `repository` differs from the run credential's;
+  `differs_from_credential`, a session that sends any other key the run credential
+  decides, a label or an `about.details` key, with another value; and `run_id_used`, a
+  run configuration request whose `run_id` already names a run at this gateway, with no
+  names. The names of `target_differs_from_credential` and `differs_from_credential` are
+  each member and the run credential's value, `labels.<key>=<value>` or
+  `about.details.<key>=<value>`, the one value a refusal's names carry.
+  `events/run.refused.schema.json` lists the four codes and says so of `names`;
+  `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
+  `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
+  `refusal.GatewayDecides` reports a gateway's code. `fixtures/batch/` has
+  `refused-differs-from-credential.json`.
 - Forager reads a run configuration with `encoding/json/v2` first, which refuses a
   member name that appears twice and invalid UTF-8, then against the schema and the
   limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and

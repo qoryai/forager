@@ -4,6 +4,9 @@
 // A refusal is an [*accesskey.Refusal], the type of every refused run, the server's
 // codes included. Its Detail reads as a sentence for the caller's user and contains
 // names alone: a variable's name, a tool's, an image's, never a value.
+//
+// It also holds the codes a gateway that verifies a run credential decides, which
+// Forager does not: a session reads them from the gateway's signed answer.
 package refusal
 
 import (
@@ -62,6 +65,40 @@ func Decides(code string) bool {
 	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
 		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
+		return true
+	}
+	return false
+}
+
+// The codes a gateway that verifies a run credential, the one an issuer gives a run,
+// decides.
+const (
+	// RunCredentialRefused is a run credential the gateway refuses, for any reason, and
+	// a run key that already opened a run at this gateway: one opaque answer, with no
+	// names.
+	RunCredentialRefused = "run_credential_refused"
+	// TargetDiffersFromCredential is a session whose label forge or repository, the
+	// ones qory takes from the checkout, differs from the run credential's: its names
+	// are each such member and the credential's value, labels.<key>=<value>.
+	TargetDiffersFromCredential = "target_differs_from_credential"
+	// DiffersFromCredential is a session that sends any other key the run credential
+	// decides, a label or an about.details key, with another value: its names are each
+	// such member and the credential's value, labels.<key>=<value> or
+	// about.details.<key>=<value>.
+	DiffersFromCredential = "differs_from_credential"
+	// RunIDUsed is a run configuration request whose run_id already names a run at this
+	// gateway: the session chooses the run id, and the gateway takes only an unused
+	// one. It has no names. A run_id that is not a canonical lower-case UUID is
+	// invalid_request.
+	RunIDUsed = "run_id_used"
+)
+
+// GatewayDecides reports whether a gateway that verifies a run credential decides the
+// code, one of this package's: a refusal of the run credential or of what the session
+// sends beside it. Forager decides none of these, so [Decides] reports false for each.
+func GatewayDecides(code string) bool {
+	switch code {
+	case RunCredentialRefused, TargetDiffersFromCredential, DiffersFromCredential, RunIDUsed:
 		return true
 	}
 	return false
