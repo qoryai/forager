@@ -124,28 +124,123 @@ func (g *Gateway) now() time.Time {
 // key: the issuer's end.
 func (e ending) blocks() bool { return e.code == event.ReasonRunEndedAtIssuer }
 
+// keepRetry is how often the gateway writes the refused run keys again while a write
+// of them has failed.
+const keepRetry = 5 * time.Second
+
 // holdKey keeps a run key among the refused run keys, in the gateway's directory,
 // until exp, so that neither this gateway nor another started on its directory, after
-// a crash as after a stop, opens a run of it before then.
-func (g *Gateway) holdKey(k runKeyID, exp time.Time) error {
+// a crash as after a stop, opens a run of it before then. The gateway refuses the run
+// key in this process whether or not the write succeeds. A run key whose write failed
+// is written again by each later hold of it, and every [keepRetry] until a write
+// succeeds, which holds every run key refused in memory; a gateway that is closing
+// leaves the last try to Close. first reports a failure for a run key whose write had
+// not failed since the last that succeeded.
+func (g *Gateway) holdKey(k runKeyID, exp time.Time) (first bool, err error) {
 	if g.ended == nil {
-		return nil
+		return false, nil
 	}
+	g.keeping.Lock()
+	defer g.keeping.Unlock()
 	g.mu.Lock()
-	held := !exp.After(g.endedUntil[k])
+	_, unkept := g.unkept[k]
+	held := !unkept && !exp.After(g.endedUntil[k])
 	g.mu.Unlock()
 	if held {
-		return nil
+		return false, nil
 	}
-	if err := g.ended.Add(k.issuer, k.runKey, exp); err != nil {
-		return err
-	}
+	err = g.ended.Add(k.issuer, k.runKey, exp)
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err != nil {
+		if exp.After(g.unkept[k]) {
+			g.unkept[k] = exp
+		}
+		if g.keepTimer == nil && !g.closing {
+			every := keepRetry
+			if g.cfg.keepRetry != 0 {
+				every = g.cfg.keepRetry
+			}
+			g.keepTimer = time.AfterFunc(every, g.keepAgain)
+		}
+		return !unkept, err
+	}
 	if exp.After(g.endedUntil[k]) {
 		g.endedUntil[k] = exp
 	}
+	// The file now holds every run key refused in memory, those whose write failed
+	// among them. When this loop clears any, the write recovered: the proposed report
+	// line of a recovered write goes here once its wording is approved.
+	for uk, until := range g.unkept {
+		if until.After(g.endedUntil[uk]) {
+			g.endedUntil[uk] = until
+		}
+		delete(g.unkept, uk)
+	}
+	if g.keepTimer != nil {
+		g.keepTimer.Stop()
+		g.keepTimer = nil
+	}
+	return false, nil
+}
+
+// unkeptKey is a run key whose write failed and that the gateway still refuses, and the
+// exp it is to be kept to; ok is false when there is none. Those the gateway no longer
+// refuses need no write, and are dropped. Under the gateway's lock.
+func (g *Gateway) unkeptKey() (k runKeyID, exp time.Time, ok bool) {
+	for uk, until := range g.unkept {
+		if !g.blocked(uk) {
+			delete(g.unkept, uk)
+			continue
+		}
+		k, exp, ok = uk, until, true
+	}
+	return k, exp, ok
+}
+
+// keepAgain writes the refused run keys again, every [keepRetry] while a write of them
+// has failed. The failure is not reported again.
+func (g *Gateway) keepAgain() {
+	g.mu.Lock()
+	g.keepTimer = nil
+	k, exp, ok := g.unkeptKey()
+	closing := g.closing
 	g.mu.Unlock()
-	return nil
+	if ok && !closing {
+		g.holdKey(k, exp)
+	}
+}
+
+// keepAgainFor writes the refused run keys again when the write of the run key's had
+// failed: a request of it that is refused. The failure is not reported again.
+func (g *Gateway) keepAgainFor(k runKeyID) {
+	g.mu.Lock()
+	exp, ok := g.unkept[k]
+	g.mu.Unlock()
+	if ok {
+		g.holdKey(k, exp)
+	}
+}
+
+// keepOnClose stops the retries and writes the refused run keys once more, for a
+// gateway that is closing, when a write of them has failed. It returns how many run
+// keys refused in memory are still not written: those a restart would no longer
+// refuse.
+func (g *Gateway) keepOnClose() int {
+	g.mu.Lock()
+	if g.keepTimer != nil {
+		g.keepTimer.Stop()
+		g.keepTimer = nil
+	}
+	k, exp, ok := g.unkeptKey()
+	g.mu.Unlock()
+	if ok {
+		g.holdKey(k, exp)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.unkeptKey()
+	return len(g.unkept)
 }
 
 // heldTo is the latest of exp and the exps of the run credentials of the run key the
@@ -168,10 +263,11 @@ func (g *Gateway) heldTo(k runKeyID, exp time.Time) time.Time {
 	return exp
 }
 
-// endKey is [Gateway.holdKey], a failure reported, the run key's issuer and nothing of
-// the run credential. The gateway refuses the run key in this process either way.
+// endKey is [Gateway.holdKey], a run key's first failure reported, the run key's issuer
+// and nothing of the run credential; its retries are not. The gateway refuses the run
+// key in this process either way.
 func (g *Gateway) endKey(k runKeyID, exp time.Time) {
-	if err := g.holdKey(k, exp); err != nil {
+	if first, err := g.holdKey(k, exp); first {
 		g.report(fmt.Sprintf("keeping the run key of a run of the issuer %s: %v", k.issuer, err))
 	}
 }

@@ -311,6 +311,7 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 // and otherwise 401 run_credential_refused. Nothing more is served for it.
 func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) {
 	k := keyOf(id)
+	g.keepAgainFor(k)
 	g.mu.Lock()
 	lr := g.runs[runID]
 	g.mu.Unlock()

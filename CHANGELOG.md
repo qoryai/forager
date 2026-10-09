@@ -590,7 +590,10 @@ release may change what an existing document does, and says so under Upgrading.
   presented during the hold, verified, is refused and extends the hold to its own
   `exp`, and one that fails verification extends nothing. The
   gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart
-  refuses them too. A
+  refuses them too; a write of it that fails is reported once, the run key is refused
+  all the same while the gateway runs, and the file is written again on each refused
+  request of the run key, every 5 seconds, and once more at Close, until a write
+  succeeds. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
   only the policy before it opens, when it enforces and names the host itself. Its

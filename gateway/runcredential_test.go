@@ -1548,6 +1548,82 @@ func TestTheHoldRunsToTheLatestExpHeld(t *testing.T) {
 	}
 }
 
+// TestAHoldThatFailsToWrite pins a write of the refused run keys that fails: the
+// failure is reported once, the run key is refused all the same, and the write is tried
+// again until it succeeds, on each refused request of the run key, every keepRetry, and
+// once more at Close.
+func TestAHoldThatFailsToWrite(t *testing.T) {
+	kept := func(dir string) bool {
+		b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
+		return err == nil && strings.Contains(string(b), `"rk-0001"`)
+	}
+	// failing starts a gateway whose directory takes no new file once a run of rk-0001
+	// is open, and ends that run at the issuer.
+	failing := func(retry time.Duration) *service {
+		t.Helper()
+		in := &introspection{}
+		cfg := gateway.Config{Policy: enforce127}
+		gateway.SetKeepRetry(&cfg, retry)
+		s := startVerifying(t, cfg, in, 0)
+		first := credentialFor("rk-0001")
+		r := s.openSession(t, first, server.LinkRunRequest{})
+		if err := os.Chmod(s.dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		in.end(first)
+		status, body := r.reload(t, first, r.a.RunID)
+		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		return s
+	}
+	refused := func(s *service) {
+		t.Helper()
+		later := mint(issuerKey(), "rk-0001", time.Now().Add(2*time.Hour), nil)
+		s.secrets = append(s.secrets, later)
+		if status, body := s.tryOpenWith(t, later, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+			t.Errorf("a run request of the run key: %d %s", status, body)
+		}
+	}
+	const line = "keeping the run key of a run of the issuer"
+
+	// Each refused request of the run key tries again.
+	s := failing(time.Hour)
+	refused(s)
+	refused(s)
+	if n := len(s.reportsWith(line)); n != 1 {
+		t.Errorf("the failure reported %d times", n)
+	}
+	if kept(s.dir) {
+		t.Fatal("kept while the directory takes no new file")
+	}
+	os.Chmod(s.dir, 0o700)
+	refused(s)
+	if !kept(s.dir) {
+		t.Error("a refused request did not write the run key")
+	}
+
+	// Every keepRetry, with no request.
+	s = failing(20 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	if n := len(s.reportsWith(line)); n != 1 {
+		t.Errorf("the failure reported %d times as it was retried", n)
+	}
+	refused(s)
+	os.Chmod(s.dir, 0o700)
+	eventually(t, "the run key written again", func() bool { return kept(s.dir) })
+
+	// Once more at Close.
+	s = failing(time.Hour)
+	os.Chmod(s.dir, 0o700)
+	if kept(s.dir) {
+		t.Fatal("kept before Close")
+	}
+	s.close()
+	if !kept(s.dir) {
+		t.Error("Close did not write the run key")
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

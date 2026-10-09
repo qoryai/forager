@@ -1886,7 +1886,11 @@ a batch of a session's run of the run key that is still live is the run's `410`
 client's run of the run key it would join ends, `run_ended_at_issuer`. A run credential
 for a refused run key presented during the hold, its signature and claims verified, is
 refused and extends the hold to its own `exp`; a request whose run credential fails
-verification extends nothing.
+verification extends nothing. The gateway keeps the refused run keys in its state
+directory, so a restart refuses them too. When that write fails, the gateway reports it
+once and refuses the run key all the same while it runs; it writes them again on each
+refused request of the run key, every 5 seconds, and once more at Close, until a write
+succeeds.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run

@@ -130,5 +130,9 @@ func Held(g *Gateway) (runs, keys, spent, kept int) {
 // gateway looks again whether it refuses the run's run key.
 func SetOpened(c *Config, f func()) { c.opened = f }
 
+// SetKeepRetry sets how often the gateway writes the refused run keys again while a
+// write of them has failed.
+func SetKeepRetry(c *Config, d time.Duration) { c.keepRetry = d }
+
 // SetClock sets the time g refuses a run key by, in place of the system's.
 func SetClock(c *Config, now func() time.Time) { c.clock = now }

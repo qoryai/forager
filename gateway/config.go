@@ -83,6 +83,9 @@ type Config struct {
 	// keepSpent, when not zero, replaces runcredential.MaxLeeway as how long past its
 	// exp the gateway keeps what an ended run of the one address left. Tests set it.
 	keepSpent time.Duration
+	// keepRetry, when not zero, replaces keepRetry as how often the gateway writes the
+	// refused run keys again while a write of them has failed. Tests set it.
+	keepRetry time.Duration
 	// clock, when not nil, is the time the gateway refuses a run key by, in place of
 	// the system's. Tests set it.
 	clock func() time.Time

@@ -98,6 +98,13 @@ type Gateway struct {
 	clientRuns map[runKeyID]*linkRun
 	opening    map[runKeyID]chan struct{}
 	endedUntil map[runKeyID]time.Time
+	// unkept are the refused run keys whose write failed since the last that
+	// succeeded, each with the exp it is to be kept to, and keepTimer the next retry
+	// while there are any; keeping serialises the writes, so a write that succeeds
+	// clears only the run keys it holds.
+	unkept    map[runKeyID]time.Time
+	keepTimer *time.Timer
+	keeping   sync.Mutex
 	// spent are the runs on the one address that ended and were let go of, by their run
 	// id, kept as long as a run credential of theirs may be accepted; spentErrs and the
 	// delivery hold what they came to, for Close.
@@ -160,7 +167,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
 	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
-		clientRuns: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, spent: map[string]spentRun{}}
+		clientRuns: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, unkept: map[runKeyID]time.Time{}, spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
@@ -477,6 +484,10 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 			g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
 		}
 	}
+	// A write of the refused run keys that failed is tried once more. The proposed
+	// report line of the run keys still not written, keepOnClose's count, which a
+	// restart would no longer refuse, goes here once its wording is approved.
+	g.keepOnClose()
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs...)
 	g.mu.Unlock()
