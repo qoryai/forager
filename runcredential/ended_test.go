@@ -16,8 +16,10 @@ func TestEndedSurvivesARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("the directory: %v, %v", info.Mode(), err)
+	if info, err := os.Stat(dir); err != nil {
+		t.Fatalf("the directory: %v", err)
+	} else if info.Mode().Perm() != 0o700 {
+		t.Fatalf("the directory: %v", info.Mode())
 	}
 	exp := now.Add(10 * time.Minute)
 	if e.Has(exampleIssuer, "rk-0001", now) {
@@ -33,8 +35,11 @@ func TestEndedSurvivesARestart(t *testing.T) {
 		t.Error("another issuer's run key, or another run key, has ended")
 	}
 	info, err := os.Stat(filepath.Join(dir, EndedFile))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("the file: %v, %v", info.Mode(), err)
+	if err != nil {
+		t.Fatalf("the file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("the file: %v", info.Mode())
 	}
 
 	// A restart: the run key is still refused.
