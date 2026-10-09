@@ -135,6 +135,48 @@ func (l *Listener) Close() error {
 	return err
 }
 
+// Serve reads the preamble of a connection another listener accepted, the gateway's one
+// address, and hands c to the run it names, or closes it, as for a connection of the
+// listener's own. With guardedOnly, a secret whose run's proxy is not guarded
+// ([Proxy.Guarded]) names no run: a connection from another machine never reaches a
+// proxy that may dial this one's own addresses. Close closes c while its preamble is
+// read.
+func (l *Listener) Serve(c net.Conn, guardedOnly bool) {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		c.Close()
+		return
+	}
+	l.pending[c] = struct{}{}
+	l.wg.Add(1)
+	l.mu.Unlock()
+	go l.dispatch(c, guardedOnly)
+}
+
+// Lookup is the proxy of the live run whose secret is secret, or nil: the secret's
+// digest picks the one candidate, and the secret itself is compared in full in constant
+// time. With guardedOnly, a run whose proxy is not guarded is none. It never logs or
+// reports the secret.
+func (l *Listener) Lookup(secret string, guardedOnly bool) *Proxy {
+	return l.find([]byte(secret), guardedOnly)
+}
+
+// find is the proxy registered under secret, or nil.
+func (l *Listener) find(secret []byte, guardedOnly bool) *Proxy {
+	key := sha256.Sum256(secret)
+	l.mu.RLock()
+	reg, ok := l.runs[key]
+	l.mu.RUnlock()
+	if !ok || subtle.ConstantTimeCompare(reg.secret, secret) != 1 {
+		return nil
+	}
+	if guardedOnly && !reg.p.Guarded() {
+		return nil
+	}
+	return reg.p
+}
+
 // accept hands every connection to its own goroutine, so a peer that sends nothing
 // holds up no one else.
 func (l *Listener) accept() {
@@ -161,14 +203,14 @@ func (l *Listener) accept() {
 		l.pending[c] = struct{}{}
 		l.wg.Add(1)
 		l.mu.Unlock()
-		go l.dispatch(c)
+		go l.dispatch(c, false)
 	}
 }
 
 // dispatch reads c's preamble and hands c to the run it names, or closes it.
-func (l *Listener) dispatch(c net.Conn) {
+func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 	defer l.wg.Done()
-	p, r, why := l.open(c)
+	p, r, why := l.open(c, guardedOnly)
 	l.mu.Lock()
 	delete(l.pending, c)
 	l.mu.Unlock()
@@ -185,7 +227,7 @@ func (l *Listener) dispatch(c net.Conn) {
 // open reads the preamble within the listener's wait, and finds the run whose secret
 // it names: the secret's digest picks the one candidate, and the secret itself is
 // compared in full in constant time. It reads nothing past the newline but into r.
-func (l *Listener) open(c net.Conn) (*Proxy, *bufio.Reader, string) {
+func (l *Listener) open(c net.Conn, guardedOnly bool) (*Proxy, *bufio.Reader, string) {
 	c.SetReadDeadline(time.Now().Add(time.Duration(l.wait.Load())))
 	defer c.SetReadDeadline(time.Time{})
 	want := link.RelayPreamble + " "
@@ -207,15 +249,11 @@ func (l *Listener) open(c net.Conn) (*Proxy, *bufio.Reader, string) {
 	if len(line) < len(want) || string(line[:len(want)]) != want {
 		return nil, nil, RefusedRelay
 	}
-	secret := line[len(want):]
-	key := sha256.Sum256(secret)
-	l.mu.RLock()
-	reg, ok := l.runs[key]
-	l.mu.RUnlock()
-	if !ok || subtle.ConstantTimeCompare(reg.secret, secret) != 1 {
+	p := l.find(line[len(want):], guardedOnly)
+	if p == nil {
 		return nil, nil, RefusedRelay
 	}
-	return reg.p, r, ""
+	return p, r, ""
 }
 
 // validSecret reports whether s is within the bounds a listener reads: printable

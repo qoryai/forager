@@ -99,9 +99,11 @@ var serverClosedRun = ending{reason: event.ReasonRunClosed, code: accesskey.Code
 
 // open opens a run for a request the link accepted: the ping and the run configuration
 // with a server, the policy in force, the credentials and the tools, the run's proxy
-// under a fresh secret, and its record. A refusal is an [*accesskey.Refusal]; recorded
-// says the run's record was made, so its id is used from now on.
-func (g *Gateway) open(req *server.LinkRunRequest) (lr *linkRun, recorded bool, err error) {
+// under a fresh secret, and its record. remote says the request came to the gateway's
+// one address, whose runs' proxies are guarded whatever their wall. A refusal is an
+// [*accesskey.Refusal]; recorded says the run's record was made, so its id is used
+// from now on.
+func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, recorded bool, err error) {
 	st, err := g.stream.Open(req.RunID)
 	if err != nil {
 		return nil, false, err
@@ -183,9 +185,9 @@ func (g *Gateway) open(req *server.LinkRunRequest) (lr *linkRun, recorded bool, 
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
 	}
-	if req.Wall {
+	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own
-		// addresses are not its to reach.
+		// addresses are not its to reach: an enclosure, or another machine.
 		lr.px.Guard(pol.Policy.Egress.Allow)
 	}
 	// The node's path rules, beside a server's: fixed for the run, so a reload that

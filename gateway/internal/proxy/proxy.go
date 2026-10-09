@@ -280,6 +280,20 @@ func (p *Proxy) Guard(names []string) {
 	p.guarded.Store(true)
 }
 
+// Guarded reports whether [Proxy.Guard] was called.
+func (p *Proxy) Guarded() bool { return p.guarded.Load() }
+
+// ServeConn hands c to a proxy [New] made, as a [Listener] hands it a connection past
+// its preamble: the proxy reads c's first request from its first byte. A proxy with a
+// listener of its own takes none, and c is closed.
+func (p *Proxy) ServeConn(c net.Conn) {
+	if p.in == nil {
+		c.Close()
+		return
+	}
+	p.in.deliver(c)
+}
+
 // opened are the entries of an allow list that name a host itself.
 func opened(names []string) []string {
 	var out []string

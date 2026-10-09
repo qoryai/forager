@@ -96,6 +96,35 @@ the refusal's `message`, the text such a run always returned, such as
 needs a wall and has none returns the error such a run always had, and so does a run
 the gateway could not open for a reason without a code.
 
+## A separate gateway
+
+A gateway serves the sessions of other machines, and clients with no session, on one
+address of its own, beside its local link. Its `gateway.Config` sets it:
+
+- `Listen`, the one address, `host:port`. Empty means the local link alone. Every
+  connection is routed by its first bytes, after the TLS handshake: `QORY-RELAY` and a
+  run's proxy secret go to that run's proxy; a proxy request, `CONNECT` or an
+  absolute-form target, to the proxy of the run its `Proxy-Authorization` names; any
+  other request to the contract, where every request carries
+  `Authorization: Bearer <run credential>`
+  ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)). The
+  proxy of every run served there is guarded, wall or none. `Gateway.Addr` is this
+  address.
+- `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
+  address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
+- `RunCredentials`, the issuers whose run credentials open a run there, required with
+  `Listen` ([run credentials](gateway-run-credentials.md)). The verifier is not wired in
+  yet: until it is, the one address refuses every run credential.
+- `Runs.Quiet`, how long a run with no session lasts with no connection: 30 minutes when
+  zero.
+- `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
+  `authority/ca.pem`, which the machines of the clients with no session trust.
+
+`Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
+`host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
+read or that do not match, `TLS` without `Listen`, and `Listen` without `RunCredentials`
+or `Dir`.
+
 ## The runtime
 
 `Runtime` is the program as Forager needs to know it: a
@@ -225,9 +254,9 @@ with `e2e` to check them together.
     - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
   - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
     and `variables`.
-- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, with the
-  proxy, the credentials and the tools in `gateway/internal/`, and reports every run to
-  the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
+- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, and with
+  `Config.Listen` on one address of its own, with the proxy, the credentials and the
+  tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
   and the `Gateway` it returns, `Resend` with its `ResendConfig`, and the types their
   fields need are the package's whole surface.
 - `wall/`: the wall.

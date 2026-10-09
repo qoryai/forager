@@ -28,12 +28,13 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a separate
-// gateway, a heartbeat the discovery cannot announce, no place for the records.
+// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: an address
+// with no issuer of run credentials, a certificate with no address, a heartbeat the
+// discovery cannot announce, no place for the records.
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
-		"an address":                  {Dir: dir, Listen: "127.0.0.1:0"},
+		"an address without issuers":  {Dir: dir, Listen: "127.0.0.1:0"},
 		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
 		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
 		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},

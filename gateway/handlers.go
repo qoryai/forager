@@ -64,7 +64,7 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; 409 run_id_used for a run id that
 // already names a run here; the run's refusal when it does not open; else the run
 // answer.
-func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.LinkContentType) {
 		invalid(w)
 		return
@@ -94,7 +94,7 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 	g.opens.Add(1)
 	g.mu.Unlock()
 	defer g.opens.Done()
-	lr, recorded, err := g.open(req)
+	lr, recorded, err := g.open(req, s.remote)
 	if err != nil {
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
@@ -116,7 +116,7 @@ func (g *Gateway) openRun(w http.ResponseWriter, r *http.Request) {
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
 	lr.mu.Unlock()
-	g.answerHeaders(w, digest)
+	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	w.Write(answer)
@@ -179,16 +179,19 @@ func message(text string) string {
 }
 
 // answerHeaders sets the digests every answer for a run carries: the link's discovery's,
-// and the run's reload answer's, which a session fetches again when it changes.
-func (g *Gateway) answerHeaders(w http.ResponseWriter, runDigest string) {
-	w.Header().Set(server.HeaderConfiguration, g.discoveryDigest)
+// the one the request's side answers, and the run's reload answer's, which a session
+// fetches again when it changes.
+func (g *Gateway) answerHeaders(s *side, w http.ResponseWriter, r *http.Request, runDigest string) {
+	if _, digest, ok := g.discoveryOf(s, r); ok {
+		w.Header().Set(server.HeaderConfiguration, digest)
+	}
 	w.Header().Set(server.HeaderRunConfiguration, runDigest)
 }
 
 // reload answers a GET of a run's configuration by its run id: the reload answer as it
 // stands, 410 for a run that ended at the gateway, 400 invalid_request for a run id
 // this gateway holds no run of.
-func (g *Gateway) reload(w http.ResponseWriter, runID string) {
+func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	g.mu.Lock()
 	lr := g.runs[runID]
 	g.mu.Unlock()
@@ -204,7 +207,7 @@ func (g *Gateway) reload(w http.ResponseWriter, runID string) {
 	lr.mu.Lock()
 	body, digest := lr.reloadBody, lr.reloadDigest
 	lr.mu.Unlock()
-	g.answerHeaders(w, digest)
+	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("ETag", `"`+digest+`"`)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
@@ -214,7 +217,7 @@ func (g *Gateway) reload(w http.ResponseWriter, runID string) {
 // batch answers one link batch: 202 when its events are numbered; 410 for a run that
 // ended at the gateway; 400 invalid_request for one the link refuses, which ends the
 // run with session_lost when it names one this gateway holds.
-func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 		return
@@ -267,7 +270,7 @@ func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
 	lr.mu.Lock()
 	digest := lr.reloadDigest
 	lr.mu.Unlock()
-	g.answerHeaders(w, digest)
+	g.answerHeaders(s, w, r, digest)
 	w.WriteHeader(http.StatusAccepted)
 	if final {
 		// The session's run.exited or run.refused: the run's gateway side ends.
