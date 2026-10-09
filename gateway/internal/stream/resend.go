@@ -57,7 +57,8 @@ type ResendResult struct {
 	Stopped bool
 	// Sent is how many events the server accepted now, and Undelivered how many it
 	// still has not; those are under the record directory's undelivered/, as after a
-	// run.
+	// run, but when Stopped: a stop spools nothing, so the events not sent are in the
+	// record's events.jsonl alone.
 	Sent        int
 	Undelivered int
 	// NotOpened says the run never opened at the server, so nothing of it is sent, and
@@ -153,7 +154,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		return res, nil
 	}
 	// What was spooled is in the events file as well, and is spooled again if the
-	// server still does not take it.
+	// server still does not take it, unless it says stop.
 	if err := os.RemoveAll(filepath.Join(cfg.Dir, sink.UndeliveredDir)); err != nil {
 		return nil, err
 	}
