@@ -33,7 +33,7 @@
       "$ref": "events/run.exited.schema.json#/properties/state"
     },
     "reason": {
-      "description": "On a 410 that ends a run, the reason of the gateway's own dev.qory.run.exited of it: Forager's code, or the code the run's starter gave. The session records it in its own dev.qory.run.exited, but for a batch the gateway refused, where it records the error, batch_refused. Absent when the run ended with no reason, as when its starter gave an outcome and none, and on every other refusal.",
+      "description": "On a 410 that ends a run, the reason of the gateway's own dev.qory.run.exited of it: Forager's code, or the code the run's starter gave. The session records it in its own dev.qory.run.exited, but for a batch the gateway refused, where it records its code, batch_refused. Absent when the run ended with no reason, as when its starter gave an outcome and none, and on every other refusal.",
       "$ref": "events/run.exited.schema.json#/properties/reason"
     }
   }

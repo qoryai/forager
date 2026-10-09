@@ -405,7 +405,7 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 		t.Errorf("run.started about %v", about)
 	}
 	if c := data(started[0])["credential"]; c != "starter" {
-		t.Errorf("run.started credential %v; want issuer behind a separate gateway", c)
+		t.Errorf("run.started credential %v; want starter behind a separate gateway", c)
 	}
 	s.close(t)
 	numbered := s.record(t, res.RunID)

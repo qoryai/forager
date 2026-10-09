@@ -505,7 +505,7 @@ func TestALiveRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 // connection of its run key ends the run, credential_check_unreachable or credential_check_invalid,
 // and gets the 503 that says to try again or the 403 that says the answer was not
 // valid; asked again while the run has a connection, the run ends the same way; its
-// record's run.exited has that reason and neither state nor exit_code; no run key is
+// record's run.exited has that reason, the state failed and no exit_code; no run key is
 // held, and the next connection opens a new run once the issuer answers active.
 func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 	o := origin(t)

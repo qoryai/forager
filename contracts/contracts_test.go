@@ -256,17 +256,24 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // reference, a link reload answer with the proxy secret, the run secret or the certificate
 // authority or whose applied holds variables, a link outcome answer with a reason and no
 // state or with a state other than the three, a link batch whose event carries a sequence, that holds a ping or a
-// run.egress, a run.started a gateway opened, a run.exited with a reason other than
-// timeout, or a run.refused with a gateway's code, run_closed, another code of the
+// run.egress, a run.started a gateway opened, a run.exited with one of Forager's reasons
+// other than timeout or with timeout and a state other than cancelled, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
 // has no heartbeat interval or proxy, a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
 // other than the three, and run credentials
 // with alg none or HS256, without an audience, with a label of claims and no join, a key
 // without its file, a plain http issuer, a run_key from a claim other than sub, or a
-// member the schema does not define. The longest schema name the file name starts with is
+// member the schema does not define. A fixture whose name holds -beyond-schema- breaks a
+// rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
+// beyondLinkSchema marks a refused fixture under fixtures/invalid whose rule only the
+// gateway checks, which its schema accepts: a session's dev.qory.run.exited with no
+// outcome answer whose state is not the runtime's exit's, cancelled with no reason or
+// succeeded with an exit status other than 0.
+const beyondLinkSchema = "-beyond-schema-"
+
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
@@ -294,7 +301,11 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := schema.Validate(doc); err == nil {
+		err = schema.Validate(doc)
+		switch beyond := strings.Contains(path.Base(f), beyondLinkSchema); {
+		case beyond && err != nil:
+			t.Errorf("%s fails %s, but is marked as a rule only the gateway checks: %v", f, kind, err)
+		case !beyond && err == nil:
 			t.Errorf("%s passed %s; want a failure", f, kind)
 		}
 	}

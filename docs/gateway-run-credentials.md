@@ -186,7 +186,9 @@ that are live, and of those that ended whose record is not yet flushed; it keeps
 `exp` of a run once its record is flushed. During the hold, a session's run request is
 `401` `run_credential_refused`; a reload or a batch of a session's run of the run key
 that is still live is the run's `410` `stopped`, and the run ends with the end the
-starter gave; and a client's connection is `407`, and the client's run of the run key it
+starter gave, but for the one run whose ask at its runtime's exit got the answer, which
+may still end with its own `dev.qory.run.exited` for up to 30 seconds (the contract's
+§The gateway's link, The outcome at the exit); and a client's connection is `407`, and the client's run of the run key it
 would join ends so too. The discovery is answered to a run credential of the run key as
 to any, and opens nothing. A run credential for a refused run key presented during the
 hold, its signature and claims verified, is refused and extends the hold to its own
@@ -287,15 +289,18 @@ optional:
   `dev.qory.run.exited`.
 - `qory_reason`: a code, `^[a-z][a-z0-9_]{0,63}$`, the `reason` of the run's
   `dev.qory.run.exited`, carried as given: `all_checks_passed`, `checks_failed` or
-  `no_longer_needed`, say.
+  `no_longer_needed`, say. The pattern is anchored at both ends; outside JSON Schema,
+  use `\A…\z`.
 
-RFC 7662 §2.2 lets an endpoint add members of its own to the answer, and the `qory_`
-prefix keeps them clear of other servers' names, as §3.1 asks of a name used across
-domains. One deviation from the standard is documented: §2.2 says an endpoint SHOULD NOT
-include why a credential is inactive. That guards against an asker the endpoint does not
-trust. This gateway is the operator's own, configured to trust this endpoint, and
-authenticates to it as its client. The gateway reads the two members only when `active`
-is `false`:
+RFC 7662 §2.2 lets an implementation add service-specific members of its own to the
+answer. These are not registered under §3.1, so the `qory_` prefix keeps them clear of
+other servers' names. One deviation from the standard is documented: §2.2 says the
+endpoint "SHOULD NOT include any additional information about an inactive token, including why the token is inactive", and §4 repeats it, which keeps the endpoint from disclosing its state
+to its asker. Here you opt in, adding the members only when you choose to; your endpoint
+authenticates the gateway as its client; and the gateway passes the members on to the
+run's own side, in the `410` the session gets and the answer to its ask at the exit, to
+Qory Apiary and to qory's output. So put in them only what you would show the run's
+side. The gateway reads the two members only when `active` is `false`:
 
 - with no `qory_outcome`, the run ends `cancelled` with the reason `stopped`, as with
   `{"active": false}` alone;
@@ -315,10 +320,12 @@ decides as it always has, and only the member is ignored.
 The answer is about a run credential, so about its run key: the outcome and the reason
 apply to every live run of that run key when the answer arrives. The starter never
 learns the gateway's run ids; to give each run an outcome of its own, give each run its
-own run key. When a session's runtime exits by itself, the gateway asks once more, not
-from its cache, and the outcome the endpoint gives within a few seconds is the run's,
-beside the runtime's own exit status; so have the verdict ready when the run's program
-exits.
+own run key. When a session's runtime exits by itself, the gateway asks once more, at
+most once per run and not from its cache, and the outcome the endpoint gives within
+about 6 seconds is the run's, beside the runtime's own exit status; so have the verdict
+ready when the run's program exits. That answer holds the run key and ends its other
+live runs, as any `active: false` does, while the run that asked may still end with its
+own exit for up to 30 seconds.
 
 ## The operator's configuration
 
@@ -477,9 +484,10 @@ the run normally ends with its runtime's own exit; the gateway can also end it, 
 `credential_expired`, the starter's end, or `batch_refused` after it refused a batch of
 the session's, and the session then records that end. When the runtime exits by itself,
 the session asks the gateway once how the starter says the run ended, and the gateway
-asks the endpoint once, not from its cache, and answers within a few seconds, or with
-`{}`; a run on the local link is never asked (the contract's §The gateway's link, The
-outcome at the exit).
+asks the endpoint at most once per run, not from its cache, and answers within about 6
+seconds, the 4 seconds in which its tries start and one more try of 2 seconds, or with
+`{}`; a run on the local link is never asked, and the local link answers the ask with
+`400` `invalid_request` (the contract's §The gateway's link, The outcome at the exit).
 
 Behind a separate gateway the session's machine keeps, beside the session's record,
 what the gateway accepted of it, `delivered.log`, and the batches it did not,

@@ -591,7 +591,7 @@ func runsIn(t *testing.T, dir string) []string {
 // policy_applied, and the connection's egress; a second connection, with a refreshed
 // run credential of the same run key, joins the run; the gateway's own heartbeats
 // while it lives; the run ends quiet after the quiet time with no connection, its
-// run.exited with quiet_seconds and neither state nor exit_code; and the next
+// run.exited with quiet_seconds, the state cancelled and no exit_code; and the next
 // connection of its run key opens a new run, of a new run id and the same run_key
 // label, with its own run.started. Nothing secret reaches the record, the server or a
 // report.
@@ -699,8 +699,8 @@ func stringMap(v any) map[string]string {
 // TestARunWithNoSessionEnds pins the other ends of a run with no session: its run
 // credential's exp with no fresher one, credential_expired, even while a connection
 // is open; and the issuer that no longer holds it active, stopped, asked
-// again while the run has connections. Each run.exited has neither state nor
-// exit_code. After credential_expired, a fresh run credential of the run key opens a
+// again while the run has connections. Each run.exited has the state cancelled and
+// no exit_code. After credential_expired, a fresh run credential of the run key opens a
 // new run; after the issuer's end, the gateway refuses the run key, 407, even for a
 // run credential the issuer holds active.
 func TestARunWithNoSessionEnds(t *testing.T) {

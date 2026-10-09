@@ -49,9 +49,9 @@ release may change what an existing document does, and says so under Upgrading.
 - Contract `v1` revision 1, amended in place, lets the run's starter say how a run
   ended, and carries it to the end of the run. The starter's introspection endpoint
   may add `qory_outcome`, `succeeded`, `failed` or `cancelled`, and `qory_reason`, a
-  code, to an answer of `active: false`: members of its own as RFC 7662 §2.2 allows,
-  prefixed as §3.1 asks, with one documented deviation, §2.2's SHOULD NOT about why a
-  credential is inactive. The outcome applies to every live run of that run key; with
+  code, to an answer of `active: false`: service-specific members of its own as RFC 7662 §2.2
+  allows, not registered under §3.1 and so prefixed `qory_`, with one documented
+  deviation, the SHOULD NOT of §2.2 and §4 about saying why a credential is inactive. The outcome applies to every live run of that run key; with
   no outcome the run ends `cancelled` with `stopped`, with no reason its reason is
   empty, and a reason that is one of Forager's reserved codes, or no code, is dropped;
   a `qory_outcome` other than the three is ignored and counts as no outcome, and
@@ -63,20 +63,25 @@ release may change what an existing document does, and says so under Upgrading.
   that ends a run on the link carries the `state` and the `reason` of that end, new
   optional members of `link-refusal.schema.json`. Behind a separate gateway, a session
   whose runtime exits by itself asks once, `GET <run.url>/<run_id>/outcome` with what a
-  reload carries, and the gateway answers within a few seconds with a
-  `link-outcome-answer.schema.json` document, `{}` or the starter's `state` and
-  `reason`, which the session's `dev.qory.run.exited` then carries beside the
-  runtime's own `exit_code`, and a link batch's `dev.qory.run.exited` may carry that
-  reason; on the local link it is never asked. The README's §The events, How a run
+  reload carries; the gateway asks the starter at most once per run and answers within
+  about 6 seconds with a `link-outcome-answer.schema.json` document, `{}` or the
+  starter's `state` and `reason`, which the session's `dev.qory.run.exited` then
+  carries beside the runtime's own `exit_code`. The gateway holds that event to the
+  answer, and with no outcome to the runtime's exit: `succeeded` with exit status 0,
+  `failed` otherwise, or `cancelled` with `timeout`. An answer that the run credential
+  is no longer active holds the run key, and the run that asked may still end with its
+  own exit for up to 30 seconds. On the local link it is never asked, and is `400`
+  `invalid_request`. The README's §The events, How a run
   ends, gives the state of each of Forager's own endings, and §Run credentials and
   `docs/gateway-run-credentials.md` the starter's two members. `fixtures/` has a run
   a gateway opened that its starter ended with an outcome and a reason, a session's
   run that ends `cancelled` with `stopped`, one whose starter gave its outcome at the
   exit, the outcome answers, `410`s with a `state` and a `reason`, and refused ones: a
   `dev.qory.run.exited` without `state`, with a state of no kind it names, with a
-  reason that is no code or `gateway_lost` and `cancelled`, an outcome answer with a
-  reason and no state, and refusals and outcome answers with a state of no kind it
-  names.
+  reason that is no code or `gateway_lost` and `cancelled`, a session's with `timeout`
+  and `succeeded` or with the old name `run_ended_at_issuer`, two marked beyond the
+  schema, which only the gateway refuses, an outcome answer with a reason and no
+  state, and refusals and outcome answers with a state of no kind it names.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
