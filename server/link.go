@@ -169,6 +169,11 @@ type LinkRunAnswer struct {
 	// Details are the keys of about.details the run credential decides, a JSON object,
 	// which run.started reports; nil when the answer has none.
 	Details json.RawMessage `json:"details,omitzero"`
+	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
+	// the policy in force, a JSON object: every member but harness_hosts and variables,
+	// which the session adds. The gateway refuses a policy_applied whose other members
+	// are not these. Nil when the answer has none.
+	Applied json.RawMessage `json:"applied,omitzero"`
 }
 
 // Values are the answer's variables as values by name; nil when it has none.
@@ -221,8 +226,9 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 
 // LinkReloadAnswer is what the gateway answers a reload with,
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
-// now, its digest and the run's variables, placeholders, reserved names and image. It
-// never holds the proxy secret or the certificate authority.
+// now, its digest and the run's variables, placeholders, reserved names, image and the
+// members of policy_applied the gateway decides. It never holds the proxy secret or the
+// certificate authority.
 type LinkReloadAnswer struct {
 	Version      int                 `json:"version"`
 	Policy       json.RawMessage     `json:"policy,omitzero"`
@@ -231,6 +237,9 @@ type LinkReloadAnswer struct {
 	Placeholders []string            `json:"placeholders,omitempty"`
 	Reserved     []string            `json:"reserved,omitempty"`
 	Image        *LinkImage          `json:"image,omitempty"`
+	// Applied are the members of dev.qory.run.policy_applied the gateway decides, as
+	// [LinkRunAnswer.Applied].
+	Applied json.RawMessage `json:"applied,omitzero"`
 }
 
 // Values are the answer's variables as values by name; nil when it has none.
