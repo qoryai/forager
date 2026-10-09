@@ -40,7 +40,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 	}
 	preamble := ""
 	if token := os.Getenv(RelayTokenEnv); token != "" {
-		preamble = link.RelayPreamble + " " + token + "\n"
+		preamble = link.Preamble(link.RelayPreamble, token)
 	}
 	var lc net.ListenConfig
 	var wg sync.WaitGroup

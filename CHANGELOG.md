@@ -212,6 +212,15 @@ release may change what an existing document does, and says so under Upgrading.
   `fixtures/link/` holds the valid documents and `fixtures/invalid/link-*` the refused
   ones. Package `link` has `LinkPreamble`, `LinkDirPrefix`, `LinkSocketName`,
   `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
+- `link.Local` is what a session needs of a gateway on the same machine: its link
+  socket, the link secret, its proxy address, the files a walled run must not mount and
+  the variables it reserves; fmt and log/slog print its secret as `[redacted]`.
+  `link.WriteLinkPreamble` and `link.ReadLinkPreamble` write and read the link's
+  preamble, compared in constant time in a read of exactly its length, beside
+  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
+- `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
+  server's signed answer, `accesskey.FromGateway` for one a gateway decides, made by
+  `refusal.ByGateway`, and empty for a session's own; its text is unchanged.
 
 #### Changed
 

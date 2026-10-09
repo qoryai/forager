@@ -42,7 +42,7 @@ const EnvRunID = "QORY_RUN_ID"
 
 // socketDirPrefix begins the name of the private directory a tool's socket is in, which
 // is made in the system's temporary directory when the tool starts.
-const socketDirPrefix = "qory-tool-"
+const socketDirPrefix = link.ToolDirPrefix
 
 // SocketDirs is the pattern of the private directories the tools' sockets are in, the
 // system's temporary directory with socketDirPrefix and a random part: a path that

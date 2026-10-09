@@ -116,3 +116,11 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	}
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
+
+// ByGateway is the refusal [New] makes, decided by a gateway: its From is
+// [accesskey.FromGateway].
+func ByGateway(code string, names []string, format string, a ...any) *accesskey.Refusal {
+	r := New(code, names, format, a...)
+	r.From = accesskey.FromGateway
+	return r
+}

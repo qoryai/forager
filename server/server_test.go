@@ -64,6 +64,15 @@ func code(err error) string {
 	return err.Error()
 }
 
+// from returns the From of a refusal, or "none" when the error is no refusal.
+func from(err error) string {
+	var r *accesskey.Refusal
+	if errors.As(err, &r) {
+		return r.From
+	}
+	return "none"
+}
+
 // TestServerDocumentReads pins the fixtures reading and that a refused document is an
 // error naming it: one without its access key id, with plain http elsewhere than
 // loopback, or with a secret. A document without its pin is apiary_public_key_missing.
@@ -342,19 +351,20 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 // unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
 // instance_limit to the ping is instance_limit, and a signed 410 run_closed to a
 // delivery closes the run while a signed 410 without that code stops the deliveries
-// alone. A 401 that carries a signature is unauthorized all the same.
+// alone. A 401 that carries a signature is unauthorized all the same. A signed code is
+// From apiary; an unauthorized is From none.
 func TestRefusalsAreCoded(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
 	events := v.srv.URL + "/v1/events"
 	v.status, v.code = 409, "instance_limit"
-	if err := c.Ping(context.Background(), events, "d1", []byte("[]")); code(err) != accesskey.CodeInstanceLimit || !strings.Contains(err.Error(), events) {
+	if err := c.Ping(context.Background(), events, "d1", []byte("[]")); code(err) != accesskey.CodeInstanceLimit || !strings.Contains(err.Error(), events) || from(err) != accesskey.FromApiary {
 		t.Errorf("ping: %v", err)
 	}
 	v.status, v.code = 401, "unauthorized"
 	for _, sign := range []string{"none", ""} {
 		v.sign = sign
-		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized {
+		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized || from(err) != "" {
 			t.Errorf("ping on 401 signed %q: %v", sign, err)
 		}
 	}

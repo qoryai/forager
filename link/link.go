@@ -3,8 +3,9 @@
 // point a program at the proxy, the preamble of the wall's relay, the proxy's loopback
 // address, the variables that name the run's socket and a tool's socket, the headers
 // the proxy sets on a request it hands to a tool, the value of a placeholder variable,
-// and the names of the gateway's link: its preamble, its socket's directory and modes,
-// and the scheme a run credential is presented in.
+// the names of the gateway's link: its preamble, its socket's directory and modes, and
+// the scheme a run credential is presented in; what a session needs of a gateway on the
+// same machine, [Local]; and the writing and reading of a preamble.
 package link
 
 import "io/fs"

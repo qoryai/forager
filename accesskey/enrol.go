@@ -239,7 +239,7 @@ func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentA
 			return nil, fmt.Errorf("enrolment: a signed %d with a code this package does not read",
 				a.Status)
 		}
-		return nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment"}
+		return nil, &Refusal{Code: ref.Error, Status: a.Status, Names: ref.Names, Detail: "enrolment", From: FromApiary}
 	case http.StatusCreated:
 	default:
 		return nil, unsigned

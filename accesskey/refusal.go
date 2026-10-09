@@ -46,7 +46,21 @@ type Refusal struct {
 	// Detail says more about where the refusal came from, a URL say; it never contains
 	// a secret.
 	Detail string
+	// From says who refused, as the gateway's link reports it: [FromApiary] for a code
+	// read from the server's signed answer, [FromGateway] for one a gateway decides. It
+	// is empty for a refusal a session decides, and for one decided about an answer,
+	// answer_unsigned say. Error does not show it.
+	From string
 }
+
+// The values of [Refusal.From].
+const (
+	// FromGateway is a refusal a gateway decides.
+	FromGateway = "gateway"
+	// FromApiary is a refusal of Qory Apiary's, the server's, read from its signed
+	// answer; a gateway passes it on with its code and status.
+	FromApiary = "apiary"
+)
 
 func (r *Refusal) Error() string {
 	var b strings.Builder
@@ -69,7 +83,7 @@ var codeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // ReadRefusal reads the code of a coded refusal, {"error": "<code>", "names": [...]},
 // from the body of an answer whose signature verified. It returns nil when the body
 // contains no such code: a code is read from a signed answer alone, so a caller
-// verifies the answer first.
+// verifies the answer first. Its From is [FromApiary].
 func ReadRefusal(status int, body []byte) *Refusal {
 	var doc struct {
 		Error string   `json:"error"`
@@ -78,5 +92,5 @@ func ReadRefusal(status int, body []byte) *Refusal {
 	if jsonv2.Unmarshal(body, &doc) != nil || !codeShape.MatchString(doc.Error) {
 		return nil
 	}
-	return &Refusal{Code: doc.Error, Status: status, Names: doc.Names}
+	return &Refusal{Code: doc.Error, Status: status, Names: doc.Names, From: FromApiary}
 }

@@ -811,7 +811,7 @@ func TestPostEnrols(t *testing.T) {
 	var limited *accesskey.Refusal
 	_, err = r.Post(ctx, nil, srv.URL, "qory/test")
 	if !errors.As(err, &limited) || limited.Code != accesskey.CodeRateLimited ||
-		limited.Status != http.StatusTooManyRequests {
+		limited.Status != http.StatusTooManyRequests || limited.From != accesskey.FromApiary {
 		t.Errorf("signed 429 rate_limited: %v", err)
 	}
 	body = []byte(`{"error":"rate_limited"}`)
@@ -839,7 +839,7 @@ func TestPostEnrols(t *testing.T) {
 	for _, b := range []string{`{"error":"key_invalid"}`, `{"error":"key_invalid",` + keys + `}`} {
 		body = []byte(b)
 		var ref *accesskey.Refusal
-		if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); !errors.As(err, &ref) || ref.Code != accesskey.CodeAnswerUnsigned || ref.Status != http.StatusConflict {
+		if _, err := r.Post(ctx, nil, srv.URL, "qory/test"); !errors.As(err, &ref) || ref.Code != accesskey.CodeAnswerUnsigned || ref.Status != http.StatusConflict || ref.From != "" {
 			t.Errorf("an unsigned 409 %s: %v", b, err)
 		}
 	}
@@ -1043,5 +1043,20 @@ func TestOnlyAGETOrAPOSTIsSigned(t *testing.T) {
 	r, _ := accesskey.NewEnrolmentRequest(key, "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
 	if _, err := r.Post(context.Background(), nil, "http://127.0.0.2:8787", "test"); err == nil || !strings.Contains(err.Error(), "neither https") {
 		t.Errorf("http to 127.0.0.2, which server.schema.json refuses: %v", err)
+	}
+}
+
+// TestReadRefusalIsApiarys pins that a code read from the server's signed answer is
+// Qory Apiary's refusal, From apiary, and that From does not show in its text.
+func TestReadRefusalIsApiarys(t *testing.T) {
+	r := accesskey.ReadRefusal(http.StatusConflict, []byte(`{"error":"instance_limit","names":["n1"]}`))
+	if r == nil || r.Code != accesskey.CodeInstanceLimit || r.Status != http.StatusConflict || r.From != accesskey.FromApiary {
+		t.Fatalf("read %+v", r)
+	}
+	if got, want := r.Error(), "instance_limit (status 409): n1"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if r := accesskey.ReadRefusal(http.StatusConflict, []byte(`{}`)); r != nil {
+		t.Errorf("a body without a code: %+v", r)
 	}
 }
