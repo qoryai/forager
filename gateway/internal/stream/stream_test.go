@@ -314,6 +314,117 @@ func TestHeldEgressFollowsAStartAloneInItsBatch(t *testing.T) {
 	}
 }
 
+// appliedDigest matches a run.policy_applied of that digest.
+func appliedDigest(digest string) func(*event.Event) bool {
+	return func(ev *event.Event) bool {
+		data, _ := ev.Data.(map[string]any)
+		return ev.Type == event.PolicyApplied && data["digest"] == digest
+	}
+}
+
+// hostsAndTypes are the record's types, each run.egress with its host.
+func hostsAndTypes(evs []event.Event) string {
+	var out []string
+	for _, ev := range evs {
+		t := strings.TrimPrefix(ev.Type, event.Prefix)
+		if ev.Type == event.RunEgress {
+			t += ":" + ev.Data.(map[string]any)["host"].(string)
+		}
+		out = append(out, t)
+	}
+	return strings.Join(out, " ")
+}
+
+// TestWaitingEgressFollowsItsPolicyApplied pins the reload's order, today's session's:
+// the run.egress made with EmitAfter follow the run.policy_applied they wait for, not
+// another; one that comes releases those made before it that still wait; and when the
+// session's final event comes first, they are numbered right before it.
+func TestWaitingEgressFollowsItsPolicyApplied(t *testing.T) {
+	s := New(Config{Dir: t.TempDir()})
+	runID := event.NewRunID()
+	r, _ := s.Open(runID)
+	r.Accept([]event.Event{
+		sessionEvent(runID, event.RunStarted, map[string]any{}),
+		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "a"}),
+	})
+	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"}, map[string]any{"host": "two.example"})
+	r.Accept([]event.Event{
+		sessionEvent(runID, event.RunLog, map[string]any{}),
+		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "a"}),
+	})
+	r.Emit(event.RunEgress, map[string]any{"host": "now.example"})
+	r.Accept([]event.Event{
+		sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "b"}),
+		sessionEvent(runID, event.RunLog, map[string]any{}),
+	})
+	r.EmitAfter(appliedDigest("c"), event.RunEgress, map[string]any{"host": "three.example"})
+	r.EmitAfter(appliedDigest("d"), event.RunEgress, map[string]any{"host": "four.example"})
+	r.Accept([]event.Event{sessionEvent(runID, event.PolicyApplied, map[string]any{"digest": "d"})})
+	r.EmitAfter(appliedDigest("e"), event.RunEgress, map[string]any{"host": "five.example"})
+	r.Accept([]event.Event{
+		sessionEvent(runID, event.RunLog, map[string]any{}),
+		sessionEvent(runID, event.RunExited, map[string]any{}),
+	})
+	if err := r.EmitAfter(appliedDigest("f"), event.RunEgress, map[string]any{"host": "six.example"}); !errors.Is(err, ErrEnded) {
+		t.Errorf("after the final event: %v", err)
+	}
+	r.Close(context.Background())
+	rec := readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	want := "run.started run.policy_applied run.log run.policy_applied run.egress:now.example " +
+		"run.policy_applied run.egress:one.example run.egress:two.example run.log " +
+		"run.policy_applied run.egress:three.example run.egress:four.example " +
+		"run.log run.egress:five.example run.exited"
+	if got := hostsAndTypes(rec); got != want {
+		t.Errorf("the record:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestWaitingEgressPrecedesTheGatewaysEnd pins the other ends: the gateway's own
+// run.exited follows what still waits, and Close numbers what waits in a run that has
+// no final event, a run.egress before run.started held for it as ever.
+func TestWaitingEgressPrecedesTheGatewaysEnd(t *testing.T) {
+	s := New(Config{Dir: t.TempDir()})
+	runID := event.NewRunID()
+	r, _ := s.Open(runID)
+	r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{})})
+	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	r.Emit(event.RunExited, map[string]any{"state": "failed"})
+	r.Close(context.Background())
+	rec := readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if got := hostsAndTypes(rec); got != "run.started run.egress:one.example run.exited" {
+		t.Errorf("the record: %s", got)
+	}
+
+	runID = event.NewRunID()
+	r, _ = s.Open(runID)
+	r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{})})
+	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	r.Close(context.Background())
+	rec = readRecord(t, r.Dir())
+	contiguous(t, runID, rec)
+	if got := hostsAndTypes(rec); got != "run.started run.egress:one.example" {
+		t.Errorf("the record of a run with no final event: %s", got)
+	}
+
+	var reports []string
+	s = New(Config{Dir: t.TempDir(), Report: func(l string) { reports = append(reports, l) }})
+	runID = event.NewRunID()
+	r, _ = s.Open(runID)
+	r.EmitAfter(appliedDigest("b"), event.RunEgress, map[string]any{"host": "one.example"})
+	r.Close(context.Background())
+	if _, err := os.Stat(filepath.Join(r.Dir(), sink.EventsFile)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile)); len(b) != 0 {
+		t.Errorf("the record of a run that never started: %s", b)
+	}
+	if len(reports) != 1 || !strings.Contains(reports[0], "1 connections before the run started") {
+		t.Errorf("reports %q", reports)
+	}
+}
+
 // TestEgressOfARunThatNeverStartedIsReported pins that held egress of a run closed
 // before run.started is not numbered, and is reported.
 func TestEgressOfARunThatNeverStartedIsReported(t *testing.T) {
