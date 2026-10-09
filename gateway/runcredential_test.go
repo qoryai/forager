@@ -1068,3 +1068,35 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	s.close()
 	noSecretIn(t, s.dir, cred)
 }
+
+// TestNoLinkSocketWithTheOneAddress pins Config.NoLinkSocket beside Listen: the
+// gateway serves the one address over TLS, a session's run on its run credential going
+// as without it, and makes no link directory and no socket; its local link is in
+// memory alone.
+func TestNoLinkSocketWithTheOneAddress(t *testing.T) {
+	tmp, err := os.MkdirTemp("/tmp", "qt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
+	s := startVerifying(t, gateway.Config{NoLinkSocket: true}, nil, 0)
+	if l := s.g.LocalLink(); l.Socket != "" || !l.IsInMemory() {
+		t.Errorf("local %+v", l)
+	}
+	cred := credentialFor("rk-0001")
+	r := s.openSession(t, cred, server.LinkRunRequest{})
+	if status, b := r.reload(t, cred, r.a.RunID); status != http.StatusOK {
+		t.Errorf("the reload: %d %s", status, b)
+	}
+	if status, b := r.post(t, cred, exited(r.a.RunID)); status != http.StatusAccepted {
+		t.Errorf("the run.exited: %d %s", status, b)
+	}
+	if m, _ := filepath.Glob(filepath.Join(tmp, link.LinkDirPrefix+"*")); len(m) != 0 {
+		t.Errorf("link directories %v", m)
+	}
+	s.close()
+	if got := types(s.record(r.a.RunID)); !slices.Equal(got, []string{event.RunStarted, event.PolicyApplied, event.RunExited}) {
+		t.Errorf("record %v", got)
+	}
+}

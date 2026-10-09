@@ -242,6 +242,10 @@ release may change what an existing document does, and says so under Upgrading.
   A session in the gateway's own process, as `qory` runs them on one machine, reaches
   the link in memory, with the same preamble and HTTP/1.1, and never dials the socket's
   path, where another process of the same user could stand in for the gateway.
+  `gateway.Config.NoLinkSocket`, which `qory run` sets, makes no link directory and no
+  socket: the link is served in memory alone, `LocalLink()` has no `Socket`, and its
+  `Files` leave out the link directory and keep every other entry, the pattern of every
+  gateway's link among them.
   A separate gateway speaks TLS 1.3 alone, with the operator's certificate, which the
   session verifies against the system's roots or `session.gateway.ca_file` and an
   optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's

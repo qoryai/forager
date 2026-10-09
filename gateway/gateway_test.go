@@ -742,3 +742,83 @@ func TestRefuseOpen(t *testing.T) {
 		t.Errorf("link-refusal.schema.json refuses %s: %v", w.Body, err)
 	}
 }
+
+// TestALinkWithNoSocket pins Config.NoLinkSocket: the gateway makes no link directory and
+// no socket, its Local reaches it in memory alone, and a run goes as on the socket; the
+// gateway's files leave out the directory it did not make and keep every other entry,
+// with its text and in its order, the pattern of every gateway's link among them; Close
+// leaves nothing behind; and a Local with neither a socket nor a way in memory is
+// refused.
+func TestALinkWithNoSocket(t *testing.T) {
+	// A short one, as a socket's path is bounded.
+	tmp, err := os.MkdirTemp("/tmp", "qt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
+	links := func() []string {
+		m, _ := filepath.Glob(filepath.Join(tmp, link.LinkDirPrefix+"*"))
+		return m
+	}
+	h := start(t, gateway.Config{NoLinkSocket: true})
+	l := h.g.LocalLink()
+	if l.Socket != "" || !l.IsInMemory() {
+		t.Fatalf("local %+v, in memory %v", l, l.IsInMemory())
+	}
+	if got := links(); len(got) != 0 {
+		t.Errorf("link directories %v", got)
+	}
+	if !strings.Contains(h.g.String(), "in memory") || strings.Contains(h.g.String(), l.Secret) {
+		t.Errorf("printed %s", h.g)
+	}
+	a := h.open(server.LinkRunRequest{})
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), logged(a.RunID)); !d.Accepted() {
+		t.Fatalf("a batch: %+v", d)
+	}
+	if d := h.post(exited(a.RunID)); !d.Accepted() {
+		t.Fatalf("the run's end: %+v", d)
+	}
+	if _, err := server.NewLocalLink(link.Local{Secret: l.Secret}, accesskey.UserAgent("test"), nil); err == nil {
+		t.Error("a Local with neither a socket nor a way in memory")
+	}
+
+	// The files are a gateway's with a socket but its link directory.
+	withSocket := start(t, gateway.Config{})
+	var want []link.File
+	for _, f := range withSocket.g.LocalLink().Files {
+		if f.Path != filepath.Dir(withSocket.g.LocalLink().Socket) {
+			want = append(want, f)
+		}
+	}
+	files := l.Files
+	for i := range files {
+		// Each gateway's own directory is its harness's.
+		if files[i].What == "the gateway's directory" {
+			files[i].Path = withSocket.dir
+		}
+	}
+	if !slices.Equal(files, want) {
+		t.Errorf("files\n got %+v\nwant %+v", files, want)
+	}
+	if !slices.Contains(files, link.File{Path: filepath.Join(tmp, link.LinkDirPrefix+"*"), What: "where the gateways' links are made", Kept: true}) {
+		t.Errorf("the pattern of every gateway's link is not among %+v", files)
+	}
+	withSocket.close()
+
+	h.close()
+	if got := types(h.record(a.RunID)); !slices.Equal(got, []string{event.RunStarted, event.PolicyApplied, event.RunLog, event.RunExited}) {
+		t.Errorf("record %v", got)
+	}
+	if got := links(); len(got) != 0 {
+		t.Errorf("after Close, link directories %v", got)
+	}
+	entries, _ := os.ReadDir(h.dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if !slices.Equal(names, []string{"runs"}) {
+		t.Errorf("the gateway's directory after Close: %v", names)
+	}
+}

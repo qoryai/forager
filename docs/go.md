@@ -26,6 +26,9 @@ The module is a library with two entry points: the gateway and the session.
   [`gateway.Config`](../gateway/config.go): the machine's policy, its credentials and
   tools, the server it reports to, and where each run's record goes. The gateway holds
   all of it: the proxy, the policy, the credentials, the tools and the access key.
+  `gateway.Config.NoLinkSocket` makes no link socket and no link directory: the link is
+  served in memory alone, to a session in the gateway's process, as `qory run` starts
+  it; without it the socket serves a session in another process too.
 - It then builds a [`session.Spec`](../session/session.go): the program to start, and
   how, and the gateway it speaks to, `session.LocalGateway(g.LocalLink())`. The session
   holds no policy, no credential and no server. It speaks to the gateway alone, over the
@@ -174,9 +177,10 @@ A program that needs code of its own implements the interface.
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The session reaches
   that gateway in the process's memory, never by its socket's path, which serves a
-  session in another process. The link's secret stays in the process's memory: a
-  `session.Gateway` is printed and logged by its socket alone, and a
-  `*gateway.Gateway` by its proxy's address and its socket. The zero `Gateway` is no run. The server the run reports to and the node's
+  session in another process, and which a gateway started with `NoLinkSocket` does not
+  make. The link's secret stays in the process's memory: a `session.Gateway` is printed
+  and logged by its socket alone, and a `*gateway.Gateway` by its proxy's address and
+  its socket. The zero `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).

@@ -36,11 +36,14 @@ type linkListener struct {
 	wg      sync.WaitGroup
 }
 
-// newLinkListener serves the connections of uid's processes on ln.
+// newLinkListener serves the connections of uid's processes on ln, and those made in
+// memory; a nil ln is no socket, and the connections made in memory alone.
 func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
 	l := &linkListener{ln: ln, secret: newSecretValue(secret), uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
-	l.wg.Add(1)
-	go l.accept()
+	if ln != nil {
+		l.wg.Add(1)
+		go l.accept()
+	}
 	return l
 }
 
@@ -158,14 +161,30 @@ func (l *linkListener) Close() error {
 			c.Close()
 		}
 		l.mu.Unlock()
-		err = l.ln.Close()
+		if l.ln != nil {
+			err = l.ln.Close()
+		}
 		l.wg.Wait()
 	})
 	return err
 }
 
-// Addr is the link's socket.
-func (l *linkListener) Addr() net.Addr { return l.ln.Addr() }
+// Addr is the link's socket, or the in-memory link's when there is none.
+func (l *linkListener) Addr() net.Addr {
+	if l.ln == nil {
+		return memoryAddr{}
+	}
+	return l.ln.Addr()
+}
+
+// memoryAddr is the address of the link served in memory alone.
+type memoryAddr struct{}
+
+// Network is "memory".
+func (memoryAddr) Network() string { return "memory" }
+
+// String names the link in memory.
+func (memoryAddr) String() string { return "the gateway's local link in memory" }
 
 // linkConn reads through the reader the preamble was read with, which may hold the
 // first bytes of HTTP.
