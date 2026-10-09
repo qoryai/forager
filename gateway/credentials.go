@@ -131,6 +131,78 @@ func (g *Gateway) endKey(k runKeyID, exp time.Time) {
 	}
 }
 
+// keptTo reports whether the ended run keys keep k at least to exp, as this process
+// wrote them.
+func (g *Gateway) keptTo(k runKeyID, exp time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !exp.After(g.endedUntil[k])
+}
+
+// spentRun is what a run on the one address leaves once it has ended, its record is
+// flushed and its run key is kept among the ended run keys: how a later request of its
+// run key is answered, until a run credential of it can no longer be accepted.
+type spentRun struct {
+	runID, code, from string
+	started           bool
+	until             time.Time
+}
+
+// retire lets go of a run on the one address that has ended, its record flushed and
+// its run key kept to exp among the ended run keys: the gateway holds no more of it than
+// its [spentRun], until exp plus [runcredential.MaxLeeway], the latest a run credential
+// of that exp is accepted; what it came to joins the gateway's delivery. The spent runs
+// and the run keys kept past that time go too, so neither grows with the runs a gateway
+// has served. A gateway that is closing keeps every run for Close.
+func (g *Gateway) retire(lr *linkRun, k runKeyID, exp time.Time) {
+	code, from, _ := lr.gone()
+	started := lr.st.Started()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return
+	}
+	keep := runcredential.MaxLeeway
+	if g.cfg.keepSpent != 0 {
+		keep = g.cfg.keepSpent
+	}
+	now := time.Now()
+	for sk, sp := range g.spent {
+		if !now.Before(sp.until) {
+			delete(g.spent, sk)
+		}
+	}
+	for ek, until := range g.endedUntil {
+		if _, live := g.keys[ek]; !live && !now.Before(until.Add(keep)) {
+			delete(g.endedUntil, ek)
+		}
+	}
+	if g.keys[k] == lr {
+		delete(g.keys, k)
+	}
+	delete(g.runs, lr.id)
+	g.spent[k] = spentRun{runID: lr.id, code: code, from: from, started: started, until: exp.Add(keep)}
+	g.delivery.Undelivered += lr.result.Undelivered
+	if lr.closed && !g.delivery.RunClosed {
+		g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
+	}
+	if lr.err != nil {
+		g.spentErrs = append(g.spentErrs, lr.err)
+	}
+}
+
+// spentOf is the spent run of k, when it is still kept.
+func (g *Gateway) spentOf(k runKeyID) (spentRun, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	sp, ok := g.spent[k]
+	if ok && !time.Now().Before(sp.until) {
+		delete(g.spent, k)
+		return spentRun{}, false
+	}
+	return sp, ok
+}
+
 // presented notes a run credential presented for a run key: when its run has ended,
 // one whose exp is later than the one the ended run keys keep it to is kept to it, so
 // a refreshed run credential never reopens the run key once the earlier entry lapses.

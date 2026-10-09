@@ -577,6 +577,10 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
+		if lr.cred != nil && lr.g.keptTo(key, expires) {
+			// Flushed, and its run key kept: the gateway lets go of it.
+			lr.g.retire(lr, key, expires)
+		}
 	}()
 }
 

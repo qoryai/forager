@@ -79,6 +79,9 @@ type Config struct {
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's
 	// flush. Tests set them.
 	quiet, closeWait time.Duration
+	// keepSpent, when not zero, replaces runcredential.MaxLeeway as how long past its
+	// exp the gateway keeps what an ended run of the one address left. Tests set it.
+	keepSpent time.Duration
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int

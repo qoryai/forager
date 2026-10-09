@@ -1177,3 +1177,64 @@ func TestARenewTheEndedRunKeysCannotKeep(t *testing.T) {
 		}
 	}
 }
+
+// TestAGatewayLetsGoOfEndedRuns pins the bound on what a gateway holds of the runs of
+// its one address: once a run has ended, its record is flushed and its run key is kept,
+// the gateway holds only what a later request of its run key is answered with, the 410,
+// a run id not the run's still 401; a client's run likewise, its run key's connections
+// 407; and once a run credential of an ended run can no longer be accepted, nothing of
+// it is held at all.
+func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	cfg := gateway.Config{Policy: enforce127, Runs: gateway.RunsConfig{Quiet: time.Second}}
+	gateway.SetKeepSpent(&cfg, time.Millisecond)
+	s := startVerifying(t, cfg, nil, 0)
+	exp := time.Unix(time.Now().Add(3*time.Second).Unix(), 0)
+	var ended []*sessionRun
+	for _, k := range []string{"rk-0001", "rk-0002", "rk-0003"} {
+		r := s.openSession(t, mint(issuerKey(), k, exp, nil), server.LinkRunRequest{})
+		if status, b := r.post(t, r.credential, exited(r.a.RunID)); status != http.StatusAccepted {
+			t.Fatalf("the run.exited: %d %s", status, b)
+		}
+		ended = append(ended, r)
+	}
+	client := mint(issuerKey(), "rk-0004", exp, nil)
+	s.secrets = append(s.secrets, client)
+	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+client)) + "\r\n\r\n"
+	resp, conn, _ := s.proxyRequest(t, login)
+	conn.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the client's run: %d", resp.StatusCode)
+	}
+	eventually(t, "the runs let go of", func() bool {
+		runs, keys, spent, _ := gateway.Held(s.g)
+		return runs == 0 && keys == 0 && spent == 4
+	})
+	r := ended[0]
+	if status, b := r.reload(t, r.credential, r.a.RunID); status != http.StatusGone {
+		t.Errorf("a reload of a run let go of: %d %s", status, b)
+	}
+	if status, b := r.reload(t, r.credential, ended[1].a.RunID); status != http.StatusUnauthorized {
+		t.Errorf("a reload of another run id: %d %s", status, b)
+	}
+	if status, b := r.post(t, r.credential, heartbeat(r.a.RunID)); status != http.StatusGone {
+		t.Errorf("a batch of a run let go of: %d %s", status, b)
+	}
+	if status, b := s.tryOpenWith(t, r.credential, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("its run key again: %d %s", status, b)
+	}
+	resp, conn, _ = s.proxyRequest(t, login)
+	conn.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Errorf("the client's run key again: %d", resp.StatusCode)
+	}
+	// Past their exp, the next run to end takes what they left with it.
+	time.Sleep(time.Until(exp) + 100*time.Millisecond)
+	last := s.openSession(t, credentialFor("rk-0005"), server.LinkRunRequest{})
+	last.post(t, last.credential, exited(last.a.RunID))
+	eventually(t, "what the earlier runs left let go of", func() bool {
+		runs, keys, spent, kept := gateway.Held(s.g)
+		return runs == 0 && keys == 0 && spent == 1 && kept == 1
+	})
+}

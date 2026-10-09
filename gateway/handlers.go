@@ -274,16 +274,24 @@ func (g *Gateway) localRun(runID string) *linkRun {
 }
 
 // credentialRun is the session's run of the run credential a request on the one
-// address carried, by its run key, live or ended; nil, with the 401
-// run_credential_refused answered, when the run key has no session's run at this
-// gateway, so no run is reached but the credential's.
-func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request) (*linkRun, runIdentity) {
+// address carried, by its run key, live or ended; nil when there is none to go on with:
+// the 410 answered for a run the gateway has let go of, when runID is empty or the
+// run's, and otherwise the 401 run_credential_refused, when the run key has no
+// session's run at this gateway, so no run is reached but the credential's.
+func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
 	id, ok := identityOf(r.Context())
 	var lr *linkRun
 	if ok {
 		g.mu.Lock()
 		lr = g.keys[keyOf(id)]
 		g.mu.Unlock()
+	}
+	if lr == nil && ok {
+		if sp, spent := g.spentOf(keyOf(id)); spent && (runID == "" || runID == sp.runID) {
+			g.presented(id)
+			gone(w, sp.code, sp.from, sp.started)
+			return nil, id
+		}
 	}
 	if lr == nil || lr.client {
 		if ok {
@@ -331,7 +339,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 	var lr *linkRun
 	if s.remote {
 		var id runIdentity
-		if lr, id = g.credentialRun(w, r); lr == nil {
+		if lr, id = g.credentialRun(w, r, runID); lr == nil {
 			return
 		}
 		if lr.id != runID {
@@ -375,7 +383,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	var lr *linkRun
 	var id runIdentity
 	if s.remote {
-		if lr, id = g.credentialRun(w, r); lr == nil {
+		if lr, id = g.credentialRun(w, r, ""); lr == nil {
 			return
 		}
 		lr.batch.Lock()

@@ -97,6 +97,11 @@ type Gateway struct {
 	keys       map[runKeyID]*linkRun
 	opening    map[runKeyID]chan struct{}
 	endedUntil map[runKeyID]time.Time
+	// spent are the runs on the one address that ended and were let go of, by their run
+	// key, kept as long as a run credential of theirs may be accepted; spentErrs and
+	// the delivery hold what they came to, for Close.
+	spent     map[runKeyID]spentRun
+	spentErrs []error
 
 	closed   chan struct{}
 	delivery Delivery
@@ -154,7 +159,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
 	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
-		keys: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}}
+		keys: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, spent: map[runKeyID]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
@@ -471,6 +476,9 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 			g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
 		}
 	}
+	g.mu.Lock()
+	errs = append(errs, g.spentErrs...)
+	g.mu.Unlock()
 	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	if err := g.http.Shutdown(shut); err != nil {
 		g.http.Close()
