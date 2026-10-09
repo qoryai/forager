@@ -1,4 +1,4 @@
-// Package refusal is a run the runner refuses before it starts, with the refusal code
+// Package refusal is a run Forager refuses before it starts, with the refusal code
 // of the contract, contracts/forager/v1, that says why, and the names it concerns.
 //
 // A refusal is an [*accesskey.Refusal], the type of every refused run, the server's
@@ -13,7 +13,7 @@ import (
 	"github.com/qoryai/runner/accesskey"
 )
 
-// The codes the runner decides.
+// The codes Forager decides.
 const (
 	// RunConfigurationInvalid is a run configuration the decoder, the schema or the
 	// limits refuse, a fetched security_policy included.
@@ -30,7 +30,7 @@ const (
 	// PlaceholderConflict is a run that passes a value for a placeholder.
 	PlaceholderConflict = "placeholder_conflict"
 	// MountContainsForagerFiles is a walled run with a mount that is, contains or lies
-	// inside one of the runner's files: its names are the mount and the file, in that
+	// inside one of Forager's files: its names are the mount and the file, in that
 	// order.
 	MountContainsForagerFiles = "mount_contains_forager_files"
 	// MountModeConflict is a walled run with a mount, or the workspace, inside another
@@ -49,13 +49,13 @@ const (
 	// its names are the place, the link and the other place, the place and the other
 	// one as passed.
 	MountThroughLink = "mount_through_link"
-	// EngineUnreachable is a walled run that cannot ask the container engine whether
-	// an earlier walled run, whose runner is gone, still has containers: its names are
-	// the earlier run's id and the path of its entry in the registry.
+	// EngineUnreachable is a walled run that cannot check with the container engine
+	// whether an earlier walled run, whose session is gone, still has containers: its
+	// names are the earlier run's id and the path of its entry in the registry.
 	EngineUnreachable = "engine_unreachable"
 )
 
-// Decides reports whether the runner decides the code, one of this package's: a
+// Decides reports whether Forager decides the code, one of this package's: a
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {

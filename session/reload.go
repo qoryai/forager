@@ -214,7 +214,7 @@ func (l *live) pass() {
 	// The variables are the run's from its start to its end: a reload leaves them.
 	pol, _, err := l.fetch(l.ctx, conf.Run.URL)
 	if err != nil {
-		// Only a document the server answered and the runner refuses is not asked for
+		// Only a document the server answered and Forager refuses is not asked for
 		// again; a fetch the server did not answer is.
 		var document *server.DocumentError
 		var refused *policy.Error

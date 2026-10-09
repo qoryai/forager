@@ -28,7 +28,7 @@ import (
 // TestDockerClaudeCodeThroughTheWall runs Claude Code itself behind the Docker adapter
 // against a recorder that answers as the Messages API, which ANTHROPIC_BASE_URL points
 // Claude Code at: with an API key and with an OAuth credential, each a fake key the
-// runner sets outside, headless and interactive. The variables Claude Code reads a
+// session sets outside, headless and interactive. The variables Claude Code reads a
 // model credential from that the run does not set a stand-in in are set empty, so each
 // run also checks that Claude Code reads an empty one as unset and uses the stand-in.
 // Claude Code answers with the recorder's text; every request the recorder gets

@@ -16,7 +16,7 @@ import (
 	"github.com/qoryai/runner/wall"
 )
 
-// entry is a path as the runner looks its name up: in its parent, resolved.
+// entry is a path as Forager looks its name up: in its parent, resolved.
 func entry(t *testing.T, p string) string {
 	t.Helper()
 	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
@@ -203,7 +203,7 @@ func TestALinkInsideNoPlaceIsFollowedWhereItLeads(t *testing.T) {
 }
 
 // TestALinkToTheForagersFilesInsideAPlaceIsTheirs pins a place that is a link inside a
-// writable place to a runs directory: it is one of the runner's files, as every place
+// writable place to a runs directory: it is one of Forager's files, as every place
 // that resolves to one is.
 func TestALinkToTheForagersFilesInsideAPlaceIsTheirs(t *testing.T) {
 	root, runs := t.TempDir(), t.TempDir()
@@ -231,7 +231,7 @@ func TestAChainOfLinkedPlacesIsNoRun(t *testing.T) {
 }
 
 // TestARunsDirectoryThroughAnotherRunsBindIsNoRun pins a runs directory that is a link
-// inside another walled run's writable bind: refused before the runner writes the
+// inside another walled run's writable bind: refused before the session writes the
 // record through it, with the runs directory exactly as passed as the first name.
 func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 	w, target := t.TempDir(), t.TempDir()
@@ -250,7 +250,7 @@ func TestARunsDirectoryThroughAnotherRunsBindIsNoRun(t *testing.T) {
 		t.Errorf("detail %q", r.Detail)
 	}
 	if entries, _ := os.ReadDir(target); len(entries) != 0 {
-		t.Errorf("the runner wrote through the link: %v", entries)
+		t.Errorf("the session wrote through the link: %v", entries)
 	}
 
 	// A runs directory inside the other run's bind, by its path, written with a
@@ -392,8 +392,8 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 		t.Fatalf("the first run ended: %+v, %v", s.res, s.err)
 	}
 	for _, c := range []struct{ mount, name, what string }{
-		{filepath.Dir(helper), helper, "the runner's helper "},
-		{dir, dir, "the runner's directory "},
+		{filepath.Dir(helper), helper, "Forager's helper "},
+		{dir, dir, "Forager's directory "},
 	} {
 		other := walledSpec(t, &openWall{})
 		other.Mounts = []wall.Mount{{Path: c.mount}}
@@ -417,9 +417,9 @@ func TestTheWallsOwnBindsAreAnotherRunsToo(t *testing.T) {
 		mine := &bindingWall{binds: []wall.Bind{b}}
 		sp := walledSpec(t, mine)
 		err := runErr(sp)
-		what := "the runner's directory "
+		what := "Forager's directory "
 		if b.Helper {
-			what = "the runner's helper "
+			what = "Forager's helper "
 		}
 		want := what + b.Path + " lies inside the writable bind " + h + " of the walled run " +
 			first.RunID + ", which is still going: a walled agent of that run can change it"
@@ -470,7 +470,7 @@ func TestAWallsHelperIsListedFromTheStart(t *testing.T) {
 	other := walledSpec(t, &openWall{})
 	other.Mounts = []wall.Mount{{Path: h}}
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
-	want := "the mount " + h + " (writable) contains the runner's helper " + helper +
+	want := "the mount " + h + " (writable) contains Forager's helper " + helper +
 		" of the walled run " + w.id +
 		", which is still going: this run's agent could change it"
 	if !slices.Equal(r.Names, []string{h, w.id, helper}) || r.Detail != want {
@@ -501,7 +501,7 @@ func TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun(t *testing.T) {
 	other := walledSpec(t, &openWall{})
 	other.Mounts = []wall.Mount{{Path: sub, ReadOnly: true}}
 	r := refusalOf(t, "mount_shared_with_run", runErr(other))
-	want := "the mount " + sub + " (read-only) lies inside the runner's directory " + dir +
+	want := "the mount " + sub + " (read-only) lies inside Forager's directory " + dir +
 		" of the walled run " + w.id + ", which is still going: a walled agent of that " +
 		"run can change it"
 	if !slices.Equal(r.Names, []string{sub, w.id, dir}) || r.Detail != want {
@@ -543,7 +543,7 @@ func TestAnotherRunsRunDirectoryIsItsAlone(t *testing.T) {
 		if !slices.Equal(r.Names, []string{c.mount, first.RunID, first.RunsDir}) ||
 			!strings.Contains(r.Detail, "(read-only)"+c.how+"the run directory ") ||
 			!strings.HasSuffix(r.Detail,
-				"which is still going: a run directory is its runner's alone") {
+				"which is still going: a run directory is its session's alone") {
 			t.Errorf("names %q, detail %q", r.Names, r.Detail)
 		}
 	}

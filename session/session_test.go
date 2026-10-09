@@ -258,7 +258,7 @@ func TestMain(m *testing.M) {
 // fakeRuntime prints what a headless runtime prints, reaches two hosts through the
 // proxy, calls its hook the way a runtime calls a command hook, and exits as told. It
 // sends its requests through HTTP_PROXY explicitly, because the origins are on
-// loopback, which the runner's NO_PROXY exempts and Go never proxies.
+// loopback, which Forager's NO_PROXY exempts and Go never proxies.
 func fakeRuntime() int {
 	fmt.Println(`{"type":"system","subtype":"init","session_id":"fake","model":"m"}`)
 	fmt.Fprintln(os.Stderr, "fake runtime: starting")
@@ -290,7 +290,7 @@ func fakeRuntime() int {
 			return 90
 		}
 		// Every group's every hook runs, as the runtime runs them: the launch's own and
-		// the runner's forwarder.
+		// the session's forwarder.
 		for _, group := range s.Hooks["SessionEnd"] {
 			for _, h := range group.Hooks {
 				cmd := shell(h.Command)
@@ -472,7 +472,7 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 }
 
 // runWithSettingsEnv runs the spec with FAKE_SETTINGS pointing at the settings file
-// the runner writes, which is only known once the run directory exists: the run id is
+// the session writes, which is only known once the run directory exists: the run id is
 // fixed in advance so the path is known.
 func runWithSettingsEnv(t *testing.T, sp session.Spec) (*session.Result, error) {
 	t.Helper()
@@ -1270,7 +1270,7 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 }
 
 // TestResendCompletesAndDeliversTheRecordOfARunThatIsOver pins what a job's last step
-// relies on: what the receiver did not get is sent, once; a record its runner left
+// relies on: what the receiver did not get is sent, once; a record its session left
 // unfinished is closed with the reason; and a run that still goes is left alone.
 func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	c := newControl(t)
@@ -1298,7 +1298,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 		t.Errorf("second resend %+v, %v, store holds %d", again, err, store.Count())
 	}
 
-	// A record its runner died over: no run.exited, and half a line at the end.
+	// A record its session died over: no run.exited, and half a line at the end.
 	sp = spec(t, nil)
 	sp.Local = true
 	if res, err = runWithSettingsEnv(t, sp); err != nil {
@@ -1415,7 +1415,7 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 		t.Errorf("%+v %v", res, started)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
-		t.Error("something was prepared for a runtime the runner does not know")
+		t.Error("something was prepared for a runtime Forager does not know")
 	}
 }
 
@@ -1646,7 +1646,7 @@ func TestRunClosedBeforeTheRuntimeStartsEndsTheRun(t *testing.T) {
 		}
 		once.Do(func() {
 			// Hold the start here, after run.started, until the server has closed the
-			// run and the runner has read the answer.
+			// run and the gateway has read the answer.
 			c.closed.Store(true)
 			for c.closedAnswers.Load() == 0 {
 				time.Sleep(10 * time.Millisecond)

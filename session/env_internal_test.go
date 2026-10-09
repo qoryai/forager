@@ -8,8 +8,8 @@ import (
 
 // TestNoProgramReceivesTheAccessKeysVariables pins that QORY_ACCESS_KEY_SECRET,
 // QORY_ACCESS_KEY_ID and QORY_APIARY_PUBLIC_KEY reach neither a tool, whose
-// environment is the runner's own, nor the agent, whose environment is the run's,
-// the runner's own by default, while the other variables do.
+// environment is Forager's own, nor the agent, whose environment is the run's,
+// Forager's own by default, while the other variables do.
 func TestNoProgramReceivesTheAccessKeysVariables(t *testing.T) {
 	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
 	t.Setenv("QORY_ACCESS_KEY_ID", "ak_f1xt0re000000000")

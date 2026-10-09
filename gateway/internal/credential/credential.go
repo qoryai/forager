@@ -1,14 +1,15 @@
-// Package credential holds the tokens a run uses without its session ever holding
-// them, and gets them from where the machine says: a variable of the runner's
+// Package credential holds the credentials a run uses without its session ever
+// holding them, and gets them from where the machine says: a variable of Forager's
 // environment, a file, or an adapter.
 //
 // An adapter is a program of the machine's that knows one kind of host, a source code
-// host say. The runner starts it outside the enclosure, with one argument the run's
+// host say. The gateway starts it outside the enclosure, with one argument the run's
 // policy chose, and reads one JSON document from its standard output,
-// contracts/forager/v1/credential.schema.json: the token, when it expires, and how it is
-// used, the hosts, the scheme and the paths, because hosts differ in all three and the
-// runner knows none of them. The runner asks again before the token expires and when a
-// host refuses it; the answer then changes the token and nothing else.
+// contracts/forager/v1/credential.schema.json: the credential, when it expires, and how
+// it is used, the hosts, the scheme and the paths, because hosts differ in all three and
+// the gateway knows none of them. The gateway runs the adapter again before the
+// credential expires and when a host refuses it; the answer then changes the credential
+// and nothing else.
 //
 // A [Definition] is the machine's. A run's policy selects definitions by name and
 // defines none, so whoever writes a policy chooses among the programs the machine's
@@ -38,7 +39,8 @@ import (
 // Adapter says where the token comes from.
 type Definition struct {
 	Name string
-	// Env names a variable of the runner's own environment that holds the token.
+	// Env is the name of a variable of Forager's own environment that holds the
+	// credential.
 	Env string
 	// File is a path that holds the token, read again when it changes.
 	File string
@@ -83,7 +85,8 @@ func (u *Use) Rejected() { u.held.rejected() }
 const (
 	// adapterWait is how long an adapter has to answer.
 	adapterWait = time.Minute
-	// renewBefore is how long before a token expires the runner asks again.
+	// renewBefore is how long before a credential expires the gateway runs the adapter
+	// again.
 	renewBefore = 5 * time.Minute
 	// retryWait is the least time between two askings.
 	retryWait = 30 * time.Second
@@ -418,7 +421,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		args[i] = strings.ReplaceAll(a, "${argument}", h.argument)
 	}
 	cmd := exec.CommandContext(ctx, d.Adapter[0], args...)
-	// The access key's variables are the runner's, and no credential program's.
+	// The access key's variables are the gateway's, and no credential program's.
 	cmd.Env = accesskey.WithoutVariables(os.Environ())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

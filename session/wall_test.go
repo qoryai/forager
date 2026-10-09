@@ -15,7 +15,7 @@ import (
 	"github.com/qoryai/runner/wall"
 )
 
-// openWall is a wall with nothing in it: it records what the session runner tells it
+// openWall is a wall with nothing in it: it records what the session sends it
 // and starts the launch as it is, pointed at the proxy and the socket by their own
 // addresses.
 type openWall struct {
@@ -40,7 +40,7 @@ func (w *openWall) Close(context.Context) error { w.closed++; return nil }
 
 // TestWallWrapsTheLaunch pins what crosses to a wall and what does not: the enclosure
 // is asked where the proxy listens and told where it does, it gets the socket, the
-// settings the runner wrote and the run's environment without the proxy variables, a
+// settings the session wrote and the run's environment without the proxy variables, a
 // nil environment is nothing and not the process's own, the record names the wall and
 // the image, and the enclosure is closed once.
 func TestWallWrapsTheLaunch(t *testing.T) {

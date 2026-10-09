@@ -214,13 +214,13 @@ func TestTheRegistryIsOneOfTheForagersFiles(t *testing.T) {
 		sp.Mounts = []wall.Mount{{Path: mount}}
 		r := mountRefusal(t, runErr(sp))
 		if want := []string{mount, reg}; !slices.Equal(r.Names, want) ||
-			!strings.Contains(r.Detail, "where the runner lists the walled runs still going") {
+			!strings.Contains(r.Detail, "where Forager lists the walled runs still going") {
 			t.Errorf("names %q, detail %q", r.Names, r.Detail)
 		}
 	}
 }
 
-// TestALinkedForagerFileIsKeptAsAPattern pins that a runner file passed as a pattern of
+// TestALinkedForagerFileIsKeptAsAPattern pins that a Forager file passed as a pattern of
 // one name, the way a caller keeps a link from being replaced, is refused by the
 // mount of its directory, with the pattern as passed as the refusal's second name.
 func TestALinkedForagerFileIsKeptAsAPattern(t *testing.T) {
@@ -474,8 +474,8 @@ func TestBindsThatMayShareRunSideBySide(t *testing.T) {
 	}
 }
 
-// TestAStaleEntryIsRemoved pins that an entry no runner holds, that of a run whose
-// runner died and whose engine holds no container of it, decides nothing and is
+// TestAStaleEntryIsRemoved pins that an entry no session holds, that of a run whose
+// session died and whose engine holds no container of it, decides nothing and is
 // removed.
 func TestAStaleEntryIsRemoved(t *testing.T) {
 	root := t.TempDir()
@@ -542,7 +542,7 @@ func TestRunsThatStartTogetherAreCheckedInTurn(t *testing.T) {
 	}
 }
 
-// TestARegistryOthersWriteIsRefused pins that the runner uses its registry only while
+// TestARegistryOthersWriteIsRefused pins that the session uses its registry only while
 // it is a directory of this user's that no one else writes.
 func TestARegistryOthersWriteIsRefused(t *testing.T) {
 	reg := registry(t)

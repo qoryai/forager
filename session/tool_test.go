@@ -23,7 +23,7 @@ import (
 // toolMode is the first argument that makes the test binary a tool.
 const toolMode = "qory-test-tool"
 
-// fakeTool serves on the socket the runner names, answering every request with 200,
+// fakeTool serves on the socket the gateway sets, answering every request with 200,
 // and appends what it was handed of each to the file its arguments name: the path, the
 // path rule and the request's id, one line per request.
 func fakeTool(args []string) int {

@@ -2,7 +2,7 @@
 // session events.
 //
 // A [Descriptor] is the document of contracts/forager/v1/descriptor.schema.json: how
-// the runner attaches to one runtime and the rules that turn its records into session
+// the session attaches to one runtime and the rules that turn its records into session
 // events. [Load] takes the embedded default for a runtime and an optional override
 // directory; [Parse] validates a document against the schema before decoding it, so the
 // schema is the reader. A [Record] is one unit of runtime output with the source it
@@ -53,10 +53,10 @@ type Secrets struct {
 	// Reserves is the variables the runtime reads a credential from beside the declared
 	// ones.
 	Reserves []string `yaml:"reserves" json:"reserves,omitempty"`
-	// Denies is the variables the runner leaves out of the server's set for the runtime.
+	// Denies is the variables the session leaves out of the server's set for the runtime.
 	Denies []string `yaml:"denies" json:"denies,omitempty"`
 	// CredentialFiles is the files in which the runtime keeps a credential of its own,
-	// ~ being the home of the user the runner runs as.
+	// ~ being the home of the user Forager runs as.
 	CredentialFiles []string `yaml:"credential_files" json:"credential_files,omitempty"`
 }
 
@@ -95,14 +95,14 @@ type Headless struct {
 	Args []string `yaml:"args" json:"args"`
 }
 
-// Stop is how the runtime is asked to leave: a signal of the runner's list and the time
-// until SIGKILL, as a duration. Either may be empty, the runner's default.
+// Stop is how the runtime is asked to leave: a signal of Forager's list and the time
+// until SIGKILL, as a duration. Either may be empty, Forager's default.
 type Stop struct {
 	Signal string `yaml:"signal" json:"signal,omitempty"`
 	Grace  string `yaml:"grace" json:"grace,omitempty"`
 }
 
-// Sources is how the runner attaches to the runtime.
+// Sources is how the session attaches to the runtime.
 type Sources struct {
 	// Output is the runtime's standard output as JSON lines, when the session runs on
 	// pipes; nil when the runtime has none.

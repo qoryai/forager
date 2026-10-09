@@ -22,9 +22,9 @@ const Base = "https://qory.dev/contracts/forager/v1"
 const Version = "v1"
 
 // Revision is the revision of the contract version this module implements: the
-// integer the runner sends as X-Qory-Contract-Version and as contract_version in the
+// integer the gateway sends as X-Qory-Contract-Version and as contract_version in the
 // ping. A revision adds; a breaking change is a new Version. The revision is raised
-// only once a released runner is in use.
+// only once a release of Forager is in use.
 const Revision = 1
 
 // runtimes.json lists the secrets of the descriptors under forager/v1/runtimes, for a

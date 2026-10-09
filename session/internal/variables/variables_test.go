@@ -87,7 +87,7 @@ func TestTheHighestRungWins(t *testing.T) {
 			Server: map[string]string{"CODEX_HOME": "a"}, Run: []string{"CODEX_HOME=b"}, Machine: []string{"CODEX_HOME=c"},
 			Defaults: []string{"CODEX_HOME=d"}, Shell: []string{"CODEX_HOME=e"},
 		}, nil, []string{"CODEX_HOME<-fixed apiary:fixed run:fixed machine:fixed harness:fixed shell:fixed"}},
-		{"the runner's names and a placeholder are fixed", variables.Inputs{
+		{"Forager's names and a placeholder are fixed", variables.Inputs{
 			Own: []string{"CLAUDE_SETTINGS_HINT"}, Placeholders: []string{"GITHUB_TOKEN"},
 			Server: map[string]string{"CLAUDE_SETTINGS_HINT": "x", "GITHUB_TOKEN": "x"}, Machine: []string{"CLAUDE_SETTINGS_HINT=y"},
 		}, nil, []string{"CLAUDE_SETTINGS_HINT<-fixed apiary:fixed machine:fixed", "GITHUB_TOKEN<-fixed apiary:fixed"}},
@@ -299,7 +299,7 @@ func TestTheBuiltinListIsTheContracts(t *testing.T) {
 
 // TestCheckRefusesWhatStaysOutside pins the refusals of a run's own environment, with
 // their codes and names and never a value: behind a wall, a QORY_ variable other than
-// the two the runner sets, in any case, and a variable a machine value is read from,
+// the two Forager sets, in any case, and a variable a machine value is read from,
 // are variable_reserved; in any run, a value for a placeholder is
 // placeholder_conflict. Without a wall the first pass, and a variable the runtime
 // reads its credential from passes either way.

@@ -109,7 +109,7 @@ func TestAFileIsReadWhenItIsUsed(t *testing.T) {
 }
 
 // TestAnAdapterReceivesNoAccessKeyVariable pins that the access key's variables, the
-// runner's alone, are not in an adapter's environment, while the runner's others are.
+// gateway's alone, are not in an adapter's environment, while Forager's others are.
 func TestAnAdapterReceivesNoAccessKeyVariable(t *testing.T) {
 	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
 	t.Setenv("QORY_ACCESS_KEY_ID", "ak_f1xt0re000000000")

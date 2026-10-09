@@ -1,7 +1,7 @@
 // Package policy reads the run policy and answers what it allows.
 //
-// The policy is the document of contracts/forager/v1/policy.schema.json, given to the
-// runner once by its caller and pinned for the run. [Read] reads it from bytes: a
+// The policy is the document of contracts/forager/v1/policy.schema.json, given to
+// Forager once by its caller and pinned for the run. [Read] reads it from bytes: a
 // document the schema refuses is a [*Error] and no run; [None] is the absent policy,
 // mode observe with no list to deny by. The schema is the reader: a refused document
 // carries the schema's message.
@@ -75,7 +75,7 @@ type Loaded struct {
 	// Source is "config" when a document was given, "fetched" when the server's run
 	// configuration holds it, "none" when there was none.
 	Source string
-	// Digest is the hex sha256 of the document as canonical JSON, the runner's own
+	// Digest is the hex sha256 of the document as canonical JSON, Forager's own
 	// serialization of it, when Source is "config" or "fetched": the version stamp of
 	// the run's policy, the same for the same policy however it was written.
 	Digest string

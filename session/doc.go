@@ -1,8 +1,8 @@
-// Package session runs one coding agent session inside the runner's boundary.
+// Package session runs one coding agent session inside Forager's boundary.
 //
 // [Run] takes a [Spec], the program to start and how, and returns a [Result], the exit
 // status and where the run's record is. Between the two it does what the contract,
-// contracts/forager/v1/README.md, lists as the runner's duties, in that order:
+// contracts/forager/v1/README.md, lists as Forager's duties, in that order:
 //
 //   - reads the policy once and pins it; an unreadable policy is a [*policy.Error] and
 //     no run, no policy is observe everything
@@ -10,7 +10,7 @@
 //     points the session at it
 //   - with a [wall.Wall] in the spec, starts the runtime inside an enclosure whose only
 //     route out leads to that proxy, and removes the enclosure at exit
-//   - keeps every credential of the runner's out of the session: the session's
+//   - keeps every credential of the gateway's out of the session: the session's
 //     environment is the caller's plus the proxy and socket variables, nothing else
 //   - behind a wall, starts the tools the policy selects outside the enclosure, hands
 //     each the requests to the hosts it serves that the policy lets through, and stops

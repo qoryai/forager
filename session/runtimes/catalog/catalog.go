@@ -1,4 +1,4 @@
-// Package catalog resolves a runtime's name to the way this runner runs it.
+// Package catalog resolves a runtime's name to the way Forager runs it.
 package catalog
 
 import (
@@ -21,7 +21,7 @@ func Installers() map[string]runtimes.Installer {
 var name = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
 // Lookup is the runtime of a name. A descriptor in dir, <name>.yaml, comes first when
-// dir is not empty: it is how a machine describes a runtime this runner ships nothing
+// dir is not empty: it is how a machine describes a runtime Forager ships nothing
 // for, or replaces what it ships. Then the contract's own descriptor for the name. A
 // name with neither is a bare runtime: the run is recorded, the session inside is not.
 func Lookup(runtime, dir string) (runtimes.Runtime, error) {

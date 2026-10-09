@@ -43,7 +43,7 @@ type ResendSpec struct {
 type ResendResult struct {
 	RunID string
 	// Closed says the record had no run.exited and got one, with the reason
-	// gateway_lost: the runner died before the runtime's exit was recorded.
+	// gateway_lost: Forager died before the runtime's exit was recorded.
 	Closed bool
 	// Reaped is how many containers and networks the run's wall had left.
 	Reaped int
@@ -54,13 +54,13 @@ type ResendResult struct {
 }
 
 // Resend completes and delivers the record of a run that is over, for a caller whose
-// runner died or whose receiver was away: the step a job runs last, whatever happened
+// session died or whose receiver was away: the step a job runs last, whatever happened
 // before it. The events file is the record of truth and the run directory says which
 // of its events the server accepted, so Resend sends the rest, the ones the server's
 // configuration wants, in order and in the run's own batches, until they are accepted
 // or the context ends. A record with run.started and without run.exited gets one
 // first, with the reason gateway_lost, and what the run's wall left is removed. A run
-// whose runner still lives is [ErrRunning]; a server that said stop during the run, or
+// whose session still lives is [ErrRunning]; a server that said stop during the run, or
 // closed it, is sent nothing.
 func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if spec.Report == nil {
@@ -154,7 +154,7 @@ type recorded struct {
 	line     []byte
 }
 
-// record reads the events file. A last line the runner died in the middle of is cut
+// record reads the events file. A last line the session died in the middle of is cut
 // off the file: it is no event, and the next one must start a line.
 func record(file string) ([]recorded, error) {
 	f, err := os.OpenFile(file, os.O_RDWR, 0)

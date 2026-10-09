@@ -44,7 +44,7 @@ func approved() string {
 // script writes nothing else, and whatever it fails at, the command starts, with the
 // umask the script started with.
 const approveScript = `# Adds the approval of the stand-in Claude Code reads its API key from to the
-# configuration it reads, then starts it. Written by the runner for one run.
+# configuration it reads, then starts it. Written by Forager for one run.
 approve() {
 	umask 077
 	base=${CLAUDE_CONFIG_DIR:-$HOME}

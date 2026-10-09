@@ -215,7 +215,7 @@ func (p *Proxy) Close() error {
 
 // Guard makes the proxy refuse the link-local range, and this machine's own addresses
 // unless the host is one of names: the entries of the policy's allow list, as its
-// owner wrote them. Entries that are *. suffixes are ignored. The session runner calls
+// owner wrote them. Entries that are *. suffixes are ignored. The session calls
 // Guard once, before it starts anything behind a wall; a policy set later brings its
 // own names.
 func (p *Proxy) Guard(names []string) {

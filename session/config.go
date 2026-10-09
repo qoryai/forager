@@ -13,7 +13,7 @@ import (
 )
 
 // Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the
-// caller hands it to the runner. The runner validates it against the schema before
+// caller passes it to Forager. Forager validates it against the schema before
 // anything starts and pins it for the run with the digest of its canonical JSON.
 type Policy struct {
 	// Version is the document version, 1.
@@ -167,10 +167,10 @@ func bothDeny(ceiling, own []string) []string {
 }
 
 // Variables are the run's and the machine's variables and how a run takes the
-// server's: for qory, --env, wall.env and the runner file's variables section.
+// server's: for qory, --env, wall.env and forager.yaml's variables section.
 //
 // For each name the highest source that sets it wins: the run's fixed names, those
-// the runner, the wall, the runtime's preparation and the placeholders set and
+// Forager, the wall, the runtime's preparation and the placeholders set and
 // [Spec.LaunchFixed]; the server's variables, which it resolved among its own levels;
 // Run; Machine; [Spec.LaunchDefaults]; [Spec.Env]. A walled run refuses first what
 // must stay outside the enclosure: a QORY_ name other than QORY_RUN_ID and
@@ -190,13 +190,13 @@ type Variables struct {
 	Machine []string
 	// Deny are names and patterns, in which * matches any run of characters, of
 	// variables the run leaves out of the server's, Run, Machine and
-	// [Spec.LaunchDefaults], matched regardless of case: the runner file's
+	// [Spec.LaunchDefaults], matched regardless of case: forager.yaml's
 	// variables.deny.
 	Deny []string
 	// Unwalled is how a run without a Wall takes the server's variables:
 	// [UnwalledAccept] applies them as a walled run does, after the deny list;
 	// [UnwalledIgnore], which empty means, leaves them all out. The deny list keeps the
-	// wall and the runner whole, not the developer's shell, which accept opens to the
+	// wall and Forager whole, not the developer's shell, which accept opens to the
 	// server.
 	Unwalled string
 }
@@ -255,10 +255,10 @@ const (
 )
 
 // Server is the server document, contracts/forager/v1/server.schema.json, as the
-// caller hands it to the runner: the server whose configuration document says where
-// events go and where the run configuration is, the access key the runner signs every
+// caller passes it to Forager: the server whose configuration document says where
+// events go and where the run configuration is, the access key the gateway signs every
 // request as, and the pin, the server's keys every answer is verified under. The
-// access key's secret is outside the document: [Spec.AccessKey]. The runner validates
+// access key's secret is outside the document: [Spec.AccessKey]. The gateway validates
 // the document, fetches the configuration document, and posts a ping the server must
 // accept, before anything starts.
 type Server struct {
@@ -274,22 +274,22 @@ type Server struct {
 	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
 
-// Credential is one credential as the machine defines it, [Spec.Credentials]: a token
-// the runner holds outside the enclosure and the proxy sets on the requests to the
+// Credential is one credential as the machine defines it, [Spec.Credentials]: a secret
+// the gateway holds outside the enclosure and the proxy sets on the requests to the
 // hosts it is for. A run's policy selects credentials by name and defines none. Exactly
-// one of Env, File and Adapter says where the token comes from.
+// one of Env, File and Adapter says where the secret comes from.
 //
 // An adapter is a program of the machine's that knows one kind of host, a source code
-// host say. The runner starts it outside the enclosure and reads one JSON document
-// from its standard output, contracts/forager/v1/credential.schema.json: the token, when
+// host say. The gateway starts it outside the enclosure and reads one JSON document
+// from its standard output, contracts/forager/v1/credential.schema.json: the secret, when
 // it expires, and how it is used, the hosts, the scheme and the paths, because hosts
-// differ in those and the runner knows none of them.
+// differ in those and the gateway knows none of them.
 type Credential struct {
 	// Name is what a policy selects it by.
 	Name string
-	// Env names a variable of the runner's own environment that holds the token.
+	// Env is a variable of Forager's own environment that holds the secret.
 	Env string
-	// File is a path that holds the token, read again whenever it is used.
+	// File is a path that holds the secret, read again whenever it is used.
 	File string
 	// Adapter is the program and its arguments; ${argument} in an argument is replaced
 	// by the argument the run's policy gives.
@@ -297,7 +297,7 @@ type Credential struct {
 	// Argument is a regular expression the policy's argument must match whole; empty
 	// means a policy passes none. Only an adapter takes one.
 	Argument string
-	// Hosts, Scheme, Username, Header and Paths say how a token from Env or File is
+	// Hosts, Scheme, Username, Header and Paths say how a secret from Env or File is
 	// used: the scheme is bearer, basic with Username, or header with Header, and nil
 	// Paths are every path. For an Adapter, which says all that itself, Hosts and Paths
 	// are the most it may claim, when they are set.
@@ -313,7 +313,7 @@ type Credential struct {
 // configuration says so before any run selects it.
 func (c Credential) Check() error { return gateway.CredentialDefinition(c).Check() }
 
-// Tool is one tool as the machine defines it, [Spec.Tools]: a program the runner starts
+// Tool is one tool as the machine defines it, [Spec.Tools]: a program the gateway starts
 // for the run, outside the enclosure, that serves hosts. The proxy ends the session's
 // TLS for those hosts, decides the host and the path by the policy as for any host, and
 // hands every request it lets through to the tool, over a Unix socket the tool listens
@@ -327,7 +327,7 @@ type Tool struct {
 	// Name is what a policy selects it by.
 	Name string
 	// Command is the program and its arguments; ${argument} in an argument is replaced
-	// by the argument the run's policy gives. The program gets the runner's own
+	// by the argument the run's policy gives. The program gets Forager's own
 	// environment, without the variables [Credential.Env] names, with QORY_TOOL_LISTEN,
 	// the path of the Unix socket it listens on, and QORY_RUN_ID.
 	Command []string

@@ -51,7 +51,7 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 
 func TestADescriptorNamesAnInstallerAndNeverBringsOne(t *testing.T) {
 	doc := strings.Replace(other, "  output: {format: jsonl}\n", "  hooks: {install: claude-settings, events: [Stop]}\n", 1)
-	if _, err := runtimes.Described("other-agent.yaml", []byte(doc), nil); err == nil || !strings.Contains(err.Error(), "not one this runner implements") {
+	if _, err := runtimes.Described("other-agent.yaml", []byte(doc), nil); err == nil || !strings.Contains(err.Error(), "not one Forager implements") {
 		t.Errorf("an installer the caller does not give: %v", err)
 	}
 	called := false

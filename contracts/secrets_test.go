@@ -767,8 +767,8 @@ func TestDeniedVariables(t *testing.T) {
 	}
 }
 
-// TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's, the
-// runner's and qory's.
+// TestRunRefusedCodes pins the codes of dev.qory.run.refused: the server's,
+// Forager's and qory's.
 func TestRunRefusedCodes(t *testing.T) {
 	var s struct {
 		Properties struct {

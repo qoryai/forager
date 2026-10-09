@@ -106,7 +106,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 			readFrom = append(readFrom, c.Env)
 		}
 	}
-	// The runner's own names, the proxy's, the wall's and the preparation's: with the
+	// Forager's own names, the proxy's, the wall's and the preparation's: with the
 	// placeholders and the harness's computed values, the run's fixed names.
 	own := []string{EnvRunID, EnvSocket}
 	if spec.HarnessHome != "" {

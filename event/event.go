@@ -1,4 +1,4 @@
-// Package event is the CloudEvents envelope the runner emits and the emitter that
+// Package event is the CloudEvents envelope Forager emits and the emitter that
 // numbers events within a run.
 //
 // An [Event] is one event of the contract, contracts/forager/v1/event.schema.json, as Go
@@ -83,7 +83,7 @@ func NewEmitter(runID string, now func() time.Time) *Emitter {
 }
 
 // NewEmitterAfter returns an emitter that goes on after seq: whoever completes the
-// record of a run its runner left numbers on from the last event in the file.
+// record of a run its session left numbers on from the last event in the file.
 func NewEmitterAfter(runID string, seq uint64, now func() time.Time) *Emitter {
 	e := NewEmitter(runID, now)
 	e.seq = seq

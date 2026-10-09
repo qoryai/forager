@@ -341,7 +341,7 @@ func fetch(u string, header ...string) (int, string, string) {
 	return resp.StatusCode, string(b), ""
 }
 
-// serveTool is the suite's tool: it listens where the runner says and answers every
+// serveTool is the suite's tool: it listens where the gateway sets and answers every
 // request with the path rule and the id the proxy handed it.
 func serveTool() int {
 	ln, err := net.Listen("unix", os.Getenv(link.EnvToolListen))

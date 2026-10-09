@@ -96,7 +96,7 @@ func lines(applied session.Applied) []string {
 	return out
 }
 
-// serverVariables is a run configuration with variables of every kind the runner
+// serverVariables is a run configuration with variables of every kind the session
 // treats apart: one it applies, one the node's deny entry covers, one the runtime
 // denies, one the built-in list denies, one the run sets as well, one the harness
 // computes, and one the runtime declares.
@@ -274,7 +274,7 @@ func TestWhatARunPassesInIsChecked(t *testing.T) {
 	}
 }
 
-// TestTheHarnessHome pins QORY_HARNESS_HOME: the runner sets it to the spec's
+// TestTheHarnessHome pins QORY_HARNESS_HOME: the session sets it to the spec's
 // HarnessHome, with or without a wall; without a wall it wins over a value the run
 // inherits, a value of the run's own is denied as any QORY_ name, and the record lists
 // the name, fixed. Behind a wall a value the run passes is variable_reserved

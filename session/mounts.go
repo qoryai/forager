@@ -41,7 +41,7 @@ func overlap(mount, path string) (string, error) {
 	}
 	p, err := split(path, 0)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve the runner's file %s: %w", path, err)
+		return "", fmt.Errorf("cannot resolve Forager's file %s: %w", path, err)
 	}
 	if ok, same := holds(m, p); ok {
 		if same {
@@ -172,19 +172,19 @@ func sameName(a, b string) bool {
 	return ok
 }
 
-// foragerFile is one of the runner's files, and what it is, for the refusal's Detail.
+// foragerFile is one of Forager's files, and what it is, for the refusal's Detail.
 type foragerFile struct {
 	path, what string
 }
 
 // foragerFiles are the paths a walled run's mounts leave out: the caller's, and every one
-// the runner knows itself. The programs are every one the machine defines, not only the
+// Forager knows itself. The programs are every one the machine defines, not only the
 // ones the run's policy selects, because a server's policy selects after the check, and
 // a reload may select another credential.
 func foragerFiles(spec Spec) []foragerFile {
 	var out []foragerFile
 	for _, p := range spec.ForagerFiles {
-		out = append(out, foragerFile{p, "one of the runner's files"})
+		out = append(out, foragerFile{p, "one of Forager's files"})
 	}
 	for _, c := range spec.Credentials {
 		if len(c.Adapter) > 0 {
@@ -218,14 +218,14 @@ func foragerFiles(spec Spec) []foragerFile {
 			out = append(out, foragerFile{p, "one of the " + spec.Wall.Name() + " wall's files"})
 		}
 	}
-	// The run directories hold the record, and the runner reads the runtime's settings
+	// The run directories hold the record, and the session reads the runtime's settings
 	// from them; a run's own is shown to its enclosure read-only, and to no other: no
 	// place of this run's holds the runs directory, and a walled run with a bind that
 	// is, holds or lies inside the run directory of another walled run still going does
 	// not start (checkShared).
 	out = append(out, foragerFile{spec.RunsDir, "where the run directories are kept"})
 	if dir, err := walledDir(); err == nil {
-		out = append(out, foragerFile{dir, "where the runner lists the walled runs still going"})
+		out = append(out, foragerFile{dir, "where Forager lists the walled runs still going"})
 	}
 	return out
 }
@@ -389,10 +389,10 @@ type bindSource struct {
 	Lookups  []string `json:"lookups"`
 	Writable bool     `json:"writable"`
 	// Kind is empty for a place the run lists, run for the run directory, helper for
-	// the runner's helper and directory for another directory of the runner's a wall
+	// Forager's helper and directory for another directory of Forager's a wall
 	// binds.
 	Kind string `json:"kind,omitempty"`
-	// Pattern says Path is a pattern of the directories a runner makes there later, each
+	// Pattern says Path is a pattern of the directories a session makes there later, each
 	// its own: it stands for them until the run lists the one it made.
 	Pattern bool `json:"pattern,omitempty"`
 	// what names the bind in a refusal's sentence, at is where it resolved and looks
@@ -432,16 +432,16 @@ type mountPlan struct {
 	sources []bindSource
 }
 
-// checkMounts refuses a caller's runner file that is not an absolute path and, behind a
+// checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
 // enclosure binds. The places are the run's own, Spec.Mounts and the workspace; the run
-// directory, read-only, and the hook socket's directory are the runner's, which it
-// keeps apart from every caller's place: the runs directory is one of the runner's
+// directory, read-only, and the hook socket's directory are Forager's, which it
+// keeps apart from every caller's place: the runs directory is one of Forager's
 // files, and so is where the sockets are made. A refusal's first name is always one of
 // the places exactly as the caller passed it:
 //
-//   - mount_contains_forager_files: a place that is, contains or lies inside one of the
-//     runner's files, or a writable place that contains a directory a name on the way
+//   - mount_contains_forager_files: a place that is, contains or lies inside one of
+//     Forager's files, or a writable place that contains a directory a name on the way
 //     to one is looked up in, a link say; the place and the file are its names, in that
 //     order.
 //   - mount_mode_conflict: a place inside another one, or the same, of the other mode:
@@ -460,10 +460,10 @@ type mountPlan struct {
 func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, p := range spec.ForagerFiles {
 		if strings.ContainsRune(p, 0) {
-			return mountPlan{}, errors.New("a runner file's path holds a NUL byte")
+			return mountPlan{}, errors.New("a Forager file's path holds a NUL byte")
 		}
 		if !filepath.IsAbs(p) {
-			return mountPlan{}, fmt.Errorf("the runner file %q is not an absolute path", p)
+			return mountPlan{}, fmt.Errorf("the Forager file %q is not an absolute path", p)
 		}
 	}
 	if spec.Wall == nil {
@@ -479,7 +479,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for i, f := range files {
 		ls, err := lookups(f.path)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve the runner's file %s: %w", f.path, err)
+			return mountPlan{}, fmt.Errorf("cannot resolve Forager's file %s: %w", f.path, err)
 		}
 		fileLooks[i] = ls
 	}
@@ -509,7 +509,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		if !m.writable {
 			continue
 		}
-		// A link on the way to a runner's file, in a place the agent writes, is one the
+		// A link on the way to a file of Forager's, in a place the agent writes, is one the
 		// agent points elsewhere.
 		for j, f := range files {
 			if l, ok := lookedUpIn(at, fileLooks[j]); ok {
@@ -614,7 +614,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	}
 	plan.Mounts = append(plan.Mounts, wall.Mount{Path: runDir, ReadOnly: true})
 	// The run directory is named by the runs directory the caller passed, in which the
-	// runner makes it.
+	// session makes it.
 	run.Path = spec.RunsDir
 	plan.sources = append(plan.sources, run)
 	return plan, nil
@@ -739,9 +739,9 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 func bindSources(binds []wall.Bind) ([]bindSource, error) {
 	var out []bindSource
 	for _, m := range binds {
-		what, kind := "the runner's directory "+m.Path, kindDir
+		what, kind := "Forager's directory "+m.Path, kindDir
 		if m.Helper {
-			what, kind = "the runner's helper "+m.Path, kindHelper
+			what, kind = "Forager's helper "+m.Path, kindHelper
 		}
 		src, err := source(m.Path, what, kind, !m.ReadOnly)
 		if err != nil {

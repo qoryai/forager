@@ -29,7 +29,7 @@ const RelayReady = "relay: listening"
 // listens on a port for each forward, written port=host:port, and copies every
 // connection to that forward's target, fixed when it starts. It reads nothing, decides
 // nothing and takes no instruction from whoever connects; the policy stays in the
-// session runner. It prints [RelayReady] to ready once every port listens and returns
+// gateway. It prints [RelayReady] to ready once every port listens and returns
 // when the context ends.
 //
 // The caller's binary runs it in a hidden mode, so the relay needs no image of its own:

@@ -219,7 +219,7 @@ func TestRecordedRunValidates(t *testing.T) {
 	}
 }
 
-// beyondSchema marks the refused fixtures of about whose rule only the runner checks: a
+// beyondSchema marks the refused fixtures of about whose rule only Forager checks: a
 // byte limit, the 8192 bytes of details as the event contains them, two subjects with
 // the same type and ref, a url's syntax and host, a url's user name or password, and a
 // member name twice in details.
@@ -282,7 +282,7 @@ func TestAboutFixturesValidate(t *testing.T) {
 	}
 }
 
-// TestAboutFixturesAgreeWithCheckAbout holds the runner's check to the same fixtures as
+// TestAboutFixturesAgreeWithCheckAbout holds Forager's check to the same fixtures as
 // the schema: every accepted one decodes into an About that CheckAbout passes, and every
 // refused one is refused, those marked beyond the schema included. A member About has no
 // field for has nothing to decode into, so the decoding refuses it, and only it: an

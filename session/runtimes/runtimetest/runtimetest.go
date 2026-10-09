@@ -1,5 +1,5 @@
 // Package runtimetest is what a runtime is held to, whoever wrote it: the checks a
-// [runtimes.Runtime] passes before the runner runs sessions of it. A runtime's own test
+// [runtimes.Runtime] passes before Forager runs sessions of it. A runtime's own test
 // calls [Conforms], and [Replays] with the records it was written against.
 package runtimetest
 
@@ -25,7 +25,7 @@ var (
 )
 
 // Conforms checks what holds of every runtime: a name events can carry, a stop the
-// runner can send, and a Prepare that leaves alone what is not its own, the caller's
+// session can send, and a Prepare that leaves alone what is not its own, the caller's
 // program and arguments when the run has no forwarder, and the machine outside the run
 // directory always.
 func Conforms(t *testing.T, rt runtimes.Runtime) {

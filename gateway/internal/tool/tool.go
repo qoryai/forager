@@ -1,13 +1,13 @@
 // Package tool starts the programs a run reaches through the proxy for more than a
 // token in a header: a tool.
 //
-// A tool is a program of the machine's that serves hosts. The runner starts it for the
-// run, outside the enclosure, with one argument the run's policy chose, and tells it
-// where to listen: a Unix socket in a private directory of the runner's, named in the
-// tool's environment as [link.EnvToolListen]. The proxy ends the session's TLS for the hosts the
+// A tool is a program of the machine's that serves hosts. The gateway starts it for the
+// run, outside the enclosure, with one argument the run's policy chose, and sets where
+// it listens: a Unix socket in a private directory of the gateway's, set in the tool's
+// environment as [link.EnvToolListen]. The proxy ends the session's TLS for the hosts the
 // tool serves, decides the host and the path as for any host, and hands each request it
 // lets through to the tool over that socket as plain HTTP/1.1. What the tool does with a
-// request, and whom it calls, is the tool's: the runner knows no protocol, holds none of
+// request, and whom it calls, is the tool's: the gateway knows no protocol, holds none of
 // the tool's secrets and reads no body.
 //
 // A [Definition] is the machine's. A run's policy selects definitions by name and
@@ -58,7 +58,7 @@ var listenWait = time.Minute
 const (
 	// stopGrace is how long a tool has between SIGTERM and SIGKILL when the run ends.
 	stopGrace = 5 * time.Second
-	// poll is how often the runner looks whether a starting tool listens yet.
+	// poll is how often the gateway looks whether a starting tool listens yet.
 	poll = 25 * time.Millisecond
 )
 
@@ -204,7 +204,7 @@ func Placeholders(chosen []Chosen) []string {
 	return out
 }
 
-// Running is a tool the runner started, listening.
+// Running is a tool the gateway started, listening.
 type Running struct {
 	Name string
 	// Serves are the hosts it serves, as the machine defined them.
@@ -221,7 +221,7 @@ type Running struct {
 	stderr  *os.File
 	drained chan struct{}
 	report  func(string)
-	// ready says the tool listens, from when its lines are the runner's to report.
+	// ready says the tool listens, from when its lines are the gateway's to report.
 	mu    sync.Mutex
 	ready bool
 	// early are the lines written before the tool listened, reported once it does, or
@@ -255,7 +255,7 @@ func (s *Set) Close() {
 	wg.Wait()
 }
 
-// Start starts every chosen tool with env, the runner's own environment, and waits
+// Start starts every chosen tool with env, Forager's own environment, and waits
 // until each listens. A tool that exits first, or does not listen within a minute, is
 // no run, and the last line it wrote to standard error is the reason given. After
 // that, what a tool writes to standard error goes to report line by line, and a tool
@@ -287,10 +287,10 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 	cmd.Env = append(slices.Clone(env), link.EnvToolListen+"="+sock, EnvRunID+"="+runID)
 	// A group of its own, so what the tool starts in turn is stopped with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Standard output goes to the null device: a pipe the runner copied would make
+	// Standard output goes to the null device: a pipe the gateway copied would make
 	// waiting for the tool wait for whatever it started as well.
 	cmd.Stdout = nil
-	// A pipe of the runner's own, not the command's: waiting for the tool does not wait
+	// A pipe of the gateway's own, not the command's: waiting for the tool does not wait
 	// for whatever it started that still holds its standard error.
 	stderr, w, err := os.Pipe()
 	if err != nil {
@@ -407,7 +407,7 @@ func (t *Running) stop() {
 	t.stopping = true
 	t.mu.Unlock()
 	defer os.RemoveAll(t.dir)
-	// What the tool started may hold its standard error after it is gone; the runner
+	// What the tool started may hold its standard error after it is gone; the gateway
 	// stops reading it.
 	defer t.stderr.Close()
 	select {

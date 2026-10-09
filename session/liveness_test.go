@@ -15,14 +15,14 @@ import (
 	"github.com/qoryai/runner/wall"
 )
 
-// leftID is the run id of an entry whose runner is gone.
+// leftID is the run id of an entry whose session is gone.
 const leftID = "0191f2a4-0000-7000-8000-00000000a11e"
 
-// leftEngine is the engine an entry whose runner is gone records.
+// leftEngine is the engine an entry whose session is gone records.
 var leftEngine = wall.Engine{Wall: "docker", Command: "/opt/left/docker",
 	Env: []string{"DOCKER_CONTEXT=left"}, Pinned: true}
 
-// leave writes the entry of a walled run whose runner is gone: its lock is free, and it
+// leave writes the entry of a walled run whose session is gone: its lock is free, and it
 // binds dir writable, with the engine when it is not nil.
 func leave(t *testing.T, dir string, engine *wall.Engine) string {
 	t.Helper()
@@ -86,7 +86,7 @@ func (w *enginedWall) Engine(context.Context) wall.Engine { return w.engine }
 
 func (w *enginedWall) EngineID(context.Context) (string, error) { return w.id, w.idErr }
 
-// TestAnEntryWithAContainerIsLive pins an entry whose runner is gone and whose run
+// TestAnEntryWithAContainerIsLive pins an entry whose session is gone and whose run
 // still has a container, in whatever state, on the engine the entry records: it is a
 // run still going, so a bind inside its writable bind is refused, exactly as for an
 // entry whose lock is held, and the entry stays. The engine asked is the entry's, not
@@ -120,7 +120,7 @@ func TestAnEntryWithAContainerIsLive(t *testing.T) {
 	}
 }
 
-// TestAnEntryWithoutAContainerIsRemoved pins an entry whose runner is gone and whose
+// TestAnEntryWithoutAContainerIsRemoved pins an entry whose session is gone and whose
 // run has no container left: the run is over, its entry is removed, and a run inside
 // its bind starts.
 func TestAnEntryWithoutAContainerIsRemoved(t *testing.T) {
@@ -142,7 +142,7 @@ func TestAnEntryWithoutAContainerIsRemoved(t *testing.T) {
 }
 
 // TestAnEngineThatCannotBeAskedStopsTheRun pins that a run that cannot tell whether an
-// entry whose runner is gone still has containers does not start, and binds nothing:
+// entry whose session is gone still has containers does not start, and binds nothing:
 // for an engine that fails, an entry that records no engine, and one that cannot be
 // read. Its names are the earlier run's id and the entry's absolute path, and the entry
 // stays.
@@ -188,7 +188,7 @@ func TestAnEngineThatCannotBeAskedStopsTheRun(t *testing.T) {
 }
 
 // TestAWalledRunRecordsItsEngine pins the entry of a run whose wall is in a container
-// engine: it records the engine, as the wall reaches it, for another runner to ask.
+// engine: it records the engine, as the wall reaches it, for another session to ask.
 func TestAWalledRunRecordsItsEngine(t *testing.T) {
 	w := &heldEngined{holdingWall: newHoldingWall(), engine: leftEngine}
 	s := start(walledSpec(t, w))

@@ -18,7 +18,7 @@ const preambleWait = 10 * time.Second
 var errNoToken = errors.New("the connection did not open with the run's token")
 
 // Require makes the proxy serve only connections that open with the preamble and this
-// token. The session runner calls it once, before the wall starts the relay.
+// secret. The session calls it once, before the wall starts the relay.
 func (p *Proxy) Require(token string, refused func()) {
 	p.refused = refused
 	p.token.Store(&token)

@@ -276,11 +276,11 @@ func (w *Server) deliver(batch []queued) {
 	}
 }
 
-// Accepted records a delivery the sink did not make itself, the ping, which the runner
+// Accepted records a delivery the sink did not make itself, the ping, which the gateway
 // posts before there is a sink.
 func (w *Server) Accepted(id, seq string) { w.ack(id, []queued{{seq: seq}}) }
 
-// ack records an accepted batch, or the server's stop, as it happens: a runner that
+// ack records an accepted batch, or the server's stop, as it happens: a gateway that
 // dies after it has nothing to say twice.
 func (w *Server) ack(id string, batch []queued) {
 	if w.acks == nil {
@@ -391,7 +391,7 @@ func Delivered(dir string) (map[string]bool, bool, error) {
 	}
 	seqs, stopped := map[string]bool{}, false
 	for _, line := range strings.Split(string(b), "\n") {
-		// A line the runner died in the middle of still names accepted events only: it is
+		// A line the gateway died in the middle of still names accepted events only: it is
 		// written after the answer, and a sequence cut short matches none.
 		fields := strings.Fields(line)
 		if len(fields) == 0 {

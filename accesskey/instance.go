@@ -70,7 +70,7 @@ func ReadInstanceFile(b []byte, machineID []byte) (id string, ok bool) {
 }
 
 // The variables qory reads the access key's secret, its id and the pin from. They are
-// the runner's alone: no tool, credential program or agent receives them.
+// the gateway's alone: no tool, credential program or agent receives them.
 const (
 	EnvSecret = "QORY_ACCESS_KEY_SECRET"
 	EnvID     = "QORY_ACCESS_KEY_ID"
@@ -78,7 +78,7 @@ const (
 )
 
 // WithoutVariables returns an environment, NAME=value entries, without [EnvSecret],
-// [EnvID] and [EnvPin]: the environment a program the runner starts receives.
+// [EnvID] and [EnvPin]: the environment a program Forager starts receives.
 func WithoutVariables(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

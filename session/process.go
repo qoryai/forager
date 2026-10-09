@@ -45,7 +45,7 @@ type process struct {
 	resized    func(cols, rows int)
 }
 
-// The size a pseudo-terminal gets when the runner's own input is not a terminal, or
+// The size a pseudo-terminal gets when Forager's own input is not a terminal, or
 // its size is unknown: the size a terminal has always been assumed to have.
 const (
 	defaultCols = 80

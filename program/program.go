@@ -1,4 +1,4 @@
-// Package program finds where a program the runner starts lives on this machine: the
+// Package program finds where a program Forager starts lives on this machine: the
 // directories a mount must leave out, so the agent cannot change what runs outside the
 // wall.
 package program

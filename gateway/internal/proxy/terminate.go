@@ -23,8 +23,8 @@ import (
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
 
-// Credential is one use of a token the runner holds for the session: the hosts it goes
-// to, how it is set, and the paths of those hosts the run may ask for.
+// Credential is one use of a credential the gateway holds for the session: the hosts it
+// goes to, how it is set, and the paths of those hosts the run may request.
 type Credential struct {
 	// Name is the credential's name in the machine's configuration, for the record.
 	Name  string
@@ -62,7 +62,7 @@ const headerPrefix = "Qory-"
 // are for, the hosts with path rules and the hosts the tools serve, answering as each
 // with a certificate of the run's authority, so it can read a request's path, set a
 // credential on it or hand it to a tool. Every other host stays a tunnel it does not
-// read. The session runner calls it once, before anything connects. The tools are the
+// read. The session calls it once, before anything connects. The tools are the
 // run's for as long as it lasts: a policy set later changes the paths and the
 // credentials, never the tools, nor the node's paths set with [Proxy.NodePaths].
 func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string, tools []Tool) {

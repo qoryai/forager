@@ -1,13 +1,13 @@
-// Package runtimes is the boundary between the runner and the program it runs: an agent
-// runtime such as Claude Code, Codex or one of a caller's own. The runner starts a
+// Package runtimes is the boundary between the session and the program it runs: an agent
+// runtime such as Claude Code, Codex or one of a caller's own. The session starts a
 // process, records it and stops it; what is particular to a program, how it is made to
 // report, what its records mean and how it is asked to leave, is behind [Runtime].
 //
-// There are three ways to a Runtime. [Bare] is a program the runner knows nothing
+// There are three ways to a Runtime. [Bare] is a program Forager knows nothing
 // about: the run is recorded, the session inside it is not. [Described] is a runtime
 // written as data, a descriptor of the contract that matches records and copies fields
 // and names an [Installer] among the ones it is given; nothing of a descriptor runs.
-// And a caller that embeds the runner implements the interface itself. The catalog
+// And a caller that embeds Forager implements the interface itself. The catalog
 // package resolves a name to the first two.
 package runtimes
 
@@ -22,7 +22,7 @@ import (
 	"github.com/qoryai/runner/session/internal/descriptor"
 )
 
-// Runtime is one program the runner can run a session of.
+// Runtime is one program Forager can run a session of.
 type Runtime interface {
 	// Name is the runtime's name as events report it: claude, codex.
 	Name() string
@@ -30,7 +30,7 @@ type Runtime interface {
 	// in run.started and not checked against what is installed. Empty when the adapter
 	// was written against none.
 	Version() string
-	// Prepare makes a launch one the runner can follow: it installs the forwarder as
+	// Prepare makes a launch one the session can follow: it installs the forwarder as
 	// the program's hook, writes what that takes into the run directory, and returns
 	// the launch to start in place of the one given, command and arguments. A program
 	// that waits for a person to approve a stand-in of [Attach.Placeholders] may be
@@ -39,7 +39,7 @@ type Runtime interface {
 	// prepare returns the launch as it is.
 	Prepare(Attach) (Launch, error)
 	// ReadsOutput reports whether the program's standard output, when the session runs
-	// on pipes, is JSON lines the runner hands to Map as records of [SourceOutput].
+	// on pipes, is JSON lines the session passes to Map as records of [SourceOutput].
 	ReadsOutput() bool
 	// Map turns one record of the program into one event of the contract, its type and
 	// data, or reports that the record is none.
@@ -71,7 +71,7 @@ type Attach struct {
 	// enclosure sees it read-only at the same path.
 	RunDir string
 	// Forwarder is the command to install as the program's hook: it reads a hook's
-	// input and forwards it to the runner as a record of [SourceHooks]. Empty means the
+	// input and forwards it to the session as a record of [SourceHooks]. Empty means the
 	// run has none, and no hooks are installed.
 	Forwarder []string
 	// Interactive says the session runs on a pseudo-terminal, not on pipes.
@@ -100,9 +100,9 @@ type Secrets interface {
 // descriptor: Declares, the secrets it reads, each from one variable; OneOf, the
 // groups of them of which the runtime needs one at most; Reserves, the
 // variables it reads a credential from beside the declared ones; Denies, the
-// variables the runner leaves out of a server's set for it; and CredentialFiles, the
-// files in which it keeps a credential of its own, ~ being the home of the user the
-// runner runs as.
+// variables the session leaves out of a server's set for it; and CredentialFiles, the
+// files in which it keeps a credential of its own, ~ being the home of the user
+// Forager runs as.
 type Declarations = descriptor.Secrets
 
 // Declaration is one secret a runtime reads: its id, a title for a person, the
@@ -128,7 +128,7 @@ const (
 )
 
 // Stop is how a program is asked to leave: Signal, one [CheckStopSignal] passes, and
-// Grace, the time until SIGKILL. Empty and zero are the runner's defaults.
+// Grace, the time until SIGKILL. Empty and zero are Forager's defaults.
 type Stop struct {
 	Signal string
 	Grace  time.Duration
@@ -139,7 +139,7 @@ type Stop struct {
 // names an installer; it never brings one.
 type Installer func(events []string, a Attach) (Launch, error)
 
-// Bare is a program the runner knows nothing about: nothing is prepared, no record is
+// Bare is a program Forager knows nothing about: nothing is prepared, no record is
 // read, and it is asked to leave the default way. The run itself, its process, its
 // output and its egress, is recorded all the same.
 func Bare(name string) Runtime { return bare(name) }
@@ -161,7 +161,7 @@ func (bare) ReadsOutput() bool { return false }
 // Map finds no event in any record.
 func (bare) Map(Record) (string, map[string]any, bool) { return "", nil, false }
 
-// Stop is the runner's defaults.
+// Stop is Forager's defaults.
 func (bare) Stop() Stop { return Stop{} }
 
 // Headless is false: nothing is known of the arguments.
@@ -180,7 +180,7 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 	if h := d.Sources.Hooks; h != nil {
 		r.install = installers[h.Install]
 		if r.install == nil {
-			return nil, fmt.Errorf("%s: hook installer %q is not one this runner implements", name, h.Install)
+			return nil, fmt.Errorf("%s: hook installer %q is not one Forager implements", name, h.Install)
 		}
 	}
 	if s := d.Stop; s != nil {
@@ -224,7 +224,7 @@ func (r *described) Headless(args []string) bool { return namesHeadless(r.headle
 // that is exactly it; a long one, two dashes, matches the token or the token up to an
 // equals sign, its --name=value form. Tokens are compared one by one and no flag
 // grammar is parsed: which tokens are values of the flags before them is the program's
-// to know, and the runner does not guess at it, so a value that happens to spell a
+// to know, and Forager does not guess at it, so a value that happens to spell a
 // named argument counts as one.
 func namesHeadless(named, args []string) bool {
 	for _, arg := range args {

@@ -53,7 +53,7 @@ const (
 // created with --internal and on nothing else, so it has no route out and its resolver
 // knows only that network; the network's bridge gets no address, so the engine's host is
 // not on it either. The relay's container is on that network and on an ordinary
-// one; it runs [Relay], forwarding one port to the session runner's proxy, and is the
+// one; it runs [Relay], forwarding one port to the gateway, and is the
 // one peer the agent can reach. Both run as a user that is not root, with every
 // capability dropped and no new privileges.
 type Docker struct {
@@ -87,8 +87,8 @@ type Docker struct {
 	recorded    *Engine
 }
 
-// selected is the engine's selection the adapter's commands run with, nil for the
-// runner's own environment.
+// selected is the engine's selection the adapter's commands run with, nil for
+// Forager's own environment.
 func (d *Docker) selected() []string {
 	d.selectionMu.Lock()
 	defer d.selectionMu.Unlock()
@@ -102,8 +102,8 @@ func (d *Docker) selected() []string {
 // needs neither Docker nor Linux.
 type system interface {
 	// run runs a command and returns its output, standard error included. env, when
-	// not nil, is the selection of the engine the command reaches, in place of the
-	// runner's own.
+	// not nil, is the selection of the engine the command reaches, in place of
+	// Forager's own.
 	run(ctx context.Context, argv, env []string) ([]byte, error)
 	// output runs a command and returns its standard output alone; env is as for run.
 	output(ctx context.Context, argv, env []string) ([]byte, error)
@@ -281,8 +281,8 @@ type dockerEnclosure struct {
 	// made holds the commands that remove what was created, in the order created.
 	made [][]string
 	temp string
-	// env is the engine's selection every command of the run's runs with, nil for the
-	// runner's own environment.
+	// env is the engine's selection every command of the run's runs with, nil for
+	// Forager's own environment.
 	env []string
 }
 
@@ -587,7 +587,7 @@ func under(dir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, up)
 }
 
-// limits are the agent's resource flags. The relay gets none: it is the runner's own.
+// limits are the agent's resource flags. The relay gets none: it is Forager's own.
 func limits(l Limits) ([]string, error) {
 	var out []string
 	if l.CPUs != "" {
@@ -710,7 +710,7 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 }
 
 // Reap removes the containers and the networks that carry the run's label: what a
-// runner that died left behind. The containers go first, since a network in use stays.
+// session that died left behind. The containers go first, since a network in use stays.
 func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 	if !runIDShape.MatchString(runID) {
 		return 0, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
@@ -755,7 +755,7 @@ func (hostSystem) output(ctx context.Context, argv, env []string) ([]byte, error
 	return selectedCommand(ctx, argv, env).Output()
 }
 
-// selectedCommand is hostCommand, with the engine's selection in place of the runner's
+// selectedCommand is hostCommand, with the engine's selection in place of Forager's
 // own when env is not nil.
 func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 	if env == nil {
@@ -765,7 +765,7 @@ func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 }
 
 // hostCommand is a command of the machine's the wall runs, the docker CLI say, with
-// the runner's environment without the access key's variables, which neither the CLI
+// Forager's environment without the access key's variables, which neither the CLI
 // nor a credential helper it starts receives.
 func hostCommand(ctx context.Context, argv []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)

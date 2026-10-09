@@ -279,7 +279,7 @@ func (v *verified) client() *server.Client {
 }
 
 // TestDiscoverReadsTheConfigurationAndItsDigest pins discovery: the well-known path,
-// the document decoded with a section the runner does not know ignored, the node id,
+// the document decoded with a section the gateway does not know ignored, the node id,
 // the digest from the header, and no run on a status that is not 200.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)

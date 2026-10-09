@@ -41,7 +41,7 @@ type Spec struct {
 	// Env is the environment the run inherits, NAME=value: a nil Env is the process's
 	// own, or nothing under a Wall, where only what the run lists goes in. It is the
 	// lowest of the run's sources of variables: LaunchDefaults, Variables and the
-	// server's variables win over it, apart from it, so the runner distinguishes them
+	// server's variables win over it, apart from it, so the session distinguishes them
 	// from what is merely inherited (contracts/forager/v1/README.md §Variables). The
 	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them,
@@ -51,7 +51,7 @@ type Spec struct {
 	// LaunchFixed is the values the harness computes itself, NAME=value. They are fixed
 	// names of the run: they win over every other source of a variable, the built-in
 	// deny list, denied-variables.json, leaves one out, and the runtime's denies and
-	// Variables.Deny do not. The runner's, the wall's and the runtime preparation's
+	// Variables.Deny do not. Forager's, the wall's and the runtime preparation's
 	// names win over them.
 	LaunchFixed []string
 	// LaunchDefaults is the values the harness's author wrote as defaults, NAME=value.
@@ -61,7 +61,7 @@ type Spec struct {
 	// variables of the server's run configuration.
 	Variables Variables
 	// HarnessHome is the harness's home as the agent's process sees it, an absolute
-	// path; empty means none. When set, the runner sets QORY_HARNESS_HOME to it, as one
+	// path; empty means none. When set, the session sets QORY_HARNESS_HOME to it, as one
 	// of its own names, like QORY_RUN_ID.
 	HarnessHome string
 	// OnVariables, when not nil, is called once the run's variables are resolved,
@@ -130,17 +130,17 @@ type Spec struct {
 	// the other mode is no run, mount_mode_conflict. One whose path goes through a link
 	// inside a writable one, and that does not resolve into it, is no run, whatever its
 	// mode, mount_through_link. Dir is writable, and is bound at its own path when no mount
-	// holds it. The runner adds the run directory, read-only. A walled run refuses a
+	// holds it. The session adds the run directory, read-only. A walled run refuses a
 	// bind that lies inside, or is reached through, a writable bind of another walled
 	// run of this user's still going, apart from the same root, a writable one that
 	// holds one of that run's binds or the way to one, and one that is, holds or lies
 	// inside that run's run directory: mount_shared_with_run. Without a Wall they mean
 	// nothing.
 	Mounts []wall.Mount
-	// ForagerFiles are the absolute paths of the caller's files that are the runner's
-	// own, such as the directory of qory's runner file with the access key secret. A
+	// ForagerFiles are the absolute paths of the caller's files that are Forager's
+	// own, such as the directory of qory's forager.yaml with the access key secret. A
 	// walled run refuses a mount, or a workspace, that is, contains or lies inside one of
-	// them, or one of the paths the runner knows itself, RunsDir among them,
+	// them, or one of the paths Forager knows itself, RunsDir among them,
 	// mount_contains_forager_files: see [Overlap].
 	ForagerFiles []string
 	// Credentials are the credentials this machine defines; the run's policy selects
@@ -150,15 +150,15 @@ type Spec struct {
 	Credentials []Credential
 	// Tools are the tools this machine defines; the run's policy selects among them by
 	// name. A selected tool needs a Wall, as a credential does: the proxy terminates TLS
-	// for the hosts it serves. The runner starts each selected tool before the runtime
+	// for the hosts it serves. The gateway starts each selected tool before the runtime
 	// and stops it when the run ends; the tools a run has are fixed when it starts.
 	Tools []Tool
 	// Declared is the egress the harness declared, nil when nothing was. It is
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
 	Declared []string
-	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of the
-	// runner's files, so a walled run needs one outside its mounts and Dir.
+	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of
+	// Forager's files, so a walled run needs one outside its mounts and Dir.
 	RunsDir string
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
@@ -172,14 +172,14 @@ type Spec struct {
 	// Labels are the caller's own names for the run, its key in a queue, a repository, an
 	// issue: reported in run.started and no other event, so a receiver ties the run id to
 	// what it knows, and sent, all of them, as the query of the run configuration request,
-	// so the server chooses the run's policy by them. The runner reads nothing into them.
+	// so the server chooses the run's policy by them. Forager reads nothing into them.
 	// At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and dash, a value
 	// at most 256 bytes.
 	Labels map[string]string
 	// About is what the run is about, as the caller passed it: the kind of run, a title,
 	// the subjects it works on and details. It is reported in run.started and no other
 	// event, so a receiver shows the run by it; it is never sent on the run configuration
-	// request and never selects a policy. The runner reads nothing into it. CheckAbout
+	// request and never selects a policy. Forager reads nothing into it. CheckAbout
 	// holds it to its bounds before the server is contacted. Nil, or an About whose every
 	// member is empty, is left out. An empty Kind, Title or Subjects counts as absent and
 	// is left out of the event. Details is shown to every reader of the run, so it
@@ -189,10 +189,10 @@ type Spec struct {
 	// runtime is stopped the way the context ending stops it, and run.exited carries
 	// the reason.
 	Timeout time.Duration
-	// StopSignal is the signal that asks the runtime to leave when the runner stops it,
+	// StopSignal is the signal that asks the runtime to leave when the session stops it,
 	// at the Timeout or the context's end: one CheckStopSignal passes. A runtime may
 	// close a session on one signal and drop it on another, and which is the runtime's
-	// to say, not the runner's. Empty means the Runtime's, and DefaultStopSignal when it
+	// to say, not the session's. Empty means the Runtime's, and DefaultStopSignal when it
 	// names none.
 	StopSignal string
 	// StopGrace is how long the runtime gets between the stop signal and SIGKILL: the
@@ -206,7 +206,7 @@ type Spec struct {
 	// Server, heartbeats run from the accepted ping, which announces the interval, a
 	// whole number of seconds from 1 to 300; without one, from run.started.
 	Heartbeat time.Duration
-	// Report receives one line per thing the runner tells its user; nil means Stderr.
+	// Report receives one line per thing the session reports to its user; nil means Stderr.
 	Report func(string)
 }
 
@@ -243,14 +243,14 @@ type Discovery struct {
 // with apiary_public_key_missing without a pin, unauthorized on a 401,
 // answer_unsigned on an answer that does not verify under the pin, instance_limit when
 // the node's live instances are at its limit, and run_closed when the server closes
-// the run before it starts. The runner's own refusals are Refusals too, with the names
+// the run before it starts. Forager's own refusals are Refusals too, with the names
 // they concern and never a value: run_configuration_invalid, variable_reserved,
 // placeholder_conflict, tool_unknown, image_unknown, mount_contains_forager_files,
 // mount_mode_conflict and mount_shared_with_run among them. errors.As finds one in
 // what [Run] returns.
 type Refusal = accesskey.Refusal
 
-// The environment variables the session gets from the runner. EnvHarnessHome is set
+// The environment variables the session gets from Forager. EnvHarnessHome is set
 // when the spec has a HarnessHome.
 const (
 	EnvRunID       = "QORY_RUN_ID"
@@ -346,7 +346,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	dir := filepath.Join(spec.RunsDir, runID)
-	// Behind a wall, a place the run lists that holds one of the runner's files, or that
+	// Behind a wall, a place the run lists that holds one of Forager's files, or that
 	// a walled agent of another run still going can change, is no run, before the server
 	// is contacted and before anything starts. The run is then listed among the walled
 	// runs still going until it ends, however it ends.
@@ -542,7 +542,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	// The runtime prepares the launch before the variables are resolved, because what it
-	// sets is the runner's own and wins over a server's variable of the same name. Behind
+	// sets is Forager's own and wins over a server's variable of the same name. Behind
 	// a wall the run directory goes in read-only, apart from every place the run binds:
 	// the settings are read from it, and the record in it is not the agent's to rewrite
 	// or move. Behind a wall the runtime learns the placeholders the run sets.
@@ -643,7 +643,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// starts it inside, which sets the proxy and socket variables by the addresses the
 	// enclosure reaches them on. The environment is what the run inherits, then the
 	// variables as resolved, the harness's computed values, what the runtime's
-	// preparation sets and the runner's own, each over the ones before, and behind a
+	// preparation sets and Forager's own, each over the ones before, and behind a
 	// wall the placeholders and, empty, the runtime's declared and reserved variables
 	// nothing sets, so an image's own value for one does not reach the runtime. The
 	// resolution has left out every value of a fixed name, so what wins here by position
@@ -969,7 +969,7 @@ func placeholders(names []string) []string {
 	return out
 }
 
-// environment is the session's environment: base with the runner's variables set,
+// environment is the session's environment: base with Forager's variables set,
 // replacing any of the same names, and without the access key's variables, whichever
 // of them brought one.
 func environment(base []string, sets ...[]string) []string {
@@ -1026,7 +1026,7 @@ func hold(ctx context.Context, spec Spec, defs []gateway.CredentialDefinition, p
 	for _, name := range held.Placeholders {
 		if passes(spec, name) {
 			held.Close()
-			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return held, nil
@@ -1044,7 +1044,7 @@ func choose(spec Spec, defs []gateway.ToolDefinition, pol *policy.Loaded, held *
 	}
 	for _, name := range gateway.ToolPlaceholders(chosen) {
 		if passes(spec, name) {
-			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
+			return nil, refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", name)
 		}
 	}
 	return chosen, nil
@@ -1077,8 +1077,8 @@ func sameTools(a, b []policy.Selected) bool {
 	return slices.Equal(order(a), order(b))
 }
 
-// toolEnv is the environment a tool gets: the runner's own, without the variables the
-// machine's credentials and the access key are read from, which are the runner's to
+// toolEnv is the environment a tool gets: Forager's own, without the variables the
+// machine's credentials and the access key are read from, which are the gateway's to
 // hold and no tool's.
 func toolEnv(creds []Credential) []string {
 	var out []string

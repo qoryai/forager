@@ -59,7 +59,7 @@ func Example() {
 	os.Exit(res.ExitCode)
 }
 
-// Example_forward is the hook command the runner installs, `<exe> forward` for the
+// Example_forward is the hook command the session installs, `<exe> forward` for the
 // spec above: it reads the hook's input from stdin and hands it to the run that
 // installed it, and exits 0 whatever happened.
 func Example_forward() {

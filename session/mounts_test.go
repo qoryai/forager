@@ -13,8 +13,8 @@ import (
 	"github.com/qoryai/runner/wall"
 )
 
-// TestOverlapComparesWholeComponentsThroughLinks pins how a mount and one of the
-// runner's paths stand to each other: by whole components, after symbolic links, with a
+// TestOverlapComparesWholeComponentsThroughLinks pins how a mount and one of
+// Forager's paths stand to each other: by whole components, after symbolic links, with a
 // part that does not exist yet resolved through the parent that does.
 func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 	root := t.TempDir()
@@ -23,14 +23,14 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// link leads to the runner's directory a/b, and m to its parent a.
+	// link leads to Forager's directory a/b, and m to its parent a.
 	if err := os.Symlink(filepath.Join(root, "a", "b"), filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(root, "a"), filepath.Join(root, "m")); err != nil {
 		t.Fatal(err)
 	}
-	// dangling and relative lead into the runner's directory, to names that do not
+	// dangling and relative lead into Forager's directory, to names that do not
 	// exist yet.
 	if err := os.Symlink(filepath.Join(root, "a", "b", "later"), filepath.Join(root, "dangling")); err != nil {
 		t.Fatal(err)
@@ -49,8 +49,8 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		{"sibling with the path as prefix", p("a/bc"), p("a/b"), ""},
 		{"sibling the path is a prefix of", p("a/b"), p("a/bc"), ""},
 		{"the filesystem's root", "/", p("a/b"), "contains"},
-		{"a link to the runner's directory, as the path", p("a"), p("link"), "contains"},
-		{"a link to the runner's directory, as the mount", p("link"), p("a/b"), "is"},
+		{"a link to Forager's directory, as the path", p("a"), p("link"), "contains"},
+		{"a link to Forager's directory, as the mount", p("link"), p("a/b"), "is"},
 		{"a mount under a linked parent", p("m/b"), p("a/b"), "is"},
 		{"a mount under a linked parent, above the path", p("m"), p("a/b/file"), "contains"},
 		{"a path that does not exist yet", p("a"), p("a/b/new/deeper"), "contains"},
@@ -79,9 +79,9 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 		})
 	}
 
-	// A link in a directory the runner cannot search may lead anywhere: Overlap cannot
+	// A link in a directory Forager cannot search may lead anywhere: Overlap cannot
 	// say, and a run with it as a mount does not start.
-	t.Run("a link in a directory the runner cannot search", func(t *testing.T) {
+	t.Run("a link in a directory Forager cannot search", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root searches every directory")
 		}
@@ -113,7 +113,7 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 
 // TestOverlapJudgesTheSameDirectoryByTheFilesystem pins that on a disk that ignores
 // case, a path written in another case is the directory it names, and that an existing
-// directory matching a pattern of the runner's is refused like the pattern.
+// directory matching a pattern of Forager's is refused like the pattern.
 func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
 	root := t.TempDir()
 	for _, d := range []string{"Home/User/.config/qory", "tmp/qory-tool-abc"} {
@@ -144,7 +144,7 @@ func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
 	}
 }
 
-// foragerDir is a runner file's directory, a directory below a fresh one: the parent is
+// foragerDir is a Forager file's directory, a directory below a fresh one: the parent is
 // what a careless mount lists.
 func foragerDir(t *testing.T) (parent, dir string) {
 	t.Helper()
@@ -173,7 +173,7 @@ func runErr(sp session.Spec) error {
 }
 
 // TestAMountOfTheForagersFilesIsNoRun pins the refusal of a walled run whose mount
-// contains a runner file's directory: it names the mount, then the runner's path, the
+// contains a Forager file's directory: it names the mount, then Forager's path, the
 // server is never contacted, the wall builds nothing and no run directory is made.
 func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	c := newControl(t)
@@ -200,7 +200,7 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 		t.Errorf("a run directory was made: %v", err)
 	}
 
-	// A mount inside the runner's directory, and the workspace itself, are refused too.
+	// A mount inside Forager's directory, and the workspace itself, are refused too.
 	sp.Mounts = []wall.Mount{{Path: filepath.Join(dir, "labels")}}
 	r = mountRefusal(t, runErr(sp))
 	if want := []string{filepath.Join(dir, "labels"), dir}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, " lies inside ") {
@@ -224,7 +224,7 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 }
 
 // TestAMountBesideTheForagersFilesRuns pins that a mount that neither holds nor lies in
-// one of the runner's files runs, and that a run without a wall checks nothing, having
+// one of Forager's files runs, and that a run without a wall checks nothing, having
 // no mounts.
 func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 	_, dir := foragerDir(t)
@@ -235,7 +235,7 @@ func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 	sp.ForagerFiles = []string{dir}
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil || res.ExitCode != 0 || !w.wrapped {
-		t.Fatalf("a walled run beside the runner's files: %+v, %v", res, err)
+		t.Fatalf("a walled run beside Forager's files: %+v, %v", res, err)
 	}
 
 	sp = spec(t, nil, "FAKE_EXIT=0")
@@ -247,7 +247,7 @@ func TestAMountBesideTheForagersFilesRuns(t *testing.T) {
 }
 
 // TestAMountOfAToolsProgramIsNoRun pins that the directory of a tool's program is one
-// of the runner's files, whether or not the run's policy selects the tool, and so is
+// of Forager's files, whether or not the run's policy selects the tool, and so is
 // the directory a link to the program leads to.
 func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "bin")
@@ -290,7 +290,7 @@ func TestAMountOfAToolsProgramIsNoRun(t *testing.T) {
 	}
 }
 
-// TestForagerFilesAreAbsolutePaths pins that a runner file that is no absolute path is
+// TestForagerFilesAreAbsolutePaths pins that a Forager file that is no absolute path is
 // a plain error, not a refusal, walled or not.
 func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
@@ -299,13 +299,13 @@ func TestForagerFilesAreAbsolutePaths(t *testing.T) {
 		_, err := session.Run(context.Background(), sp)
 		var r *session.Refusal
 		if err == nil || errors.As(err, &r) {
-			t.Errorf("runner file %q: %v", p, err)
+			t.Errorf("Forager file %q: %v", p, err)
 		}
 	}
 }
 
-// TestAMountOfTheWallsFilesIsNoRun pins that the files a wall lists as its own are the
-// runner's: the Docker adapter's helper among them.
+// TestAMountOfTheWallsFilesIsNoRun pins that the files a wall lists as its own are
+// Forager's: the Docker adapter's helper among them.
 func TestAMountOfTheWallsFilesIsNoRun(t *testing.T) {
 	helpers := filepath.Join(t.TempDir(), "helpers")
 	sp := spec(t, nil, "FAKE_EXIT=0")
@@ -332,7 +332,7 @@ func (w *swappingWall) Prepare(ctx context.Context, req wall.Request) (wall.Encl
 }
 
 // TestTheMountsAreCheckedAgainBeforeTheWrap pins the second check: a mount that led
-// nowhere at the start and is a link to the runner's files by the time the enclosure
+// nowhere at the start and is a link to Forager's files by the time the enclosure
 // is wrapped is refused the same way, and the enclosure never shows it.
 func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 	parent, dir := foragerDir(t)
@@ -353,7 +353,7 @@ func TestTheMountsAreCheckedAgainBeforeTheWrap(t *testing.T) {
 
 // TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun pins that the private directories
 // runs make in the system's temporary directory, for their record sockets and for the
-// Docker wall's environment files, are the runner's files whoever made them: a mount
+// Docker wall's environment files, are Forager's files whoever made them: a mount
 // of the temporary directory while another run's exist is refused, and so is a mount
 // of one of them, or of a file in one.
 func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {

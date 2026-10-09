@@ -1,4 +1,4 @@
-// Package claude is Claude Code as a runtime of the runner: the contract's descriptor
+// Package claude is Claude Code as a runtime of Forager: the contract's descriptor
 // for it, and the one thing of it that takes code, the claude-settings installer. It
 // puts the forwarder into the settings Claude Code reads its hooks from and, for an
 // interactive session with the API key's stand-in, pre-approves the stand-in in the

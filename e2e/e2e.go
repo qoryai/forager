@@ -353,7 +353,7 @@ func Run(t *testing.T, o Options) {
 	}
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")
-	check("the settings are read-only", p.SettingsWrite != "", "the probe opened the runner's settings for writing")
+	check("the settings are read-only", p.SettingsWrite != "", "the probe opened the session's settings for writing")
 	written, err := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
 	check("the workspace is the run's", err == nil && string(written) == "inside", err)
 	if runtime.GOOS == "linux" {
@@ -362,7 +362,7 @@ func Run(t *testing.T, o Options) {
 			check("no host namespace: "+ns, p.Namespaces[ns] != "" && p.Namespaces[ns] != host, fmt.Sprintf("inside %q, the host %q", p.Namespaces[ns], host))
 		}
 	}
-	t.Run("the hook reaches the runner", func(t *testing.T) {
+	t.Run("the hook reaches the session", func(t *testing.T) {
 		if !o.Hooks {
 			t.Skip("the adapter carries no hook socket across on this machine")
 		}
@@ -517,7 +517,7 @@ func checkKeys(t *testing.T, o Options, r result, keys runtimeKeys, trusted erro
 	t.Run(names[4], func(t *testing.T) { checkNoKey(t, r) })
 }
 
-// checkNoKey checks that the run's directory, its output and what the runner reported
+// checkNoKey checks that the run's directory, its output and what the session reported
 // contain no runtime's key.
 func checkNoKey(t *testing.T, r result) {
 	t.Helper()
@@ -534,7 +534,7 @@ func checkNoKey(t *testing.T, r result) {
 			return nil
 		})
 	}
-	for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the runner reported": r.reports} {
+	for name, s := range map[string]string{"the output": r.out, "the errors": r.errs, "what the session reported": r.reports} {
 		if strings.Contains(s, keyMark) {
 			where = append(where, name)
 		}
@@ -605,12 +605,12 @@ type result struct {
 	probe     report
 	events    []map[string]any
 	// out, errs and reports are the run's standard output and error, and what the
-	// runner reported.
+	// session reported.
 	out, errs, reports string
 }
 
 // run runs the probe as the runtime of a session behind the wall and reads what it
-// reported and what the runner recorded.
+// reported and what the session recorded.
 func run(t *testing.T, o Options, interactive bool, h hosts, outside string) result {
 	t.Helper()
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")

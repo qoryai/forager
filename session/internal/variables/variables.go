@@ -1,7 +1,7 @@
 // Package variables resolves the variables a run's agent receives, name by name, from
 // the sources that set them, and records where each came from and what lost.
 //
-// The sources form rungs, the highest first: the run's fixed names, the runner's, the
+// The sources form rungs, the highest first: the run's fixed names, Forager's, the
 // wall's, the runtime preparation's, the placeholders and the values the harness
 // computes; the server's, which it resolved among its own levels; the run's own, --env
 // for qory; the machine's, wall.env; the harness's written defaults; and the
@@ -43,7 +43,7 @@ const (
 	Accept = "accept"
 )
 
-// The variables the runner sets for the session itself, the one QORY_ names a run's
+// The variables Forager sets for the session itself, the one QORY_ names a run's
 // environment may contain.
 const (
 	envRunID  = "QORY_RUN_ID"
@@ -100,7 +100,7 @@ type Inputs struct {
 	Placeholders []string
 	// ReadFrom is the names of the variables the machine's values are read from.
 	ReadFrom []string
-	// Runner is the names the runner, the wall and the runtime's preparation set: with
+	// Own is the names Forager, the wall and the runtime's preparation set: with
 	// the placeholders and Fixed, the run's fixed names.
 	Own []string
 }
@@ -255,7 +255,7 @@ func byName(env []string) map[string]string {
 
 // Check refuses a run whose own environment, env, NAME=value, passes into the
 // enclosure what stays outside. In a walled run, a QORY_ variable other than the two
-// the runner sets for the session, or a variable a machine value is read from, is
+// Forager sets for the session, or a variable a machine value is read from, is
 // [refusal.VariableReserved]. In any run, a value for a placeholder is
 // [refusal.PlaceholderConflict].
 func Check(env []string, walled bool, placeholders, machine []string) error {
@@ -279,11 +279,11 @@ func Check(env []string, walled bool, placeholders, machine []string) error {
 			own := strings.HasPrefix(strings.ToUpper(n), "QORY_") && n != envRunID && n != envSocket
 			return own || slices.Contains(machine, n)
 		}); len(reserved) > 0 {
-			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, the runner's own or what a value of the machine's is read from", strings.Join(reserved, ", "))
+			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's own or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
 	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {
-		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the runner holds outside the enclosure", strings.Join(conflict, ", "))
+		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the gateway holds outside the enclosure", strings.Join(conflict, ", "))
 	}
 	return nil
 }

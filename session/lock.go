@@ -7,12 +7,12 @@ import (
 	"syscall"
 )
 
-// lockFile is the file in a run directory its runner holds locked for as long as it
+// lockFile is the file in a run directory its session holds locked for as long as it
 // lives. The lock is the kernel's and ends with the process, however it ends, so a
-// free lock says the runner is gone and a held one that the run is still going.
+// free lock says the session is gone and a held one that the run is still going.
 const lockFile = "lock"
 
-// ErrRunning says a run directory's runner is still alive.
+// ErrRunning says a run directory's session is still alive.
 var ErrRunning = errors.New("the run is still going")
 
 // lock takes the run directory's lock without waiting; [ErrRunning] when another
