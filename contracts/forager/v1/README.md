@@ -797,19 +797,23 @@ for a run a gateway opened. Such a run's `labels`, `run_key` among them, and
 `about.details` come from the run credential's mapping.
 
 **How a run ends.** `dev.qory.run.exited` contains `reason` when the run ended other
-than by the runtime's own exit. The session writes `timeout` and `run_closed`
-(§Sequence), and the resend of a record writes `gateway_lost` (§The server). The gateway
-writes `session_lost`, the gateway heard nothing from the session for 3 × its heartbeat
-interval, and `quiet`, a run with no session had no connection for the gateway's quiet
-period, which `quiet_seconds` contains. `credential_expired`, the run credential's `exp`
-passed with no fresh credential for the same run key, and `run_ended_at_issuer`, the
-issuer's introspection endpoint answered that the run credential is no longer active,
-are the gateway's for a run with no session; on a session's run the gateway's link ends
-the run with that code, and the session writes it (§The gateway's link). A session's run
-always contains `state` and `exit_code`; with `gateway_lost` and `session_lost` they are
-`failed` and `-1`, since no exit status was recorded. A run a gateway opened contains
-neither, `gateway_lost` included. Beyond that the contract fixes no state per reason: a
-receiver maps each reason to a state of its own.
+than by the runtime's own exit. The session writes `timeout`, and `run_closed` when the
+server it reports to closes the run (§Sequence); the resend of a record writes
+`gateway_lost` (§The server). The gateway writes the others, on a run with no session and
+on a session's run on its link alike: `session_lost`, the gateway heard nothing from the
+session for 3 × its heartbeat interval, or the gateway refused a batch of the session's
+(§The gateway's link); `quiet`, a run with no session had no connection for the
+gateway's quiet period, which `quiet_seconds` contains; `credential_expired`, the run
+credential's `exp` passed with no fresh credential for the same run key;
+`run_ended_at_issuer`, the issuer's introspection endpoint answered that the run
+credential is no longer active; and `run_closed` when the server closes a run on the
+link. On a session's run the session records the same reason in its own record alone
+(§The gateway's link, The end of a run at the gateway). A session's run always contains
+`state` and `exit_code`; with `gateway_lost` and `session_lost`, and in every
+`dev.qory.run.exited` the gateway writes for it, they are `failed` and `-1`, since no
+exit status was recorded. A run a gateway opened contains neither, `gateway_lost`
+included. Beyond that the contract fixes no state per reason: a receiver maps each
+reason to a state of its own.
 
 `dev.qory.run.policy_applied` records where the policy comes from: `source` is `none`,
 `config` or `fetched`; `url` is where the run configuration was fetched from, and
@@ -1449,26 +1453,27 @@ The body is a `link-batch.schema.json` document: events of the run as
 `event.schema.json` defines them, with their ids and without `sequence`, in the
 session's own order. The gateway numbers the run's stream: one `sequence` per run, from
 `0000000001` and contiguous, as §The events requires. Into a session's run it merges its
-own `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`,
-`session_lost`, or `gateway_lost` when it sends its record again. It numbers an event
-once, by its id, so a batch the session sends again is not numbered twice, and it
-delivers the stream to the server under its access key. The gateway is the node toward
-the server, so it sends the ping; the session sends no ping on the link, and a link batch
-holds none. `dev.qory.run.policy_applied` is the session's: the session writes it from
-the run answer, and again from a reload answer whose digest changed, at the sequence
-where the new configuration takes effect, since only the session has the run's resolved
-variables and the harness's hosts. For a run with no session the gateway writes it. The
-session keeps its own file record of its own events, numbered as today (§The record
-files): that record is the session's, not the run's stream. The gateway keeps the record
-of what it sent, and resends it after a crash (§The server, After Forager stops
-unexpectedly). The gateway answers a batch as the server does, unsigned: a `2xx` is
-accepted. A `400` `invalid_request` to a batch ends the run at the gateway: the gateway
-writes `dev.qory.run.exited` with `reason: session_lost`, since it no longer accepts the
+own `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`, with the
+reason it ended the run with (The end of a run at the gateway, below), or `gateway_lost`
+when it sends its record again. It numbers an event once, by its id, so a batch the
+session sends again is not numbered twice, and it delivers the stream to the server under
+its access key. The gateway is the node toward the server, so it sends the ping; the
+session sends no ping on the link, and a link batch holds none.
+`dev.qory.run.policy_applied` is the session's: the session writes it from the run
+answer, and again from a reload answer whose digest changed, at the sequence where the
+new configuration takes effect, since only the session has the run's resolved variables
+and the harness's hosts. For a run with no session the gateway writes it. The session
+keeps its own file record of its own events, numbered as today (§The record files): that
+record is the session's, not the run's stream. The gateway keeps the record of what it
+sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The
+gateway answers a batch as the server does, unsigned: a `2xx` is accepted. A `400`
+`invalid_request` to a batch ends the run at the gateway: the gateway writes
+`dev.qory.run.exited` with `reason: session_lost`, since it no longer accepts the
 session's stream, refuses the run's proxy secret, and answers the session's further
 requests with a `410` `run_closed` (The end of a run at the gateway, below). The session
-stops the runtime as after a `410` and records `dev.qory.run.exited` with `reason:
-run_closed` in its own record. Anything else but a `2xx`, that `400` or a `410` is
-retried.
+stops the runtime as after a `410` and records `dev.qory.run.exited` with
+`reason: run_closed` in its own record alone. Anything else but a `2xx`, that `400` or a
+`410` is retried.
 
 A session writes no event the gateway or the run credential decides. The gateway
 refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
@@ -1483,10 +1488,12 @@ its events:
   or is a `dev.qory.run.started` when the run already has one with another id: a run
   has at most one;
 - is an event, by an id the gateway has not numbered, after the run's
-  `dev.qory.run.exited` or `dev.qory.run.refused`: nothing follows either;
-- is a `dev.qory.run.exited` whose `reason` is one the gateway writes, `gateway_lost`,
-  `session_lost` or `quiet`, or is `credential_expired`, `run_ended_at_issuer` or
-  `run_closed` when the gateway has not ended the run with that code;
+  `dev.qory.run.exited` or `dev.qory.run.refused`: nothing follows either; or is a
+  `dev.qory.run.refused` after the run's `dev.qory.run.started`, whose place it takes;
+- is a `dev.qory.run.exited` with a `reason` other than `timeout`: a session's batch
+  carries only its own `dev.qory.run.exited`, the runtime's exit or its time limit, and
+  the gateway writes the event of every other reason itself (The end of a run at the
+  gateway, below);
 - is a `dev.qory.run.policy_applied` with a member the gateway decides that differs from
   what the gateway computes for the policy in force it gave the run: `mode`, `allow`,
   `deny`, `source`, `url`, `digest`, `run_configuration`, `node_policy`, `paths`,
@@ -1505,7 +1512,7 @@ its events:
   refusal carries.
 
 `link-batch.schema.json` states what a schema can: neither type the gateway writes, an
-`opened_by` of `session`, none of the three reasons the gateway writes, a
+`opened_by` of `session`, `timeout` as the only reason of a `dev.qory.run.exited`, a
 `dev.qory.run.refused` code among the session's own, and no name of the form
 `<member>=<value>`. The gateway checks the rest.
 
@@ -1520,16 +1527,24 @@ from each request of the session's, the gateway ends the run with
 receives no events from it, and the gateway's resend when it starts again writes
 `dev.qory.run.exited` with `reason: gateway_lost`.
 
-**The end of a run at the gateway.** When the run ends at the gateway, the gateway
-answers the session's next request on the link, and every one after it, with a `410`.
-Every `410` on the link has the body of every refusal on the link, and `from`, what
-ended the run: `{"error": "<code>", "from": "gateway"}`. `from` is `apiary` when the
-server closed the run, and the code is then `run_closed`. `from` is `gateway` when the
-gateway ended the run itself, and the code is `credential_expired`, the run credential
-expired with no fresh one; `run_ended_at_issuer`, the issuer reports the run credential
-no longer active; or `run_closed`, the gateway ended the run with `session_lost`, after
-it refused a batch of the session's (Events, above). The session stops the runtime as
-at its time limit and records `dev.qory.run.exited` with that code as its `reason`.
+**The end of a run at the gateway.** When the gateway ends a session's run, with
+`session_lost`, `credential_expired`, `run_ended_at_issuer` or the server's
+`run_closed`, it writes the run's `dev.qory.run.exited` itself, with that reason,
+`state: failed` and `exit_code: -1`, as with `session_lost`: it holds no exit status of
+the runtime's. It numbers that event into the run's stream and delivers it toward the
+server, except after the server's own `410` `run_closed`, where it records it in its
+record alone and sends nothing further for the run, as the session does toward the
+server (§The server). It answers the session's next request on the link, and every one
+after it, with a `410`. Every `410` on the link has the body of every refusal on the
+link, and `from`, what ended the run: `{"error": "<code>", "from": "gateway"}`. `from` is
+`apiary` when the server closed the run, and the code is then `run_closed`. `from` is
+`gateway` when the gateway ended the run itself, and the code is `credential_expired`,
+the run credential expired with no fresh one; `run_ended_at_issuer`, the issuer reports
+the run credential no longer active; or `run_closed`, the gateway ended the run with
+`session_lost`, after the session was silent (Heartbeats and liveness, above) or after
+it refused a batch of the session's (Events, above). The session stops the runtime as at
+its time limit, records its own `dev.qory.run.exited` with that code as its `reason` in
+its own record alone, and posts nothing more on the link.
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`. A
 reload is a `GET` of the run's configuration by its run id instead,
@@ -2101,7 +2116,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, a run request without a wall and one with a wall and a narrowing, a run answer with a wall, the run credential's labels and `details`, one without a wall and one without a policy, a reload answer with and without a policy, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, and a batch of the `dev.qory.run.refused` of a session's own code | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, a run request without a wall and one with a wall and a narrowing, a run answer with a wall, the run credential's labels and `details`, one without a wall and one without a policy, a reload answer with and without a policy, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, and a batch of a session's `dev.qory.run.exited` with `timeout` | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
