@@ -3,6 +3,7 @@ package link_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,45 @@ func TestLocalNeverPrintsItsSecret(t *testing.T) {
 	if got := fmt.Sprintf("%+v", link.Local{}); strings.Contains(got, "redacted") {
 		t.Errorf("an empty secret is shown as redacted: %s", got)
 	}
+}
+
+// TestALocalInMemory pins the way in memory: DialContext takes it, copies keep it, and
+// it changes nothing of how a Local prints; without it DialContext dials the socket.
+func TestALocalInMemory(t *testing.T) {
+	plain := link.Local{Socket: "/nonexistent/qory-link-x/sock", Secret: secret}
+	if plain.IsInMemory() {
+		t.Error("a Local without a way in memory has one")
+	}
+	if _, err := plain.DialContext(context.Background()); err == nil {
+		t.Error("a socket that does not exist was dialled")
+	}
+	calls := 0
+	l := plain.InMemory(func(context.Context) (net.Conn, error) {
+		calls++
+		c, _ := net.Pipe()
+		return c, nil
+	})
+	copied := l
+	c, err := copied.DialContext(context.Background())
+	if err != nil || calls != 1 || !copied.IsInMemory() {
+		t.Fatalf("in memory: %v, %d calls", err, calls)
+	}
+	c.Close()
+	for _, format := range []string{"%v", "%+v", "%#v"} {
+		if fmt.Sprintf(format, l) != fmt.Sprintf(format, plain) {
+			t.Errorf("%s prints the way in memory: %s", format, fmt.Sprintf(format, l))
+		}
+	}
+	if a, _ := json.Marshal(l); string(a) != string(must(json.Marshal(plain))) {
+		t.Errorf("JSON: %s", a)
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 // TestLinkPreamble pins the local link's preamble: written in one write, read in

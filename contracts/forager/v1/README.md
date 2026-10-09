@@ -1307,7 +1307,15 @@ the session. Before it writes the secret, the session checks that the socket's p
 its own user, by the peer's uid. The gateway compares the secret in constant time,
 never logs it, and closes a connection that opens otherwise unanswered, as the proxy
 closes one without `QORY-RELAY` (§Limits). Every URL the link's discovery lists is
-`http://localhost` and a path, and the session sends every request over the socket.
+`http://localhost` and a path, and the session sends every request over the link.
+
+**In one process.** When the session and the gateway share one process, as `qory` runs
+them on one machine, the session reaches the gateway's link in memory and never dials
+the socket's path, where another process of the same user could listen in the
+gateway's place, pass the uid check and read the secret. Each connection in memory
+carries the same bytes as one over the socket: `QORY-LINK`, a space, the link secret
+and a newline, then HTTP/1.1, and the gateway checks the preamble as on the socket; its
+peer is the process itself. The socket serves a session in another process.
 
 **A separate gateway.** TLS 1.3 alone: the gateway and the session each refuse an
 earlier version. The gateway serves the operator's certificate and key,

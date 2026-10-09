@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,8 +19,9 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// linkListener hands the link's HTTP server the connections whose peer is this
-// process's user and that opened with the link's preamble; any other is closed
+// linkListener hands the link's HTTP server the connections that opened with the link's
+// preamble: those to the socket whose peer is this process's user, and those made in
+// memory by a session in this process, [linkListener.dial]. Any other is closed
 // unanswered, and nothing is logged of it.
 type linkListener struct {
 	ln     net.Listener
@@ -69,15 +71,37 @@ func (l *linkListener) accept() {
 		l.pending[c] = struct{}{}
 		l.wg.Add(1)
 		l.mu.Unlock()
-		go l.check(c)
+		go l.check(c, false)
 	}
 }
 
-// check hands c on when its peer is this user and it opens with the preamble within
-// [link.PreambleWait], and closes it otherwise.
-func (l *linkListener) check(c net.Conn) {
+// dial opens a connection to the link in this process's memory, one end of a
+// [net.Pipe]: the session's client writes the preamble on it and speaks HTTP/1.1, as
+// over the socket, and the other end is checked and served as a socket's connection is,
+// its peer this process. It is the in-memory way of [link.Local.InMemory].
+func (l *linkListener) dial(context.Context) (net.Conn, error) {
+	client, served := net.Pipe()
+	l.mu.Lock()
+	select {
+	case <-l.done:
+		l.mu.Unlock()
+		client.Close()
+		served.Close()
+		return nil, net.ErrClosed
+	default:
+	}
+	l.pending[served] = struct{}{}
+	l.wg.Add(1)
+	l.mu.Unlock()
+	go l.check(served, true)
+	return client, nil
+}
+
+// check hands c on when its peer is this user, or this process for one made in memory,
+// and it opens with the preamble within [link.PreambleWait], and closes it otherwise.
+func (l *linkListener) check(c net.Conn, inMemory bool) {
 	defer l.wg.Done()
-	ok, r := l.opens(c)
+	ok, r := l.opens(c, inMemory)
 	l.mu.Lock()
 	delete(l.pending, c)
 	l.mu.Unlock()
@@ -93,14 +117,17 @@ func (l *linkListener) check(c net.Conn) {
 }
 
 // opens reports whether c is a session's: its peer this process's user, by the uid the
-// kernel recorded, and its first bytes the preamble with the link secret.
-func (l *linkListener) opens(c net.Conn) (bool, *bufio.Reader) {
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return false, nil
-	}
-	if uid, err := peerUID(uc); err != nil || uid != l.uid {
-		return false, nil
+// kernel recorded, or this process itself for a connection made in memory; and its
+// first bytes the preamble with the link secret.
+func (l *linkListener) opens(c net.Conn, inMemory bool) (bool, *bufio.Reader) {
+	if !inMemory {
+		uc, ok := c.(*net.UnixConn)
+		if !ok {
+			return false, nil
+		}
+		if uid, err := peerUID(uc); err != nil || uid != l.uid {
+			return false, nil
+		}
 	}
 	c.SetReadDeadline(time.Now().Add(link.PreambleWait))
 	defer c.SetReadDeadline(time.Time{})

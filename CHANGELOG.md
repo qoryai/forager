@@ -196,6 +196,9 @@ release may change what an existing document does, and says so under Upgrading.
   close, over two transports. The local link is a Unix socket in `qory-link-*`, mode
   `0700`, the socket `0600`, one of Forager's files; the session checks the socket's
   peer is its own user and opens every connection with `QORY-LINK` and the link secret.
+  A session in the gateway's own process, as `qory` runs them on one machine, reaches
+  the link in memory, with the same preamble and HTTP/1.1, and never dials the socket's
+  path, where another process of the same user could stand in for the gateway.
   A separate gateway speaks TLS 1.3 alone, with the operator's certificate, which the
   session verifies against the system's roots or `session.gateway.ca_file` and an
   optional pin, `session.gateway.certificate_sha256`, the SHA-256 of the certificate's
@@ -315,7 +318,11 @@ release may change what an existing document does, and says so under Upgrading.
   `LinkSocketName`, `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
 - `link.Local` is what a session needs of a gateway on the same machine: its link
   socket, the link secret, its proxy address, the files a walled run must not mount and
-  the variables it reserves; fmt and log/slog print its secret as `[redacted]`.
+  the variables it reserves; fmt and log/slog print its secret as `[redacted]`. The one
+  `(*gateway.Gateway).LocalLink()` hands out reaches the gateway in memory,
+  `Local.IsInMemory`; `Local.DialContext` opens a connection in memory when it has that
+  way, `Local.InMemory`, and to the socket otherwise, and `server.NewLocalLink` dials
+  that way alone.
   `link.WriteLinkPreamble` and `link.ReadLinkPreamble` write and read the link's
   preamble, compared in constant time in a read of exactly its length, beside
   `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
@@ -438,7 +445,8 @@ release may change what an existing document does, and says so under Upgrading.
 #### Upgrading
 
 - Package `gateway` exports `gateway.Start`, its `Config` and the `Gateway` it returns,
-  with `Addr`, `LocalLink`, `Close` and `Wait`; `gateway.Resend`, its `ResendConfig`,
+  with `Addr`, `LocalLink`, `Close` and `Wait`, and `String`, `Format`, `GoString` and
+  `LogValue`, which never print the link secret; `gateway.Resend`, its `ResendConfig`,
   `Delivery` and `ErrRunning`; and the types their fields need: `Server`, `TLS`,
   `Policy` with `Under`, `ReadPolicy`, `PolicyEgress`, `PolicyCredential`, `PolicyTool`,
   `Credential`, `Tool`, `Discovery` and `Image`. `Proxy`, `Decision`, `CA`,

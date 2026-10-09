@@ -298,28 +298,33 @@ type Link struct {
 	http *http.Client
 }
 
-// NewLocalLink returns the client of a gateway's local link: each connection dials
-// the Unix socket at l.Socket, checks that its peer is this process's user, and only
-// then writes the link's preamble with l.Secret, before HTTP/1.1. userAgent is sent as
-// User-Agent, [accesskey.UserAgent]; digests, when not nil, gets the digests of every
-// answer of Discover, OpenRun and Reload other than a 410, synchronously before the
-// call returns, and Deliver's are in the [Delivery] it returns. A Local without a
-// socket, or whose secret no preamble carries, is refused; nothing is dialled.
+// NewLocalLink returns the client of a gateway's local link. Each connection is the
+// Local's [link.Local.DialContext]: to a gateway in this process in memory, never by the
+// socket's path; else to the Unix socket at l.Socket, whose peer must be this process's
+// user. Only then it writes the link's preamble with l.Secret, before HTTP/1.1, the same
+// bytes either way. userAgent is sent as User-Agent, [accesskey.UserAgent]; digests,
+// when not nil, gets the digests of every answer of Discover, OpenRun and Reload other
+// than a 410, synchronously before the call returns, and Deliver's are in the
+// [Delivery] it returns. A Local with neither a way in memory nor a socket, or whose
+// secret no preamble carries, is refused; nothing is dialled.
 func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link, error) {
-	if l.Socket == "" {
+	if l.Socket == "" && !l.IsInMemory() {
 		return nil, errors.New("the gateway's local link has no socket")
 	}
-	if err := link.WriteLinkPreamble(io.Discard, l.Secret); err != nil {
-		return nil, fmt.Errorf("the gateway's local link %s: %w", l.Socket, err)
+	name := "the gateway's local link " + l.Socket
+	if l.IsInMemory() {
+		name = "the gateway's local link in this process"
 	}
-	k := &Link{userAgent: userAgent, origin: LocalOrigin, name: "the gateway's local link " + l.Socket, digests: digests, uid: os.Getuid()}
-	socket, secret := l.Socket, l.Secret
+	if err := link.WriteLinkPreamble(io.Discard, l.Secret); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	k := &Link{userAgent: userAgent, origin: LocalOrigin, name: name, digests: digests, uid: os.Getuid()}
 	k.http = &http.Client{
 		Timeout: Timeout,
 		Transport: &http.Transport{
 			Proxy: nil,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return k.dialLocal(ctx, socket, secret)
+				return k.dialLocal(ctx, l)
 			},
 			DisableCompression: true,
 			MaxIdleConns:       4,
@@ -331,28 +336,30 @@ func NewLocalLink(l link.Local, userAgent string, digests func(Digests)) (*Link,
 	return k, nil
 }
 
-// dialLocal opens one connection of the local link: it dials the socket, checks the
-// peer's uid, and writes the preamble with the secret, in one write, within the
-// context's deadline.
-func (k *Link) dialLocal(ctx context.Context, socket, secret string) (net.Conn, error) {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", socket)
+// dialLocal opens one connection of the local link: in memory to a gateway in this
+// process, else to the socket, whose peer's uid it checks; then it writes the preamble
+// with the secret, in one write, within the context's deadline.
+func (k *Link) dialLocal(ctx context.Context, l link.Local) (net.Conn, error) {
+	secret := l.Secret
+	c, err := l.DialContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, err)
 	}
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		c.Close()
-		return nil, fmt.Errorf("%s: not a Unix socket", k.name)
-	}
-	uid, err := peerUID(uc)
-	if err != nil {
-		c.Close()
-		return nil, fmt.Errorf("%s: the socket's peer: %w", k.name, err)
-	}
-	if uid != k.uid {
-		c.Close()
-		return nil, fmt.Errorf("%s: the peer is uid %d, this process is uid %d: %w", k.name, uid, k.uid, ErrLinkPeer)
+	if !l.IsInMemory() {
+		uc, ok := c.(*net.UnixConn)
+		if !ok {
+			c.Close()
+			return nil, fmt.Errorf("%s: not a Unix socket", k.name)
+		}
+		uid, err := peerUID(uc)
+		if err != nil {
+			c.Close()
+			return nil, fmt.Errorf("%s: the socket's peer: %w", k.name, err)
+		}
+		if uid != k.uid {
+			c.Close()
+			return nil, fmt.Errorf("%s: the peer is uid %d, this process is uid %d: %w", k.name, uid, k.uid, ErrLinkPeer)
+		}
 	}
 	deadline, ok := ctx.Deadline()
 	if !ok {

@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -227,9 +229,11 @@ func newClient(s *Server, version string) (*server.Client, error) {
 // opens with the relay's preamble and a live run's proxy secret.
 func (g *Gateway) Addr() string { return g.proxies.Addr() }
 
-// LocalLink is what a session on this machine needs of the gateway: the link's socket
-// and secret, the proxy's address, the gateway's own files, which a walled run must not
-// mount, and the variables the gateway sets for a run, which the session must not set.
+// LocalLink is what a session in this process needs of the gateway: the way to its link
+// in memory, which a session's client takes in place of the socket, so no other process
+// can stand in for the gateway at the socket's path; the link's socket, for a session
+// in another process, and its secret; the proxy's address, the gateway's own files,
+// which a walled run must not mount, and the names a walled run must not pass.
 func (g *Gateway) LocalLink() link.Local {
 	return link.Local{
 		Socket:   filepath.Join(g.dir, link.LinkSocketName),
@@ -237,8 +241,26 @@ func (g *Gateway) LocalLink() link.Local {
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
 		Reserved: g.reserved(),
-	}
+	}.InMemory(g.link.dial)
 }
+
+// String names the gateway by its proxy's address and its link's socket, never its
+// secret.
+func (g *Gateway) String() string {
+	if g == nil {
+		return "gateway.Gateway(nil)"
+	}
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + filepath.Join(g.dir, link.LinkSocketName) + "}"
+}
+
+// Format prints g as String does, under every verb and flag: never its secret.
+func (g *Gateway) Format(f fmt.State, _ rune) { io.WriteString(f, g.String()) }
+
+// GoString is g as %#v prints it, never its secret.
+func (g *Gateway) GoString() string { return g.String() }
+
+// LogValue is g as log/slog logs it, never its secret.
+func (g *Gateway) LogValue() slog.Value { return slog.StringValue(g.String()) }
 
 // files are the gateway's own files, each with the phrase a refused mount names it by:
 // the directories of the machine's credentials' and tools' programs and the

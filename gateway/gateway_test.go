@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,8 +95,122 @@ func TestTheLinkRefusesAnotherUsersPeer(t *testing.T) {
 	h := start(t, cfg)
 	l := h.g.LocalLink()
 	closedUnanswered(t, l.Socket, "another user's peer", link.Preamble(link.LinkPreamble, l.Secret)+"GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
-	if _, err := h.link.Discover(context.Background()); err == nil {
+	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket, Secret: l.Secret}, accesskey.UserAgent("test"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bySocket.Close()
+	if _, err := bySocket.Discover(context.Background()); err == nil {
 		t.Error("the session's client of another user was answered")
+	}
+	// In memory the peer is this process: the uid is not the socket's to tell.
+	if _, err := h.link.Discover(context.Background()); err != nil {
+		t.Errorf("the session in this process: %v", err)
+	}
+}
+
+// TestASessionInThisProcessReachesTheGatewayInMemory pins the way to the gateway on one
+// machine: the client a session makes of g.LocalLink() reaches the gateway in memory,
+// with the same preamble and HTTP/1.1, and never by the socket's path. With the socket
+// gone, or another listener at its path, the session's runs go on, and that listener
+// receives no byte; a client of the socket alone reaches the gateway at its socket.
+func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
+	h := start(t, gateway.Config{})
+	l := h.g.LocalLink()
+	if !l.IsInMemory() {
+		t.Fatal("the gateway's Local has no way in memory")
+	}
+	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket, Secret: l.Secret}, accesskey.UserAgent("test"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bySocket.Close()
+	if _, err := bySocket.Discover(context.Background()); err != nil {
+		t.Fatalf("a client of the socket: %v", err)
+	}
+	a := h.open(server.LinkRunRequest{})
+	if err := os.Remove(l.Socket); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh client of the same Local, so no connection made before is reused.
+	fresh, err := server.NewLocalLink(l, accesskey.UserAgent("test"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if _, err := fresh.Discover(context.Background()); err != nil {
+		t.Fatalf("with the socket gone: %v", err)
+	}
+	stranger, err := net.Listen("unix", l.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stranger.Close()
+	received := make(chan int, 16)
+	go func() {
+		for {
+			c, err := stranger.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				c.SetReadDeadline(time.Now().Add(2 * time.Second))
+				b, _ := io.ReadAll(c)
+				received <- len(b)
+			}()
+		}
+	}()
+	again, err := server.NewLocalLink(l, accesskey.UserAgent("test"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if _, err := again.Discover(context.Background()); err != nil {
+		t.Fatalf("with another listener at the socket's path: %v", err)
+	}
+	b, _ := json.Marshal([]map[string]any{started(a.RunID, nil), applied(a.RunID, a.Applied)})
+	if d, err := again.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), b, ""); err != nil || !d.Accepted() {
+		t.Fatalf("a batch with another listener at the socket's path: %+v %v", d, err)
+	}
+	b, _ = json.Marshal([]map[string]any{exited(a.RunID)})
+	if d, err := again.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), b, ""); err != nil || !d.Accepted() {
+		t.Fatalf("the run's end: %+v %v", d, err)
+	}
+	h.close()
+	stranger.Close()
+	select {
+	case n := <-received:
+		t.Errorf("the listener at the socket's path was dialled, and received %d bytes", n)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := types(h.record(a.RunID)); !slices.Equal(got, []string{event.RunStarted, event.PolicyApplied, event.RunExited}) {
+		t.Errorf("record %v", got)
+	}
+}
+
+// TestAGatewayNeverPrintsItsSecret pins that a Gateway shows its link secret under no
+// verb, method or slog handler.
+func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
+	h := start(t, gateway.Config{})
+	secret := h.g.LocalLink().Secret
+	var outs []string
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+		outs = append(outs, fmt.Sprintf(format, h.g))
+	}
+	outs = append(outs, fmt.Sprint(h.g), h.g.String(), h.g.GoString())
+	for _, newHandler := range []func(io.Writer) slog.Handler{
+		func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) },
+		func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) },
+	} {
+		var b bytes.Buffer
+		slog.New(newHandler(&b)).Info("gateway", "gateway", h.g)
+		outs = append(outs, b.String())
+	}
+	for _, out := range outs {
+		if strings.Contains(out, secret) || !strings.Contains(out, h.g.Addr()) {
+			t.Errorf("printed %s", out)
+		}
 	}
 }
 

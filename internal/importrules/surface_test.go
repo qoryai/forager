@@ -20,6 +20,7 @@ import (
 var gatewaySurface = []string{
 	"Start", "Config", "Server", "TLS",
 	"Gateway", "Gateway.Addr", "Gateway.LocalLink", "Gateway.Close", "Gateway.Wait",
+	"Gateway.String", "Gateway.Format", "Gateway.GoString", "Gateway.LogValue",
 	"Resend", "ResendConfig", "Delivery", "ErrRunning",
 	"Policy", "Policy.Under", "ReadPolicy", "PolicyEgress", "PolicyCredential", "PolicyTool",
 	"Credential", "Credential.Check", "Tool", "Tool.Check", "Discovery", "Image", "Image.Check",
@@ -28,7 +29,7 @@ var gatewaySurface = []string{
 // What each rule requires, as every failure of it says.
 const (
 	surfaceRule = "package gateway exports only what starts a gateway, configures it and closes it: " +
-		"Start, Config, Gateway with Addr, LocalLink, Close and Wait, Resend, and the types their fields need"
+		"Start, Config, Gateway with Addr, LocalLink, Close, Wait and the methods that print it, Resend, and the types their fields need"
 	linkRule = "the session reaches a gateway over its local link alone, " +
 		"so no file of session/ but a test imports a gateway package"
 	testRule = "a session test may start a real gateway, " +

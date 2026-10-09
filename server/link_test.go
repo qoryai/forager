@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -503,5 +504,58 @@ func TestTheLinkNeverShowsItsSecret(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "[redacted]") || !strings.Contains(out.String(), "server.LinkRunAnswer{") {
 		t.Errorf("the run answer is not shown redacted:\n%s", out.String())
+	}
+}
+
+// TestALinkInMemoryNeverDialsItsSocket pins the client of a gateway in this process: each
+// connection is the Local's way in memory, it carries the same preamble with the
+// secret, and the socket's path is never dialled, whatever listens there. A Local that
+// has that way needs no socket.
+func TestALinkInMemoryNeverDialsItsSocket(t *testing.T) {
+	socket := linktest.SocketPath(t)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	dialled := make(chan struct{}, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			dialled <- struct{}{}
+			c.Close()
+		}
+	}()
+	preambles := make(chan bool, 4)
+	dial := func(context.Context) (net.Conn, error) {
+		client, gateway := net.Pipe()
+		go func() {
+			defer gateway.Close()
+			gateway.SetReadDeadline(time.Now().Add(5 * time.Second))
+			ok, err := link.ReadLinkPreamble(bufio.NewReader(gateway), linkSecret)
+			preambles <- ok && err == nil
+		}()
+		return client, nil
+	}
+	for _, l := range []link.Local{
+		link.Local{Socket: socket, Secret: linkSecret}.InMemory(dial),
+		link.Local{Secret: linkSecret}.InMemory(dial),
+	} {
+		k, err := server.NewLocalLink(l, userAgent, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = k.Discover(context.Background())
+		if err == nil || strings.Contains(err.Error(), linkSecret) {
+			t.Errorf("a gateway in memory that answers nothing: %v", err)
+		}
+		if ok := <-preambles; !ok {
+			t.Error("the connection in memory did not open with the link's preamble")
+		}
+		k.Close()
+	}
+	select {
+	case <-dialled:
+		t.Error("the socket's path was dialled")
+	case <-time.After(100 * time.Millisecond):
 	}
 }

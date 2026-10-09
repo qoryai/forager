@@ -134,9 +134,11 @@ A program that needs code of its own implements the interface.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
-  link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The link's secret stays
-  in the process's memory: a `session.Gateway` is printed and logged by its socket
-  alone. The zero `Gateway` is no run. The server the run reports to and the node's
+  link the gateway hands out, `(*gateway.Gateway).LocalLink()`. The session reaches
+  that gateway in the process's memory, never by its socket's path, which serves a
+  session in another process. The link's secret stays in the process's memory: a
+  `session.Gateway` is printed and logged by its socket alone, and a
+  `*gateway.Gateway` by its proxy's address and its socket. The zero `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).

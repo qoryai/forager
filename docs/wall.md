@@ -238,7 +238,8 @@ itself, are the run's own, and lie in Forager's files. Forager's files are:
   run's environment files, `qory-wall-*`, the relay's with the proxy's secret among
   them.
 - The private directories in the system's temporary directory where every gateway on the
-  machine makes its link's socket, `qory-link-*`
+  machine makes its link's socket, `qory-link-*`, for a session in another process; a
+  session in the gateway's own process reaches it in memory, never by that path
   (see [the gateway's link](../contracts/forager/v1/README.md#the-gateways-link)).
 - A wall's own files, when it implements `wall.Filer`. For `wall.Docker` they are the
   directory of the `docker` command, the directory of the helper, and the command's
