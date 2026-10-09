@@ -186,9 +186,9 @@ type Image = run.Image
 
 // Delivery is what the end of a gateway's runs, or a resend, came to toward the server.
 type Delivery struct {
-	// Undelivered is how many events the server did not accept. They are all still in
-	// the run's record directory's events.jsonl, and whatever was spooled is under its
-	// undelivered/; a stop during a resend spools nothing.
+	// Undelivered is how many events the server did not accept. Whatever was spooled
+	// is under the run's record directory's undelivered/; a stop during a resend spools
+	// nothing. For a resend they are all still in the record's events.jsonl.
 	Undelivered int
 	// RunClosed says the run ended at the gateway before its session ended it: ClosedBy
 	// says who, always "gateway", since a server's 410 ends no run, and Reason the code
