@@ -350,8 +350,8 @@ func sameMap(a, b map[string]string) bool {
 // run: a forge or repository of the session's that differs is
 // target_differs_from_credential, another label or detail the mapping sets is
 // differs_from_credential, each named with the run credential's value; a label the
-// mapping does not set is ignored; a refused run opens nothing, so its run key opens
-// a run afterwards; and a run credential the verifier refuses is 401.
+// mapping does not set is ignored; a refused run opens nothing, and a later run
+// request opens a run as any other; and a run credential the verifier refuses is 401.
 func TestARunRequestDifferentFromItsRunCredential(t *testing.T) {
 	s := startVerifying(t, gateway.Config{}, nil, 0)
 	cred := credentialFor("rk-0001")

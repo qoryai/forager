@@ -94,7 +94,9 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 // refusal is a session.Refusal with its code, names and who refused, recorded as
 // run.refused in the session's record alone, the server's with its status; the
 // gateway's wall_required is the error a run without a wall always had, word for
-// word, recorded nowhere; a 410 is the run closed before it started; and a 500 is the
+// word, recorded nowhere; a 410 is the run closed before it started, the server's or
+// the gateway's with each of its codes, recorded as run.refused with the 410's code and
+// status, which the schema validates; and a 500 is the
 // failure the gateway's message says, word for word, or one naming its status without
 // one, recorded nowhere. Nothing is posted for any of them.
 func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
@@ -120,6 +122,18 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 		"the server's close": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_closed", "apiary")},
 			"run_closed", accesskey.FromApiary, nil, "the server closed the run before it started: run_closed (status 410)",
 			map[string]any{"code": "run_closed", "status": 410.0}},
+		"the gateway's session_lost": {linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
+			"session_lost", accesskey.FromGateway, nil, "the gateway closed the run before it started: session_lost (status 410)",
+			map[string]any{"code": "session_lost", "status": 410.0}},
+		"the gateway's batch_refused": {linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
+			"batch_refused", accesskey.FromGateway, nil, "the gateway closed the run before it started: batch_refused (status 410)",
+			map[string]any{"code": "batch_refused", "status": 410.0}},
+		"the gateway's credential_expired": {linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
+			"credential_expired", accesskey.FromGateway, nil, "the gateway closed the run before it started: credential_expired (status 410)",
+			map[string]any{"code": "credential_expired", "status": 410.0}},
+		"the gateway's run_ended_at_issuer": {linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},
+			"run_ended_at_issuer", accesskey.FromGateway, nil, "the gateway closed the run before it started: run_ended_at_issuer (status 410)",
+			map[string]any{"code": "run_ended_at_issuer", "status": 410.0}},
 		"a 500 with a message": {linktest.Reply{Status: 500, Body: map[string]any{"message": "credential git: the adapter exited with status 1"}},
 			"", "", nil, "credential git: the adapter exited with status 1", nil},
 		"a refusal with a message": {linktest.Reply{Status: 409, Body: map[string]any{"error": "instance_limit", "from": "apiary", "message": "ping https://apiary.example/v1/events: instance_limit (status 409)"}},
@@ -145,7 +159,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			if c.code == "" && errors.As(err, &r) {
 				t.Errorf("a refusal %v, want an error that is none", r)
 			}
-			if c.code != "run_closed" && err.Error() != c.text {
+			if c.reply.Status != 410 && err.Error() != c.text {
 				t.Errorf("%q, want exactly %q", err, c.text)
 			}
 			evs := events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)})
@@ -278,7 +292,11 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 			code: "credential_expired", from: "gateway"},
 		"a 410 to a reload": {reload: &linktest.Reply{Status: 410, Body: linktest.Refusal("run_ended_at_issuer", "gateway")},
 			code: "run_ended_at_issuer", from: "gateway"},
-		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "run_closed", from: "gateway"},
+		"the gateway's 410 to a lost session": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("session_lost", "gateway")},
+			code: "session_lost", from: "gateway"},
+		"the gateway's 410 after a refused batch": {batch: &linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
+			code: "batch_refused", from: "gateway"},
+		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "batch_refused", from: "gateway"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g := specGateway(t)

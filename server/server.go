@@ -553,7 +553,7 @@ type Delivery struct {
 	// link, empty when none.
 	Code string
 	// End is, on the link, the end of the run at the gateway this answer says, one of
-	// [EndCodes]: a 410's code, and run_closed for a batch the gateway refused
+	// [EndCodes]: a 410's code, and batch_refused for a batch the gateway refused
 	// invalid_request. Empty for any other answer, and always toward the server.
 	End string
 	// From is, on the link, who ended or refused: [accesskey.FromApiary] when the

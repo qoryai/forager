@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,8 +19,10 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 )
 
@@ -358,6 +361,105 @@ func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
 			t.Errorf("%v, want the server's run_closed", err)
 		}
 	})
+}
+
+// gate holds back what the session writes to its gateway while it is shut.
+type gate struct{ mu sync.RWMutex }
+
+// gatedConn is a connection to the gateway whose writes wait while its gate is shut.
+type gatedConn struct {
+	net.Conn
+	g *gate
+}
+
+func (c gatedConn) Write(b []byte) (int, error) {
+	c.g.mu.RLock()
+	defer c.g.mu.RUnlock()
+	return c.Conn.Write(b)
+}
+
+// TestARealGatewaysCloseCarriesItsCause pins the gateway's own end of a session's run
+// end to end: a session it hears nothing from for three heartbeat intervals gets a 410
+// session_lost, and one whose batch it refused a 410 batch_refused. The runtime is
+// stopped, the result says the gateway closed the run with that code, and the
+// session's record ends with run.exited of that reason, while the gateway's says
+// session_lost for both.
+func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
+	for _, cause := range []string{"session_lost", "batch_refused"} {
+		t.Run(cause, func(t *testing.T) {
+			sp := spec(t)
+			sleeps(&sp, 30*time.Second)
+			sp.StopGrace = time.Second
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			rg := startGateway(t, &sp, gateway.Config{Heartbeat: time.Second})
+			local := rg.g.LocalLink()
+			var shut gate
+			sp.Gateway = session.LocalGateway(local.InMemory(func(ctx context.Context) (net.Conn, error) {
+				c, err := local.DialContext(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return gatedConn{Conn: c, g: &shut}, nil
+			}))
+			dir := filepath.Join(sp.RunsDir, sp.RunID)
+			going := func() bool {
+				_, err := os.Stat(filepath.Join(dir, "session.jsonl"))
+				return err == nil && len(ofType(events(t, &session.Result{Dir: dir}), "dev.qory.run.heartbeat")) > 0
+			}
+			ended := func() bool {
+				_, err := os.Stat(filepath.Join(dir, "events.jsonl"))
+				return err == nil && len(ofType(record(t, &session.Result{Dir: dir}), "dev.qory.run.exited")) > 0
+			}
+			go func() {
+				waitFor(t, going)
+				if cause == "session_lost" {
+					// The session's writes wait until the gateway has ended the run.
+					shut.mu.Lock()
+					defer shut.mu.Unlock()
+					waitFor(t, ended)
+					return
+				}
+				// A batch of the run's the gateway refuses: a ping, which the gateway
+				// alone writes.
+				k, err := server.NewLocalLink(local, "test", nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				body, _ := json.Marshal([]map[string]any{{
+					"specversion": "1.0", "id": event.NewID(), "source": event.Source(sp.RunID), "type": event.Ping, "subject": sp.RunID,
+					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.Ping),
+					"data": map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30},
+				}})
+				d, err := k.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+				if err != nil || d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+					t.Errorf("the refused batch: %+v %v", d, err)
+				}
+			}()
+			start := time.Now()
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if time.Since(start) > 20*time.Second {
+				t.Errorf("the run took %s", time.Since(start))
+			}
+			if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != cause || res.State != "failed" || res.TimedOut {
+				t.Errorf("result %+v", res)
+			}
+			if d := rg.close(t); !d.RunClosed || d.ClosedBy != "gateway" || d.Reason != cause {
+				t.Errorf("delivery %+v", d)
+			}
+			for name, want := range map[string]struct {
+				evs    []map[string]any
+				reason string
+			}{"the session's": {events(t, res), cause}, "the gateway's": {record(t, res), "session_lost"}} {
+				if l := want.evs[len(want.evs)-1]; l["type"] != "dev.qory.run.exited" || data(l)["reason"] != want.reason {
+					t.Errorf("%s record ends %v", name, l)
+				}
+			}
+		})
+	}
 }
 
 // TestARealGatewayPassesOnTheServersRefusal pins a refusal of the server's end to end:

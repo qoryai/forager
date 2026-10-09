@@ -20,6 +20,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
 	refusals "github.com/qoryai/forager/refusal"
@@ -451,6 +453,87 @@ func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 		t.Errorf("the gateway's record ends %v", last)
 	}
 	r.noSecretIn(t, s, res.RunID, cred)
+}
+
+// TestASeparateGatewaysCloseCarriesItsCause pins the gateway's own end of a session's
+// run on the one address, over TLS: a session it hears nothing from for three heartbeat
+// intervals gets a 410 session_lost, and one whose batch it refused a 410
+// batch_refused. The session stops the runtime, its result says the gateway closed the
+// run with that code, and its record ends with run.exited of that reason, while the
+// gateway's says session_lost for both.
+func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
+	for _, cause := range []string{"session_lost", "batch_refused"} {
+		t.Run(cause, func(t *testing.T) {
+			s := startSeparate(t)
+			cred := credentialOf("rk-0001")
+			// While shut, the session's requests wait for their run credential, and so
+			// send nothing.
+			var shut sync.RWMutex
+			r := newSepRun(t, s.remote(func(context.Context) (string, error) {
+				shut.RLock()
+				defer shut.RUnlock()
+				return cred, nil
+			}))
+			r.sp.Args = []string{"-c", "sleep 30"}
+			r.sp.StopGrace = time.Second
+			r.sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			own := &session.Result{Dir: filepath.Join(r.sp.RunsDir, r.sp.RunID)}
+			going := func() bool {
+				_, err := os.Stat(filepath.Join(own.Dir, "session.jsonl"))
+				return err == nil && len(ofType(events(t, own), "dev.qory.run.heartbeat")) > 0
+			}
+			ended := func() bool {
+				_, err := os.Stat(filepath.Join(s.dir, "runs", r.sp.RunID, "events.jsonl"))
+				return err == nil && len(ofType(s.record(t, r.sp.RunID), "dev.qory.run.exited")) > 0
+			}
+			go func() {
+				waitFor(t, going)
+				if cause == "session_lost" {
+					shut.Lock()
+					defer shut.Unlock()
+					waitFor(t, ended)
+					return
+				}
+				// A batch of the run's the gateway refuses: a ping, which the gateway
+				// alone writes.
+				body, _ := json.Marshal([]map[string]any{{
+					"specversion": "1.0", "id": event.NewID(), "source": event.Source(r.sp.RunID), "type": event.Ping, "subject": r.sp.RunID,
+					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.Ping),
+					"data": map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30},
+				}})
+				req, _ := http.NewRequest(http.MethodPost, s.url()+"/v1/events", bytes.NewReader(body))
+				req.Header.Set("Content-Type", server.ContentType)
+				req.Header.Set("Authorization", link.BearerScheme+" "+cred)
+				c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: s.pool, MinVersion: tls.VersionTLS13}}}
+				resp, err := c.Do(req)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusBadRequest {
+					t.Errorf("the refused batch: %d", resp.StatusCode)
+				}
+			}()
+			start := time.Now()
+			res, err := session.Run(context.Background(), r.sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.RunClosed || res.ClosedBy != accesskey.FromGateway || res.ClosedReason != cause || res.State != "failed" || res.TimedOut || time.Since(start) > 20*time.Second {
+				t.Errorf("result %+v after %s", res, time.Since(start))
+			}
+			if exited := ofType(events(t, res), "dev.qory.run.exited"); len(exited) != 1 || data(exited[0])["reason"] != cause {
+				t.Errorf("the session's run.exited %v", exited)
+			}
+			s.close(t)
+			rec := s.record(t, res.RunID)
+			if last := rec[len(rec)-1]; last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "session_lost" {
+				t.Errorf("the gateway's record ends %v", last)
+			}
+			r.noSecretIn(t, s, res.RunID, cred)
+		})
+	}
 }
 
 // sepWall is a wall with a relay, for a run behind a separate gateway: the launch

@@ -200,8 +200,11 @@ type Result struct {
 	// ClosedBy is who closed the run when RunClosed: "apiary", the server, or
 	// "gateway", the gateway itself.
 	ClosedBy string
-	// ClosedReason is the code the run was closed with when RunClosed: run_closed,
-	// credential_expired or run_ended_at_issuer.
+	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
+	// as the gateway answered it: run_closed, credential_expired or
+	// run_ended_at_issuer; from the gateway, session_lost when it heard nothing from
+	// the session for three heartbeat intervals, and batch_refused when it refused a
+	// batch of the session's.
 	ClosedReason string
 }
 

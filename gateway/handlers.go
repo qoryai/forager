@@ -360,10 +360,11 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 
 // batch answers one link batch: 202 when its events are numbered; 410 for a run that
 // ended at the gateway; 400 invalid_request for one the link refuses, which ends the
-// run with session_lost when it names one this gateway holds. On the one address the
-// batch's run is one of the run credential's run key: 401 run_credential_refused, before
-// the body is read, when its run key has no session's run here, and after it when the
-// batch names a run of another run key, or none.
+// run when it names one this gateway holds: its record says session_lost, and the
+// session's later requests are a 410 batch_refused. On the one address the batch's run
+// is one of the run credential's run key: 401 run_credential_refused, before the body
+// is read, when its run key has no session's run here, and after it when the batch
+// names a run of another run key, or none.
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
@@ -423,7 +424,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if why := lr.check(body, evs); why != "" {
 		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
 		invalid(w)
-		lr.end(sessionLost)
+		lr.end(batchRefused)
 		return
 	}
 	if _, err := lr.st.Accept(evs); err != nil {
@@ -433,7 +434,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		}
 		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %v; the run ends, session_lost", lr.id, err))
 		invalid(w)
-		lr.end(sessionLost)
+		lr.end(batchRefused)
 		return
 	}
 	final := lr.accepted(evs)

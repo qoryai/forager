@@ -132,7 +132,10 @@ release may change what an existing document does, and says so under Upgrading.
   `events/run.refused.schema.json` lists the four codes and says so of `names`, and
   that a run request the gateway refuses opens no run at the gateway: the session
   records the refusal it received in its own record alone, and nothing reaches the
-  server for it. A session that fails after the run answer and before its process
+  server for it. A gateway's `410` before the runtime starts is recorded the same way,
+  as `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
+  include `session_lost`, `batch_refused`, `credential_expired` and
+  `run_ended_at_issuer`. A session that fails after the run answer and before its process
   starts posts its `dev.qory.run.refused` on the link, and the gateway delivers it;
   `refusal.RunCredentialRefused`, `refusal.TargetDiffersFromCredential`,
   `refusal.DiffersFromCredential` and `refusal.RunIDUsed` are the codes in Go, and
@@ -332,8 +335,8 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.refused`. A
   `400` `invalid_request` to a batch ends the run at the gateway: the gateway writes
   `dev.qory.run.exited` with `session_lost`, refuses the run's proxy secret and answers
-  the session's further requests with a `410` `run_closed`; the session stops the
-  runtime and records `dev.qory.run.exited` with `run_closed` in its own record alone.
+  the session's further requests with a `410` `batch_refused`; the session stops the
+  runtime and records `dev.qory.run.exited` with `batch_refused` in its own record alone.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
   `dev.qory.run.egress`, every one after a reload's switch held until the session's
@@ -351,9 +354,9 @@ release may change what an existing document does, and says so under Upgrading.
   answers the session's next request and every one after it with a `410`, whose code
   the session records as the reason of its own `dev.qory.run.exited`, in its own record
   alone, posting nothing more: `run_closed` from `apiary` when the server closed the
-  run, and from `gateway` `credential_expired`, `run_ended_at_issuer`, or `run_closed`
-  after `session_lost`, from silence or a refused batch. Every `410` on the link carries
-  `from`. The relay opens its
+  run, and from `gateway` `credential_expired`, `run_ended_at_issuer`, `session_lost`
+  after a silent session, or `batch_refused` after a refused batch, which the gateway's
+  record says as `session_lost`. Every `410` on the link carries `from`. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
@@ -491,14 +494,15 @@ release may change what an existing document does, and says so under Upgrading.
   credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, the
   session was silent or the gateway refused a batch of its, `quiet`,
   `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
-  `timeout`, `run_closed` and `gateway_lost`; when the gateway ends a session's run it
-  writes the run's `dev.qory.run.exited`, and the session records the same reason in its
-  own record alone. `quiet_seconds`, the quiet period the gateway applied, is present
+  `timeout`, `run_closed` and `gateway_lost`, and `batch_refused`, which only the
+  session writes; when the gateway ends a session's run it writes the run's
+  `dev.qory.run.exited`, and the session records the code of the gateway's `410` in its
+  own record alone, the same reason but `batch_refused` after a refused batch. `quiet_seconds`, the quiet period the gateway applied, is present
   with `quiet` alone. `state` and `exit_code` are optional: a session's run contains
-  both, `failed` and `-1` with `gateway_lost` and `session_lost` and in every
-  `dev.qory.run.exited` the gateway writes for it, and a run a gateway opened neither,
+  both, `failed` and `-1` with `gateway_lost` and in every `dev.qory.run.exited` the
+  gateway writes for it, `session_lost` included, and a run a gateway opened neither,
   `gateway_lost` included; the schema fixes them to `failed` and `-1` with
-  `gateway_lost` and `session_lost` when they are present, and requires neither. The
+  `gateway_lost` when they are present, and requires neither. The
   contract no longer says the state is `failed` with each reason; a receiver maps each
   reason to a state of its own.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
