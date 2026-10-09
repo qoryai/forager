@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/sink"
 )
 
 // remoteSpec is a spec whose runtime exits by itself with the status exit, behind a
@@ -56,18 +58,22 @@ func exitedOf(t *testing.T, res *session.Result, g *linktest.Fake) (own, posted 
 // exit behind a separate gateway: the session asks once, by the run's id and with its
 // run secret, before it posts run.exited; the starter's outcome sets the state and the
 // reason of run.exited, in the record and on the link, and of the result, whatever
-// the exit status, which exit_code keeps; with no reason, run.exited has none.
+// the exit status, which exit_code keeps; with no reason, run.exited has none. A reason
+// that is no code, or one of Forager's reserved codes, is dropped alone, and the
+// starter's state kept.
 func TestTheOutcomeAtTheExitSetsTheStateAndTheReason(t *testing.T) {
 	for name, c := range map[string]struct {
 		exit          int
 		answer        map[string]any
 		state, reason string
 	}{
-		"failed over exit 0":    {0, map[string]any{"state": "failed", "reason": "checks_failed"}, "failed", "checks_failed"},
-		"succeeded over exit 3": {3, map[string]any{"state": "succeeded", "reason": "all_checks_passed"}, "succeeded", "all_checks_passed"},
-		"cancelled over exit 0": {0, map[string]any{"state": "cancelled", "reason": "no_longer_needed"}, "cancelled", "no_longer_needed"},
-		"an outcome alone":      {3, map[string]any{"state": "cancelled"}, "cancelled", ""},
-		"the same as the exit":  {0, map[string]any{"state": "succeeded", "reason": "all_checks_passed"}, "succeeded", "all_checks_passed"},
+		"failed over exit 0":       {0, map[string]any{"state": "failed", "reason": "checks_failed"}, "failed", "checks_failed"},
+		"succeeded over exit 3":    {3, map[string]any{"state": "succeeded", "reason": "all_checks_passed"}, "succeeded", "all_checks_passed"},
+		"cancelled over exit 0":    {0, map[string]any{"state": "cancelled", "reason": "no_longer_needed"}, "cancelled", "no_longer_needed"},
+		"an outcome alone":         {3, map[string]any{"state": "cancelled"}, "cancelled", ""},
+		"the same as the exit":     {0, map[string]any{"state": "succeeded", "reason": "all_checks_passed"}, "succeeded", "all_checks_passed"},
+		"a reason that is no code": {0, map[string]any{"state": "failed", "reason": "Checks failed"}, "failed", ""},
+		"a reserved reason":        {3, map[string]any{"state": "cancelled", "reason": "timeout"}, "cancelled", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sp, g, reports := remoteSpec(t, c.exit)
@@ -85,6 +91,11 @@ func TestTheOutcomeAtTheExitSetsTheStateAndTheReason(t *testing.T) {
 			}
 			if got := g.Outcomes(); !slices.Equal(got, []string{res.RunID}) {
 				t.Errorf("the outcome was asked for %v, want once for %s", got, res.RunID)
+			}
+			// Every request of the run's, the ask among them, carried the run's secret.
+			secrets := g.RunSecrets()
+			if len(secrets) != len(g.Batches())+len(g.Reloads())+len(g.Outcomes()) || slices.ContainsFunc(secrets, func(s string) bool { return s != linktest.RunSecret }) {
+				t.Errorf("the run secrets %q", secrets)
 			}
 			if len(exitedBefore) != 0 {
 				t.Errorf("run.exited was posted before the ask: %v", exitedBefore)
@@ -108,8 +119,7 @@ func TestTheOutcomeAtTheExitSetsTheStateAndTheReason(t *testing.T) {
 }
 
 // TestNoOutcomeLeavesTheExitToDecide pins every answer to the ask that is no outcome:
-// {}, an answer that is not valid, a reserved reason, a refusal, a 410 among them, and
-// a 500. The runtime's exit decides, succeeded on 0 and failed otherwise, with no
+// {}, an answer that is not valid, a refusal, a 410 among them, and a 500. The runtime's exit decides, succeeded on 0 and failed otherwise, with no
 // reason; nothing is added to the record or the result, and the session reports
 // nothing.
 func TestNoOutcomeLeavesTheExitToDecide(t *testing.T) {
@@ -117,8 +127,7 @@ func TestNoOutcomeLeavesTheExitToDecide(t *testing.T) {
 		"{}":                             {Status: 200, Body: map[string]any{}},
 		"a state that is not one":        {Status: 200, Body: map[string]any{"state": "lost", "reason": "checks_failed"}},
 		"a reason without a state":       {Status: 200, Body: map[string]any{"reason": "checks_failed"}},
-		"a reason that is no code":       {Status: 200, Body: map[string]any{"state": "failed", "reason": "Checks failed"}},
-		"a reserved reason":              {Status: 200, Body: map[string]any{"state": "cancelled", "reason": "timeout"}},
+		"a bad state with a bad reason":  {Status: 200, Body: map[string]any{"state": "Failed", "reason": "Checks failed"}},
 		"not JSON":                       {Status: 200, Body: []byte("not json")},
 		"a 404":                          {Status: 404, Body: map[string]any{"state": "failed", "reason": "checks_failed"}},
 		"a 410":                          {Status: 410, Body: map[string]any{"error": "stopped", "from": "gateway", "state": "failed", "reason": "checks_failed"}},
@@ -250,12 +259,12 @@ func TestTheWaitForTheOutcomeIsBounded(t *testing.T) {
 	}
 }
 
-// TestAResendSaysHowTheRunEnded pins the state and the reason of a resend: a run whose
-// starter gave its outcome at the exit, and whose batches the gateway did not take,
-// sends its run.exited again, the starter's reason with it; the gateway's 410 that
-// ends the run says how it ended, as the session records it; and once the gateway
-// takes the record, the record's run.exited says it.
-func TestAResendSaysHowTheRunEnded(t *testing.T) {
+// undeliveredRun runs a session behind a fake separate gateway whose starter gives
+// the outcome failed, checks_failed, at the exit, and which takes no batch after the
+// run's start: run.exited is among what the record still owes. It returns the spec
+// of its resend, and the gateway.
+func undeliveredRun(t *testing.T) (session.ResendSpec, *linktest.Fake) {
+	t.Helper()
 	sp, g, _ := remoteSpec(t, 0)
 	g.OnOutcome(func(string) linktest.Reply {
 		return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
@@ -273,22 +282,118 @@ func TestAResendSaysHowTheRunEnded(t *testing.T) {
 	if res.State != "failed" || res.Reason != "checks_failed" || res.Undelivered == 0 {
 		t.Fatalf("result %+v", res)
 	}
-	resend := session.ResendSpec{Gateway: sp.Gateway.(session.RemoteGateway), Dir: res.Dir, ForagerVersion: "test"}
+	return session.ResendSpec{Gateway: sp.Gateway.(session.RemoteGateway), Dir: res.Dir, ForagerVersion: "test"}, g
+}
 
-	g.OnBatch(func([]map[string]any) linktest.Reply { return *gone("stopped", "cancelled", "no_longer_needed") })
-	got, err := session.Resend(context.Background(), resend)
-	if err != nil || !got.RunClosed || got.ClosedReason != "stopped" || got.State != "cancelled" || got.Reason != "no_longer_needed" {
-		t.Errorf("the resend after the gateway's end: %+v %v", got, err)
+// TestAResendSaysHowTheRunEnded pins the state and the reason of a resend of a run
+// whose starter gave its outcome at the exit, and whose batches the gateway did not
+// take: the gateway's 410 that ends the run says how it ended, as the session records
+// it; a 410 run_closed, which says only that the run had ended otherwise, leaves it to
+// the record's own run.exited; and a gateway that takes the record gets run.exited
+// again, the starter's reason with it, which says how the run ended.
+func TestAResendSaysHowTheRunEnded(t *testing.T) {
+	for name, c := range map[string]struct {
+		reply         *linktest.Reply
+		closed        string
+		state, reason string
+	}{
+		"the gateway's end":   {gone("stopped", "cancelled", "no_longer_needed"), "stopped", "cancelled", "no_longer_needed"},
+		"a 410 run_closed":    {gone("run_closed", "", ""), "run_closed", "failed", "checks_failed"},
+		"the gateway took it": {&linktest.Reply{Status: 200}, "", "failed", "checks_failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resend, g := undeliveredRun(t)
+			g.OnBatch(func([]map[string]any) linktest.Reply { return *c.reply })
+			got, err := session.Resend(context.Background(), resend)
+			if err != nil || got.RunClosed != (c.closed != "") || got.ClosedReason != c.closed || got.State != c.state || got.Reason != c.reason {
+				t.Errorf("the resend %+v %v, want closed %q, %s %q", got, err, c.closed, c.state, c.reason)
+			}
+			if c.closed != "" {
+				return
+			}
+			exited := ofType(g.Events(), "dev.qory.run.exited")
+			if got.Undelivered != 0 || len(exited) == 0 || data(exited[len(exited)-1])["reason"] != "checks_failed" {
+				t.Errorf("the resend %+v; the gateway received run.exited %v", got, exited)
+			}
+		})
 	}
+}
 
-	g.OnBatch(func([]map[string]any) linktest.Reply { return linktest.Reply{Status: 200} })
-	got, err = session.Resend(context.Background(), resend)
-	if err != nil || got.RunClosed || got.Undelivered != 0 || got.State != "failed" || got.Reason != "checks_failed" {
-		t.Errorf("the resend the gateway took: %+v %v", got, err)
+// TestAResendOfARunAReloadEndedSendsNothing pins a run the gateway ended by its 410 to
+// a reload, with the starter's state and reason or its state alone, once the gateway
+// took every batch: the session's own run.exited, which holds that state, is in its
+// record alone, and delivered.log says stopped. A resend owes nothing: it makes no
+// request, and its result is the zero one.
+func TestAResendOfARunAReloadEndedSendsNothing(t *testing.T) {
+	for name, end := range map[string]*linktest.Reply{
+		"failed with checks_failed": gone("stopped", "failed", "checks_failed"),
+		"succeeded with no reason":  gone("stopped", "succeeded", ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, g, _ := remoteSpec(t, 0)
+			sp.Args = []string{"-c", "sleep 30"}
+			sp.StopGrace = time.Second
+			g.SetInterval(1)
+			g.SetRunDigest("sha256=" + strings.Repeat("1", 64))
+			g.OnBatch(func([]map[string]any) linktest.Reply {
+				g.SetRunDigest("sha256=" + strings.Repeat("2", 64))
+				return linktest.Reply{Status: 200}
+			})
+			g.OnReload(func(string) linktest.Reply { return *end })
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.RunClosed || res.ClosedReason != "stopped" {
+				t.Fatalf("result %+v", res)
+			}
+			accepted, stopped, err := sink.Delivered(res.Dir)
+			if err != nil || !stopped {
+				t.Fatalf("delivered.log %v, stopped %v, %v", accepted, stopped, err)
+			}
+			for _, e := range events(t, res) {
+				if e["type"] != "dev.qory.run.exited" && !accepted[fmt.Sprint(e["sequence"])] {
+					t.Fatalf("the gateway did not take %v", e)
+				}
+			}
+			batches := len(g.Batches())
+			var asked atomic.Int32
+			gw := sp.Gateway.(session.RemoteGateway)
+			gw.Credential = func(ctx context.Context) (string, error) { asked.Add(1); return linktest.Credential(ctx) }
+			got, err := session.Resend(context.Background(), session.ResendSpec{Gateway: gw, Dir: res.Dir, ForagerVersion: "test"})
+			if err != nil || got != (session.ResendResult{}) || asked.Load() != 0 || len(g.Batches()) != batches {
+				t.Errorf("the resend %+v %v, %d credential reads, %d batches", got, err, asked.Load(), len(g.Batches())-batches)
+			}
+		})
 	}
-	exited := ofType(g.Events(), "dev.qory.run.exited")
-	if len(exited) == 0 || data(exited[len(exited)-1])["reason"] != "checks_failed" {
-		t.Errorf("the gateway received run.exited %v", exited)
+}
+
+// TestTheHeartbeatsGoOnWhileTheSessionAsks pins the heartbeats during the ask at the
+// exit: a gateway with a short interval that takes its time to answer gets them
+// meanwhile, and none after run.exited.
+func TestTheHeartbeatsGoOnWhileTheSessionAsks(t *testing.T) {
+	sp, g, _ := remoteSpec(t, 0)
+	g.SetInterval(1)
+	var during atomic.Int32
+	g.OnOutcome(func(string) linktest.Reply {
+		before := len(ofType(g.Events(), "dev.qory.run.heartbeat"))
+		time.Sleep(3500 * time.Millisecond)
+		during.Store(int32(len(ofType(g.Events(), "dev.qory.run.heartbeat")) - before))
+		return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
+	})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != "failed" || res.Reason != "checks_failed" {
+		t.Errorf("result %+v", res)
+	}
+	if during.Load() < 2 {
+		t.Errorf("the gateway got %d heartbeats while it was asked for 3.5s at an interval of 1s", during.Load())
+	}
+	evs := events(t, res)
+	if evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
+		t.Errorf("the record ends with %v", evs[len(evs)-1]["type"])
 	}
 }
 

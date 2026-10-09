@@ -68,12 +68,43 @@ func TestTheOutcomeRequestIsAReloadsGETOfOutcome(t *testing.T) {
 	}
 }
 
+// TestABadReasonIsDroppedAlone pins that a reason the schema refuses, one that is not a
+// code or is empty, and one of Forager's reserved codes or an old name, is dropped
+// alone, as the gateway drops it: the answer's valid state is the outcome, with no
+// error.
+func TestABadReasonIsDroppedAlone(t *testing.T) {
+	for body, want := range map[string]server.LinkOutcome{
+		`{"state":"failed","reason":"Checks failed"}`:      {State: "failed"},
+		`{"state":"failed","reason":""}`:                   {State: "failed"},
+		`{"state":"succeeded","reason":7}`:                 {State: "succeeded"},
+		`{"state":"cancelled","reason":"timeout"}`:         {State: "cancelled"},
+		`{"state":"cancelled","reason":"stopped"}`:         {State: "cancelled"},
+		`{"state":"failed","reason":"session_lost"}`:       {State: "failed"},
+		`{"state":"failed","reason":"run_closed"}`:         {State: "failed"},
+		`{"state":"failed","reason":"issuer_unreachable"}`: {State: "failed"},
+		`{"state":"succeeded","reason":"X","later":true}`:  {State: "succeeded"},
+	} {
+		g := startRemote(t, nil)
+		g.refusal = func(w http.ResponseWriter, r *http.Request) bool {
+			if r.URL.Path != outcomePath {
+				return false
+			}
+			answer(w, 200, body)
+			return true
+		}
+		k, runURL := openRemote(t, g)
+		got, err := k.Outcome(context.Background(), runURL, remoteRunID)
+		if got != want || err != nil {
+			t.Errorf("%s: %+v %v, want %+v", body, got, err, want)
+		}
+	}
+}
+
 // TestAnOutcomeThatIsNotValidIsNone pins what counts as {}: an answer the schema
-// refuses, a reason without a state, a state that is not one of run.exited's, a reason
-// that is not a code, one of Forager's reserved codes or an old name; a body that is
-// not JSON or holds a member twice; a 410, a 404 and a 500, whatever they carry. Each
-// is the empty outcome, with an error that says why and holds neither the run
-// credential nor the run secret.
+// refuses, a reason without a state, a state that is not one of run.exited's, with a
+// reason or without; a body that is not JSON or holds a member twice; a 410, a 404 and
+// a 500, whatever they carry. Each is the empty outcome, with an error that says why
+// and holds neither the run credential nor the run secret.
 func TestAnOutcomeThatIsNotValidIsNone(t *testing.T) {
 	for _, c := range []struct {
 		status int
@@ -81,14 +112,13 @@ func TestAnOutcomeThatIsNotValidIsNone(t *testing.T) {
 	}{
 		{200, `{"reason":"no_longer_needed"}`},
 		{200, `{"state":"lost"}`},
-		{200, `{"state":"failed","reason":"Checks failed"}`},
-		{200, `{"state":"failed","reason":""}`},
-		{200, `{"state":"cancelled","reason":"timeout"}`},
-		{200, `{"state":"cancelled","reason":"stopped"}`},
-		{200, `{"state":"failed","reason":"session_lost"}`},
-		{200, `{"state":"failed","reason":"run_closed"}`},
-		{200, `{"state":"failed","reason":"issuer_unreachable"}`},
+		{200, `{"reason":"Checks failed"}`},
+		{200, `{"state":"lost","reason":"checks_failed"}`},
+		{200, `{"state":"lost","reason":"Checks failed"}`},
+		{200, `{"state":"","reason":"checks_failed"}`},
 		{200, `{"state":"succeeded","state":"failed"}`},
+		{200, `{"state":"succeeded","state":"failed","reason":"x"}`},
+		{200, `{"state":"succeeded","reason":"a","reason":"b"}`},
 		{200, `["succeeded"]`},
 		{200, `not json`},
 		{200, ``},

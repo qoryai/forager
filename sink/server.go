@@ -39,8 +39,9 @@ const QueueSize = 10000
 
 // DeliveredFile is the file in the run directory that holds what the server accepted,
 // a line per batch written as the answer comes: the delivery id, then the sequence of
-// each event in it. A server's stop, a signed 410 with any code or none, is the one
-// word stopped. With events.jsonl it says what a run cut short still owes
+// each event in it. A server's stop, a signed 410 with any code or none, and on the
+// link an answer that ended the run, one [Server.RunEnded] records among them, is the
+// one word stopped. With events.jsonl it says what a run cut short still owes
 // its server.
 const DeliveredFile = "delivered.log"
 
@@ -469,6 +470,20 @@ func (w *Server) Stopped() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.stopped
+}
+
+// RunEnded records that an answer of the gateway's the sink did not read itself, a
+// reload's 410 say, ended the run: nothing more is sent, [Server.RunClosed] reports
+// true, and [DeliveredFile] says stopped, once, as after the sink's own.
+func (w *Server) RunEnded() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runClosed = true
+	if w.stopped {
+		return
+	}
+	w.stopped = true
+	w.ack(stoppedWord, nil)
 }
 
 // RunClosed reports whether an answer on the link ended the run. A server's signed 410

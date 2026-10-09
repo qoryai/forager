@@ -888,10 +888,12 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 // runtime's own exit: a GET of <runURL>/<runID>/outcome, with no query, authorised as a
 // reload is, the run credential and the run's secret, and bounded to [OutcomeTimeout]
 // besides ctx. It returns the answer's outcome when the gateway answers 200 with a
-// document link-outcome-answer.schema.json accepts whose reason is none of Forager's
-// reserved codes. Anything else is {}, with the error that says why: a transport
-// failure, no answer in time, any other status, a 410 among them, or an answer that is
-// not valid; a caller that reads the outcome reads {} as no outcome, and the error as
+// document link-outcome-answer.schema.json accepts. A reason that is one of Forager's
+// reserved codes, or one the schema refuses where the answer without it is valid, is
+// dropped alone, as the gateway drops it, and the state kept. Anything else is {}, with
+// the error that says why: a transport failure, no answer in time, any other status, a
+// 410 among them, or an answer that is not valid, one with a state the schema refuses
+// among them; a caller that reads the outcome reads {} as no outcome, and the error as
 // nothing more. The answer's digests are handed to nobody. On the local link there is
 // no starter to ask: it sends nothing, and returns {} at once.
 func (k *Link) Outcome(ctx context.Context, runURL, runID string) (LinkOutcome, error) {
@@ -916,12 +918,31 @@ func (k *Link) Outcome(ctx context.Context, runURL, runID string) (LinkOutcome, 
 	}
 	var o LinkOutcome
 	if err := readLinkDocument("link-outcome-answer.schema.json", a.body, &o); err != nil {
+		var kept LinkOutcome
+		if alone, ok := withoutReason(a.body); ok && readLinkDocument("link-outcome-answer.schema.json", alone, &kept) == nil && kept.State != "" {
+			return LinkOutcome{State: kept.State}, nil
+		}
 		return LinkOutcome{}, &DocumentError{"the outcome answer", k.at(u), err}
 	}
 	if slices.Contains(reservedReasons, o.Reason) {
-		return LinkOutcome{}, &DocumentError{"the outcome answer", k.at(u), errors.New("/reason is one of Forager's reserved codes")}
+		o.Reason = ""
 	}
 	return o, nil
+}
+
+// withoutReason is an outcome answer's object without its reason member, and whether
+// it had one to drop.
+func withoutReason(body []byte) ([]byte, bool) {
+	var members map[string]jsontext.Value
+	if jsonv2.Unmarshal(body, &members) != nil {
+		return nil, false
+	}
+	if _, ok := members["reason"]; !ok {
+		return nil, false
+	}
+	delete(members, "reason")
+	b, err := jsonv2.Marshal(members)
+	return b, err == nil
 }
 
 // Deliver posts one link batch to eventsURL, the discovery's events.url, as the
