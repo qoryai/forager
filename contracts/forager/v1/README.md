@@ -1645,7 +1645,8 @@ the run whose `run_secret` it carries, checked before its body is read; behind a
 separate gateway that run must be of the run credential's run key. A batch without it,
 or with one of no such run, is `401` `run_credential_refused` behind a separate gateway
 and `400` `invalid_request` on the local link, and ends no run, so no run can be probed.
-Any other `400` `invalid_request` to a batch, one over the size limit or one that does
+A batch whose body does not arrive whole, its client gone before the end, is `400`
+`invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
 not decode among them, ends its run at the gateway: the
 gateway writes `dev.qory.run.exited` with `reason: session_lost`, since it no longer
 accepts the session's stream, refuses the run's proxy secret, and answers the session's
