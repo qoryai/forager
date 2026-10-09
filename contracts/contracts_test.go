@@ -152,7 +152,7 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // schema of the gateway's link its name starts with: the discovery of the local link and
 // of a separate gateway, a run request without a wall and one with a wall and a
 // narrowing, a run answer with a wall, without one and without a policy, a reload
-// answer with and without a policy, and a batch of events without sequence.
+// answer with and without a policy, and a batch of a session's events without sequence.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch)
 	seen := map[string]bool{}
@@ -182,15 +182,21 @@ func TestLinkFixturesValidate(t *testing.T) {
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
 // the schema its name starts with: a policy that widens, a server without its access
 // key id or its pin or with a secret, a configuration without events, a ping whose
-// interval is over 300 seconds, an event with an unpadded sequence, a descriptor with
-// an expression, a link run request without wall, whose run id is not lower-case or
-// whose narrowing holds a member it does not define, a link run answer without its proxy
+// interval is over 300 seconds, an event with an unpadded sequence, a run.started
+// without opened_by, with an unknown one, opened by a session without its command or by
+// a gateway with one, a run.exited with an unknown reason, with quiet and no
+// quiet_seconds or with quiet_seconds and another reason, a descriptor with an
+// expression, a link run request without wall, whose run id is not lower-case or whose
+// narrowing holds a member it does not define, a link run answer without its proxy
 // secret, a link reload answer with the proxy secret or the certificate authority, a
-// link batch whose event carries a sequence or that holds a ping, a link discovery that
-// lists a node or has no heartbeat interval, run credentials without an audience or with
-// alg none or HS256. The longest schema name the file name starts with is the schema, so
-// run-configuration-variable-value-not-string is held to the run configuration and not
-// to a schema named run.
+// link batch whose event carries a sequence, that holds a ping or a run.egress, a
+// run.started a gateway opened, or a run.exited with gateway_lost, session_lost or
+// quiet, a link discovery that lists a node or has no heartbeat interval, and run
+// credentials with alg none or HS256, without an audience, with a label of claims and
+// no join, a key without its file, a plain http issuer, a run_key from a claim other
+// than sub, or a member the schema does not define. The longest schema name the file name
+// starts with is the schema, so run-configuration-variable-value-not-string is held to
+// the run configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",

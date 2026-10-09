@@ -10,7 +10,7 @@
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
     "data": {
       "opened_by": "gateway",
-      "forager_version": "0.7.0",
+      "forager_version": "0.6.0",
       "labels": {
         "forge": "example-forge",
         "repository": "example-namespace/project",
