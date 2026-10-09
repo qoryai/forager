@@ -313,12 +313,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			final = true
 		case event.PolicyApplied:
-			own := map[string]any{}
-			for k, v := range data {
-				if k != "harness_hosts" && k != "variables" {
-					own[k] = v
-				}
-			}
+			own := decided(data)
 			ok := false
 			for _, a := range given {
 				if reflect.DeepEqual(own, a) {

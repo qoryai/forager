@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 	"time"
 
@@ -513,9 +514,10 @@ func appliedOf(pol *policy.Loaded, held *credential.Held, chosen []tool.Chosen, 
 }
 
 // apply puts a policy the reload fetched in force, as today's session does: decided as
-// strictly as a start, then set on the run's proxy in one step and committed; the
-// tunnels the new policy closed are recorded after it. The session fetches the new
-// policy with its reload and writes its dev.qory.run.policy_applied.
+// strictly as a start, then set on the run's proxy in one step and committed. The
+// session fetches the new policy with its reload and writes its
+// dev.qory.run.policy_applied; the tunnels the new policy closed are recorded right
+// after it, today's order, or before the run's final event when it never comes.
 func (lr *linkRun) apply(next *policy.Loaded) error {
 	d, err := lr.r.Reload(lr.ctx, next)
 	if err != nil {
@@ -529,10 +531,47 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	lr.r.Commit(d)
 	lr.posts.SetRunDigest(d.Policy.RunConfiguration)
 	lr.mu.Lock()
+	defer lr.mu.Unlock()
 	lr.refresh()
-	lr.mu.Unlock()
-	for _, dec := range refused {
-		lr.st.Emit(event.RunEgress, run.Egress(dec))
+	if len(refused) > 0 {
+		// Before the session can see the new digest, so its policy_applied finds them
+		// waiting.
+		data := make([]any, len(refused))
+		for i, dec := range refused {
+			data[i] = run.Egress(dec)
+		}
+		lr.st.EmitAfter(appliedIs(lr.given[len(lr.given)-1]), event.RunEgress, data...)
 	}
 	return nil
+}
+
+// appliedIs matches the session's dev.qory.run.policy_applied whose members the gateway
+// decides are a.
+func appliedIs(a map[string]any) func(*event.Event) bool {
+	return func(ev *event.Event) bool {
+		if ev.Type != event.PolicyApplied {
+			return false
+		}
+		raw, ok := ev.Data.(json.RawMessage)
+		if !ok {
+			return false
+		}
+		var data map[string]any
+		if json.Unmarshal(raw, &data) != nil {
+			return false
+		}
+		return reflect.DeepEqual(decided(data), a)
+	}
+}
+
+// decided are the members of a dev.qory.run.policy_applied's data the gateway decides:
+// all but those the session adds.
+func decided(data map[string]any) map[string]any {
+	own := map[string]any{}
+	for k, v := range data {
+		if k != "harness_hosts" && k != "variables" {
+			own[k] = v
+		}
+	}
+	return own
 }

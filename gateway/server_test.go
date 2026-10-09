@@ -1,10 +1,14 @@
 package gateway_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +19,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
 
@@ -207,6 +212,102 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	h.close()
 	if got := types(h.record(runID)); !slices.Equal(got[len(got)-2:], []string{event.RunHeartbeat, event.RunExited}) {
 		t.Errorf("record %v", got)
+	}
+}
+
+// tunnel opens a CONNECT tunnel to target through the run's proxy, as the run's
+// harness would.
+func tunnel(t *testing.T, addr, secret, target string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	io.WriteString(c, link.Preamble(link.RelayPreamble, secret))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT %s: %d", target, resp.StatusCode)
+	}
+	return c
+}
+
+// TestAReloadRecordsTheTunnelsItClosesAfterItsPolicyApplied pins today's order of a
+// reload, one-machine behaviour: the run.egress of a tunnel the new policy closes
+// follows the session's run.policy_applied of the new policy, which the session writes
+// after its reload; when the run ends before the session writes it, the egress comes
+// right before the run's end.
+func TestAReloadRecordsTheTunnelsItClosesAfterItsPolicyApplied(t *testing.T) {
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	go func() {
+		for {
+			c, err := origin.Accept()
+			if err != nil {
+				return
+			}
+			go func() { io.Copy(io.Discard, c); c.Close() }()
+		}
+	}()
+	for _, writes := range []bool{true, false} {
+		t.Run(fmt.Sprintf("policy_applied %v", writes), func(t *testing.T) {
+			c := newControl(t)
+			c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+			h := start(t, gateway.Config{Server: c.server()})
+			a := h.open(server.LinkRunRequest{})
+			runID := a.RunID
+			h.mu.Lock()
+			first := h.digests[len(h.digests)-1].RunConfiguration
+			h.mu.Unlock()
+			h.post(started(runID, nil), applied(runID, a.Applied))
+			conn := tunnel(t, h.g.Addr(), a.ProxySecret, origin.Addr().String())
+			c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
+			h.post(logged(runID))
+			eventually(t, "the reload", func() bool {
+				d := h.post(heartbeat(runID))
+				return d.Accepted() && d.Digests.RunConfiguration != first
+			})
+			// The new policy closed the tunnel.
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("the tunnel the reload closed: %v", err)
+			}
+			denied := func(l recorded) bool { return l.Type == event.RunEgress && l.Data["decision"] == "denied" }
+			if slices.ContainsFunc(h.record(runID), denied) {
+				t.Errorf("the closed tunnel is recorded before the session's policy_applied: %v", types(h.record(runID)))
+			}
+			if writes {
+				r, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				h.post(applied(runID, r.Applied), logged(runID))
+			}
+			h.post(exited(runID))
+			h.close()
+			lines := h.record(runID)
+			i := slices.IndexFunc(lines, denied)
+			if i < 1 || lines[i].Data["host"] != "127.0.0.1" || slices.ContainsFunc(lines[i+1:], denied) {
+				t.Fatalf("record %v", types(lines))
+			}
+			want := []string{event.PolicyApplied, event.RunEgress, event.RunLog, event.RunExited}
+			if !writes {
+				want = []string{event.RunHeartbeat, event.RunEgress, event.RunExited}
+			}
+			if got := types(lines[i-1:]); !slices.Equal(got, want) {
+				t.Errorf("after the reload %v, want %v", got, want)
+			}
+			if writes && !slices.Equal(anyStrings(lines[i-1].Data["allow"]), []string{"b.example"}) {
+				t.Errorf("the egress follows the policy_applied %v", lines[i-1].Data)
+			}
+		})
 	}
 }
 
