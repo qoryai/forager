@@ -659,6 +659,9 @@ release may change what an existing document does, and says so under Upgrading.
   refused.
 - `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
   30 minutes when zero.
+- `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
+  is, since the run never opened at the server: its ping was never accepted, or it had
+  no server.
 
 #### Changed
 
@@ -677,6 +680,31 @@ release may change what an existing document does, and says so under Upgrading.
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
   gateway: the path could be read two ways".
+
+#### Fixed
+
+- `gateway.Resend` reads on past a line of `events.jsonl` that holds no whole event, a
+  write the gateway did not finish, on a full disk: it skips those bytes, and keeps and
+  sends every event the gateway wrote after them, one the next write put on the same
+  line too, the object that ends the line, never one inside the bytes before it. When
+  those bytes are themselves exactly one whole event, a write that lost its newline
+  alone, it is kept too. A whole event numbered at or below the one before it is
+  skipped. Before, it cut the file at that line, and every event after it was lost. A
+  last line without its newline that is a whole event is kept, and gets its newline
+  before `gateway_lost` follows it; any other is cut off, as before. The resend
+  reports "<n> lines of <file> are not whole events and are not sent". `gateway_lost`
+  is numbered after the highest sequence of the whole events or of `delivered.log`,
+  since an event whose line was not finished may have reached the server whole, and the
+  file is changed only when `gateway_lost` is added.
+- `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
+  that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
+  its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend
+  reports "the server never accepted the run's ping; nothing is sent". Before, its
+  ping and events were posted, which reported a run that never opened. The same holds
+  of a record with no ping and no `delivered.log`, of a run that had no server, sent to
+  a server: it never opened there, and the resend reports "the run had no server;
+  nothing is sent". Before, its events were posted without a ping. A record with a
+  `delivered.log` is sent, its ping's line torn or not.
 
 ### Wall
 

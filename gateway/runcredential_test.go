@@ -1535,6 +1535,42 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 	}
 }
 
+// blockHold makes every write of the refused run keys in dir fail, for any user, root
+// among them, who writes a directory of mode 0500 all the same: the file is written
+// beside itself and renamed over, and a directory that is not empty stands at its path,
+// so the rename fails. The file as last written, when there is one, is set aside. The
+// function returned puts it back, and writes succeed again; it runs at the test's end
+// too.
+func blockHold(t *testing.T, dir string) (unblock func()) {
+	t.Helper()
+	path := filepath.Join(dir, runcredential.EndedFile)
+	aside := filepath.Join(t.TempDir(), runcredential.EndedFile)
+	written := true
+	if err := os.Rename(path, aside); errors.Is(err, fs.ErrNotExist) {
+		written = false
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "blocked"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	unblock = func() {
+		once.Do(func() {
+			if err := os.RemoveAll(path); err != nil {
+				t.Error(err)
+			}
+			if written {
+				if err := os.Rename(aside, path); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	t.Cleanup(unblock)
+	return unblock
+}
+
 // TestARunWhoseHoldIsNotWrittenIsLetGoOf pins the issuer's end when the refused run
 // keys cannot be written: the failure is reported, the run key is refused all the same,
 // and the run that ended is let go of once its record is flushed.
@@ -1545,11 +1581,8 @@ func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
 	s := startVerifying(t, cfg, in, 0)
 	first := credentialFor("rk-0001")
 	r := s.openSession(t, first, server.LinkRunRequest{})
-	// The gateway's directory takes no new file, the refused run keys' among them.
-	if err := os.Chmod(s.dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+	// The refused run keys cannot be written.
+	blockHold(t, s.dir)
 	in.end(first)
 	status, body := r.reload(t, first, r.a.RunID)
 	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
@@ -1610,8 +1643,9 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		b, err := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
 		return err == nil && strings.Contains(string(b), `"rk-0001"`)
 	}
-	// failing starts a gateway whose directory takes no new file once a run of rk-0001
-	// is open, and ends that run at the issuer.
+	// failing starts a gateway whose refused run keys cannot be written once a run of
+	// rk-0001 is open, and ends that run at the issuer; unblock lets them be written.
+	unblock := map[*service]func(){}
 	failing := func(retry time.Duration) *service {
 		t.Helper()
 		in := &introspection{}
@@ -1620,10 +1654,7 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		s := startVerifying(t, cfg, in, 0)
 		first := credentialFor("rk-0001")
 		r := s.openSession(t, first, server.LinkRunRequest{})
-		if err := os.Chmod(s.dir, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		unblock[s] = blockHold(t, s.dir)
 		in.end(first)
 		status, body := r.reload(t, first, r.a.RunID)
 		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
@@ -1654,9 +1685,9 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		t.Errorf("the failure reported %d times", n)
 	}
 	if kept(s.dir) {
-		t.Fatal("kept while the directory takes no new file")
+		t.Fatal("kept while the refused run keys cannot be written")
 	}
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	if s.reported("are written to") {
 		t.Error("a recovery reported while the write fails")
 	}
@@ -1673,14 +1704,14 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		t.Errorf("the failure reported %d times as it was retried", n)
 	}
 	refused(s)
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	eventually(t, "the run key written again", func() bool { return kept(s.dir) })
 	eventually(t, "the recovery reported", func() bool { return s.reported("are written to") })
 	recovered(s)
 
 	// Once more at Close.
 	s = failing(time.Hour)
-	os.Chmod(s.dir, 0o700)
+	unblock[s]()
 	if kept(s.dir) {
 		t.Fatal("kept before Close")
 	}
@@ -1822,7 +1853,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			status, body := r.reload(t, first, r.a.RunID)
 			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
 		}
-		// Written once, while the directory takes new files.
+		// Written once, while the refused run keys can be written.
 		end("rk-0002")
 		var never string
 		var neverRun *sessionRun
@@ -1831,10 +1862,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			s.secrets = append(s.secrets, never)
 			neverRun = s.openSession(t, never, server.LinkRunRequest{})
 		}
-		if err := os.Chmod(s.dir, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.Chmod(s.dir, 0o700) })
+		blockHold(t, s.dir)
 		// Its extension to a later exp fails to write.
 		later := mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil)
 		s.secrets = append(s.secrets, later)
