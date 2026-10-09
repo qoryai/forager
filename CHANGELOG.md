@@ -299,9 +299,10 @@ release may change what an existing document does, and says so under Upgrading.
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
-  `gateway` and from `apiary` among them, most with today's text as their `message`
-  and an `instance_limit` from `apiary` with Qory Apiary's URL in it, and `fixtures/invalid/link-*` the refused
-  ones, a discovery without `proxy`, a run request that passes a value with a name or
+  `gateway` and from `apiary` among them, most with today's text as their `message`,
+  the gateway's with the `: <code>: <names>` tail, and the signed `409`
+  `instance_limit` to the ping from `apiary` with Qory Apiary's URL in it, and
+  `fixtures/invalid/link-*` the refused ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
   `from` or with a control character other than tab and newline in its `message`, a
@@ -434,6 +435,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Gateway
 
+#### Upgrading
+
+- Package `gateway` exports `gateway.Start`, its `Config` and the `Gateway` it returns,
+  with `Addr`, `LocalLink`, `Close` and `Wait`; `gateway.Resend`, its `ResendConfig`,
+  `Delivery` and `ErrRunning`; and the types their fields need: `Server`, `TLS`,
+  `Policy` with `Under`, `ReadPolicy`, `PolicyEgress`, `PolicyCredential`, `PolicyTool`,
+  `Credential`, `Tool`, `Discovery` and `Image`. `Proxy`, `Decision`, `CA`,
+  `ProxyCredential`, `ProxyTool`, `CredentialDefinition`, `HeldCredentials`,
+  `ToolDefinition`, `ChosenTool`, `Tools`, `Listen`, `NewCA`, `ResolveCredentials`,
+  `ChooseTools`, `CheckTools`, `ToolPlaceholders`, `StartTools` and `ToolSocketDirs` are
+  removed: `gateway.Start` starts the one proxy every run shares, and for each run a
+  session opens on its link resolves the credentials and starts the tools the run's
+  policy selects among `gateway.Config`'s `Credentials` and `Tools`. A test in
+  `internal/importrules` fails on any other export.
+
 #### Changed
 
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
@@ -442,8 +458,7 @@ release may change what an existing document does, and says so under Upgrading.
   reads "qory: egress to <host>:<port> denied by the gateway: link-local addresses are
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
-  gateway: the path could be read two ways". Package `gateway` holds the names the
-  session drives the proxy, the credentials and the tools by.
+  gateway: the path could be read two ways".
 
 ### Wall
 
@@ -815,8 +830,8 @@ release may change what an existing document does, and says so under Upgrading.
   `session` and `e2e`; the job named `Go tests` passes when they all pass; and the two
   wall conformance jobs run `./e2e`. A test in `internal/importrules` holds each part's
   imports to the rules: the core imports no part; the gateway and the wall import the
-  core; the session imports the core, the wall and package `gateway`; and only `e2e`
-  imports the session.
+  core; the session imports the core and the wall, and its tests package `gateway`,
+  using only its surface; and only `e2e` imports the session.
 
 #### Fixed
 

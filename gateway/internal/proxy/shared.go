@@ -287,7 +287,9 @@ func (b *inbox) Close() error {
 // Addr is the inbox's own: it has no address on the network.
 func (b *inbox) Addr() net.Addr { return inboxAddr{} }
 
+// inboxAddr is the inbox's address, which names no place on the network.
 type inboxAddr struct{}
 
+// Network is the inbox's kind, "proxy".
 func (inboxAddr) Network() string { return "proxy" }
 func (inboxAddr) String() string  { return "shared" }
