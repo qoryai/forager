@@ -13,8 +13,8 @@ Behind a wall, the container gets only what the run lists of the machine's envir
 
 - `wall.env` is the whole of the node's environment that goes in, by name.
 - A model credential listed in `wall.env` is the agent's.
-- A credential defined under `credentials`, and selected by the run's policy, stays
-  outside instead.
+- A credential defined under `gateway.credentials`, and selected by the run's policy,
+  stays outside instead.
 
 For a credential that stays outside:
 
@@ -43,7 +43,7 @@ A credential's secret comes from one of three sources:
 - The record lists each credential the run uses, by name. No event contains a
   credential's secret.
 
-In `qory`, the `credentials` section of `runner.yaml` defines them. See
+In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 [qory's docs](https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has).
 
 ## Tools

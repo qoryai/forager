@@ -38,11 +38,11 @@ them. See [credentials](credentials.md), [tools](credentials.md#tools) and
 
 A run has one policy. It comes from one of three places:
 
-- **The machine's policy.** For `qory`, the `egress` section of `runner.yaml`, below.
-  From Go, `Policy` in the spec.
+- **The machine's policy.** For `qory`, the `gateway.egress` section of `forager.yaml`,
+  below. From Go, `Policy` in the spec.
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/forager/v1/README.md#the-policy).
-  - It narrows the machine's `egress`, and never widens it.
+  - It narrows the machine's `gateway.egress`, and never widens it.
   - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
@@ -51,7 +51,7 @@ A run has one policy. It comes from one of three places:
   `security_policy` is the server's policy, and the node's policy narrows it.
 
 The node's policy is `Spec.Policy`, the policy Forager is passed: for `qory`, the
-machine's `egress` with the run's own under it. Which one applies:
+machine's `gateway.egress` with the run's own under it. Which one applies:
 
 | Forager has            | The policy is                                                           |
 | ---------------------- | ----------------------------------------------------------------------- |
@@ -82,28 +82,29 @@ server, so what the node contributes can only narrow the run:
 With no policy at all, the gateway observes everything: every connection is allowed and
 recorded.
 
-## In runner.yaml
+## In forager.yaml
 
-For `qory`, one optional file changes what Forager does: `~/.config/qory/runner.yaml`.
+For `qory`, one optional file changes what Forager does: `~/.config/qory/forager.yaml`.
 It is never in a repository.
 
 ```yaml
 apiVersion: qory.dev/v1alpha1
-egress:
-  mode: enforce                         # or observe: record everything, deny only what deny names
-  allow: [api.anthropic.com, "*.github.com"]
-  deny: [gist.github.com]               # denied in either mode, whatever allow says
-server:                                 # optional
-  url: https://qory.example
-  access_key_id: ak_f1xt0re000000000   # or QORY_ACCESS_KEY_ID in the environment
-  apiary_public_key:                   # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
-    - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
+gateway:
+  egress:
+    mode: enforce                       # or observe: record everything, deny only what deny names
+    allow: [api.anthropic.com, "*.github.com"]
+    deny: [gist.github.com]             # denied in either mode, whatever allow says
+  server:                               # optional
+    url: https://qory.example
+    access_key_id: ak_f1xt0re000000000  # or QORY_ACCESS_KEY_ID in the environment
+    apiary_public_key:                  # the pin; or QORY_APIARY_PUBLIC_KEY, as JSON
+      - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 ```
 
-- `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows
-  the server's. See [where the policy comes from](#where-the-policy-comes-from).
-- Without `egress`, and with no other policy, everything is allowed and recorded.
-- `server` defines the server Forager reports to. See [the server](server.md).
+- `gateway.egress` is the machine's policy. It is the ceiling on a run's own, and it
+  narrows the server's. See [where the policy comes from](#where-the-policy-comes-from).
+- Without `gateway.egress`, and with no other policy, everything is allowed and recorded.
+- `gateway.server` defines the server Forager reports to. See [the server](server.md).
 
 ## A denied connection
 

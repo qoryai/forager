@@ -131,6 +131,9 @@ release may change what an existing document does, and says so under Upgrading.
   enforces a policy, walls the agent in with the secrets kept outside, and reports to a
   server. It shows that `qory run` starts Forager, and where a run's policy comes
   from. `docs/` contains the rest, one page per topic.
+- The docs and the contract's README name qory's `~/.config/qory/forager.yaml` and its
+  `session`, `gateway` and `wall` sections: the machine's policy is `gateway.egress`, and
+  the server `gateway.server`.
 - Contract `v1` revision 1 is amended in place: §The descriptor has six parts,
   `secrets` among them, defines `title` and the bound on `runtime`, and describes
   `runtimes.json`.
@@ -395,7 +398,7 @@ release may change what an existing document does, and says so under Upgrading.
   Forager's files, `mount_contains_forager_files`, before it contacts the server and
   before anything starts, `Local` included. `session.Spec` has `ForagerFiles`, the
   absolute paths the caller lists as its own, such as the directory of qory's
-  `runner.yaml`. Beside them the session checks the directory of every credential and tool
+  `forager.yaml`. Beside them the session checks the directory of every credential and tool
   program the machine defines, the file a credential is read from, the private directories
   of every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
   files (`qory-wall-*`) in the system's temporary directory, and the files a wall lists

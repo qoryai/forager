@@ -84,7 +84,7 @@ egress:
 
 The policy comes from one of three places:
 
-- **The machine**: the `egress` section of `~/.config/qory/runner.yaml`.
+- **The machine**: the `gateway.egress` section of `~/.config/qory/forager.yaml`.
 - **The run**: `qory run --policy <file>`, a file in the format above. It narrows the
   machine's policy, and never widens it.
 - **Your server**: its run configuration, chosen by the run's labels, such as its
