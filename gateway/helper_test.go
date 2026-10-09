@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -381,6 +383,38 @@ func (h *harness) refusalOf(path, body string) (int, map[string]any) {
 
 // openBody is a run request of the run id, without a wall.
 func openBody(runID string) string { return `{"version":1,"run_id":"` + runID + `","wall":false}` }
+
+// closedUnanswered dials the link's socket, writes open and fails the test unless the
+// gateway closes the connection without an answer byte. The gateway may close it
+// before the client has written everything: a write refused with EPIPE or ECONNRESET
+// is that close, as is a read that ends in EOF or a reset before any byte.
+func closedUnanswered(t *testing.T, socket, name, open string) {
+	t.Helper()
+	c, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(c, open); err != nil {
+		if !closedByPeer(err) {
+			t.Errorf("%s: the write: %v", name, err)
+		}
+		return
+	}
+	b, err := io.ReadAll(c)
+	if len(b) != 0 {
+		t.Errorf("%s: answered %q", name, b)
+	}
+	if err != nil && !closedByPeer(err) {
+		t.Errorf("%s: the read: %v", name, err)
+	}
+}
+
+// closedByPeer reports whether err is the peer's close: a broken pipe or a reset.
+func closedByPeer(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
+}
 
 // rawPost posts body to path on the link and returns the status and the body.
 func rawPost(t *testing.T, c *http.Client, path, contentType, body string) (int, string) {

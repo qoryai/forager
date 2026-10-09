@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,16 +76,7 @@ func TestTheLocalLink(t *testing.T) {
 		"a wrong secret": "QORY-LINK " + strings.Repeat("x", len(l.Secret)) + "\nGET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n",
 		"no preamble":    "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n" + strings.Repeat("\r\n", 40),
 	} {
-		c, err := net.Dial("unix", l.Socket)
-		if err != nil {
-			t.Fatal(err)
-		}
-		io.WriteString(c, open)
-		c.SetReadDeadline(time.Now().Add(5 * time.Second))
-		if b, err := io.ReadAll(c); len(b) != 0 || err != nil {
-			t.Errorf("%s: answered %q, %v", name, b, err)
-		}
-		c.Close()
+		closedUnanswered(t, l.Socket, name, open)
 	}
 	h.close()
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -102,19 +92,7 @@ func TestTheLinkRefusesAnotherUsersPeer(t *testing.T) {
 	gateway.SetLinkUID(&cfg, os.Getuid()+1)
 	h := start(t, cfg)
 	l := h.g.LocalLink()
-	c, err := net.Dial("unix", l.Socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	if err := link.WriteLinkPreamble(c, l.Secret); err != nil {
-		t.Fatal(err)
-	}
-	io.WriteString(c, "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
-	c.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if b, err := io.ReadAll(c); len(b) != 0 || err != nil {
-		t.Errorf("answered %q, %v", b, err)
-	}
+	closedUnanswered(t, l.Socket, "another user's peer", link.Preamble(link.LinkPreamble, l.Secret)+"GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
 	if _, err := h.link.Discover(context.Background()); err == nil {
 		t.Error("the session's client of another user was answered")
 	}
