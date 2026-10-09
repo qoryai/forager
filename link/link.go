@@ -11,8 +11,8 @@ package link
 const Loopback = "127.0.0.1:0"
 
 // NoProxy is the value of NO_PROXY the session gets: loopback by every name, so a
-// local server, a local model endpoint or the gateway's own socket-fronting programs are
-// reached directly.
+// local server, a local model endpoint or any other program that listens on loopback
+// is reached directly.
 const NoProxy = "localhost,127.0.0.1,::1"
 
 // ProxyEnv returns the variables that point a program at the proxy at u, in both cases,

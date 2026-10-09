@@ -36,7 +36,7 @@ func TestRunConfigurationReadsTheVariables(t *testing.T) {
 	}
 }
 
-// TestRunConfigurationRefusalsQuoteNoValue pins what the gateway refuses of a run
+// TestRunConfigurationRefusalsQuoteNoValue pins what Forager refuses of a run
 // configuration, each with run_configuration_invalid, and that no error contains a
 // variable's value: a member name twice, invalid UTF-8, a value with a NUL, a carriage
 // return or a line feed, a value that is no string, a name outside the grammar, more

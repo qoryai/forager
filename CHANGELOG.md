@@ -105,6 +105,10 @@ release may change what an existing document does, and says so under Upgrading.
   `About` to these rules and returns the first failure as a `*session.AboutError`, its
   `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
   before it contacts the server, and an `About` it refuses is no run.
+- Forager reads a run configuration with `encoding/json/v2` first, which refuses a
+  member name that appears twice and invalid UTF-8, then against the schema and the
+  limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
+  which rule refused the document, and never quotes a value.
 
 #### Changed
 
@@ -146,7 +150,7 @@ release may change what an existing document does, and says so under Upgrading.
   script it writes into the run directory. §The descriptor describes Claude Code's
   approval of an API key and the script that pre-approves the placeholder value, and
   §Sequence's steps 6 and 7 list the script.
-- Contract `v1` revision 1 is amended in place: the gateway signs every request with an
+- Contract `v1` revision 1 is amended in place: Forager signs every request with an
   access key, an Ed25519 key, and verifies every answer under the server's key it pins.
   The server document has `url`, `access_key_id` and the pin `apiary_public_key`, and
   no secret; `session.Server` has the same members, and `session.Spec` and
@@ -154,7 +158,7 @@ release may change what an existing document does, and says so under Upgrading.
   contains `X-Qory-Access-Key-Id`, `X-Qory-Instance-Id`, `X-Qory-Instance-Name` and
   `X-Qory-Signature-Ed25519`, over the request string of a GET or a POST. Every answer
   but a `401` is signed under the server's key and bound to the request's signature,
-  and the gateway reads its body and headers only once it verifies; during a run an
+  and Forager reads its body and headers only once it verifies; during a run an
   answer that does not verify is retried. §The server defines the access key, nodes
   and instances, the pin, the request string, signed answers, the coded refusals and
   their order, and enrolment.
@@ -185,24 +189,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Gateway
 
-#### Added
-
-- The gateway reads a run configuration with `encoding/json/v2` first, which refuses a
-  member name that appears twice and invalid UTF-8, then against the schema and the
-  limits: a variable's value of at most 4096 bytes of UTF-8. The error states where and
-  which rule refused the document, and never quotes a value.
-- A server can close a run with a signed `410` `run_closed` to a delivery: the session
-  stops the runtime as at its time limit, records `dev.qory.run.exited` with
-  `reason: run_closed` in the file sink and sends nothing further; before
-  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
-  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
-  run the same way, with exit code -1.
-  `session.Result` has `RunClosed`.
-- A run refused with a code is a `session.Refusal`, with the code and the server's
-  status: `apiary_public_key_missing` for a server without a pin, before any request;
-  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
-  `instance_limit` when the node's live instances are at its limit.
-
 #### Changed
 
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
@@ -210,8 +196,8 @@ release may change what an existing document does, and says so under Upgrading.
   only`. The gateway's `403` for a link-local address or the machine's own address
   reads "qory: egress to <host>:<port> denied by the gateway: link-local addresses are
   never reached through it, and the gateway's own machine only for a host the policy's
-  allow list names", and for an ambiguous path "qory: egress to <host>:<port> denied by
-  the gateway: the path could be read two ways". Package `gateway` holds the names the
+  allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
+  gateway: the path could be read two ways". Package `gateway` holds the names the
   session drives the proxy, the credentials and the tools by.
 
 ### Wall
@@ -407,7 +393,7 @@ release may change what an existing document does, and says so under Upgrading.
   Forager's files, `mount_contains_forager_files`, before it contacts the server and
   before anything starts, `Local` included. `session.Spec` has `ForagerFiles`, the
   absolute paths the caller lists as its own, such as the directory of qory's
-  `forager.yaml`. Beside them the session checks the directory of every credential and tool
+  `runner.yaml`. Beside them the session checks the directory of every credential and tool
   program the machine defines, the file a credential is read from, the private directories
   of every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
   files (`qory-wall-*`) in the system's temporary directory, and the files a wall lists
@@ -458,6 +444,17 @@ release may change what an existing document does, and says so under Upgrading.
   binds them. `events/run.refused.schema.json` lists the four codes.
 - The session passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
+- A server can close a run with a signed `410` `run_closed` to a delivery: the session
+  stops the runtime as at its time limit, records `dev.qory.run.exited` with
+  `reason: run_closed` in the file sink and sends nothing further; before
+  `dev.qory.run.started` it records `dev.qory.run.refused` with the code `run_closed`.
+  A close that keeps the runtime from starting after `dev.qory.run.started` ends the
+  run the same way, with exit code -1.
+  `session.Result` has `RunClosed`.
+- A run refused with a code is a `session.Refusal`, with the code and the server's
+  status: `apiary_public_key_missing` for a server without a pin, before any request;
+  `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
+  `instance_limit` when the node's live instances are at its limit.
 
 #### Changed
 

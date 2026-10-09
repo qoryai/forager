@@ -104,7 +104,7 @@ with an id; **session** is the runtime at work inside a run; **runtime** is the 
 that runs the session, such as Claude Code; **policy** is the document that narrows what a
 run may do; **egress** is a connection the session opens to the outside through the
 proxy; **event** is one CloudEvent Forager emits; **sink** is where events go, the file
-or the server; **server** is what the gateway is a client of, a control plane or a
+or the server; **server** is what Forager is a client of, a control plane or a
 receiver; **receiver** is a server that is not a control plane; **descriptor** is the document that
 maps a runtime's output to session events; **record** is one unit of runtime output a
 descriptor reads; **harness** is what the session runs on, composed elsewhere. A runtime is

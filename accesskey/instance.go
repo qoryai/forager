@@ -70,7 +70,7 @@ func ReadInstanceFile(b []byte, machineID []byte) (id string, ok bool) {
 }
 
 // The variables qory reads the access key's secret, its id and the pin from. They are
-// the gateway's alone: no tool, credential program or agent receives them.
+// Forager's alone: no tool, credential program or agent receives them.
 const (
 	EnvSecret = "QORY_ACCESS_KEY_SECRET"
 	EnvID     = "QORY_ACCESS_KEY_ID"

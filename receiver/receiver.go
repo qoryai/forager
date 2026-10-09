@@ -92,7 +92,7 @@ type Handler struct {
 	// key, and whether the key is known and not revoked. Nil knows no key.
 	Keys func(accessKeyID string) (AccessKey, bool)
 	// Signer is the receiver's own signing key: every answer to a verified request is
-	// signed under it, and a gateway pins its public key. Nil answers every verified
+	// signed under it, and Forager pins its public key. Nil answers every verified
 	// request with an unsigned 500.
 	Signer *accesskey.Key
 	// Store keeps the events accepted.
@@ -120,7 +120,7 @@ type Handler struct {
 	// Log receives one line per delivery, and may be nil. It never sees a header.
 	Log func(string)
 	// Stop, when set, is called per run id to learn whether the receiver wants nothing
-	// more; true is a signed 410 without a code, after which the gateway sends no
+	// more; true is a signed 410 without a code, after which Forager sends no
 	// further batch and its run goes on. Nil means never.
 	Stop func(runID string) bool
 	// Closed, when set, is called per run id to learn whether the receiver has closed

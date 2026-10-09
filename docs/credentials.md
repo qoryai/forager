@@ -43,7 +43,7 @@ A credential's secret comes from one of three sources:
 - The record lists each credential the run uses, by name. No event contains a
   credential's secret.
 
-In `qory`, the `credentials` section of `forager.yaml` defines them. See
+In `qory`, the `credentials` section of `runner.yaml` defines them. See
 [qory's docs](https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has).
 
 ## Tools

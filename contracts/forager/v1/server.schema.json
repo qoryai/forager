@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/server.schema.json",
   "title": "Server",
-  "description": "The server the gateway is a client of: where it fetches its configuration from, the access key it signs every request as, and the pin, the server's keys it verifies every answer under. The access key's secret lives outside this document: the command reads it from a file descriptor, else QORY_ACCESS_KEY_SECRET, else the file access-key-secret. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns a signed 200 and the server accepts the ping.",
+  "description": "The server Forager is a client of: where it fetches its configuration from, the access key it signs every request as, and the pin, the server's keys it verifies every answer under. The access key's secret lives outside this document: the command reads it from a file descriptor, else QORY_ACCESS_KEY_SECRET, else the file access-key-secret. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns a signed 200 and the server accepts the ping.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "url", "access_key_id", "apiary_public_key"],
@@ -12,7 +12,7 @@
       "const": 1
     },
     "url": {
-      "description": "The server's origin: scheme and host, with a port when there is one, and nothing after it. https, or http to a loopback address only. The gateway fetches its configuration from /.well-known/qory-configuration under it.",
+      "description": "The server's origin: scheme and host, with a port when there is one, and nothing after it. https, or http to a loopback address only. Forager fetches its configuration from /.well-known/qory-configuration under it.",
       "type": "string",
       "format": "uri",
       "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$"
@@ -23,7 +23,7 @@
       "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
     },
     "apiary_public_key": {
-      "description": "The pin: the server's Ed25519 public keys, a list so the key can rotate. Every answer of the server is verified under one of them, and the gateway takes keys from this list alone. A run with a server and no pin is refused before the first request, apiary_public_key_missing.",
+      "description": "The pin: the server's Ed25519 public keys, a list so the key can rotate. Every answer of the server is verified under one of them, and Forager takes keys from this list alone. A run with a server and no pin is refused before the first request, apiary_public_key_missing.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,

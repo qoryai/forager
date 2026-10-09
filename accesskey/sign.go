@@ -151,8 +151,8 @@ type ServerKey struct {
 }
 
 // Pin is the machine's pin, apiary_public_key in the server document: the server's
-// Ed25519 public keys the gateway verifies every answer under, a list so the server's key
-// can rotate. The gateway takes keys from its pin alone, never from an answer.
+// Ed25519 public keys Forager verifies every answer under, a list so the server's key
+// can rotate. Forager takes keys from its pin alone, never from an answer.
 type Pin []ServerKey
 
 // ParsePin reads a pin written as JSON, the form QORY_APIARY_PUBLIC_KEY contains:
@@ -181,7 +181,7 @@ func ParsePin(b []byte) (Pin, error) {
 	return p, nil
 }
 
-// Check refuses a pin the gateway cannot verify under: an empty one, an entry whose alg
+// Check refuses a pin Forager cannot verify under: an empty one, an entry whose alg
 // is not ed25519, a key not in base64url of 32 bytes, a key twice, and a key
 // [PublicKey.Check] refuses, since a key of small order verifies signatures nobody
 // made.

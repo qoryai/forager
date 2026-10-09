@@ -345,7 +345,7 @@ func TestRequestKnownAnswers(t *testing.T) {
 }
 
 // TestAnswerKnownAnswers verifies the published answers under the fixture signing key,
-// as a gateway pinning it does: 200 with the discovery body and its digest, 404 with an
+// as Forager pinning it does: 200 with the discovery body and its digest, 404 with an
 // empty body, and the enrolment answers, under their own domain line, whose third line
 // is the proof. Each is also signed again to the same bytes, and an answer with another
 // status, another body, another digest, another request's signature or the other

@@ -41,7 +41,7 @@ nothing.
   See
   [no bind from a place an agent can change](#no-bind-from-a-place-an-agent-can-change).
 - A mount that is, contains or lies inside one of Forager's files is no run,
-  `mount_contains_forager_files`: the directory of `forager.yaml` with the access key
+  `mount_contains_forager_files`: the directory of `runner.yaml` with the access key
   secret, the programs Forager starts outside the wall, their configuration. See
   [Forager's files](#foragers-files).
 - The session, the policy and the access key secret stay outside, on the node.
@@ -109,7 +109,7 @@ there has the log, the egress record and the structured output, and no hook even
 
 ## Configure it
 
-One file on the node defines it: `~/.config/qory/forager.yaml`. It is never in a
+One file on the node defines it: `~/.config/qory/runner.yaml`. It is never in a
 repository, so a checkout cannot set what it runs under. With a `wall` section, a bare
 `qory run` is walled:
 
@@ -212,7 +212,7 @@ run directory and the hook socket's directory, which the session shows the enclo
 itself, are the run's own, and lie in Forager's files. Forager's files are:
 
 - `Spec.ForagerFiles`, the absolute paths the caller lists as its own. `qory` lists the
-  directory of `forager.yaml`, with the access key secret.
+  directory of `runner.yaml`, with the access key secret.
 - The directory of every credential program and every tool program the machine defines,
   found in `PATH` as the gateway starts it, and the directory of the file a link to one
   leads to. A program's neighbours, an interpreter or a module, are covered with it.
@@ -392,7 +392,7 @@ The machine defines the images a run may start in. The run's policy selects one 
 with `image`, as it selects credentials and tools. Without a selection, the run starts
 in `Image`.
 
-`qory` reads `wall.images` from `forager.yaml`: named images, each with a `ref`, and a
+`qory` reads `wall.images` from `runner.yaml`: named images, each with a `ref`, and a
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
 starts in when its policy selects none.
 

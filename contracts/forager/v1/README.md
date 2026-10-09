@@ -133,8 +133,8 @@ Stated so a receiver reads the record for what it is.
   and the egress record are Forager's own and are always there.
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a Forager change, never a configuration change.
-- The server is trusted with what it is sent. The access key authenticates the gateway to
-  the server. Every answer is signed under the key the gateway pins, so the gateway
+- The server is trusted with what it is sent. The access key authenticates Forager to
+  the server. Every answer is signed under the key Forager pins, so Forager
   authenticates the server over `https` and over loopback `http` alike.
 
 ## Sequence
@@ -282,7 +282,7 @@ configuration request and never selects a policy. An empty `about` is left out.
 
 `policy.schema.json`. The document the command passes to Forager, from the machine's
 own configuration, never from inside the checkout, where the agent it constrains can
-write it: for `qory`, the `egress` section of `~/.config/qory/forager.yaml`. The same
+write it: for `qory`, the `egress` section of `~/.config/qory/runner.yaml`. The same
 document a server's run configuration contains as `security_policy` (§The server), so
 nothing is designed twice.
 
@@ -581,7 +581,7 @@ of the highest source that sets it:
 | `fixed` | Forager's own names, `QORY_RUN_ID`, `QORY_RUN_SOCKET` and `QORY_HARNESS_HOME`; the proxy's (§Sequence step 5); the names the wall sets (§The wall); the runtime's preparation (§The runtime); the placeholders (§Credentials, §Tools); and the values the harness computes itself | `Spec.HarnessHome`, `Spec.LaunchFixed` |
 | `apiary` | the server's: the run configuration's `variables` | |
 | `run` | the run's own variables, `qory run --env` | `Spec.Variables.Run` |
-| `machine` | the machine's variables, the `wall.env` of `forager.yaml` | `Spec.Variables.Machine` |
+| `machine` | the machine's variables, the `wall.env` of `runner.yaml` | `Spec.Variables.Machine` |
 | `harness` | the harness's written defaults | `Spec.LaunchDefaults` |
 | `shell` | the environment the run inherits | `Spec.Env` |
 
@@ -838,9 +838,9 @@ compose keeps it out of git:
 ## The server
 
 `server.schema.json`. The document the command passes to Forager, from the machine's
-own configuration: for `qory`, the `server` section of `~/.config/qory/forager.yaml`,
+own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
 with the access key secret from the file descriptor `--access-key-secret-fd <n>` names,
-else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. The gateway is a client of the server defined here and of
+else `QORY_ACCESS_KEY_SECRET`, else the file `access-key-secret`. Forager is a client of the server defined here and of
 nothing else: it fetches the server's configuration, posts its events to the URL it
 defines, and takes the server's policy for the run, which the node's narrows, and the
 run's variables from the server when the server offers them. A server is a control
@@ -856,10 +856,10 @@ apiary_public_key:                    # the pin: the server's Ed25519 keys, one 
   - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
 ```
 
-`url` is the server's origin and nothing after it: no path, no query, no fragment. The
-gateway finds every endpoint through the configuration document under it.
+`url` is the server's origin and nothing after it: no path, no query, no fragment.
+Forager finds every endpoint through the configuration document under it.
 
-**The access key.** The access key authenticates the gateway to the server. It is one
+**The access key.** The access key authenticates Forager to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
 padding, 47 characters, from the system's random source; the prefix lets secret scanners
 recognise it. The secret signs every request and is never sent, and the server stores
@@ -911,7 +911,7 @@ the run has arrived for 3 × the `interval_seconds` its ping announced.
 **The pin.** `apiary_public_key` lists the server's Ed25519 public keys, a list so the
 server's key can rotate. Every answer of the server, to discovery, to the run
 configuration and to every delivery, is verified under the pin before its body or its
-headers are read, and the gateway takes keys from its pin alone. `qory` takes the pin
+headers are read, and Forager takes keys from its pin alone. `qory` takes the pin
 from `QORY_APIARY_PUBLIC_KEY`, the same list written as JSON, when the section has none,
 and refuses to start when both are set; it takes `access_key_id` from
 `QORY_ACCESS_KEY_ID` the same way. A run with a server and no pin is no run,
@@ -990,10 +990,10 @@ the checks and the proof verifies under it. Line 3 binds the answer to its reque
 through the request's signature to the access key and the instance that sent it. An
 enrolment answer has its own domain line because its line 3 is a proof, which anyone
 holding a live code chooses: its signature never verifies as the answer to a signed
-request, nor the reverse. At run start the gateway treats an answer without a valid
+request, nor the reverse. At run start Forager treats an answer without a valid
 signature under the pin as no run, `answer_unsigned`; during the run a delivery's answer
 without one is no answer, retried as any other with its headers unread, and a reload's
-fetch without one fails the reload. The gateway reads a body's code only from a signed
+fetch without one fails the reload. Forager reads a body's code only from a signed
 answer, and a refusal body over 64 KiB counts as unsigned. Two known answers under the
 fixture signing key, to the GET of discovery above: `200` with the 208-byte body of
 `fixtures/known-answers/discovery.json` and `X-Qory-Configuration: sha256=` and the hex
@@ -1022,7 +1022,7 @@ an event of a run the server has closed; then, for a ping alone, `409`
 `X-Qory-Access-Key-Id` or `X-Qory-Signature-Ed25519`, an access key id of the wrong
 shape, an access key the server does not recognise or has revoked, a timestamp that is
 not an integer, a stale timestamp, a signature that does not verify. The body never
-indicates which, and the gateway reports every `401` as `unauthorized`. The server
+indicates which, and Forager reports every `401` as `unauthorized`. The server
 verifies the Ed25519 signature, cofactorless as RFC 8032 defines it, looks the access
 key up only after its id's shape is checked, logs nothing about the signature header,
 and records the instance id and name as display data. A redirect is not followed: a 3xx
@@ -1074,8 +1074,8 @@ refuses. The known answers are `fixtures/enrolment/` and the enrolment lines of
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery, per
 access key. The answer is a signed `200`, `application/json`, with the header
-`X-Qory-Configuration: sha256=<hex>`, the server's digest of the document: opaque to the
-gateway, which compares it byte for byte and never recomputes it.
+`X-Qory-Configuration: sha256=<hex>`, the server's digest of the document: opaque to
+Forager, which compares it byte for byte and never recomputes it.
 
 ```json
 {"version": 1,
@@ -1088,14 +1088,14 @@ gateway, which compares it byte for byte and never recomputes it.
 `version`, `node_id`, `events` and `apiary_public_key` are required. `node_id` is the id
 of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
 display: `qory` prints it. `apiary_public_key` lists the server's current key, and
-during a rotation the next one, for information: the gateway verifies under its pin alone.
+during a rotation the next one, for information: Forager verifies under its pin alone.
 `secrets` is optional, `{url}` with `run.url`'s grammar: present for an access key
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
-offers no run configuration, and the policy is the machine's. A top-level member the
-gateway does not recognise is ignored, which is how a new revision adds a section.
+offers no run configuration, and the policy is the machine's. A top-level member
+Forager does not recognise is ignored, which is how a new revision adds a section.
 
 **The run configuration document.** `run-configuration.schema.json`. A signed `GET
 <run.url>?<the run's labels>`: one query parameter per label, the label's key as the
@@ -1131,40 +1131,40 @@ and `dev.qory.run.policy_applied` reports `url` and `run_configuration` beside `
 by the command's, and one that drops it puts the command's back. `variables` are the
 server's variables for the run, a name and an object with its string `value` each
 (§Variables). A member
-the gateway does not recognise is ignored. The digest is the server's and opaque; the
-gateway keeps it, sends it back on every POST, and never recomputes it. The gateway reads
+Forager does not recognise is ignored. The digest is the server's and opaque;
+Forager keeps it, sends it back on every POST, and never recomputes it. Forager reads
 the document with a decoder that refuses a member name that appears twice and invalid
 UTF-8, then against the schema and the limits, and its error states where in the
-document and which rule refused it, never a value. Anything but `200`, or a document the
-gateway refuses, is no run, `run_configuration_invalid` for the latter.
+document and which rule refused it, never a value. Anything but `200`, or a document
+Forager refuses, is no run, `run_configuration_invalid` for the latter.
 
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
-events of one run, in sequence order, never empty. The gateway cuts a batch at one
+events of one run, in sequence order, never empty. Forager cuts a batch at one
 hundred events, at one mebibyte, or after one second since its first event, whichever
 comes first; the ping is a batch of one, sent before anything else, with the heartbeat
 interval the run uses, `interval_seconds`, at most 300. A receiver verifies the Ed25519
 signature over the request string before parsing, then deduplicates on each event's
 `id`, since delivery is at least once.
 
-The gateway reads a body's code only from a signed answer:
+Forager reads a body's code only from a signed answer:
 
 | Status | Meaning |
 |---|---|
-| 2xx, signed | accepted; the gateway forgets the batch |
+| 2xx, signed | accepted; Forager forgets the batch |
 | 409 to the ping, signed, such as `instance_limit` | no run, with its code |
 | 410, signed, with `run_closed` | the run ends: the session stops the runtime as at its time limit, records `dev.qory.run.exited` with `reason: run_closed` in the file sink, and sends nothing further. Before `dev.qory.run.started`, it stops the start and records `dev.qory.run.refused` with the code `run_closed` instead |
-| 410, signed, without that code | stop: the server requests nothing more for this run. The gateway sends no further batch and the run continues on the file sink |
+| 410, signed, without that code | stop: the server requests nothing more for this run. Forager sends no further batch and the run continues on the file sink |
 | anything else, an answer that does not verify, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
 
 Every answer may contain `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
 digests in force: of the configuration document, and of the run configuration for the
-run's labels. The gateway compares each to the one it keeps. A different
+run's labels. Forager compares each to the one it keeps. A different
 run-configuration digest means fetch the run configuration again and apply it; a
 different configuration digest means fetch the configuration document again and use
 its sections for the batches that follow: the events URL and the filter. A
 header absent means nothing, and so does a digest of an answer that does not verify.
 This is how a control plane changes a run's policy while it runs, and the whole of it:
-the gateway reads a body's code only from a signed answer.
+Forager reads a body's code only from a signed answer.
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
@@ -1193,7 +1193,7 @@ behind is removed, by the run's label; a record that has `dev.qory.run.started` 
 `exit_code: -1` and `reason: gateway_lost`, the gateway having been lost before the run's
 exit was recorded; and every event the server's filter selects
 that no accepted batch contained is posted, in order, in batches cut the same way, until
-the server accepts them or the gateway stops retrying. The resend fetches the
+the server accepts them or Forager stops retrying. The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
 `undelivered/` again. A receiver sees some events twice when Forager dies between an
@@ -1223,7 +1223,7 @@ the public keys listed in its own configuration and skips enrolment, verifies ea
 request and answers in the order this section defines, signs every answer after
 verification under its own key, returns the digest headers, deduplicates and appends to
 a file. Its discovery lists `version`, `node_id`, `events` and `apiary_public_key`, and
-no `secrets`. The module's own tests run the gateway's client against it.
+no `secrets`. The module's own tests run Forager's client against it.
 `fixtures/signed/` is what any receiver is tested against: one request per file,
 `method`, `target`, `headers`, a header sent twice being a list of its values, `body`
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
@@ -1482,7 +1482,7 @@ inode, so a path written in another case on a disk that ignores case is the dire
 it names. A part that does not exist yet is compared by name, regardless of case.
 Forager's files are:
 
-- the paths the caller lists as its own: for `qory`, the directory of `forager.yaml`, with
+- the paths the caller lists as its own: for `qory`, the directory of `runner.yaml`, with
   the access key secret;
 - the directory of every credential program and every tool program the machine defines,
   and of the file a link to one leads to, the directory and not only the file, so an

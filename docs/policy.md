@@ -38,7 +38,7 @@ them. See [credentials](credentials.md), [tools](credentials.md#tools) and
 
 A run has one policy. It comes from one of three places:
 
-- **The machine's policy.** For `qory`, the `egress` section of `forager.yaml`, below.
+- **The machine's policy.** For `qory`, the `egress` section of `runner.yaml`, below.
   From Go, `Policy` in the spec.
 - **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/forager/v1/README.md#the-policy).
@@ -47,7 +47,7 @@ A run has one policy. It comes from one of three places:
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
 - **The server's run configuration.** The server's configuration may contain a `run`
-  section. Then the gateway fetches the run configuration, with the run's labels. Its
+  section. Then the session fetches the run configuration, with the run's labels. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
 The node's policy is `Spec.Policy`, the policy Forager is passed: for `qory`, the
@@ -82,9 +82,9 @@ server, so what the node contributes can only narrow the run:
 With no policy at all, the gateway observes everything: every connection is allowed and
 recorded.
 
-## In forager.yaml
+## In runner.yaml
 
-For `qory`, one optional file changes what Forager does: `~/.config/qory/forager.yaml`.
+For `qory`, one optional file changes what Forager does: `~/.config/qory/runner.yaml`.
 It is never in a repository.
 
 ```yaml
@@ -103,7 +103,7 @@ server:                                 # optional
 - `egress` is the machine's policy. It is the ceiling on a run's own, and it narrows
   the server's. See [where the policy comes from](#where-the-policy-comes-from).
 - Without `egress`, and with no other policy, everything is allowed and recorded.
-- `server` defines the server the gateway reports to. See [the server](server.md).
+- `server` defines the server Forager reports to. See [the server](server.md).
 
 ## A denied connection
 

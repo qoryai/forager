@@ -5,16 +5,16 @@ selects goes there too, signed. The server can also set the run's policy.
 
 A server is a control plane, or a receiver of your own.
 
-## In forager.yaml
+## In runner.yaml
 
-For `qory`, the `server` section of `~/.config/qory/forager.yaml` defines the server. The
-example is in [the policy](policy.md#in-forageryaml).
+For `qory`, the `server` section of `~/.config/qory/runner.yaml` defines the server. The
+example is in [the policy](policy.md#in-runneryaml).
 
-- The gateway reports to the server as an access key: `access_key_id` is its id, and
+- Forager reports to the server as an access key: `access_key_id` is its id, and
   its secret, one line starting `qak_`, lives in the file `access-key-secret` beside
-  `forager.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
+  `runner.yaml`, or in `QORY_ACCESS_KEY_SECRET`. The secret signs every request with
   Ed25519 and is never sent.
-- `apiary_public_key` is the pin, the server's keys: the gateway verifies every answer
+- `apiary_public_key` is the pin, the server's keys: Forager verifies every answer
   under it. A server without a pin is no run.
 - `qory access-key enrol` enrols a new key with a code from the server and writes the
   id and the pin; the code's use activates the key at once. A key made for an existing
@@ -30,9 +30,9 @@ example is in [the policy](policy.md#in-forageryaml).
 - `qory run --local` runs with the files alone.
 - Without `server`, the run writes files only.
 
-## How the gateway uses the server
+## How Forager uses the server
 
-A `session.Server` in the spec defines the server the gateway reports to. The gateway:
+A `session.Server` in the spec defines the server the session reports to. The session:
 
 1. fetches the server's configuration document, with a signed `GET` of
    `/.well-known/qory-configuration`;
@@ -44,7 +44,7 @@ A `session.Server` in the spec defines the server the gateway reports to. The ga
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
-request, and the gateway reads an answer only once it verifies under the pin. The
+request, and the session reads an answer only once it verifies under the pin. The
 server decides which labels identify what the run works on.
 
 The spec holds what identifies the run to the server:
@@ -73,7 +73,7 @@ records `reason: run_closed`, and sends nothing further.
 
 ## A policy that changes while the run goes
 
-A server may answer a later batch with another digest. The gateway then fetches the run
+A server may answer a later batch with another digest. The session then fetches the run
 configuration again, and puts it in force while the run goes, narrowed by the same node
 policy. The variables stay as they were when the run started.
 

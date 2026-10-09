@@ -69,7 +69,7 @@ func fixture(t *testing.T, name string) []byte {
 	return b
 }
 
-// digestOf is a receiver's digest of a document: any string, opaque to the gateway;
+// digestOf is a receiver's digest of a document: any string, opaque to Forager;
 // here the hex sha256 of the bytes.
 func digestOf(b []byte) string {
 	sum := sha256.Sum256(b)
@@ -502,8 +502,8 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	}
 }
 
-// TestAboutIsStoredAsReceived pins that a run.started with about is stored as the
-// gateway sent it, byte for byte. The receiver reads nothing of about and holds it to no
+// TestAboutIsStoredAsReceived pins that a run.started with about is stored as
+// Forager sent it, byte for byte. The receiver reads nothing of about and holds it to no
 // bound: one with two subjects of the same type and ref is stored all the same.
 func TestAboutIsStoredAsReceived(t *testing.T) {
 	h, _, _ := handler(t, 1700000000)

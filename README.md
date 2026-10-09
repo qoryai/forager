@@ -84,13 +84,13 @@ egress:
 
 The policy comes from one of three places:
 
-- **The machine**: the `egress` section of `~/.config/qory/forager.yaml`.
+- **The machine**: the `egress` section of `~/.config/qory/runner.yaml`.
 - **The run**: `qory run --policy <file>`, a file in the format above. It narrows the
   machine's policy, and never widens it.
 - **Your server**: its run configuration, chosen by the run's labels, such as its
   repository. See [Report to a server](#4-report-to-a-server).
 
-When your server sends a policy, the gateway narrows it by the policy it is passed,
+When your server sends a policy, Forager narrows it by the policy it is passed,
 `Spec.Policy` in Go: the node only takes away. With no policy, the gateway observes and
 records everything.
 
@@ -126,7 +126,7 @@ that runs agents for others: [docs/node.md](docs/node.md).
 
 Every event goes to files. With a server, the events it selects go there too:
 
-- Before the run starts, the gateway fetches the server's configuration, signed. The run
+- Before the run starts, Forager fetches the server's configuration, signed. The run
   starts only when the server answers.
 - It posts them in batches. Every request is signed with the machine's access key, an
   Ed25519 key, and every answer is verified under the server's key the machine pins.

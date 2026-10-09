@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/run-configuration.schema.json",
   "title": "Run configuration",
-  "description": "What a server returns for a signed GET of its run configuration endpoint: the server's policy for the run and the variables the agent's process receives, chosen by the server for the run's labels, which the request sends as its query. The digest the server sends beside it is the server's own and opaque to the gateway. A member the gateway does not recognise is ignored.",
+  "description": "What a server returns for a signed GET of its run configuration endpoint: the server's policy for the run and the variables the agent's process receives, chosen by the server for the run's labels, which the request sends as its query. The digest the server sends beside it is the server's own and opaque to Forager. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version"],

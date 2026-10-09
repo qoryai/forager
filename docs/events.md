@@ -43,7 +43,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 | `dev.qory.run.heartbeat`      | Every 30 seconds while the runtime runs                 |
 | `dev.qory.run.exited`         | The runtime exited: the result, the last event          |
 
-The gateway heartbeats while the session runs. The exit status of a run is the runtime's.
+Forager heartbeats while the session runs. The exit status of a run is the runtime's.
 
 ## The session's events
 

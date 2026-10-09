@@ -30,8 +30,8 @@ in the contract: [what every wall guarantees](contracts/forager/v1/README.md#the
 - a session changes the run's record, or what Forager reports;
 - a run's policy, a descriptor or a credential adapter's answer makes Forager do
   something the binary does not already do, or widens what the machine's policy allows;
-- a receiver accepts a request the gateway did not sign, by following this contract;
-- the gateway accepts an answer the server did not sign.
+- a receiver accepts a request Forager did not sign, by following this contract;
+- Forager accepts an answer the server did not sign.
 
 ## What is not
 

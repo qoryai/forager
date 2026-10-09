@@ -167,7 +167,7 @@ func bothDeny(ceiling, own []string) []string {
 }
 
 // Variables are the run's and the machine's variables and how a run takes the
-// server's: for qory, --env, wall.env and forager.yaml's variables section.
+// server's: for qory, --env, wall.env and runner.yaml's variables section.
 //
 // For each name the highest source that sets it wins: the run's fixed names, those
 // Forager, the wall, the runtime's preparation and the placeholders set and
@@ -190,7 +190,7 @@ type Variables struct {
 	Machine []string
 	// Deny are names and patterns, in which * matches any run of characters, of
 	// variables the run leaves out of the server's, Run, Machine and
-	// [Spec.LaunchDefaults], matched regardless of case: forager.yaml's
+	// [Spec.LaunchDefaults], matched regardless of case: runner.yaml's
 	// variables.deny.
 	Deny []string
 	// Unwalled is how a run without a Wall takes the server's variables:
@@ -256,9 +256,9 @@ const (
 
 // Server is the server document, contracts/forager/v1/server.schema.json, as the
 // caller passes it to Forager: the server whose configuration document says where
-// events go and where the run configuration is, the access key the gateway signs every
+// events go and where the run configuration is, the access key the session signs every
 // request as, and the pin, the server's keys every answer is verified under. The
-// access key's secret is outside the document: [Spec.AccessKey]. The gateway validates
+// access key's secret is outside the document: [Spec.AccessKey]. The session validates
 // the document, fetches the configuration document, and posts a ping the server must
 // accept, before anything starts.
 type Server struct {

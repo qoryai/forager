@@ -1,4 +1,4 @@
-// Package server is the gateway's client of the server contract.
+// Package server is Forager's client of the server contract.
 //
 // The server is the document of contracts/forager/v1/server.schema.json: a URL, an
 // access key id and the pin, apiary_public_key, the server's keys every answer is
@@ -76,7 +76,7 @@ const MaxRefusal = accesskey.MaxAnswer
 // MaxInterval is the longest heartbeat interval a ping may announce, in seconds.
 const MaxInterval = 300
 
-// Config is the server document: where the gateway reports, as which access key, and
+// Config is the server document: where Forager reports, as which access key, and
 // the server keys it pins. The access key's secret is outside it.
 type Config struct {
 	Version     int    `json:"version"`
@@ -98,7 +98,7 @@ func (e *Error) Error() string { return "server " + e.Name + ": " + e.Err.Error(
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// DocumentError is a document the server answered with a signed 200 and the gateway
+// DocumentError is a document the server answered with a signed 200 and Forager
 // refuses: the schema does, or its digest header is missing or misshapen. It means
 // that fetching again gets the same, which a transport failure or another status does
 // not.
@@ -192,7 +192,7 @@ func decode(name, schemaName string, b []byte, out any) error {
 // Configuration is the configuration document the server answers discovery with:
 // the access key's node, where events go and which, where the run configuration is
 // when the server offers one, a secrets section for an access key allowed stored
-// secrets, and the server's keys. A section the gateway does not know is ignored.
+// secrets, and the server's keys. A section Forager does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
 	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
@@ -202,7 +202,7 @@ type Configuration struct {
 	Run *Endpoint `json:"run,omitempty"`
 	// Secrets is nil unless the access key is allowed stored secrets.
 	Secrets *Endpoint `json:"secrets,omitempty"`
-	// ApiaryPublicKey lists the server's keys, for information: the gateway verifies under
+	// ApiaryPublicKey lists the server's keys, for information: Forager verifies under
 	// its pin alone.
 	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
 }
@@ -247,7 +247,7 @@ type RunConfiguration struct {
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is
-// an attribute a gateway may ignore, and this one does.
+// an attribute Forager may ignore, and does.
 type Variable struct {
 	Value string `json:"value"`
 }
@@ -511,7 +511,7 @@ const MaxLabels = 16
 var labelKeyShape = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
 
 // CheckLabels refuses labels the contract's schema would: too many, a key outside its
-// grammar, a value longer than 256 bytes or not UTF-8. The gateway checks a run's labels
+// grammar, a value longer than 256 bytes or not UTF-8. Forager checks a run's labels
 // with it before they are sent, and the receiver the labels a run configuration request
 // carries.
 func CheckLabels(labels map[string]string) error {

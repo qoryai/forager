@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// The refusal codes this package and the gateway's client decide or read. The contract's
+// The refusal codes this package and Forager's client decide or read. The contract's
 // table of refusal codes lists every code and when each applies.
 const (
 	// CodeUnauthorized is a 401: the access key is unknown or revoked, or the request
@@ -36,7 +36,7 @@ const (
 )
 
 // Refusal is an answer, or a decision, that means no run or no key, with its code: the
-// server's, read from the body of a signed answer, or one the gateway or this package
+// server's, read from the body of a signed answer, or one Forager or this package
 // decides. Status is the answer's HTTP status, or 0 when no answer is concerned.
 type Refusal struct {
 	Code   string
