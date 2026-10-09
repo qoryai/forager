@@ -128,8 +128,10 @@ type Launch struct {
 	// Proxy is the address the proxy listens on, host:port with the port it got.
 	Proxy string
 	// ProxyToken is what the proxy requires every connection to open with, when it is
-	// not empty. An adapter gives it to its relay and to nothing inside the enclosure,
-	// so the proxy serves this run's relay alone, whoever else reaches its address.
+	// not empty: the run's proxy secret on one machine, and behind a separate gateway a
+	// token the session's forwarder checks and replaces with the proxy secret inside
+	// TLS. An adapter gives it to its relay and to nothing inside the enclosure, so the
+	// proxy serves this run's relay alone, whoever else reaches its address.
 	ProxyToken string
 	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
 	// answers as some hosts itself, to set a credential the enclosure never holds, and

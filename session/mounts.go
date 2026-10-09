@@ -192,7 +192,7 @@ func foragerFiles(spec Spec) []foragerFile {
 	// directories it keeps come last, below. So a mount refused before says what it
 	// said.
 	var kept []foragerFile
-	for _, f := range spec.Gateway.files() {
+	for _, f := range gatewayFiles(spec.Gateway) {
 		if f.Kept {
 			kept = append(kept, foragerFile{f.Path, f.What})
 			continue

@@ -377,7 +377,20 @@ release may change what an existing document does, and says so under Upgrading.
   that way alone.
   `link.WriteLinkPreamble` and `link.ReadLinkPreamble` write and read the link's
   preamble, compared in constant time in a read of exactly its length, beside
-  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`.
+  `link.Preamble`, `link.PreambleWait`, `link.MaxSecret` and `link.ToolDirPrefix`;
+  `link.ReadRelayPreamble` reads the relay's the same way.
+- `server.NewRemoteLink(url, server.RemoteTLS{CAFile, CertificateSHA256}, credential,
+  userAgent, digests)` is the client of a separate gateway's link, with the local
+  link's `Discover`, `OpenRun`, `Reload` and `Deliver` and their refusals: an `https`
+  URL of a host and an optional port alone; TLS 1.3 alone; the system's roots, or the
+  CA file's authorities in their place; the URL's host name; the pin, the SHA-256 of
+  the certificate's DER SubjectPublicKeyInfo in standard base64 with padding, checked
+  after the chain; no proxy of the environment and no redirect; and
+  `Authorization: Bearer` with the run credential, asked for before every request and
+  sent only in the syntax of RFC 6750 §2.1, never in an error or a print. Its discovery
+  must list the gateway's origin alone and name its one address as the proxy.
+  `Link.DialProxy` opens a connection to that address over TLS with the same trust, and
+  `Link.ProxyAddress` names it.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -689,11 +702,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- A session speaks to a gateway alone, over the gateway's local link. `session.Spec`
-  gains `Gateway`, made by `session.LocalGateway(l link.Local)` from the link
-  `(*gateway.Gateway).LocalLink()` hands out; the link's secret stays in the process's
-  memory, and a `session.Gateway` prints and logs by its socket alone. A spec without
-  one is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
+- A session speaks to a gateway alone, over the gateway's link. `session.Spec`
+  gains `Gateway`, an interface: `session.LocalGateway(l link.Local)` from the link
+  `(*gateway.Gateway).LocalLink()` hands out, or a `session.RemoteGateway` (Added,
+  below); the link's secret stays in the process's memory, and a `session.Gateway`
+  prints and logs by its socket or, behind a separate gateway, its URL, CA file and pin,
+  never a secret. A spec without one, a nil `Gateway`, is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
   `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
   `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
   `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`,
@@ -741,6 +755,24 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `session.RemoteGateway{URL, CAFile, CertificateSHA256, Credential}`, a separate
+  gateway on a machine of its own. The session reaches its one address over TLS 1.3
+  alone, verifies the chain for the host name of `URL` against the system's roots or,
+  with `CAFile`, that file's authorities alone, and the certificate's public key against
+  `CertificateSHA256` when it is set, and sends `Authorization: Bearer` and the run
+  credential `Credential` returns on every request, asked for again before each one, so
+  a refreshed run credential is picked up. It holds no access key, prints as its URL,
+  its `CAFile` and its pin, never the run credential, and without `Credential` is no
+  run. The discovery's proxy is the gateway's one address, the run request carries the
+  spec's labels and `about` and no narrowing, and `run_credential_refused`,
+  `target_differs_from_credential` and `differs_from_credential` return a
+  `*session.Refusal` with the gateway's message as its text. Agent traffic goes through
+  the session's forwarder to the gateway's one address over TLS with the same trust:
+  without a wall, the agent's proxy URL is the forwarder on loopback with the run's
+  proxy secret as its password, so the agent's environment holds the proxy secret;
+  behind a wall, the relay opens every connection with a token of the run's forwarder
+  alone, `wall.Launch.ProxyToken`, which the forwarder checks and replaces with the
+  run's proxy secret inside TLS, so the proxy secret is in no file of the wall's.
 - `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
   the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
   `gateway`, and with what code, `run_closed`, `credential_expired` or
