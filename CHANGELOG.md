@@ -218,13 +218,13 @@ release may change what an existing document does, and says so under Upgrading.
   next caller asks again. Callers for the same run credential share one request, which
   a caller that gives up does not end for the others. Its errors name neither the run
   credential nor the secret.
-- `runcredential.OpenEnded` and `runcredential.Ended` keep the ended run keys by issuer
-  in `ended-run-keys.json` of the gateway's state directory, mode 0600, written
-  atomically, in a directory of mode 0700 that only its user writes. Each is kept until
-  its run credential's `exp` plus 5 minutes, the longest leeway, and dropped on open and
-  on `Ended.Add`; `Ended.Has` asks. A file that cannot be read, that others can read or
+- `runcredential.OpenEnded` and `runcredential.Ended` keep the run keys a gateway
+  refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
+  0600, written atomically, in a directory of mode 0700 that only its user writes. Each
+  is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
+  dropped on open and on `Ended.Add`; `Ended.Has` asks. A file that cannot be read, that others can read or
   write, or that holds no array `ended` is refused, so a gateway never starts having
-  forgotten an ended run.
+  forgotten a run key it refuses.
 - The known answers of the run credential gain the step `serialisation` and run
   credentials refused at it (padding, a line feed, a space, four parts, two parts), at
   the header (`crit`, a `typ` other than `JWT`, a member name twice), at the signature
@@ -548,18 +548,24 @@ release may change what an existing document does, and says so under Upgrading.
   credential's, and the run answer carries them; a session's `forge` or `repository`
   that differs is `403` `target_differs_from_credential`, another label or detail the
   mapping sets `403` `differs_from_credential`, each naming the run credential's value;
-  its `run.started` must carry the same `about.details`. A run key opens one run at a
-  gateway: a second run request of it, live or ended, is `401`
-  `run_credential_refused`, and the gateway keeps the run key in
-  `ended-run-keys.json` in its directory from the moment its run opens, before the
-  answer, to its latest `exp`, so neither a restart nor a crash reopens it, and a run
-  that fails to open keeps it too. Every later
-  request of the run carries a run credential of its run key, a refreshed one carrying
-  the run to its `exp`; one of another run key is `401`, so no run id can be probed.
+  its `run.started` must carry the same `about.details`. The gateway tracks run keys
+  and does not require them to be unique; each period of activity is a run: every run
+  request opens a run of its own, of its own run id and proxy secret, with the run key
+  as its `run_key` label. Every later request of the run carries a run credential of
+  its run key, a refreshed one carrying only its own run to its `exp`; one of another
+  run key is `401`, so no run id can be probed, and a batch is of the run its first
+  event names. A batch over the limit, or one that does not decode, is a `400` that
+  ends no run.
   The run ends at its latest `exp` with no fresher run credential,
   `credential_expired`, and when the issuer's introspection no longer holds its run
   credential active, `run_ended_at_issuer`: the gateway writes its
-  `dev.qory.run.exited`, and every later request gets the `410` with that code. A
+  `dev.qory.run.exited`, and every later request gets the `410` with that code. After
+  the issuer's end, the gateway refuses the run key until its `exp`, a session's run
+  request `401` `run_credential_refused` and a client's connection `407`; a run
+  credential for a refused run key presented during the hold is refused and extends
+  the hold to its own `exp`, and the hold lapses after the latest `exp` presented. The
+  gateway keeps these run keys in `ended-run-keys.json` in its directory, so a restart
+  refuses them too. A
   session's narrowing is accepted on the one address and narrows the run's policy, at
   its start and on each reload; it opens none of the gateway's own addresses, which
   only the policy before it opens, when it enforces and names the host itself. Its
@@ -569,28 +575,27 @@ release may change what an existing document does, and says so under Upgrading.
 - A client with no session sets the gateway's one address as its HTTPS proxy, its run
   credential the password of Basic in `Proxy-Authorization`; every failure of its login
   is the same `407`, with `Proxy-Authenticate: Basic realm="qory"` and the text "a
-  valid run credential is required as the proxy password". The first connection of a
-  run key with no run opens one, of the gateway's own run id, decided as a walled run,
-  with the credentials, the tools and the path rules its policy selects, as a
-  session's run: the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  valid run credential is required as the proxy password". A connection of a run key
+  with no open client's run opens one, of the gateway's own run id, decided as a
+  walled run, with the credentials, the tools and the path rules its policy selects,
+  as a session's run: the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
   the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
   every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
   HTTPS with the gateway's own authority. Every later connection of the run key joins
-  the run. The run ends after `Runs.Quiet` with no connection, `quiet`, with
-  `quiet_seconds`; at its `exp`; at the issuer's word; or at the server's `410`; its
-  `dev.qory.run.exited` holds neither `state` nor `exit_code`, and its run key's run
-  credentials are `407` from then on. A run refused with a code gets the gateway's
+  the run while it is open; a client has at most one open run per run key, and never
+  joins a session's run, which only its proxy secret reaches. The run ends after
+  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or at
+  the issuer's word; its `dev.qory.run.exited` holds neither `state` nor `exit_code`.
+  A run that ended is never opened again: the next connection of its run key opens a
+  new run, of a new run id. A run refused with a code gets the gateway's
   `dev.qory.run.refused` with that code, right after its ping; one that fails without
-  a code gets no event. Either way its run key ends. A refusal's answer is written in
+  a code gets no event, and its connection a `503` with the text "the gateway could not
+  open the run; try again". A refusal's answer is written in
   full, the connection's writing side closed and what the client still sends read
   briefly before it closes, so no reset takes the answer's place.
-- A refreshed run credential moves a run's end to its later `exp` only once the ended
-  run keys keep the run key to it; when they cannot, the request is refused, a
-  session's `500` `internal` and a client's connection a `500`, and the run goes on to
-  its earlier end.
-- Once a run of the one address has ended, its record is flushed and its run key is
-  kept, the gateway holds only how a later request of its run key is answered, until a
-  run credential of it can no longer be accepted. A gateway's own authority keeps at
+- Once a run of the one address has ended and its record is flushed, and after the
+  issuer's end its run key is kept, the gateway holds only how a later request of the
+  run is answered, until a run credential of it can no longer be accepted. A gateway's own authority keeps at
   most 1024 hosts' certificates, the least recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
   TLS the proxy ends, so no connection relays past the run.

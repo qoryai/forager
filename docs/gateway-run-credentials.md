@@ -10,8 +10,10 @@ machines without `gateway.run_credentials` in the operator's `forager.yaml`.
 
 ## The run key and the run credential
 
-- **The run key** identifies one run, and is unique per attempt. It is not a secret and
-  proves nothing on its own. A retry gets a new run key, and so a new run.
+- **The run key** is what the issuer gives run credentials for, and the `run_key` label
+  of each run they open. It is not a secret and proves nothing on its own. The gateway
+  tracks run keys and does not require them to be unique; each period of activity is a
+  run, of its own run id.
 - **The run credential** is a JWT ([RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html))
   signed as a JWS ([RFC 7515](https://www.rfc-editor.org/rfc/rfc7515.html)) with an
   asymmetric key, following the best practices of
@@ -158,15 +160,20 @@ The leeway, 60 seconds by default and at most 5 minutes, applies to `exp`, `iat`
 `nbf` alike: a run credential is accepted until `exp` plus the leeway, and its `iat` and
 `nbf` may be up to the leeway ahead of the gateway's clock.
 
-A run credential is bound to its run as well: once its run is closed or has ended, the
-gateway refuses it, not only at `exp`. The gateway keeps each ended run key, by issuer,
-until its run credential's `exp` plus 5 minutes, the longest leeway, in a file of its
-state directory (mode 0600, in a directory only its user writes), so a restart does not
-reopen it: `ended-run-keys.json`. It writes the run key there as soon as its run
-opens, before it answers or relays a byte, so a crash does not reopen it either. So the issuer gives a retry a new run key, and does
-not refresh the run credential of a run key whose run has ended. A second run request
-of a run key whose run is live is refused as well, a retry with the same run id
-included.
+Each run request of a session opens a run of its own, of its own run id and proxy
+secret, with the run key as its `run_key` label: one run key may have several runs at
+once, and one after another. Every later request of a session's run carries a run
+credential of that run's run key, and a refreshed run credential continues only its own
+run; once the run has ended, its requests get the `410`, not only at `exp`. A run id
+already in use is refused, `run_id_used`.
+
+After the issuer's end, `run_ended_at_issuer` (below), the gateway refuses the run key
+until its `exp`: a session's run request is `401` `run_credential_refused`, and a
+client's connection `407`. A run credential for a refused run key presented during the
+hold is refused and extends the hold to its own `exp`; the hold lapses after the latest
+`exp` presented, plus 5 minutes, the longest leeway. The gateway keeps these run keys,
+by issuer, in a file of its state directory (mode 0600, in a directory only its user
+writes), `ended-run-keys.json`, so a restart refuses them too.
 
 ## The introspection endpoint
 
@@ -295,28 +302,33 @@ alone. A connection without a valid run credential gets
 as `text/plain`, "a valid run credential is required as the proxy password": the same
 answer for every failure.
 
-The first connection with a valid run credential whose run key has no run at the gateway
-opens the run. Every later connection with a run credential for the same run key belongs
-to that run, a refreshed one included. The gateway reports the run itself, in this
-order: its ping; then, once it has fetched the run's policy from the control plane and
+While a run of the client's run key is open, every connection with a valid run
+credential for that run key joins it, a refreshed one included, and its `exp` extends
+the run. Otherwise the connection opens a new run, of a new run id with the run key as
+its `run_key` label; a run that ended is never opened again. A client has at most one
+open run per run key. A client never joins a session's run: a session's run is reached
+only by its proxy secret, and decided under that session's wall and narrowing, so a
+client of a run key whose sessions' runs are open opens or joins its own run beside
+them. The gateway reports the run itself, in this order: its ping; then, once it has fetched the run's policy from the control plane and
 decided the run, its `dev.qory.run.started`, with `opened_by` `gateway` and the run
 credential's labels and `about.details`, and its policy; then every connection and its
 heartbeats. A run refused with a code, say the control plane refuses the run's
 configuration or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
-no event. Either way its run key ends.
+no event, and its connection gets `503 Service Unavailable` with, as `text/plain`, "the
+gateway could not open the run; try again".
 
 The run ends, and the gateway writes its `dev.qory.run.exited`:
 
 - `quiet`, once it has had no connection for the operator's quiet time;
 - `credential_expired`, at its run credential's latest `exp` with no fresher one;
 - `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
-  credential active;
-- `run_closed`, when the control plane closes the run.
+  credential active.
 
 When the gateway stops with the run live, the run ends without its
-`dev.qory.run.exited`, and resending its record completes it as `gateway_lost`. From any
-end on, its run key's connections get `407`.
+`dev.qory.run.exited`, and resending its record completes it as `gateway_lost`. After
+the issuer's end, the gateway refuses the run key (The lifetime, above); after any
+other end, the next connection opens a new run.
 
 For a host the policy holds to paths, the gateway reads inside HTTPS with a
 certificate of its own authority, `authority/ca.pem` in its directory, which the

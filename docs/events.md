@@ -67,8 +67,8 @@ When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says
 `reason`. The session writes `timeout`, and posts it. The gateway writes the others:
 `session_lost`, the session was silent, or the gateway refused a batch of the
 session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
-`run_ended_at_issuer`; `run_closed` when the server closes the run; and sending a
-record again writes `gateway_lost`. When the gateway or the server ends a session's
+`run_ended_at_issuer`; `run_closed` when the server closes a session's run; and sending
+a record again writes `gateway_lost`. When the gateway or the server ends a session's
 run, the gateway writes the run's `dev.qory.run.exited`, and answers the session's next
 request with a `410` and a code. The session records its own `dev.qory.run.exited` in
 `session.jsonl` alone, with the 410's code as its reason, and posts nothing more:

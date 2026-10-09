@@ -809,8 +809,8 @@ session for 3 × its heartbeat interval, or the gateway refused a batch of the s
 gateway's quiet period, which `quiet_seconds` contains; `credential_expired`, the run
 credential's `exp` passed with no fresh credential for the same run key;
 `run_ended_at_issuer`, the issuer's introspection endpoint answered that the run
-credential is no longer active; and `run_closed` when the server closes a run on the
-link. On a session's run the session records, in its own record alone, the code of the
+credential is no longer active; and `run_closed` when the server closes a session's run
+on the link. On a session's run the session records, in its own record alone, the code of the
 gateway's `410` as its reason: the same reason after `credential_expired`,
 `run_ended_at_issuer` and the server's `run_closed`, and `run_closed` after the gateway's
 `session_lost`, from silence or a refused batch (§The gateway's link, The end of a run at
@@ -1446,7 +1446,9 @@ the run's labels from it through the operator's mapping. The session's `forge` a
 the mapping sets, and any key of `about.details` it sets, must equal the credential's
 value when the session sends it. A label the session leaves out is the credential's, and
 a label the mapping does not set is ignored: a run's labels come only from the
-credential. A run key opens one run at a gateway. Every request to a separate gateway,
+credential. The gateway tracks run keys and does not require them to be unique; each
+period of activity is a run, and every run request opens a run of its own, of its own
+run id and proxy secret (§Run credentials). Every request to a separate gateway,
 the run request and every batch, carries a run credential whose `sub` is the run's run
 key, and so does every reload (below); any other is `run_credential_refused`. Behind a
 separate gateway, the gateway decides the run credential first: a run request without
@@ -1457,7 +1459,7 @@ a run request in this order:
 | Status | Code | When |
 |---|---|---|
 | `400` | `invalid_request` | a body the schema refuses: a `run_id` not in the canonical lower-case form, labels or `about` outside their rules, a member the schema does not define; and a `narrowing` on the local link |
-| `401` | `run_credential_refused` | behind a separate gateway, a run key that already has a run at this gateway, live or ended, and a run credential the issuer's introspection does not hold active. One opaque code, with no names, and `WWW-Authenticate: Bearer`, as for every failure of the run credential |
+| `401` | `run_credential_refused` | behind a separate gateway, a run key the gateway refuses after the issuer's end (§Run credentials), and a run credential the issuer's introspection does not hold active. One opaque code, with no names, and `WWW-Authenticate: Bearer`, as for every failure of the run credential |
 | `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
 | `403` | `target_differs_from_credential` | behind a separate gateway, a `forge` or `repository` that differs from the credential's |
 | `403` | `differs_from_credential` | behind a separate gateway, another label or key of `about.details` the mapping sets, sent with another value |
@@ -1590,8 +1592,13 @@ the gateway writes `dev.qory.run.policy_applied` itself. The session
 keeps its own file record of its own events, numbered as today (§The record files): that
 record is the session's, not the run's stream. The gateway keeps the record of what it
 sent, and resends it after a crash (§The server, After Forager stops unexpectedly). The
-gateway answers a batch as the server does, unsigned: a `2xx` is accepted. A `400`
-`invalid_request` to a batch ends the run at the gateway: the gateway writes
+gateway answers a batch as the server does, unsigned: a `2xx` is accepted. Behind a
+separate gateway, a batch is of the run its first event's `subject` names, which must be
+a run of the run credential's run key: any other, or none, is `401`
+`run_credential_refused`, so no run id can be probed. A batch whose run the gateway
+cannot tell, one over the size limit, one that does not decode, and on the local link
+one whose first event names no run it holds, is a `400` `invalid_request` that ends no
+run. Any other `400` `invalid_request` to a batch ends its run at the gateway: the gateway writes
 `dev.qory.run.exited` with `reason: session_lost`, since it no longer accepts the
 session's stream, refuses the run's proxy secret, and answers the session's further
 requests with a `410` `run_closed` (The end of a run at the gateway, below). The session
@@ -1603,8 +1610,7 @@ A session writes no event the gateway or the run credential decides. The gateway
 refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
 its events:
 
-- has a `subject` that is not the request's run: behind a separate gateway, the run of
-  the request's run credential; on the local link, a run the gateway does not hold;
+- has a `subject` that is not the batch's run, the one its first event names;
 - has a type the gateway writes, `dev.qory.ping` or `dev.qory.run.egress`;
 - is a `dev.qory.run.started` whose `opened_by` is not `session`, whose `labels` differ
   from the run's labels as the gateway holds them, the run credential's behind a
@@ -1715,7 +1721,7 @@ digest unchanged. Behind a separate gateway, to a refusal with a code of
 
 Behind a separate gateway, the reload carries a run credential whose `sub` is the run's
 run key, and any other is `401` `run_credential_refused`; the credential is checked
-first, so a `run_id` that is not its run's, unknown or another run's, is
+first, so a `run_id` that is not a run of its run key, unknown or another run key's, is
 `run_credential_refused` too, and no run id can be probed. On the local link the link
 secret authorises it: `qory` hands the secret to the session alone, of the same user, and
 the reload re-sends no secret of the run. A walled agent never reaches the socket, and an
@@ -1748,9 +1754,9 @@ key's variables, so the agent never holds it.
 
 A gateway that serves other machines opens a run only for a run credential: a JWT (RFC
 7519) signed as a JWS (RFC 7515) with an asymmetric key, which an issuer the operator
-trusts gives one run. Its `sub` is the run key, which identifies one run; its `aud`
-contains the gateway's own audience; and the claims the operator names make the run's
-labels and `about.details`. `run-credentials.schema.json` defines the issuers a gateway
+trusts gives a run. Its `sub` is the run key, the `run_key` label of each run it opens;
+its `aud` contains the gateway's own audience; and the claims the operator names make
+the run's labels and `about.details`. `run-credentials.schema.json` defines the issuers a gateway
 accepts, the list under `gateway.run_credentials` of the operator's `forager.yaml`: per
 issuer, `issuer`, `audience`, `algorithms` among `RS256`, `ES256` and `EdDSA`, the pinned
 `keys`, `leeway` (60 s by default, at most 5 minutes), `max_lifetime`, the scope `allow`, the mapping
@@ -1797,9 +1803,34 @@ The public package `runcredential` holds the rules beyond the schema:
   member name once, of at most 65536 bytes, whose `active` is the JSON `true`; any other
   answer, or a failure, is not active. An answer the endpoint gives is kept for `cache`
   by the SHA-256 of the run credential, at most 4096 of them; a failure is not kept.
-- `OpenEnded` and `Ended`, the ended run keys by issuer, in a file of the gateway's state
-  directory, each kept until its run credential's `exp` plus 5 minutes, so a restart
-  does not reopen them.
+- `OpenEnded` and `Ended`, the run keys a gateway refuses after the issuer's end, by
+  issuer, in a file of the gateway's state directory, each kept until the latest `exp`
+  presented for it plus 5 minutes, so a restart refuses them too.
+
+**The runs of a run key.** The gateway tracks run keys and does not require them to be
+unique; each period of activity is a run, of its own run id, with the run key as its
+`run_key` label. Each run request of a session opens a run of its own, so one run key
+may have several runs at once, and one after another; every later request of a
+session's run carries a run credential of that run's run key, and a refreshed run
+credential continues only its own run. A client with no session presents its run
+credential as the password of its proxy login. While the client's run of its run key is
+open, the connection joins it, its run credential extending the run to its `exp`;
+otherwise the connection opens a new run, and a run that ended is never opened again. A
+client has at most one open run per run key. A client never joins a session's run: a
+session's run is reached only by its proxy secret, and decided under that session's wall
+and narrowing, so a client of a run key whose sessions' runs are open opens or joins its
+own run beside them. A run with no session ends with `quiet`, `credential_expired` or
+`run_ended_at_issuer`, or `gateway_lost` when its record is resent (§The events, How a
+run ends). A client's run that fails to open without a refusal's code is answered
+`503 Service Unavailable`, `Content-Type: text/plain; charset=utf-8`, with the body
+"the gateway could not open the run; try again"; one refused with a code gets the
+gateway's `dev.qory.run.refused` with that code, after its ping.
+
+After the issuer's end, `run_ended_at_issuer`, the gateway refuses the run key until its
+`exp`: a session's run request is `401` `run_credential_refused`, and a client's
+connection `407`. A run credential for a refused run key presented during the hold is
+refused and extends the hold to its own `exp`; the hold lapses after the latest `exp`
+presented.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run
