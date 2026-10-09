@@ -137,8 +137,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # Its cache keys on go.sum alone and is saved only when that key is new; the
-          # next steps cache instead.
+          # Its cache keys on go.sum and the Go version, not the sources, and saves only on
+          # a new key; the next steps cache instead.
           cache: false
 
       - name: Find the caches
@@ -183,8 +183,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # Its cache keys on go.sum alone and is saved only when that key is new; the
-          # next steps cache instead.
+          # Its cache keys on go.sum and the Go version, not the sources, and saves only on
+          # a new key; the next steps cache instead.
           cache: false
 
       - name: Find the caches
