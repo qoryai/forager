@@ -100,6 +100,10 @@ func TestCheckClaims(t *testing.T) {
 	bounded.MaxLifetime = d(time.Hour)
 	tight := issuer()
 	tight.Leeway = d(0)
+	noAudience := issuer()
+	noAudience.Audience = ""
+	noIssuer := issuer()
+	noIssuer.Issuer = ""
 	unix := now.Unix()
 	for _, c := range []struct {
 		name   string
@@ -138,6 +142,10 @@ func TestCheckClaims(t *testing.T) {
 		{"aud an empty array", issuer(), map[string]any{"aud": []any{}}, "aud does not contain the audience"},
 		{"aud an array with a number", issuer(), map[string]any{"aud": []any{exampleAudience, 1.0}}, "aud does not contain the audience"},
 		{"no aud", issuer(), map[string]any{"aud": nil}, "aud does not contain the audience"},
+		{"an empty issuer, iss empty", noIssuer, map[string]any{"iss": ""}, "the issuer is empty"},
+		{"an empty issuer, no iss", noIssuer, map[string]any{"iss": nil}, "the issuer is empty"},
+		{"an issuer without an audience, aud empty", noAudience, map[string]any{"aud": ""}, "the issuer has no audience"},
+		{"an issuer without an audience, aud an array with empty", noAudience, map[string]any{"aud": []any{""}}, "the issuer has no audience"},
 		{"no sub", issuer(), map[string]any{"sub": nil}, "sub is missing"},
 		{"sub empty", issuer(), map[string]any{"sub": ""}, "sub is missing"},
 		{"sub a number", issuer(), map[string]any{"sub": 1.0}, "sub is missing"},

@@ -225,7 +225,11 @@ type ReadFile func(name string) ([]byte, error)
 
 // Check checks every issuer as [Issuer.Check] does, and that no two have the same
 // issuer. An empty list is refused: a gateway without issuers serves no other machine.
-func (l Issuers) Check(read ReadFile) error {
+func (l Issuers) Check(read ReadFile) error { return l.check(read, false) }
+
+// check is [Issuers.Check]; fixtures accepts the published fixture keys, which the
+// known-answer tests alone do.
+func (l Issuers) check(read ReadFile, fixtures bool) error {
 	if len(l) == 0 {
 		return fmt.Errorf("run credentials: no issuer")
 	}
@@ -235,7 +239,7 @@ func (l Issuers) Check(read ReadFile) error {
 			return fmt.Errorf("run credentials: the issuer %s appears twice", i.Issuer)
 		}
 		seen[i.Issuer] = true
-		if err := i.Check(read); err != nil {
+		if err := i.check(read, fixtures); err != nil {
 			return fmt.Errorf("run credentials[%d]: %w", n, err)
 		}
 	}
@@ -251,18 +255,25 @@ func (l Issuers) Check(read ReadFile) error {
 //   - every key's alg is among the algorithms; with more than one key every key has a
 //     kid, and no two have the same;
 //   - each key's public_key_file, read with read, is one PEM block of type PUBLIC KEY of
-//     the key type its alg needs (see [Key.PublicKey]);
+//     the key type its alg needs, and none of the published fixture keys (see
+//     [Key.PublicKey]);
 //   - the leeway is not negative, and max_lifetime and the introspection cache are
 //     positive when they are set;
 //   - the scope, the labels and the details are well formed: forge is a constant or a
 //     claim, repository a constant, a claim, or claims with a join, run_key the claim
-//     sub, a constant a label value of 1 to 256 bytes of UTF-8, and a details key 1 to
-//     64 bytes with no control character;
+//     sub, a constant a label value of 1 to 256 bytes of UTF-8 with no control
+//     character, a join UTF-8 with no control character, and a details key 1 to 64
+//     bytes with no control character and no =, since a refusal names a key as
+//     about.details.<key>=<value>;
 //   - the introspection endpoint is https, with a client id and a secret's file. The
 //     secret is not read here.
 //
 // The error names the issuer, the member and a file's name, never what a file holds.
-func (i Issuer) Check(read ReadFile) error {
+func (i Issuer) Check(read ReadFile) error { return i.check(read, false) }
+
+// check is [Issuer.Check]; fixtures accepts the published fixture keys, which the
+// known-answer tests alone do.
+func (i Issuer) check(read ReadFile, fixtures bool) error {
 	if err := checkHTTPS(i.Issuer); err != nil {
 		return fmt.Errorf("issuer: %w", err)
 	}
@@ -299,7 +310,7 @@ func (i Issuer) Check(read ReadFile) error {
 			}
 			kids[k.KID] = true
 		}
-		if _, err := k.PublicKey(read); err != nil {
+		if _, err := k.publicKey(read, fixtures); err != nil {
 			return fmt.Errorf("issuer %s: keys[%d]: %w", i.Issuer, n, err)
 		}
 	}
@@ -324,7 +335,7 @@ func (i Issuer) Check(read ReadFile) error {
 	}
 	for key, c := range i.DetailMapping {
 		if !detailsKey(key) {
-			return fmt.Errorf("issuer %s: the details key %q is not 1 to 64 bytes without a control character", i.Issuer, key)
+			return fmt.Errorf("issuer %s: the details key %q is not 1 to 64 bytes without a control character or =", i.Issuer, key)
 		}
 		if c.Claim == "" {
 			return fmt.Errorf("issuer %s: details.%s names no claim", i.Issuer, key)
@@ -367,6 +378,9 @@ func (s Source) check(claims bool) error {
 		if err := server.CheckLabels(map[string]string{"value": s.Value}); err != nil {
 			return fmt.Errorf("the value is longer than 256 bytes or not UTF-8")
 		}
+		if !plain(s.Value) {
+			return fmt.Errorf("the value holds a control character")
+		}
 	}
 	if s.Claim != "" {
 		n++
@@ -383,6 +397,9 @@ func (s Source) check(claims bool) error {
 		}
 		if s.Join == "" {
 			return fmt.Errorf("claims without a join")
+		}
+		if !plain(s.Join) {
+			return fmt.Errorf("the join is not UTF-8 or holds a control character")
 		}
 	} else if s.Join != "" {
 		return fmt.Errorf("a join without claims")
@@ -405,10 +422,11 @@ func checkHTTPS(s string) error {
 	return nil
 }
 
-// detailsKey reports whether key follows the grammar of an about.details key: 1 to 64
-// bytes of UTF-8 with no control character.
+// detailsKey reports whether key follows the grammar of an about.details key, 1 to 64
+// bytes of UTF-8 with no control character, and holds no =: a refusal names a key as
+// about.details.<key>=<value>, and a key with = would make that name ambiguous.
 func detailsKey(key string) bool {
-	return key != "" && len(key) <= 64 && plain(key)
+	return key != "" && len(key) <= 64 && plain(key) && !strings.Contains(key, "=")
 }
 
 // plain reports whether s is UTF-8 with no control character as the contract counts

@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the policy in force for the run and its digest, the run's variables, the run's proxy secret, and the run's certificate authority exactly when the run request's wall is true. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the about.details keys the run credential decides, the policy in force for the run and its digest, the run's variables, the run's proxy secret, and the run's certificate authority exactly when the run request's wall is true. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "run_id", "proxy_secret"],
+  "required": ["version", "run_id", "labels", "proxy_secret"],
   "dependentRequired": {
     "policy": ["digest"],
     "digest": ["policy"]
@@ -18,6 +18,17 @@
     "run_id": {
       "description": "The run id of the request, echoed.",
       "$ref": "link-run-request.schema.json#/properties/run_id"
+    },
+    "labels": {
+      "description": "The run's labels as the gateway holds them: the run credential's, through the operator's mapping, behind a separate gateway; the run request's on the local link. The session's dev.qory.run.started contains exactly these.",
+      "$ref": "events/run.started.schema.json#/properties/labels"
+    },
+    "details": {
+      "description": "The about.details keys the run credential decides, those whose claims it carries, with the run credential's values. The session's dev.qory.run.started contains each with this value in about.details. Absent when the run credential decides none, and on the local link.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "events/run.started.schema.json#/$defs/about_key"},
+      "additionalProperties": {"allOf": [{"$ref": "events/run.started.schema.json#/$defs/about_scalar"}, {"type": "string"}]}
     },
     "policy": {
       "description": "The policy in force for the run: the one the gateway holds for it, narrowed by the request's narrowing when it has one. Absent when there is none, and the gateway observes everything.",

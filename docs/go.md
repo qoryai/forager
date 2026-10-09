@@ -127,7 +127,10 @@ with `e2e` to check them together.
     `about.details`. See [run credentials](gateway-run-credentials.md).
   - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the
     loopback address, the variables that name the run's socket and a tool's socket, the
-    headers the proxy sets for a tool, and the placeholder value.
+    headers the proxy sets for a tool, the placeholder value, and the names of the
+    gateway's link: its preamble `QORY-LINK`, the `Bearer` scheme a run credential is
+    presented in, and the prefix `qory-link-` of its socket's directory, the socket's
+    name and the modes of both.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.
   - `session.Run` takes a launch spec, with the policy, the server and the wall as

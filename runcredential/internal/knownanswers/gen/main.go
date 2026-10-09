@@ -1,6 +1,6 @@
 // Command gen writes the known answers of the run credential into the directory its
-// one argument names, as package knownanswers makes them. go generate ./runcredential
-// runs it.
+// first argument names, and the fixture keys' Go source into the file its second
+// names, as package knownanswers makes them. go generate ./runcredential runs it.
 package main
 
 import (
@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: gen <directory>")
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: gen <directory> <go file>")
 		os.Exit(2)
 	}
 	files, err := knownanswers.Files()
@@ -31,5 +31,14 @@ func main() {
 			fmt.Fprintln(os.Stderr, "gen:", err)
 			os.Exit(1)
 		}
+	}
+	src, err := knownanswers.FixtureKeysSource()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gen:", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(os.Args[2], src, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "gen:", err)
+		os.Exit(1)
 	}
 }
