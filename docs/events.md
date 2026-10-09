@@ -8,7 +8,7 @@ CloudEvents:
 - what the runtime reports of its session.
 
 Every event goes to files, always. With a server configured, every event the server's
-configuration selects goes there too. See [the server](server.md).
+configuration selects goes there too, sent by the gateway. See [the server](server.md).
 
 ## Where the record is
 
@@ -22,28 +22,39 @@ qory run claude -- -p "Reply pong"      # one headless turn
 ```
 
 Every connection the runtime makes goes through the gateway, and is recorded.
-The session is written to its run directory, `<id>/` in the runs directory the caller
+The run is written to its run directory, `<id>/` in the runs directory the caller
 passes. `qory` keeps them under its state directory and prints the path:
 
-- `events.jsonl`: one CloudEvent per line.
+- `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
+  writes it, with the run's delivery state beside it, `delivered.log` and
+  `undelivered/`: every event the session posts on the gateway's link, and the
+  gateway's own.
+- `session.jsonl`: the session's own record, one CloudEvent per line, unnumbered: every
+  event the session posts, and the few it records alone (below).
 - `output.log`: the session's bytes.
+
+The gateway's record and the session's are in the same directory when the caller
+points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
+Otherwise the gateway keeps its record under `gateway.Config.Dir`, in `runs/<id>/`.
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
 
 ## Forager's events
 
-| Type                          | When                                                    |
-| ----------------------------- | ------------------------------------------------------- |
-| `dev.qory.ping`               | Before the runtime starts, with a server only           |
-| `dev.qory.run.started`        | The run is open: the runtime is about to start          |
-| `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect       |
-| `dev.qory.run.log`            | One per chunk of output                                 |
-| `dev.qory.run.resized`        | The pseudo-terminal was resized                         |
-| `dev.qory.run.egress`         | One per connection, or per request on a terminated host |
-| `dev.qory.run.heartbeat`      | Every 30 seconds while the runtime runs                 |
-| `dev.qory.run.exited`         | The run ended: the result, the last event               |
+| Type                          | When                                                         |
+| ----------------------------- | ------------------------------------------------------------ |
+| `dev.qory.ping`               | The gateway's, before the run's first, with a server only    |
+| `dev.qory.run.started`        | The run is open: the runtime is about to start               |
+| `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect            |
+| `dev.qory.run.log`            | One per chunk of output                                      |
+| `dev.qory.run.resized`        | The pseudo-terminal was resized                              |
+| `dev.qory.run.egress`         | One per connection, or per request on a terminated host      |
+| `dev.qory.run.heartbeat`      | Every interval while the runtime runs, 30 seconds by default |
+| `dev.qory.run.exited`         | The run ended: the result, the last event                    |
 
-Forager heartbeats while the session runs. The exit status of a run is the runtime's.
+Forager heartbeats while the session runs: the session sends one every interval the
+gateway's discovery announces, `gateway.Config.Heartbeat`, and the gateway ends a run
+whose session sends nothing for three. The exit status of a run is the runtime's.
 
 `dev.qory.run.started` says what opened the run, in `opened_by`: `session` for a run
 around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
@@ -52,14 +63,15 @@ names no runtime, command or host, and its `dev.qory.run.exited` contains no exi
 and no state.
 
 When a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
-`reason`. The session writes `timeout`, and `run_closed` when the server it reports to
-closes the run, and sending a record again writes `gateway_lost`. The gateway writes
-the others: `session_lost`, the session was silent, or the gateway refused a batch of
-the session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
-`run_ended_at_issuer`; and `run_closed` when the server closes a run on the gateway's
-link. When the gateway ends a session's run, it writes the run's `dev.qory.run.exited`,
-and the session records the same reason in its own record alone. The contract describes
-each.
+`reason`. The session writes `timeout`, and posts it. The gateway writes the others:
+`session_lost`, the session was silent, or the gateway refused a batch of the
+session's (see the contract's §The gateway's link); `quiet`; `credential_expired`;
+`run_ended_at_issuer`; `run_closed` when the server closes the run; and sending a
+record again writes `gateway_lost`. When the gateway or the server ends a session's
+run, the gateway writes the run's `dev.qory.run.exited`, and the session records its
+own with the same reason in `session.jsonl` alone, and posts nothing more. So does a
+refusal of the run request with a code other than `wall_required`: the session records `dev.qory.run.refused` in
+its own record alone, since the gateway opened no run. The contract describes each.
 
 ## The session's events
 
@@ -87,8 +99,9 @@ runs: its run, its log and its egress are recorded, with no session events. See
 
 ## Following a run
 
-[`Events`](go.md#the-spec) in the spec is any stream. A run with no receiver is followed
-on standard output, with the lines `events.jsonl` contains.
+`gateway.Config.Events` is any stream that gets every numbered event of every run as
+well, the lines `events.jsonl` contains. A run with no receiver is followed on
+standard output this way.
 
 ## The details
 

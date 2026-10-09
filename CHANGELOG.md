@@ -10,6 +10,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- `link.Local.Files` is a list of `link.File`, each path with what it is, the phrase a
+  refused mount names it by.
 - `policy.Covers` covers an IP literal by an identical entry alone, as `policy.Match`
   matches it: `*.0.0.1` covers no `10.0.0.1`, under a machine's ceiling as in
   narrowing.
@@ -529,6 +531,27 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- A session speaks to a gateway alone, over the gateway's local link. `session.Spec`
+  gains `Gateway`, made by `session.LocalGateway(l link.Local)` from the link
+  `(*gateway.Gateway).LocalLink()` hands out; the link's secret stays in the process's
+  memory, and a `session.Gateway` prints and logs by its socket alone. A spec without
+  one is no run. `Spec.Policy`, `Server`, `Local`, `AccessKey`, `InstanceID`,
+  `InstanceName`, `Discovered`, `Credentials`, `Tools`, `Events`, `Heartbeat` and
+  `ProxyBind` are removed, with `session.Policy`, `PolicyEgress`, `PolicyCredential`,
+  `PolicyTool`, `Credential`, `Tool`, `Server`, `Discovery`, `ReadPolicy`, `Under` and
+  `Resend`: the policy, the credentials, the tools and the server are
+  `gateway.Config`'s, the stream that follows every event is `gateway.Config.Events`,
+  the heartbeat interval is `gateway.Config.Heartbeat`, which the link's discovery
+  announces, and a resend is the gateway's. What the entries below say of these
+  members holds of the gateway's.
+- The session's own record is `session.jsonl` and `output.log` in the run directory;
+  the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state.
+  `Result.Undelivered` counts the session's events the gateway did not accept.
+- A refusal the gateway or the server answers the run request with is a
+  `*session.Refusal` with `From`, `gateway` or `apiary`; the gateway's `wall_required`
+  is the error a run without a wall always had, word for word. A run the gateway could
+  not open for a reason without a code is the error its answer's `message` says, word
+  for word.
 - A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
   and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
   runtime that has one, and the descriptor schema holds `runtime` to the same bound.
@@ -558,6 +581,14 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `Result.ClosedBy` and `Result.ClosedReason`: a run closed from outside, by a `410` on
+  the gateway's link or the gateway's `400` to a batch, says who closed it, `apiary` or
+  `gateway`, and with what code, `run_closed`, `credential_expired` or
+  `run_ended_at_issuer`. The runtime is stopped as at its time limit, and the session's
+  record has `dev.qory.run.exited` with that code as its reason.
+- The session fetches the run's configuration from the gateway again whenever the
+  gateway's answers carry a new run-configuration digest, and records it in another
+  `dev.qory.run.policy_applied`.
 - A run configuration's `variables` reach the agent's process: for each name an object
   with its string `value`, as the server resolved it. An attribute beside `value` is
   ignored. For each name the run takes the value of the highest source that sets it: the

@@ -91,7 +91,7 @@ The policy comes from one of three places:
   repository. See [Report to a server](#4-report-to-a-server).
 
 When your server sends a policy, Forager narrows it by the policy it is passed,
-`Spec.Policy` in Go: the node only takes away. With no policy, the gateway observes and
+`gateway.Config.Policy` in Go: the node only takes away. With no policy, the gateway observes and
 records everything.
 
 A denied connection gets a `403`, and the record gets the event. The session goes on.
@@ -149,10 +149,19 @@ above:
 go get github.com/qoryai/forager
 ```
 
-One call, `session.Run`, runs one session. You pass the program to start and its policy.
-You get back the exit status and the directory of the record:
+A gateway, `gateway.Start`, holds the policy, the credentials and the server. One call,
+`session.Run`, runs one session against it: you pass the program to start and the
+gateway's local link. You get back the exit status and the directory of the record:
 
 ```go
+g, err := gateway.Start(ctx, gateway.Config{
+	Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: hosts}},
+	Dir:    stateDir,                              // the gateway's directory
+})
+if err != nil {
+	return err
+}
+defer g.Close(ctx)                                // delivers the runs' last events
 rt, err := catalog.Lookup("claude", "")         // the runtime, by its name
 if err != nil {
 	return err
@@ -161,7 +170,7 @@ res, err := session.Run(ctx, session.Spec{
 	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"-p", "Reply pong."},
-	Policy:    &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: hosts}},
+	Gateway:   session.LocalGateway(g.LocalLink()), // the session speaks to the gateway alone
 	Forwarder: []string{exe, "forward"},          // the hook command; it calls session.Forward
 })
 if err != nil {                                   // the run did not start
