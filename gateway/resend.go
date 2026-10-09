@@ -74,9 +74,10 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 // the run's session.
 var ErrRunning = stream.ErrRunning
 
-// The lines Resend passes to ResendConfig.Report, besides those of the deliveries. A
-// caller that reports Delivery.NotOpened itself may leave out ResendNotOpened and
-// ResendNoServer.
+// Three of the lines Resend passes to ResendConfig.Report: those of a record that is
+// not sent since its run never opened at the server, and that of lines of a record
+// that are not whole events. A caller that reports Delivery.NotOpened itself may leave
+// out ResendNotOpened and ResendNoServer.
 const (
 	// ResendTorn is reported when lines of the record hold bytes that are no whole
 	// event, a write the gateway did not finish, which are skipped: a format of their

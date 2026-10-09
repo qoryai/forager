@@ -15,7 +15,8 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// The lines Resend reports, which package gateway exports as its own.
+// Three of the lines Resend reports, which package gateway exports as its own: those of
+// a record not sent since its run never opened, and that of torn lines.
 const (
 	// ResendTorn is reported when lines of the record hold bytes that are no whole
 	// event: a format of their count and the record's path.

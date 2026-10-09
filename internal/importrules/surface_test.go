@@ -15,8 +15,9 @@ import (
 
 // gatewaySurface is package gateway's whole exported surface: what starts a gateway, its
 // configuration and what closes it, the resend that is a run's close-out and the lines
-// it reports, and the types their fields need. A method is its type's name, a dot and
-// its own. A new export needs an edit here, made on purpose.
+// it reports of a run that never opened and of torn lines, and the types their fields
+// need. A method is its type's name, a dot and its own. A new export needs an edit
+// here, made on purpose.
 var gatewaySurface = []string{
 	"Start", "Config", "Server", "TLS", "RunsConfig",
 	"Gateway", "Gateway.Addr", "Gateway.LocalLink", "Gateway.Close", "Gateway.Wait",
@@ -29,7 +30,7 @@ var gatewaySurface = []string{
 // What each rule requires, as every failure of it says.
 const (
 	surfaceRule = "package gateway exports only what starts a gateway, configures it and closes it: " +
-		"Start, Config, Gateway with Addr, LocalLink, Close, Wait and the methods that print it, Resend and the lines it reports, and the types their fields need"
+		"Start, Config, Gateway with Addr, LocalLink, Close, Wait and the methods that print it, Resend and its lines of a run that never opened and of torn lines, and the types their fields need"
 	linkRule = "the session reaches a gateway over the gateway's link alone, the local link on one machine " +
 		"or a separate gateway's one address over TLS, so no file of session/ but a test imports a gateway package"
 	testRule = "a session test may start a real gateway, " +
