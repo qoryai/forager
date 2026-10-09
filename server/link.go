@@ -163,8 +163,7 @@ type LinkRunAnswer struct {
 	// gateway's proxy after the relay's preamble.
 	ProxySecret string `json:"proxy_secret"`
 	// RunSecret is the run's secret, which the gateway makes for this run and gives once:
-	// the session sends it in X-Qory-Run-Secret on every reload and batch, and it never
-	// reaches the agent.
+	// the session sends it in X-Qory-Run-Secret on every reload and batch.
 	RunSecret string `json:"run_secret"`
 	// CertificateAuthority is the run's certificate authority, PEM, when the run has a
 	// wall and the gateway reads inside HTTPS for it.

@@ -88,7 +88,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "run_secret": {
-      "description": "The run's secret: at least 128 bits from the system's random source, made by the gateway for this run and given once. The session sends it in X-Qory-Run-Secret on every reload and batch; it never reaches the agent. Compared in constant time, never logged.",
+      "description": "The run's secret: at least 128 bits from the system's random source, made by the gateway for this run and given once. The session sends it in X-Qory-Run-Secret on every reload and batch. Compared in constant time, never logged.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },

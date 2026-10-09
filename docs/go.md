@@ -180,7 +180,8 @@ res, err := session.Run(ctx, session.Spec{
   error is the request's, and must not hold the run credential. A `RemoteGateway`
   without `Credential` is no run. The run credential is never printed, logged,
   recorded or contained in an error: a `session.RemoteGateway` prints as its URL, its
-  `CAFile` and its pin.
+  `CAFile` and its pin. Every reload and batch also carries `X-Qory-Run-Secret`, the
+  run answer's `run_secret`, which names the run.
 - The run credential's file must not sit in a directory a walled run mounts, and an
   unwalled agent's environment must not carry it. Keeping it out of both is the
   caller's job. As a backstop, the session leaves `QORY_RUN_CREDENTIAL_SECRET` out of the
@@ -191,9 +192,10 @@ res, err := session.Run(ctx, session.Spec{
   variables there.
 - The run directory on the session's machine holds the session's record,
   `session.jsonl` and `output.log`, and what the gateway accepted of it, `delivered.log`,
-  and the batches it did not, `undelivered/`. The gateway's record, `events.jsonl`, with
-  its own delivery state toward the server, is on the gateway's machine
-  ([where the record is](events.md#where-the-record-is)).
+  and the batches it did not, `undelivered/`, and the run's `run_secret`, `run-secret`,
+  mode 0600, written when the run opens and removed once nothing is owed. The gateway's
+  record, `events.jsonl`, with its own delivery state toward the server, is on the
+  gateway's machine ([where the record is](events.md#where-the-record-is)).
 - The discovery must list URLs of the gateway's origin alone, and name the gateway's one
   address, the URL's host and port, as its proxy; the loopback check of the local link
   does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
@@ -250,6 +252,10 @@ res, err := session.Resend(ctx, session.ResendSpec{
   events left under `undelivered/`: `run_credential_refused`, the `401`, which an
   expired run credential gets at the discovery; `target_differs_from_credential` and
   `differs_from_credential`, the `403` of a run credential that differs from the run's.
+- Every batch carries the run's `run_secret` from the run directory's `run-secret`,
+  which is removed once nothing is owed: everything accepted, the gateway's `410`, or
+  nothing owed from the start; it is kept after a refusal or a failure to send. Without
+  the file, the batches get the `401`.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of the run credential: the session's

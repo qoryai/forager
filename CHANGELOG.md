@@ -320,7 +320,9 @@ release may change what an existing document does, and says so under Upgrading.
   and whose value an unwalled run has left out, `image`, the image the run gets when it has a wall, `applied`,
   required, the members of `dev.qory.run.policy_applied` the gateway decides, every one
   but `variables` and `harness_hosts`, which the session adds to write its own, the run's
-  `proxy_secret` and its `certificate_authority` when `wall` is true and the gateway
+  `proxy_secret`, its `run_secret`, which the session sends in the header
+  `X-Qory-Run-Secret` on every reload and batch, and its `certificate_authority` when
+  `wall` is true and the gateway
   reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
   wall with a server always; the session's `dev.qory.run.started` contains exactly
   those labels, and those keys with those values. Discovery on the link is
@@ -580,9 +582,10 @@ release may change what an existing document does, and says so under Upgrading.
   its run key, a refreshed one carrying only its own run to its `exp`, its labels and
   `about.details` the run's, else `403` `target_differs_from_credential` or
   `differs_from_credential`, and a client's connection `407`; one of another run key
-  is `401`, so no run id can be probed, and a batch is of the run its first
-  event names. A batch over the limit, or one that does not decode, is a `400` that
-  ends no run.
+  is `401`; every reload and batch also carries the run's `run_secret`, which the run
+  answer gives: a batch is of that run, and any other request of the run key is `401`,
+  so no run can be probed. A batch over the limit, or one that does not decode, ends
+  its run, `batch_refused`.
   The run ends at its latest `exp` with no fresher run credential,
   `credential_expired`, and when the issuer's introspection no longer holds its run
   credential active, `run_ended_at_issuer`: the gateway writes its
@@ -797,6 +800,8 @@ release may change what an existing document does, and says so under Upgrading.
   machine also holds `delivered.log`, what the gateway accepted of `session.jsonl` by the
   session's sequence, and `stopped` when the gateway ended the run, and `undelivered/`,
   the session's batches the gateway did not accept; neither holds the run credential.
+  It also holds `run-secret`, the run's `run_secret`, mode 0600, written when the run
+  opens and removed once nothing is owed.
   `Result.Undelivered` counts the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
   `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's
@@ -858,7 +863,8 @@ release may change what an existing document does, and says so under Upgrading.
   takes that `delivered.log` does not name is posted in order, in the link's batches,
   until the gateway accepts it or the context ends, and what it does not accept is under
   `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
-  sent. A record that owes nothing is sent nothing, with no request. A record with no
+  sent. Every batch carries the run's `run_secret` from `run-secret`, which is removed
+  once nothing is owed. A record that owes nothing is sent nothing, with no request. A record with no
   `delivered.log`, of a run that never opened at the gateway, a run refused at its run
   request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
   the gateway has ended answers with its `410`:
