@@ -144,3 +144,50 @@ func SetKeepRetry(c *Config, d time.Duration) { c.keepRetry = d }
 
 // SetClock sets the time g refuses a run key by, in place of the system's.
 func SetClock(c *Config, now func() time.Time) { c.clock = now }
+
+// SetOpenTries sets the waits between the tries of Qory Apiary's ping and run
+// configuration as a run opens, and how long after the run request or the login a try
+// may start again, in place of openWaits and openWindow.
+func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
+	c.openWaits, c.openWindow = waits, window
+}
+
+// OpenTries are the gateway's own waits between the tries of Qory Apiary as a run
+// opens, and its window.
+func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
+
+// introspectionAnswer is a test's introspection endpoint of an issuer that answers
+// with an error too.
+type introspectionAnswer struct {
+	issuer string
+	answer func(issuer, credential string) (bool, error)
+	cache  time.Duration
+}
+
+func (f introspectionAnswer) Active(ctx context.Context, credential string, _ time.Time) (bool, error) {
+	type result struct {
+		ok  bool
+		err error
+	}
+	answer := make(chan result, 1)
+	go func() {
+		ok, err := f.answer(f.issuer, credential)
+		answer <- result{ok, err}
+	}()
+	select {
+	case r := <-answer:
+		return r.ok, r.err
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (f introspectionAnswer) Cache() time.Duration { return f.cache }
+
+// SetIntrospection makes answer answer the introspection endpoint of every issuer that
+// has one, its error as runcredential's client gives one, each answer kept for cache.
+func SetIntrospection(c *Config, answer func(issuer, credential string) (bool, error), cache time.Duration) {
+	c.introspector = func(i runcredential.Issuer) activeChecker {
+		return introspectionAnswer{issuer: i.Issuer, answer: answer, cache: cache}
+	}
+}

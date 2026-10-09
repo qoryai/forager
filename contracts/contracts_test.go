@@ -227,7 +227,10 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 			t.Errorf("a link batch's run.refused allows %s, which the session does not decide", c)
 		}
 	}
-	all, _ := at(read("events/run.refused.schema.json"), "properties", "code", "enum").([]any)
+	all, _ := at(read("events/run.refused.schema.json"), "then", "properties", "code", "enum").([]any)
+	if len(all) == 0 {
+		t.Fatal("run.refused.schema.json holds no code enum")
+	}
 	for _, c := range all {
 		if refusal.Decides(c.(string)) && !allowed[c.(string)] {
 			t.Errorf("a link batch's run.refused does not allow %s, which the session decides", c)
@@ -241,7 +244,8 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session without its command or by a gateway with one,
 // a run.exited with an unknown reason, with quiet and no quiet_seconds or with
-// quiet_seconds and another reason, a descriptor with an expression, a link run request
+// quiet_seconds and another reason, a run.refused with a code outside the list and no
+// status, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without its proxy secret, its run secret or applied or whose image has no

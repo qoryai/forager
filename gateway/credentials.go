@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,11 +67,17 @@ func (c *credentialVerifier) authenticate(_ context.Context, credential string) 
 	}
 	id := runIdentity{Issuer: ver.Issuer, RunKey: ver.RunKey, Labels: ver.Labels, Details: ver.Details, Expires: ver.Expires}
 	if a := c.intro[ver.Issuer]; a != nil {
-		id.active = func(ctx context.Context) bool {
+		id.active = func(ctx context.Context) error {
 			// Any answer but active, and a failure to ask, is not active: the check
 			// fails closed.
-			ok, _ := a.Active(ctx, credential, time.Now())
-			return ok
+			ok, err := a.Active(ctx, credential, time.Now())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errInactive
+			}
+			return nil
 		}
 		id.cache = a.Cache()
 	}
@@ -95,10 +102,19 @@ type runKeyID struct{ issuer, runKey string }
 // keyOf is the run key of a run credential's run.
 func keyOf(id runIdentity) runKeyID { return runKeyID{id.Issuer, id.RunKey} }
 
-// isActive reports whether the issuer still holds the run credential active: true for
-// an issuer without introspection.
-func (id runIdentity) isActive(ctx context.Context) bool {
-	return id.active == nil || id.active(ctx)
+// errInactive is the issuer's answer that it no longer holds the run credential active.
+var errInactive = errors.New("the issuer no longer holds the run credential active")
+
+// checkActive asks whether the issuer still holds the run credential active: nil when
+// it does, and for an issuer without introspection; errInactive when it answered that
+// it does not; [runcredential.ErrIssuerUnreachable] or an error that is
+// [runcredential.ErrAnswerInvalid] when it gave no answer, or none that is valid; or
+// ctx's error.
+func (id runIdentity) checkActive(ctx context.Context) error {
+	if id.active == nil {
+		return nil
+	}
+	return id.active(ctx)
 }
 
 // The gateway tracks run keys and does not require them to be unique; each period of

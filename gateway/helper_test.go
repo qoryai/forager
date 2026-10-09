@@ -76,6 +76,9 @@ type control struct {
 	// fetch of a run configuration wait before they are taken; one whose client goes
 	// first is not taken.
 	slowEvents, slowFetch atomic.Int64
+	// intercept, when set, is asked first of every request, and answers it when it
+	// returns true.
+	intercept atomic.Pointer[func(http.ResponseWriter, *http.Request) bool]
 
 	mu     sync.Mutex
 	run    []byte
@@ -118,6 +121,9 @@ func newControl(t *testing.T) *control {
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f := c.intercept.Load(); f != nil && (*f)(w, r) {
+			return
+		}
 		slow := c.slowEvents.Load()
 		if r.URL.Path == "/v1/run-configuration" {
 			slow = c.slowFetch.Load()

@@ -19,22 +19,56 @@ import (
 )
 
 // IntrospectionTimeout is how long the gateway waits for an introspection endpoint's
-// whole answer, from the connection to the last byte.
-const IntrospectionTimeout = 10 * time.Second
+// whole answer to one try, from the connection to the last byte.
+const IntrospectionTimeout = 2 * time.Second
+
+// The tries of one introspection: up to three, the second [introspectionWaits][0]
+// after the first ends and the third [introspectionWaits][1] after the second, and a
+// try starts only within [introspectionWindow] of the first's start. A check therefore
+// ends within about 3 seconds when the endpoint refuses connections at once, and within
+// 5 when every try hangs, inside the 10 seconds a session's request and a client's
+// proxy login wait.
+var (
+	introspectionWaits  = []time.Duration{time.Second, 2 * time.Second}
+	introspectionWindow = 4 * time.Second
+)
 
 // MaxIntrospectionAnswer is the largest answer of an introspection endpoint the gateway
-// reads, in bytes; a longer one counts as not active.
+// reads, in bytes; a longer one is no valid answer.
 const MaxIntrospectionAnswer = 64 << 10
 
-// The failures of an introspection request. Each is a constant text: none names the
-// run credential, the client secret, or anything the endpoint answered.
+// ErrIssuerUnreachable is an introspection whose every try failed to get an answer: a
+// transport, TLS or timeout failure, a failed read of the answer, a 5xx or a 429.
+var ErrIssuerUnreachable = errors.New("the issuer's introspection endpoint could not be reached")
+
+// ErrAnswerInvalid is what every introspection the endpoint answered with no valid
+// answer wraps: a status other than 200, 5xx and 429 aside, and a 200 that is too long,
+// not one JSON object with each member name once, or without a boolean active. It is
+// tried once.
+var ErrAnswerInvalid = errors.New("the issuer's introspection endpoint gave no valid answer")
+
+// The failures of one introspection request. Each is a constant text: none names the
+// run credential, the client secret, or anything the endpoint answered but its status.
 var (
 	errIntrospectionUnreachable = errors.New("the introspection endpoint could not be asked")
-	errIntrospectionStatus      = errors.New("the introspection endpoint answered a status other than 200")
-	errIntrospectionTooLong     = errors.New("the introspection endpoint answered more than MaxIntrospectionAnswer bytes")
-	errIntrospectionNotJSON     = errors.New("the introspection endpoint answered other than one JSON object with each member name once")
-	errIntrospectionNoActive    = errors.New("the introspection endpoint answered no boolean active")
+	errIntrospectionTooLong     = invalidAnswer("the introspection endpoint answered more than MaxIntrospectionAnswer bytes")
+	errIntrospectionNotJSON     = invalidAnswer("the introspection endpoint answered other than one JSON object with each member name once")
+	errIntrospectionNoActive    = invalidAnswer("the introspection endpoint answered no boolean active")
 )
+
+// invalidAnswer is a failure of an answer the endpoint gave, which is [ErrAnswerInvalid].
+type invalidAnswer string
+
+func (e invalidAnswer) Error() string { return string(e) }
+
+// Unwrap is [ErrAnswerInvalid].
+func (invalidAnswer) Unwrap() error { return ErrAnswerInvalid }
+
+// errIntrospectionStatus is the failure of an answer with a status other than 200 that
+// is not tried again: it names the status.
+func errIntrospectionStatus(status int) error {
+	return invalidAnswer(fmt.Sprintf("the introspection endpoint answered status %d", status))
+}
 
 // Introspector asks an issuer's OAuth 2.0 token introspection endpoint (RFC 7662)
 // whether a run credential is still active, and keeps each answer it gives for the
@@ -46,6 +80,11 @@ type Introspector struct {
 	authorization string
 	cache         time.Duration
 	client        *http.Client
+	// waits are the waits between tries, and window how long after the first try's
+	// start a try may start; sleep waits, which a test replaces.
+	waits  []time.Duration
+	window time.Duration
+	sleep  func(time.Duration)
 
 	mu       sync.Mutex
 	answers  map[[sha256.Size]byte]introspection
@@ -87,7 +126,7 @@ func NewIntrospector(in Introspection, read ReadFile, heartbeat time.Duration) (
 }
 
 // newIntrospector is [NewIntrospector] under roots, the system's when nil, with a
-// timeout of its own, which the tests alone set.
+// timeout of each try of its own, which the tests alone set.
 func newIntrospector(in Introspection, read ReadFile, heartbeat time.Duration, roots *x509.CertPool, timeout time.Duration) (*Introspector, error) {
 	if err := checkHTTPS(in.URL); err != nil {
 		return nil, fmt.Errorf("introspection: %w", err)
@@ -133,6 +172,9 @@ func newIntrospector(in Introspection, read ReadFile, heartbeat time.Duration, r
 				return http.ErrUseLastResponse
 			},
 		},
+		waits:    introspectionWaits,
+		window:   introspectionWindow,
+		sleep:    time.Sleep,
 		answers:  map[[sha256.Size]byte]introspection{},
 		inflight: map[[sha256.Size]byte]*introspectionCall{},
 	}, nil
@@ -145,16 +187,23 @@ func (c *Introspector) Cache() time.Duration { return c.cache }
 // the endpoint answered status 200 with one JSON object, each member name once, at most
 // [MaxIntrospectionAnswer] bytes, whose member active is the JSON true. An answer
 // active false is false with a nil error; any other answer, and a failure to ask, is
-// false with an error, so the check fails closed. The error is a constant text, which
-// names neither the run credential nor the client secret.
+// false with an error, so the check fails closed: [ErrIssuerUnreachable] once every try
+// failed to get an answer, and an error that is [ErrAnswerInvalid] for an answer that
+// is no valid one. The error is a constant text, which names neither the run
+// credential nor the client secret.
+//
+// A try that gets no answer, a transport, TLS or timeout failure, a failed read of the
+// answer, a 5xx or a 429, is tried again: up to three tries, each bounded by its own
+// timeout, 1 second and then 2 seconds apart, and a try starts only within 4 seconds of
+// the first. An answer, valid or not, is tried once.
 //
 // An answer the endpoint gave, active or not, is kept for [Introspector.Cache] by the
 // SHA-256 of the run credential, at most [MaxIntrospectionAnswers] of them, and the
 // endpoint is asked again only once it is older; a failure to ask, or an answer that is
 // not one, is kept for no one, and the next caller asks again. Callers for the same run
-// credential while a request is in flight wait for its answer. The request is made for
-// all of them, whatever becomes of the caller that started it: a caller whose ctx ends
-// first is false, alone, and the others still get the answer.
+// credential while its tries are in flight wait for their end. The tries are made for
+// all of them, whatever becomes of the caller that started them: a caller whose ctx
+// ends first is false with ctx's error, alone, and the others still get the answer.
 func (c *Introspector) Active(ctx context.Context, credential string, now time.Time) (bool, error) {
 	key := sha256.Sum256([]byte(credential))
 	c.mu.Lock()
@@ -176,14 +225,14 @@ func (c *Introspector) Active(ctx context.Context, credential string, now time.T
 	case <-f.done:
 		return f.active, f.err
 	case <-ctx.Done():
-		return false, errIntrospectionUnreachable
+		return false, ctx.Err()
 	}
 }
 
-// call makes the request f stands for, bounded by the client's own timeout and by no
-// caller's context, and keeps its answer when it is one.
+// call makes the tries f stands for, each bounded by the client's own timeout and by no
+// caller's context, and keeps the answer when it is one.
 func (c *Introspector) call(f *introspectionCall, key [sha256.Size]byte, credential string, now time.Time) {
-	f.active, f.err = c.ask(context.Background(), credential)
+	f.active, f.err = c.try(credential)
 	c.mu.Lock()
 	delete(c.inflight, key)
 	if f.err == nil {
@@ -214,7 +263,24 @@ func (c *Introspector) keep(key [sha256.Size]byte, a introspection, now time.Tim
 	c.answers[key] = a
 }
 
-// ask makes one introspection request (RFC 7662 §2.1) and reads its answer (§2.2).
+// try asks the endpoint, again after a try that got no answer, until one does, the
+// tries run out, or the next would start past the window: then [ErrIssuerUnreachable].
+func (c *Introspector) try(credential string) (bool, error) {
+	first := time.Now()
+	for n := 0; ; n++ {
+		active, err := c.ask(context.Background(), credential)
+		if !errors.Is(err, errIntrospectionUnreachable) {
+			return active, err
+		}
+		if n >= len(c.waits) || time.Since(first)+c.waits[n] > c.window {
+			return false, ErrIssuerUnreachable
+		}
+		c.sleep(c.waits[n])
+	}
+}
+
+// ask makes one introspection request (RFC 7662 §2.1) and reads its answer (§2.2). A
+// try that got no answer, a 5xx and a 429 among it, is errIntrospectionUnreachable.
 func (c *Introspector) ask(ctx context.Context, credential string) (bool, error) {
 	form := url.Values{"token": {credential}, "token_type_hint": {"access_token"}}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(form))
@@ -230,8 +296,11 @@ func (c *Introspector) ask(ctx context.Context, credential string) (bool, error)
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, MaxIntrospectionAnswer+1))
+	if res.StatusCode >= 500 || res.StatusCode == http.StatusTooManyRequests {
+		return false, errIntrospectionUnreachable
+	}
 	if res.StatusCode != http.StatusOK {
-		return false, errIntrospectionStatus
+		return false, errIntrospectionStatus(res.StatusCode)
 	}
 	if err != nil {
 		return false, errIntrospectionUnreachable

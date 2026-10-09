@@ -428,8 +428,18 @@ func (a *answer) refusal(what string) error {
 		r.Detail = what
 		return r
 	}
-	return fmt.Errorf("%s: status %d", what, a.status)
+	return &AnswerError{What: what, Status: a.status}
 }
+
+// AnswerError is a signed answer at run start other than the one wanted whose body
+// contains no code: its status, a 404 with an empty body say.
+type AnswerError struct {
+	// What is the request, and Status the answer's.
+	What   string
+	Status int
+}
+
+func (e *AnswerError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }
 
 // fetch makes one signed GET of a document, which must answer a signed 200 with the
 // digest header named, validates the body against the schema and decodes it into out.
