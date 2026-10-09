@@ -1336,7 +1336,9 @@ is a `link-refusal.schema.json` document, the body of one toward the server with
 who refused, required: `{"error": "<code>", "names": ["…"], "from": "gateway"}`. `from`
 is `gateway` for the gateway's own refusal, and `apiary` for the server's, which the
 gateway passes on with its code and status; `names` is absent when the refusal concerns
-none. Every `410` on the link has this body (The end of a run at the gateway, below). A
+none. The gateway refuses a run's start or reload with a code of `refusal.Decides`, such
+as `image_unknown`, `placeholder_conflict`, `tool_unknown` or
+`run_configuration_invalid`, as a `403` from `gateway`. Every `410` on the link has this body (The end of a run at the gateway, below). A
 redirect is not followed.
 
 **Discovery.** `GET /.well-known/qory-configuration`, answered with a
@@ -1384,7 +1386,8 @@ its query and no `about` (§The server); on the link it is this `POST`, and it c
 - `about`: what the run is about (§What a run is about). It selects no policy.
 - `passes`: the names of the variables the run passes a value for, in what it inherits,
   what the harness sets and its variables: names alone, never a value, each in the
-  grammar of a variable's name (§Variables). The gateway refuses the run with
+  grammar of a variable's name (§Variables): the session leaves out a name outside it,
+  which can match no placeholder. The gateway refuses the run with
   `placeholder_conflict` when a placeholder of a credential or a tool it holds is among
   them. Absent means none.
 - `images`: the session's images, which the gateway resolves the policy's selection
@@ -1422,6 +1425,7 @@ gateway refuses a run request in this order:
 | `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
 | `403` | `target_differs_from_credential` | behind a separate gateway, a `forge` or `repository` that differs from the credential's |
 | `403` | `differs_from_credential` | behind a separate gateway, another label or key of `about.details` the mapping sets, sent with another value |
+| `403` | a code of `refusal.Decides` | the gateway's decision of the run with `passes` and `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown`, `placeholder_conflict` and the like |
 
 The names of `target_differs_from_credential` and of `differs_from_credential` are
 `<member>=<the run credential's value>`, one for each member that differs and for no
@@ -1430,17 +1434,20 @@ other, the member being `labels.<key>` or `about.details.<key>`:
 
 With `passes` and `images`, the gateway then decides the run as the session decides it
 on one machine today, in the same order, and before it sets anything: the policy in
-force, from the node's policy and the run configuration, `run_configuration_invalid`
-for a run configuration it refuses; what needs a wall, credentials, tools, path rules
-and an image, refused without one; the run's image among `images`, `image_unknown` for
-a name the machine does not define, and refused for an image defined twice or a daemon
-without a runtime; the credentials it resolves, `placeholder_conflict` for a
+force, from the node's policy and the run configuration, `run_configuration_invalid` for
+a run configuration it refuses; what needs a wall, credentials, tools, path rules and an
+image, refused without one; the run's image among `images`, `image_unknown` for a name
+the machine does not define; the credentials it resolves, `placeholder_conflict` for a
 credential's placeholder in `passes`; and the tools it chooses beside the credentials
-(§Tools), `placeholder_conflict` for a tool's placeholder in `passes`. Where the session
-refuses with a code today, the gateway refuses with that code and its names, a coded
-refusal from `gateway`. A refused run opens nothing: the gateway holds no credential,
-starts no tool and makes no proxy secret for it. The session applies what the answer
-gives and decides none of it again.
+(§Tools), `placeholder_conflict` for a tool's placeholder in `passes`. A refusal with a
+code of `refusal.Decides` is a `403` with that code and its names, `from: gateway`, as
+the session gives them today; a refusal of
+the server's passes through with its own status and `from: apiary`. The checks of the
+session's own image table and runtime, an image defined twice or a daemon without a
+runtime, have no code: the session makes them before it sends the request, as today. A
+refused run opens nothing: the gateway holds no credential, starts no tool and makes no
+proxy secret for it. The session applies what the answer gives and decides none of it
+again.
 
 A run request the gateway refuses opens no run at the gateway. The session records the
 `dev.qory.run.refused` it received in its own record alone, as with the server's `410`
@@ -1615,9 +1622,10 @@ alone gives, once. The gateway decides a reload with the run request's `passes` 
 anything. A run configuration it refuses fails the reload, and the policy in force
 stays: one it cannot read, `run_configuration_invalid`; one that selects an image or
 tools other than the run started with; a name the machine does not define,
-`image_unknown`; and a credential's placeholder in `passes`, `placeholder_conflict`.
-Where the session refuses with a code today, the reload's answer is a coded refusal from
-`gateway` with that code and its names.
+`image_unknown`; and a credential's placeholder in `passes`, `placeholder_conflict`. To
+a refusal with a code of `refusal.Decides` the reload's answer is a `403` with that code
+and its names, `from: gateway`; a refusal of the server's passes through with its own
+status and `from: apiary`.
 
 ```json
 {"version": 1,
@@ -2179,7 +2187,7 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that a session's `dev.qory.run.exited` contains `state` and `exit_code` and a gateway-opened run's neither |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, a reload answer with and without a policy, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict` and `image_unknown` from `gateway` | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, the run credential's labels and `details`, `placeholders`, `reserved`, `image` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, a reload answer with and without a policy, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, and refusals: `run_closed` from `apiary`, and `credential_expired`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown` and `tool_unknown` from `gateway`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one issuer with one key without a kid, and one issuer during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |

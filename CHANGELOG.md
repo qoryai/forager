@@ -219,7 +219,11 @@ release may change what an existing document does, and says so under Upgrading.
   today and in the same order, before it sets anything: the policy in force, what needs
   a wall, the image, `image_unknown`, the credentials and the tools, and
   `placeholder_conflict` for a placeholder the run passes a value for, each refused
-  with the session's code from `gateway`; a refused reload leaves the policy in force.
+  with a `403`, the session's code of `refusal.Decides` and `from: gateway`, while the
+  server's refusals pass through with their own status and `from: apiary`; a refused
+  reload leaves the policy in force. The session still checks its own image table and
+  runtime before it sends the request, and leaves out of `passes` a name outside the
+  variable-name grammar.
   The answer, `link-run-answer.schema.json`, has `run_id`, `labels`, the run's labels as
   the gateway holds them, the run credential's behind a separate gateway, `details`, the
   `about.details` keys the run credential decides with its values, the policy in force
