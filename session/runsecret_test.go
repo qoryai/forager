@@ -17,6 +17,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/link"
 	refusals "github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
@@ -253,4 +254,33 @@ func TestAResendRemovesTheRunSecretAfterTheRunsEnd(t *testing.T) {
 		t.Fatalf("the resend %+v %v", got, err)
 	}
 	noRunSecret(t, "after the run's 410", res.Dir)
+}
+
+// TestASessionCarriesItsRunSecretOnTheLocalLink pins the run secret on the local link:
+// the session carries the run answer's run_secret on every reload and batch, once each,
+// and keeps no file of it, since nothing on one machine sends the session's record
+// again.
+func TestASessionCarriesItsRunSecretOnTheLocalLink(t *testing.T) {
+	sp, g := specGateway(t)
+	sleeps(&sp, time.Second)
+	g.SetRunDigest("sha256=" + strings.Repeat("1", 64))
+	g.OnBatch(func([]map[string]any) linktest.Reply {
+		// Another digest: the session reloads.
+		g.SetRunDigest("sha256=" + strings.Repeat("2", 64))
+		return linktest.Reply{Status: 200}
+	})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := g.RunSecrets()
+	if len(g.Reloads()) == 0 || len(secrets) != len(g.Reloads())+len(g.Batches()) {
+		t.Fatalf("%d reloads, %d batches, %d run secrets", len(g.Reloads()), len(g.Batches()), len(secrets))
+	}
+	for i, got := range secrets {
+		if got != linktest.RunSecret {
+			t.Errorf("request %d carried %q, want the run answer's run secret once", i, got)
+		}
+	}
+	noRunSecret(t, "on the local link", res.Dir)
 }

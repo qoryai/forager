@@ -191,8 +191,8 @@ func (f *Fake) Proxied() []string {
 
 // RunAnswer is the fake's default answer to a run request: the request's run id and
 // labels, no policy, with the members of policy_applied of none, the proxy secret
-// ProxySecret, the run secret RunSecret, and behind a wall the image the request's default names, none when it
-// names none.
+// ProxySecret, the run secret RunSecret, and behind a wall the image the request's
+// default names, none when it names none.
 func RunAnswer(req server.LinkRunRequest) map[string]any {
 	labels := req.Labels
 	if labels == nil {
