@@ -1520,8 +1520,8 @@ arrival, or of a client's proxy login's start, the time the issuer's introspecti
 included, so the last answer comes inside the ten seconds the session waits. It asks
 again after no answer, a transport failure or a timeout, a `5xx`, signed or not, and a
 signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is final: a
-`401`, any other coded refusal, `not_found` among them, a signed answer with no code, and
-a document Forager refuses. Each try of the ping sends the same delivery id and body,
+`401`, any other coded refusal, `not_found` among them, a signed answer other than a
+`5xx` with no code, and a document Forager refuses. Each try of the ping sends the same delivery id and body,
 which the server deduplicates, and the run's record holds the ping once; each try of the
 run configuration is signed anew. Once the tries are spent the last answer is the
 session's, as without them: its code and status passed on from `apiary`, or a `500`
@@ -1938,21 +1938,22 @@ own run beside them. A run with no session ends with `quiet`, `credential_expire
 (§The events, How a run ends). A client's run that fails to open for a reason that may
 pass is answered `503 Service Unavailable`, `Content-Type: text/plain; charset=utf-8`,
 with the body "the gateway could not open the run; try again": the issuer's
-introspection endpoint could not be reached, Qory Apiary's `503` or `429`
-`rate_limited` or an unsigned `5xx` once the tries are spent, or a failure with neither
-a code nor a status of Qory Apiary's. One refused for a reason that does not pass is
+introspection endpoint could not be reached, Qory Apiary's `5xx`, signed or not, with
+any code or none, or its signed `429` `rate_limited`, once the tries are spent, or a
+failure with neither a code nor a status of Qory Apiary's. One refused for a reason that does not pass is
 answered `403 Forbidden`, `Content-Type: text/plain; charset=utf-8`, with one line:
 "the gateway could not open the run: Qory Apiary refused it, \<code\>" for a code of
 Qory Apiary's answer, `answer_unsigned` among them; "the gateway could not open the run:
 the gateway refused it, \<code\>" for a code the gateway decides of the run
 configuration, `run_configuration_invalid`, `tool_unknown` or `image_unknown`; "the
 gateway could not open the run: Qory Apiary refused it, status \<n\>" for a signed
-answer of Qory Apiary's with no code, a `404` with an empty body or a `200` without
-its digest header; and "the gateway could not open the run: the issuer's introspection
+answer of Qory Apiary's, other than a `5xx`, with no code, a `404` with an empty body or
+a `200` without its digest header; and "the gateway could not open the run: the issuer's introspection
 endpoint gave no valid answer" when the issuer's endpoint gave no valid answer, at its
 login or a later connection's. A run refused with a code gets the gateway's
-`dev.qory.run.refused` with that code, after its ping, and its status for a code of
-Qory Apiary's. A connection that would join a run whose issuer's endpoint could not be
+`dev.qory.run.refused` with that code, after its ping, and its status for a code read
+from Qory Apiary's answer, `unauthorized` among them; `answer_unsigned`, which the
+client reads as Qory Apiary's, carries no status. A connection that would join a run whose issuer's endpoint could not be
 reached, or gave no valid answer, ends the run, `issuer_unreachable` or
 `issuer_answer_invalid`, and gets the `503` or the `403` above.
 

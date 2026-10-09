@@ -359,7 +359,8 @@ or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
 no event. The gateway tries Qory Apiary's ping and run configuration up to 3 times, 1
 second and then 2 seconds apart, starting a try again only within 6 seconds of the
-login's start, after no answer, a `5xx` or a `429` `rate_limited`. Its connection gets,
+login's start, after no answer, a `5xx`, signed or not, with any code or none, or a
+signed `429` `rate_limited`. Its connection gets,
 as `text/plain`:
 
 - `503 Service Unavailable`, "the gateway could not open the run; try again", for a
@@ -370,7 +371,7 @@ as `text/plain`:
 - `403 Forbidden`, "the gateway could not open the run: the gateway refused it,
   \<code\>", for a code the gateway decides of the run configuration;
 - `403 Forbidden`, "the gateway could not open the run: Qory Apiary refused it, status
-  \<n\>", for a signed answer of Qory Apiary's with no code.
+  \<n\>", for a signed answer of Qory Apiary's, other than a `5xx`, with no code.
 
 The run ends, and the gateway writes its `dev.qory.run.exited`:
 

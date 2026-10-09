@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -123,6 +124,9 @@ const (
 	runPath    = "/v1/run-configuration"
 )
 
+// notFoundPage is Qory Apiary's page for a path it does not know, unsigned.
+var notFoundPage = unsignedReply(404, "text/html; charset=utf-8", "<!DOCTYPE html>\n<html><head><title>Not Found</title></head><body><h1>Not Found</h1></body></html>\n")
+
 // gaps are the times between the requests.
 func gaps(seen []seenRequest) []time.Duration {
 	var out []time.Duration
@@ -167,6 +171,7 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 		{"a ping's unsigned 429", eventsPath, []apiaryReply{unsignedReply(429, "application/json", `{"error":"rate_limited"}`)}, 1, "answer_unsigned", 429, "gateway", false},
 		{"a run configuration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, 1, "not_found", 404, "apiary", false},
 		{"a run configuration's signed 404 without a code", runPath, []apiaryReply{{status: 404, signed: true}}, 1, "", 0, "", true},
+		{"a run configuration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, 1, "answer_unsigned", 404, "gateway", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctl := newControl(t)
@@ -227,6 +232,45 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheTriesStopWhenTheSessionGoes pins that a session's run request that ends
+// while the gateway waits between its tries of Qory Apiary ends them: the run does not
+// open, Qory Apiary is asked nothing more, and the run id is free again at once, so the
+// session's next request of it opens.
+func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
+	ctl := newControl(t)
+	cfg := gateway.Config{Server: ctl.server()}
+	gateway.SetOpenTries(&cfg, []time.Duration{2 * time.Second, 2 * time.Second}, 10*time.Second)
+	h := start(t, cfg)
+	s := script(ctl)
+	s.then(eventsPath, coded(503, "unavailable"))
+	req := server.LinkRunRequest{RunID: event.NewRunID()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.link.OpenRun(ctx, server.LocalOrigin+"/v1/run-configuration", req)
+		done <- err
+	}()
+	eventually(t, "the first try", func() bool { return len(s.requests(eventsPath)) == 1 })
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("the run opened")
+	}
+	time.Sleep(200 * time.Millisecond)
+	start := time.Now()
+	a, err := h.tryOpen(req)
+	if err != nil {
+		t.Fatalf("the next request of the run id: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the next request took %v: the tries went on", took)
+	}
+	if n := len(s.requests(eventsPath)); n != 2 {
+		t.Errorf("Qory Apiary was asked %d times; want the first request's try and the next request's", n)
+	}
+	h.post(heartbeat(a.RunID))
 }
 
 // TestTheWindowOfTheTries pins the window of the tries of Qory Apiary as a run opens: a
@@ -538,7 +582,6 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
 	const allow = `{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`
-	html := unsignedReply(404, "text/html; charset=utf-8", "<!DOCTYPE html>\n<html><head><title>Not Found</title></head><body><h1>Not Found</h1></body></html>\n")
 	for _, c := range []struct {
 		name    string
 		path    string
@@ -570,7 +613,7 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 			"the gateway could not open the run: the gateway refused it, image_unknown", map[string]any{"code": "image_unknown", "names": []any{"example-image"}}, 1, "image_unknown"},
 		{"a run configuration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, not_found", map[string]any{"code": "not_found", "status": 404.0}, 1, "not_found (status 404)"},
-		{"a run configuration's unsigned 404 page", runPath, []apiaryReply{html}, "", 403,
+		{"a run configuration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, answer_unsigned", map[string]any{"code": "answer_unsigned"}, 1, "answer_unsigned (status 404)"},
 		{"a run configuration's code the contract does not list", runPath, []apiaryReply{coded(404, "example_server_code")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, example_server_code", map[string]any{"code": "example_server_code", "status": 404.0}, 1, "example_server_code (status 404)"},
@@ -582,6 +625,8 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 			tryAgainText, map[string]any{"code": "unavailable", "status": 503.0}, 3, "unavailable (status 503)"},
 		{"the ping's unsigned 502 three times", eventsPath, []apiaryReply{unsignedReply(502, "", ""), unsignedReply(502, "", ""), unsignedReply(502, "", "")}, "", 503,
 			tryAgainText, map[string]any{"code": "answer_unsigned"}, 3, "answer_unsigned (status 502)"},
+		{"a run configuration's signed 500 without a code three times", runPath, []apiaryReply{{status: 500, signed: true}, {status: 500, signed: true}, {status: 500, signed: true}}, "", 503,
+			tryAgainText, nil, 3, ": status 500"},
 		{"a run configuration's 429 rate_limited three times", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited"), coded(429, "rate_limited")}, "", 503,
 			tryAgainText, map[string]any{"code": "rate_limited", "status": 429.0}, 3, "rate_limited (status 429)"},
 	} {

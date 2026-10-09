@@ -662,13 +662,14 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.refused` with that code, right after its ping; one that fails without
   a code gets no event. Its connection gets a `503` with the text "the gateway could not
   open the run; try again" for a failure that may pass, the issuer's endpoint
-  unreachable or Qory Apiary's `503`, `429` `rate_limited` or unsigned `5xx` once the
-  tries are spent among it, and for one with neither a code nor a status of Qory
+  unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
+  signed `429` `rate_limited`, once the tries are spent, among it, and for one with neither a code nor a status of Qory
   Apiary's; and a `403` with one line for a reason that does not pass: "the gateway
   could not open the run: Qory Apiary refused it, \<code\>" for a code of Qory
   Apiary's answer, `answer_unsigned` among them, "the gateway could not open the run:
   the gateway refused it, \<code\>" for one the gateway decides, "the gateway could not
-  open the run: Qory Apiary refused it, status \<n\>" for a signed answer with no code,
+  open the run: Qory Apiary refused it, status \<n\>" for a signed answer, other than a
+  `5xx`, with no code,
   and "the gateway could not open the run: the issuer's introspection endpoint gave no
   valid answer". A connection that would join a run whose issuer's endpoint could not
   be reached, or gave no valid answer, ends the run and gets the same `503` or `403`. A refusal's answer is written in

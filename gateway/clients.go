@@ -134,7 +134,7 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 // refusedText is what a client with no session reads of a run that did not open for a
 // reason that does not pass: who refused and the code, Qory Apiary for a code of its
 // answer, answer_unsigned among them, and the gateway for one it decides; and for a
-// signed answer of Qory Apiary's with no code, its status. False for a failure that may
+// signed answer of Qory Apiary's, other than a 5xx, with no code, its status. False for a failure that may
 // pass, and for one with neither a code nor a status of Qory Apiary's: the client is to
 // try again.
 func refusedText(err error) (string, bool) {
