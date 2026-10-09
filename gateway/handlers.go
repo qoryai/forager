@@ -65,7 +65,7 @@ func mediaType(r *http.Request, want string) bool {
 // openRun answers a run request: 400 invalid_request for a body the schema refuses and
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
-// until the latest exp presented, or whose run credential the issuer no longer holds
+// during its hold, or whose run credential the issuer no longer holds
 // active; 409 run_id_used for a run id
 // that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details

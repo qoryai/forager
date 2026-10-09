@@ -1845,7 +1845,7 @@ The public package `runcredential` holds the rules beyond the schema:
   by the SHA-256 of the run credential, at most 4096 of them; a failure is not kept.
 - `OpenEnded` and `Ended`, the run keys a gateway refuses after the issuer's end, by
   issuer, in a file of the gateway's state directory, each kept until the latest `exp`
-  presented for it plus 5 minutes, so a restart refuses them too.
+  added for it plus 5 minutes, so a restart refuses them too.
 
 **The runs of a run key.** The gateway tracks run keys and does not require them to be
 unique; each period of activity is a run, of its own run id, with the run key as its
@@ -1875,14 +1875,18 @@ run ends). A client's run that fails to open without a refusal's code is answere
 "the gateway could not open the run; try again"; one refused with a code gets the
 gateway's `dev.qory.run.refused` with that code, after its ping.
 
-After the issuer's end, `run_ended_at_issuer`, the gateway refuses the run key until its
-`exp` plus 5 minutes, the longest leeway: a session's run request is `401`
-`run_credential_refused`; a reload or a batch of a session's run of the run key that is
-still live is the run's `410` `run_ended_at_issuer`, and the run ends; and a client's
-connection is `407`, and the client's run of the run key it would join ends,
-`run_ended_at_issuer`. A run credential for a
-refused run key presented during the hold is refused and extends the hold to its own
-`exp`; the hold lapses after the latest `exp` presented, plus 5 minutes.
+After the issuer's end, `run_ended_at_issuer`, the gateway refuses the run key until
+the latest `exp` of the run credentials of the key the gateway still holds, and of
+any presented during the hold, plus 5 minutes, the longest leeway. The run credentials
+it still holds are those of the run key's runs that are live, and of those that ended
+whose record is not yet flushed; it keeps no `exp` of a run once its record is flushed.
+During the hold, a session's run request is `401` `run_credential_refused`; a reload or
+a batch of a session's run of the run key that is still live is the run's `410`
+`run_ended_at_issuer`, and the run ends; and a client's connection is `407`, and the
+client's run of the run key it would join ends, `run_ended_at_issuer`. A run credential
+for a refused run key presented during the hold, its signature and claims verified, is
+refused and extends the hold to its own `exp`; a request whose run credential fails
+verification extends nothing.
 
 Every failure of a run credential is one opaque answer, `run_credential_refused` to a
 session and `407` to a client with no session, and names no claim value. The run

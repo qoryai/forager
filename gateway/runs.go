@@ -548,10 +548,11 @@ func (lr *linkRun) gone() (code, from string, ended bool) {
 // after the issuer's end.
 func (lr *linkRun) end(e ending) {
 	if e.blocks() {
-		// After the issuer's end, the gateway refuses the run key until the latest exp
-		// presented for it, kept in its directory so a restart refuses it too: kept
-		// before the run is seen to end, so no request that sees the end opens a run of
-		// it. Outside the run's lock, which is taken under the gateway's.
+		// After the issuer's end, the gateway refuses the run key until the latest exp of
+		// the run credentials of the run key it still holds, and of any presented during
+		// the hold, kept in its directory so a restart refuses it too: kept before the
+		// run is seen to end, so no request that sees the end opens a run of it.
+		// Outside the run's lock, which is taken under the gateway's.
 		lr.mu.Lock()
 		live := !lr.ended && lr.opened && lr.cred != nil
 		var key runKeyID
@@ -561,7 +562,7 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.mu.Unlock()
 		if live {
-			lr.g.endKey(key, expires)
+			lr.g.endKey(key, lr.g.heldTo(key, expires))
 		}
 	}
 	lr.mu.Lock()
@@ -587,7 +588,7 @@ func (lr *linkRun) end(e ending) {
 	lr.mu.Unlock()
 	if lr.cred != nil && e.blocks() {
 		// A run credential with a later exp presented since: the refusal lasts to it.
-		lr.g.endKey(key, expires)
+		lr.g.endKey(key, lr.g.heldTo(key, expires))
 	}
 	go func() {
 		defer close(lr.done)

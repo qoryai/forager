@@ -1515,6 +1515,39 @@ func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
 	}
 }
 
+// TestTheHoldRunsToTheLatestExpHeld pins the hold's length: after the issuer's end of
+// a run of a run key, the gateway refuses the run key until the latest exp of the run
+// credentials of the key it still holds, a live run's later exp among them, not the
+// ended run's own.
+func TestTheHoldRunsToTheLatestExpHeld(t *testing.T) {
+	in := &introspection{}
+	var ahead atomic.Int64
+	cfg := gateway.Config{Policy: enforce127}
+	gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
+	s := startVerifying(t, cfg, in, 0)
+	now := time.Now()
+	first := mint(issuerKey(), "rk-0001", now.Add(time.Hour), nil)
+	second := mint(issuerKey(), "rk-0001", now.Add(2*time.Hour), nil)
+	probe := mint(issuerKey(), "rk-0001", now.Add(time.Hour+time.Minute), nil)
+	s.secrets = append(s.secrets, first, second, probe)
+	ended := s.openSession(t, first, server.LinkRunRequest{})
+	s.openSession(t, second, server.LinkRunRequest{})
+	in.end(first)
+	status, body := ended.reload(t, first, ended.a.RunID)
+	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	// Past the ended run's exp and its leeway, the live run's later exp holds the run
+	// key; the probe's own exp is earlier, so it extends nothing.
+	ahead.Store(int64(time.Hour + 10*time.Minute))
+	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
+		t.Errorf("past the ended run's exp: %d %s", status, body)
+	}
+	// Past the later exp and its leeway, the run key opens a new run.
+	ahead.Store(int64(2*time.Hour + 10*time.Minute))
+	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
+		t.Errorf("past the latest exp held: %d %s", status, body)
+	}
+}
+
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
 // run run_ended_at_issuer: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.

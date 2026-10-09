@@ -33,8 +33,8 @@ type clientLogin struct{ g *Gateway }
 // again. A client has at most one open run per run key, and never joins a session's
 // run, which only its proxy secret reaches: a run key with sessions' runs open opens or
 // joins its client's run beside them. Every failure of the run credential is refused,
-// 407, and so is a run key the gateway refuses after the issuer's end, until the latest
-// exp presented. A run refused with a code is [errUnserved], and one that fails to open
+// 407, and so is a run key the gateway refuses after the issuer's end, during its hold.
+// A run refused with a code is [errUnserved], and one that fails to open
 // without a code [errNotOpened].
 func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	g := c.g

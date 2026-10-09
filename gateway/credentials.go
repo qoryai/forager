@@ -101,8 +101,9 @@ func (id runIdentity) isActive(ctx context.Context) bool {
 
 // The gateway tracks run keys and does not require them to be unique; each period of
 // activity is a run. It refuses a run key only after the issuer's end of a run of it:
-// after run_ended_at_issuer, the gateway refuses the run key until the latest exp
-// presented for it. Those run keys are kept in the gateway's directory, so a restart
+// after run_ended_at_issuer, the gateway refuses the run key until the latest exp of
+// the run credentials of the run key it still holds, and of any presented during the
+// hold. Those run keys are kept in the gateway's directory, so a restart
 // refuses them too.
 
 // blocked reports whether the gateway refuses the run key, after the issuer's end.
@@ -145,6 +146,26 @@ func (g *Gateway) holdKey(k runKeyID, exp time.Time) error {
 	}
 	g.mu.Unlock()
 	return nil
+}
+
+// heldTo is the latest of exp and the exps of the run credentials of the run key the
+// gateway still holds: those of its runs, live and ended, that it has not let go of.
+// What a run it let go of was presented, it no longer remembers. Not under the lock of
+// any run.
+func (g *Gateway) heldTo(k runKeyID, exp time.Time) time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, lr := range g.runs {
+		if lr.cred == nil || lr.cred.key != k {
+			continue
+		}
+		lr.mu.Lock()
+		if lr.cred.expires.After(exp) {
+			exp = lr.cred.expires
+		}
+		lr.mu.Unlock()
+	}
+	return exp
 }
 
 // endKey is [Gateway.holdKey], a failure reported, the run key's issuer and nothing of
@@ -222,7 +243,7 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 
 // presented notes a run credential presented for a run key the gateway refuses: it is
 // refused, and extends the refusal to its own exp, so the refusal lapses only after the
-// latest exp presented. A run key the gateway does not refuse is left as it is.
+// latest exp held or presented. A run key the gateway does not refuse is left as it is.
 func (g *Gateway) presented(id runIdentity) {
 	if k := keyOf(id); g.blocked(k) {
 		g.endKey(k, id.Expires)
