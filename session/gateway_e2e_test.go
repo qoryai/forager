@@ -180,8 +180,8 @@ type control struct {
 	pin   accesskey.Pin
 	store *receiver.File
 	// closed makes every run closed; closeOnFetch closes every run once the run
-	// configuration is fetched.
-	closed, closeOnFetch atomic.Bool
+	// configuration is fetched; limit admits no instance.
+	closed, closeOnFetch, limit atomic.Bool
 
 	mu     sync.Mutex
 	run    []byte
@@ -203,6 +203,7 @@ func newControl(t *testing.T) *control {
 		Signer: signer,
 		Store:  store,
 		Closed: func(string) bool { return c.closed.Load() },
+		Admit:  func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(c.pin)
 			doc := `{"version":1,"node_id":"nd_f1xt0re000000000","apiary_public_key":` + string(pin) +
@@ -357,4 +358,24 @@ func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
 			t.Errorf("%v, want the server's run_closed", err)
 		}
 	})
+}
+
+// TestARealGatewayPassesOnTheServersRefusal pins a refusal of the server's end to end:
+// the run is a *session.Refusal from apiary whose Error is the text the run always
+// had, word for word, the request the server refused, its code and its status.
+func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+	c.limit.Store(true)
+	sp := spec(t)
+	sleeps(&sp, 0)
+	startGateway(t, &sp, gateway.Config{Server: c.server()})
+	_, err := session.Run(context.Background(), sp)
+	var r *session.Refusal
+	if !errors.As(err, &r) || r.Code != "instance_limit" || r.From != accesskey.FromApiary {
+		t.Fatalf("%v, want the server's instance_limit", err)
+	}
+	if want := "ping " + c.srv.URL + "/v1/events: instance_limit (status 409)"; err.Error() != want {
+		t.Errorf("%q, want %q", err, want)
+	}
 }

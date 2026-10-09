@@ -121,6 +121,10 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			map[string]any{"code": "run_closed", "status": 410.0}},
 		"a 500 with a message": {linktest.Reply{Status: 500, Body: map[string]any{"message": "credential git: the adapter exited with status 1"}},
 			"", "", nil, "credential git: the adapter exited with status 1", nil},
+		"a refusal with a message": {linktest.Reply{Status: 409, Body: map[string]any{"error": "instance_limit", "from": "apiary", "message": "ping https://apiary.example/v1/events: instance_limit (status 409)"}},
+			"instance_limit", accesskey.FromApiary, nil, "ping https://apiary.example/v1/events: instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
+		"a 500 internal": {linktest.Reply{Status: 500, Body: map[string]any{"error": "internal", "from": "gateway", "message": "credential git: the adapter exited with status 1"}},
+			"", "", nil, "credential git: the adapter exited with status 1", nil},
 		"a bare 500": {linktest.Reply{Status: 500}, "", "", nil, "the gateway answered the run request with status 500", nil},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -140,7 +144,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			if c.code == "" && errors.As(err, &r) {
 				t.Errorf("a refusal %v, want an error that is none", r)
 			}
-			if (c.code == "" || c.code != "run_closed") && err.Error() != c.text {
+			if c.code != "run_closed" && err.Error() != c.text {
 				t.Errorf("%q, want exactly %q", err, c.text)
 			}
 			evs := events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, sp.RunID)})

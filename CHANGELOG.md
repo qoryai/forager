@@ -556,10 +556,12 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state.
   `Result.Undelivered` counts the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
-  `*session.Refusal` with `From`, `gateway` or `apiary`; the gateway's `wall_required`
-  is the error a run without a wall always had, word for word. A run the gateway could
-  not open for a reason without a code is the error its answer's `message` says, word
-  for word.
+  `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's
+  `message`, the text the run always returned; the gateway's `wall_required` is the
+  error a run without a wall always had, word for word. A run the gateway could not open
+  for a reason without a code is the error its answer's `message` says, word for word.
+  `server.LinkRefusal` has `Message`, and the link's client sets a refusal's
+  `accesskey.Refusal.Text` from it.
 - A runtime name is a lower-case letter and then up to 63 lower-case letters, digits
   and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
   runtime that has one, and the descriptor schema holds `runtime` to the same bound.

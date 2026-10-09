@@ -90,8 +90,11 @@ Every connection to the proxy opens with the relay's preamble and the run's prox
 secret: without a wall the forwarder writes it, behind one the wall's relay does.
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
-with the code, the names it concerns and `From`, `apiary` or `gateway`. A run whose
-policy needs a wall and has none returns the error such a run always had.
+with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
+the refusal's `message`, the text such a run always returned, such as
+`ping https://qory.example/v1/events: instance_limit (status 409)`. A run whose policy
+needs a wall and has none returns the error such a run always had, and so does a run
+the gateway could not open for a reason without a code.
 
 ## The runtime
 

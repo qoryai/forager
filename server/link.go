@@ -254,8 +254,9 @@ type LinkRefusal struct {
 	Error string   `json:"error"`
 	Names []string `json:"names,omitempty"`
 	From  string   `json:"from,omitempty"`
-	// Message is, on a 500 to a run request the gateway could not open for a reason
-	// without a code, the error's text as the user is told it.
+	// Message is the refusal's text as its user is told it: on a run request the
+	// gateway did not open, the error the run would have returned had the session
+	// opened it itself.
 	Message string `json:"message,omitempty"`
 }
 
@@ -465,22 +466,29 @@ func (a *linkAnswer) from() string {
 // refusal is the error of an answer that is not the one wanted: a 410 is the end of
 // the run, its code one of [EndCodes]; a coded body is its code with its names and who
 // refused; anything else names its status.
+//
+// A refusal's message, the text its user is told, is its Text, so its Error says it
+// word for word. A 5xx whose code is internal, or that has none, is a failure without
+// a code: a StatusError with the message.
 func (a *linkAnswer) refusal(what string) error {
+	var doc LinkRefusal
+	jsonv2.Unmarshal(a.body, &doc)
 	if a.status == http.StatusGone {
-		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from()}
+		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from(), Text: doc.Message}
 	}
-	if a.status >= http.StatusInternalServerError {
-		var doc LinkRefusal
-		if jsonv2.Unmarshal(a.body, &doc) == nil && doc.Message != "" {
-			return &StatusError{What: what, Status: a.status, Message: doc.Message}
-		}
+	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
+		return &StatusError{What: what, Status: a.status, Message: doc.Message}
 	}
 	if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
-		r.Detail, r.From = what, a.from()
+		r.Detail, r.From, r.Text = what, a.from(), doc.Message
 		return r
 	}
-	return &StatusError{What: what, Status: a.status}
+	return &StatusError{What: what, Status: a.status, Message: doc.Message}
 }
+
+// CodeInternal is the code of a gateway's 500 to a run it could not open for a reason
+// without a code of its own.
+const CodeInternal = "internal"
 
 // StatusError is an answer of the link with neither the one wanted nor a code: a
 // gateway's 5xx, say, to a run it could not open, whose body may carry the error's text
