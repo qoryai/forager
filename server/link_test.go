@@ -75,8 +75,9 @@ func answer(w http.ResponseWriter, status int, body string) {
 // TestTheLinkSpeaksTheContractOverTheSocket pins one run's requests on the local
 // link: each connection opens with the preamble, every request carries User-Agent and
 // the contract revision and none of the signed requests' headers, the run request
-// carries the run's passes and images, a batch its content type and delivery id, and
-// every answer's digests reach the caller.
+// carries the run's passes and images, a batch its content type and delivery id, the
+// reload and the batch the run answer's run secret, which neither the discovery nor the
+// run request carries, and every answer's digests reach the caller.
 func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	var mu sync.Mutex
 	var problems []string
@@ -90,6 +91,13 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 			if r.Header.Get(h) != "" {
 				note("%s %s carries %s", r.Method, r.URL, h)
 			}
+		}
+		wantSecret := []string{runSecret}
+		if r.URL.Path == server.WellKnown || r.URL.Path == "/v1/run-configuration" {
+			wantSecret = nil
+		}
+		if got := r.Header.Values(server.HeaderRunSecret); fmt.Sprint(got) != fmt.Sprint(wantSecret) {
+			note("%s %s: the run secret %d times, want %d", r.Method, r.URL, len(got), len(wantSecret))
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
@@ -466,7 +474,8 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 
 // TestTheLinkNeverShowsItsSecret pins that the link secret appears in no error, no
 // print under any verb of the client or of its value, and no log line, and that a run
-// answer prints and logs without its proxy secret.
+// answer prints and logs without its proxy secret or its run secret, and a link without
+// the run secret it carries.
 func TestTheLinkNeverShowsItsSecret(t *testing.T) {
 	if _, err := server.NewLocalLink(link.Local{Socket: "/x", Secret: "with space " + linkSecret}, userAgent, nil); err == nil || strings.Contains(err.Error(), linkSecret) {
 		t.Errorf("a secret no preamble carries: %v", err)
@@ -498,13 +507,16 @@ func TestTheLinkNeverShowsItsSecret(t *testing.T) {
 	server.SetPeerUID(k2, os.Getuid()+1)
 	_, err = k2.Discover(context.Background())
 	fmt.Fprintf(&out, "%v\n", err)
-	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret}
+	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret, RunSecret: runSecret}
+	k2.UseRunSecret(runSecret)
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		fmt.Fprintf(&out, verb+"\n", a)
 		fmt.Fprintf(&out, verb+"\n", &a)
+		fmt.Fprintf(&out, verb+"\n", k2)
+		fmt.Fprintf(&out, verb+"\n", *k2)
 	}
-	log.Info("answer", "answer", a)
-	if strings.Contains(out.String(), linkSecret) || strings.Contains(out.String(), proxySecret) {
+	log.Info("answer", "answer", a, "link", k2)
+	if strings.Contains(out.String(), linkSecret) || strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), runSecret) {
 		t.Errorf("a secret is shown:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "[redacted]") || !strings.Contains(out.String(), "server.LinkRunAnswer{") {
@@ -562,5 +574,33 @@ func TestALinkInMemoryNeverDialsItsSocket(t *testing.T) {
 	case <-dialled:
 		t.Error("the socket's path was dialled")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestALinkCarriesTheRunSecretItIsGiven pins UseRunSecret: a link given no run secret
+// carries none; one of the schema's form is carried on every request from then on; a
+// value of another form is ignored, and the link carries what it carried before.
+func TestALinkCarriesTheRunSecretItIsGiven(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
+		mu.Unlock()
+		answer(w, 200, discovery)
+	}))
+	k, _ := newLink(t, g)
+	for _, give := range []string{"", "not a secret the schema allows", "short", runSecret, "a-secret-of-its-own-form\r\nX-Other: 1"} {
+		if give != "" {
+			k.UseRunSecret(give)
+		}
+		if _, err := k.Discover(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"", "", "", runSecret, runSecret}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the run secrets carried %q, want %q", got, want)
 	}
 }
