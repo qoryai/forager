@@ -119,7 +119,7 @@ func (id runIdentity) checkActive(ctx context.Context) error {
 
 // The gateway tracks run keys and does not require them to be unique; each period of
 // activity is a run. It refuses a run key only after the issuer's end of a run of it:
-// after run_ended_at_issuer, the gateway refuses the run key until the latest exp of
+// after stopped, the gateway refuses the run key until the latest exp of
 // the run credentials of the run key it still holds, and of any presented during the
 // hold. Those run keys are kept in the gateway's directory, so a restart
 // refuses them too.
@@ -140,7 +140,7 @@ func (g *Gateway) now() time.Time {
 
 // blocks reports whether an ending is the one after which the gateway refuses the run
 // key: the issuer's end.
-func (e ending) blocks() bool { return e.code == event.ReasonRunEndedAtIssuer }
+func (e ending) blocks() bool { return e.code == event.ReasonStopped }
 
 // keepRetry is how often the gateway writes the refused run keys again while a write
 // of them has failed.

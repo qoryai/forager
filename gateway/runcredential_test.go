@@ -496,7 +496,7 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 	s.close()
 	rec := s.record(r.a.RunID)
 	last := rec[len(rec)-1]
-	if last.Type != event.RunExited || last.Data["reason"] != "credential_expired" || last.Data["state"] != "failed" || last.Data["exit_code"] != float64(-1) {
+	if last.Type != event.RunExited || last.Data["reason"] != "credential_expired" || last.Data["state"] != "cancelled" || last.Data["exit_code"] != float64(-1) {
 		t.Errorf("the record ends %+v", last)
 	}
 	validEvents(t, rec)
@@ -505,7 +505,7 @@ func TestEveryRequestOfARunCarriesItsRunCredential(t *testing.T) {
 
 // TestIntrospectionEndsARun pins the issuer's introspection: asked before a run opens,
 // a run credential it holds inactive opens none, 401; asked again on a run's requests,
-// once it holds the run credential inactive the run ends, run_ended_at_issuer, which
+// once it holds the run credential inactive the run ends, cancelled and stopped, which
 // the request and every later one get as the 410.
 func TestIntrospectionEndsARun(t *testing.T) {
 	in := &introspection{}
@@ -523,12 +523,12 @@ func TestIntrospectionEndsARun(t *testing.T) {
 	}
 	in.end(cred)
 	status, b := r.post(t, cred, heartbeat(r.a.RunID))
-	gone(t, "the batch", status, b, "run_ended_at_issuer")
+	gone(t, "the batch", status, b, "stopped")
 	status, b = r.reload(t, cred, r.a.RunID)
-	gone(t, "a later reload", status, b, "run_ended_at_issuer")
+	gone(t, "a later reload", status, b, "stopped")
 	s.close()
 	rec := s.record(r.a.RunID)
-	if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+	if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "stopped" || last.Data["state"] != "cancelled" || last.Data["exit_code"] != float64(-1) {
 		t.Errorf("the record ends %+v", last)
 	}
 	validEvents(t, rec)
@@ -666,7 +666,7 @@ func TestARunWithNoSession(t *testing.T) {
 	}
 	st := rec[1].Data
 	about, _ := st["about"].(map[string]any)
-	if st["opened_by"] != "gateway" || st["credential"] != "issuer" || !sameMap(stringMap(st["labels"]), exampleLabels("rk-0001")) || !sameMap(stringMap(about["details"]), map[string]string{"requester": "example-requester"}) || st["runtime"] != nil || st["host"] != nil {
+	if st["opened_by"] != "gateway" || st["credential"] != "starter" || !sameMap(stringMap(st["labels"]), exampleLabels("rk-0001")) || !sameMap(stringMap(about["details"]), map[string]string{"requester": "example-requester"}) || st["runtime"] != nil || st["host"] != nil {
 		t.Errorf("run.started %v", st)
 	}
 	if rec[2].Data["source"] != "fetched" || rec[2].Data["variables"] != nil {
@@ -676,7 +676,7 @@ func TestARunWithNoSession(t *testing.T) {
 		t.Errorf("egress %v %v", rec[3].Data, rec[4].Data)
 	}
 	end := rec[len(rec)-1].Data
-	if end["reason"] != "quiet" || end["quiet_seconds"] != float64(2) || end["state"] != nil || end["exit_code"] != nil {
+	if end["reason"] != "quiet" || end["quiet_seconds"] != float64(2) || end["state"] != "cancelled" || end["exit_code"] != nil {
 		t.Errorf("run.exited %v", end)
 	}
 	validEvents(t, rec)
@@ -698,7 +698,7 @@ func stringMap(v any) map[string]string {
 
 // TestARunWithNoSessionEnds pins the other ends of a run with no session: its run
 // credential's exp with no fresher one, credential_expired, even while a connection
-// is open; and the issuer that no longer holds it active, run_ended_at_issuer, asked
+// is open; and the issuer that no longer holds it active, stopped, asked
 // again while the run has connections. Each run.exited has neither state nor
 // exit_code. After credential_expired, a fresh run credential of the run key opens a
 // new run; after the issuer's end, the gateway refuses the run key, 407, even for a
@@ -750,7 +750,7 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 				switch last.Data["reason"] {
 				case "credential_expired":
 					expired = id
-				case "run_ended_at_issuer":
+				case "stopped":
 					ended = id
 				}
 			}
@@ -762,14 +762,14 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 		t.Error("the tunnel relays after credential_expired")
 	}
 	if tunnelOpen(held, host) {
-		t.Error("the tunnel relays after run_ended_at_issuer")
+		t.Error("the tunnel relays after stopped")
 	}
 	for name, c := range map[string]struct {
 		credential string
 		want       int
 	}{
-		"credential_expired":  {mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), http.StatusOK},
-		"run_ended_at_issuer": {mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil), http.StatusProxyAuthRequired},
+		"credential_expired": {mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil), http.StatusOK},
+		"stopped":            {mint(issuerKey(), "rk-0002", time.Now().Add(2*time.Hour), nil), http.StatusProxyAuthRequired},
 	} {
 		s.secrets = append(s.secrets, c.credential)
 		resp, conn, _ := s.proxyRequest(t, login(c.credential))
@@ -781,7 +781,7 @@ func TestARunWithNoSessionEnds(t *testing.T) {
 	s.close()
 	for _, id := range []string{expired, ended} {
 		rec := s.record(id)
-		if end := rec[len(rec)-1].Data; end["state"] != nil || end["exit_code"] != nil {
+		if end := rec[len(rec)-1].Data; end["state"] != "cancelled" || end["exit_code"] != nil {
 			t.Errorf("run.exited %v", end)
 		}
 		validEvents(t, rec)
@@ -1277,7 +1277,7 @@ func TestARunKeyIsNotUnique(t *testing.T) {
 }
 
 // TestTheIssuersEndRefusesTheRunKey pins the one end after which the gateway refuses a
-// run key: after the issuer's end, run_ended_at_issuer, a session's run request of the
+// run key: after the issuer's end, stopped, a session's run request of the
 // run key is 401 and a client's connection 407, even with a run credential the issuer
 // holds active, and so after a restart on the same directory. A run credential of the
 // run key presented then is refused and extends the refusal to its own exp; the
@@ -1299,7 +1299,7 @@ func TestTheIssuersEndRefusesTheRunKey(t *testing.T) {
 	r := s.openSession(t, first, server.LinkRunRequest{})
 	in.end(first)
 	status, body := r.reload(t, first, r.a.RunID)
-	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	gone(t, "the issuer's end", status, body, "stopped")
 	login := func(credential string) string {
 		return "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+credential)) + "\r\n\r\n"
 	}
@@ -1405,7 +1405,7 @@ func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
 		t.Helper()
 		in.end(first)
 		status, body := r.reload(t, first, r.a.RunID)
-		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		gone(t, "the issuer's end", status, body, "stopped")
 	}
 
 	// A session's run request.
@@ -1462,7 +1462,7 @@ func TestTheIssuersEndRefusesTheRunKeyInFlight(t *testing.T) {
 
 // TestTheIssuersEndRefusesTheRunKeysLiveRuns pins the issuer's end against the run
 // key's other runs that are live: a reload or a batch of a session's run of it gets the
-// run's 410, run_ended_at_issuer, though the issuer holds that run's own run credential
+// run's 410, stopped, though the issuer holds that run's own run credential
 // active, and the run ends; a client's run of it refuses its next connection, 407, and
 // ends too.
 func TestTheIssuersEndRefusesTheRunKeysLiveRuns(t *testing.T) {
@@ -1486,21 +1486,21 @@ func TestTheIssuersEndRefusesTheRunKeysLiveRuns(t *testing.T) {
 	}
 	in.end(first)
 	status, body := a.reload(t, first, a.a.RunID)
-	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	gone(t, "the issuer's end", status, body, "stopped")
 
 	status, body = b.post(t, second, heartbeat(b.a.RunID))
-	gone(t, "a batch of another run of the run key", status, body, "run_ended_at_issuer")
+	gone(t, "a batch of another run of the run key", status, body, "stopped")
 	status, body = reloaded.reload(t, second, reloaded.a.RunID)
-	gone(t, "a reload of another run of the run key", status, body, "run_ended_at_issuer")
+	gone(t, "a reload of another run of the run key", status, body, "stopped")
 	status, body = b.reload(t, second, b.a.RunID)
-	gone(t, "a later reload", status, body, "run_ended_at_issuer")
+	gone(t, "a later reload", status, body, "stopped")
 	if status, _, err := get(s.clientWith(second), o.URL); err != nil || status != http.StatusProxyAuthRequired {
 		t.Errorf("a client's connection after the end: %d %v", status, err)
 	}
 	s.close()
 	for _, id := range []string{b.a.RunID, reloaded.a.RunID, client} {
 		rec := s.record(id)
-		if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+		if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "stopped" || last.Data["state"] != "cancelled" {
 			t.Errorf("run %s: the record ends %+v", id, last)
 		}
 	}
@@ -1528,7 +1528,7 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 			// of, the server takes nothing more.
 			in.end(first)
 			status, body := a.reload(t, first, a.a.RunID)
-			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+			gone(t, "the issuer's end", status, body, "stopped")
 			eventually(t, "the ended run let go of", func() bool {
 				runs, _, _, _ := gateway.Held(s.g)
 				return runs == 0
@@ -1563,7 +1563,7 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 		rec := s.record(ended)
 		if client {
 			// The client's run started: its record ends with its exit, undelivered.
-			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "run_ended_at_issuer" {
+			if last := rec[len(rec)-1]; last.Type != event.RunExited || last.Data["reason"] != "stopped" {
 				t.Errorf("the client's run: the record ends %+v", last)
 			}
 			if d.Undelivered == 0 {
@@ -1627,7 +1627,7 @@ func TestARunWhoseHoldIsNotWrittenIsLetGoOf(t *testing.T) {
 	blockHold(t, s.dir)
 	in.end(first)
 	status, body := r.reload(t, first, r.a.RunID)
-	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	gone(t, "the issuer's end", status, body, "stopped")
 	if !s.reported("keeping the run key of a run of the issuer") {
 		t.Error("the failed write was not reported")
 	}
@@ -1661,7 +1661,7 @@ func TestTheHoldRunsToTheLatestExpHeld(t *testing.T) {
 	s.openSession(t, second, server.LinkRunRequest{})
 	in.end(first)
 	status, body := ended.reload(t, first, ended.a.RunID)
-	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	gone(t, "the issuer's end", status, body, "stopped")
 	// Past the ended run's exp and its leeway, the live run's later exp holds the run
 	// key; the probe's own exp is earlier, so it extends nothing.
 	ahead.Store(int64(time.Hour + 10*time.Minute))
@@ -1699,7 +1699,7 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 		unblock[s] = blockHold(t, s.dir)
 		in.end(first)
 		status, body := r.reload(t, first, r.a.RunID)
-		gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+		gone(t, "the issuer's end", status, body, "stopped")
 		return s
 	}
 	refused := func(s *service) {
@@ -1893,7 +1893,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			r := s.openSession(t, first, server.LinkRunRequest{})
 			in.end(first)
 			status, body := r.reload(t, first, r.a.RunID)
-			gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+			gone(t, "the issuer's end", status, body, "stopped")
 		}
 		// Written once, while the refused run keys can be written.
 		end("rk-0002")
@@ -1915,7 +1915,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 			// The issuer ends a run of a run key the file never holds.
 			in.end(never)
 			status, body := neverRun.reload(t, never, neverRun.a.RunID)
-			gone(t, "the issuer's end of the run key never written", status, body, "run_ended_at_issuer")
+			gone(t, "the issuer's end of the run key never written", status, body, "stopped")
 		}
 		if !s.reported("keeping the run key of a run of the issuer") {
 			t.Fatal("no write failed")
@@ -1936,7 +1936,7 @@ func TestCloseCountsTheRunKeysARestartWouldNotRefuse(t *testing.T) {
 }
 
 // TestARequestThatGoesWhileTheIssuerIsAsked pins that only the issuer's answer ends a
-// run run_ended_at_issuer: a request that goes while the issuer is still being asked
+// run stopped: a request that goes while the issuer is still being asked
 // gets no answer, and the run goes on, its later requests answered as before.
 func TestARequestThatGoesWhileTheIssuerIsAsked(t *testing.T) {
 	in := &introspection{}
@@ -2062,7 +2062,7 @@ func TestASessionOnTheOneAddressSaysItsCredentialIsAnIssuers(t *testing.T) {
 	cred := credentialFor("rk-0001")
 	s.secrets = append(s.secrets, cred)
 	a, _ := s.openWith(t, cred, server.LinkRunRequest{})
-	if a.Credential != "issuer" {
+	if a.Credential != "starter" {
 		t.Errorf("the run answer's credential %q", a.Credential)
 	}
 	r := &sessionRun{s: s, credential: cred, a: a}

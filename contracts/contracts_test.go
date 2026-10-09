@@ -131,6 +131,7 @@ const (
 	linkRunRequest = "link-run-request.schema.json"
 	linkRunAnswer  = "link-run-answer.schema.json"
 	linkReload     = "link-reload-answer.schema.json"
+	linkOutcome    = "link-outcome-answer.schema.json"
 	linkBatch      = "link-batch.schema.json"
 	linkRefusal    = "link-refusal.schema.json"
 )
@@ -156,12 +157,14 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // wall, the names it passes and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, image, applied and certificate
 // authority, one with a wall and an image but no certificate authority, one without a
-// wall and one without a policy, a reload answer with and without a policy, a batch of a
+// wall and one without a policy, a reload answer with and without a policy, an outcome
+// answer with an outcome and a reason, with an outcome alone and with none, a batch of a
 // session's events without sequence, a batch of a run.refused with a session's own code,
 // a batch of a run.exited with timeout, and refusals from the gateway, two internal ones
-// among them, one whose message spans lines, and from apiary.
+// among them, one whose message spans lines, two 410s with the state and the reason of
+// the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
-	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal)
 	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/link") {
 		kind := namedSchema(s, f)
@@ -243,19 +246,22 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // or its pin or with a secret, a configuration without events, a ping whose interval is
 // over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session without its command or by a gateway with one,
-// a run.exited with an unknown reason, with quiet and no quiet_seconds or with
-// quiet_seconds and another reason, a run.refused with a code outside the list and no
+// a run.exited without state, with a state other than the three, with a reason that is
+// not a code, with gateway_lost and a state other than failed, with quiet and no
+// quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
 // status, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without its proxy secret, its run secret or applied or whose image has no
 // reference, a link reload answer with the proxy secret, the run secret or the certificate
-// authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a ping or a
+// authority or whose applied holds variables, a link outcome answer with a reason and no
+// state or with a state other than the three, a link batch whose event carries a sequence, that holds a ping or a
 // run.egress, a run.started a gateway opened, a run.exited with a reason other than
 // timeout, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// has no heartbeat interval or proxy, a link refusal without from or with a control
-// character other than tab and newline in its message, C0, DEL or C1, and run credentials
+// has no heartbeat interval or proxy, a link refusal without from, with a control
+// character other than tab and newline in its message, C0, DEL or C1, or with a state
+// other than the three, and run credentials
 // with alg none or HS256, without an audience, with a label of claims and no join, a key
 // without its file, a plain http issuer, a run_key from a claim other than sub, or a
 // member the schema does not define. The longest schema name the file name starts with is
@@ -265,7 +271,7 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
-		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal,
 		"run-credentials.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
@@ -299,8 +305,9 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // names the same run in source and subject, the run starts with ping or run.started and
 // ends with run.exited, and output.log is the concatenation of the run.log chunks. What
 // the schema cannot state, since run.exited does not contain opened_by, is pinned here: a
-// session's run.exited contains state and exit_code, and a run a gateway opened has no
-// process, so its run.exited contains neither and neither output nor a resize is recorded.
+// session's run.exited contains exit_code, and a run a gateway opened has no process, so
+// its run.exited contains none and neither output nor a resize is recorded. Every
+// run.exited contains state, which the schema requires.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -344,7 +351,7 @@ func TestRecordedRunValidates(t *testing.T) {
 			case typ == "dev.qory.run.exited":
 				_, state := d["state"]
 				_, code := d["exit_code"]
-				if want := openedBy == "session"; state != want || code != want {
+				if want := openedBy == "session"; !state || code != want {
 					t.Errorf("%s: line %d: a run opened by %q exits with state %v and exit_code %v",
 						dir, i+1, openedBy, d["state"], d["exit_code"])
 				}

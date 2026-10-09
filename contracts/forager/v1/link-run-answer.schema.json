@@ -20,7 +20,7 @@
       "$ref": "link-run-request.schema.json#/properties/run_id"
     },
     "credential": {
-      "description": "Where the run's credential came from, as the gateway decides it: issuer behind a separate gateway, where an issuer gave the run its run credential; none on the local link. The session's dev.qory.run.started contains exactly this.",
+      "description": "Where the run's credential came from, as the gateway decides it: starter behind a separate gateway, where the run's starter gave the run its run credential; none on the local link. The session's dev.qory.run.started contains exactly this.",
       "$ref": "events/run.started.schema.json#/properties/credential"
     },
     "labels": {

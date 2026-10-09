@@ -443,7 +443,7 @@ func started(runID string, labels map[string]string) map[string]any {
 // issuerStarted is the session's run.started of a run on the one address with the
 // labels, its credential an issuer's.
 func issuerStarted(runID string, labels map[string]string) map[string]any {
-	return startedWith(runID, labels, event.CredentialIssuer)
+	return startedWith(runID, labels, event.CredentialStarter)
 }
 
 func startedWith(runID string, labels map[string]string, credential string) map[string]any {

@@ -544,11 +544,11 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "failed" {
+	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "cancelled" {
 		t.Errorf("result %+v", res)
 	}
 	exited := ofType(events(t, res), "dev.qory.run.exited")
-	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" {
+	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" || data(exited[0])["state"] != "cancelled" {
 		t.Errorf("run.exited %v", exited)
 	}
 	// A limit that was not reached is not a reason.

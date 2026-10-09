@@ -186,7 +186,8 @@ type Result struct {
 	ExitCode int
 	// Signal names the signal that killed the runtime, if one did.
 	Signal string
-	// State is succeeded or failed.
+	// State is the state of the session's dev.qory.run.exited: succeeded or failed by
+	// the runtime's exit, and cancelled when it was stopped at the spec's Timeout.
 	State string
 	// TimedOut says the runtime was stopped at the spec's Timeout.
 	TimedOut bool
@@ -202,9 +203,10 @@ type Result struct {
 	// itself.
 	ClosedBy string
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
-	// as the gateway answered it: run_closed, credential_expired or
-	// run_ended_at_issuer, issuer_unreachable when its issuer's introspection endpoint
-	// could not be reached, issuer_answer_invalid when it gave no valid answer,
+	// as the gateway answered it: run_closed, credential_expired or stopped,
+	// credential_check_unreachable when its run credential could not be checked because
+	// the introspection endpoint could not be reached, credential_check_invalid when it
+	// gave no valid answer,
 	// session_lost when it heard nothing from the session for three heartbeat
 	// intervals, and batch_refused when it refused a batch of the session's.
 	ClosedReason string
@@ -832,8 +834,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		exit = exitStatus{code: -1}
 	}
 	state := "failed"
-	if exit.code == 0 && !closed {
+	switch {
+	case exit.code == 0 && !closed:
 		state = "succeeded"
+	case timedOut && !closed:
+		// The time limit stopped the runtime before it said how it went.
+		state = "cancelled"
 	}
 	exited := map[string]any{"state": state, "exit_code": exit.code, "duration_ms": time.Since(start).Milliseconds()}
 	if exit.signal != "" {

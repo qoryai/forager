@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/link-outcome-answer.schema.json",
+  "title": "Link outcome answer",
+  "description": "What a gateway's one address returns on its link for a GET of a run's outcome by its run id, <run.url>/<run_id>/outcome, a 200, application/json, unsigned: the link's transport authenticates it. The session asks it once, when its runtime exits by itself and before it writes dev.qory.run.exited, and never on the local link. The gateway asks the run's starter once, and answers within a few seconds: with the outcome and the reason the starter gave, when its introspection endpoint answers that the run credential is no longer active with an outcome; with {} otherwise, the starter's answer active, without an outcome, not given in time, or not valid. With {} the runtime's exit decides the state, as without the ask. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "dependentRequired": {"reason": ["state"]},
+  "properties": {
+    "state": {
+      "description": "The outcome the run's starter gave, qory_outcome: the state of the session's dev.qory.run.exited, whatever the runtime's exit status, which exit_code keeps. Absent when the starter gave none.",
+      "$ref": "events/run.exited.schema.json#/properties/state"
+    },
+    "reason": {
+      "description": "The reason the run's starter gave with its outcome, qory_reason, as given: the reason of the session's dev.qory.run.exited. Absent when the starter gave none, or gave one of Forager's reserved codes, which is dropped.",
+      "$ref": "events/run.exited.schema.json#/properties/reason"
+    }
+  }
+}

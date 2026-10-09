@@ -1,0 +1,7 @@
+{
+  "error": "stopped",
+  "message": "the gateway refused the run: stopped",
+  "from": "gateway",
+  "state": "cancelled",
+  "reason": "stopped"
+}

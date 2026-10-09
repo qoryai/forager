@@ -128,8 +128,9 @@ type runCred struct {
 
 // ending is how a run ends at the gateway.
 type ending struct {
-	// reason is the reason of the dev.qory.run.exited the gateway writes, empty for none.
-	reason string
+	// reason is the reason of the dev.qory.run.exited the gateway writes, empty for none,
+	// and state its state: succeeded, failed or cancelled.
+	reason, state string
 	// code and from are the 410 the session's later requests get.
 	code, from string
 	// closed says the run ended before its session ended it.
@@ -140,7 +141,7 @@ type ending struct {
 
 // sessionLost ends a run whose session the gateway no longer hears: its later requests
 // are a 410 session_lost.
-var sessionLost = ending{reason: event.ReasonSessionLost, code: event.ReasonSessionLost, from: accesskey.FromGateway, closed: true}
+var sessionLost = ending{reason: event.ReasonSessionLost, state: stateFailed, code: event.ReasonSessionLost, from: accesskey.FromGateway, closed: true}
 
 // sessionGone ends a run whose session gave up before it had the run answer: nothing
 // more is written of it.
@@ -149,23 +150,30 @@ var sessionGone = ending{code: event.ReasonSessionLost, from: accesskey.FromGate
 // batchRefused ends a run whose session's batch the gateway refused: its record says
 // session_lost, as for a session it no longer hears, and its later requests are a 410
 // batch_refused.
-var batchRefused = ending{reason: event.ReasonSessionLost, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
+var batchRefused = ending{reason: event.ReasonSessionLost, state: stateFailed, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
 
 // credentialExpired ends a run on the one address whose run credential's exp passed
-// with no fresh one; endedAtIssuer one whose issuer no longer holds its run credential
-// active, or ended another run of its run key.
+// with no fresh one, cancelled; stopped one whose starter no longer holds its run
+// credential active, or ended another run of its run key, cancelled, since the starter
+// gave no outcome.
 var (
-	credentialExpired = ending{reason: event.ReasonCredentialExpired, code: event.ReasonCredentialExpired, from: accesskey.FromGateway, closed: true}
-	endedAtIssuer     = ending{reason: event.ReasonRunEndedAtIssuer, code: event.ReasonRunEndedAtIssuer, from: accesskey.FromGateway, closed: true}
+	credentialExpired = ending{reason: event.ReasonCredentialExpired, state: stateCancelled, code: event.ReasonCredentialExpired, from: accesskey.FromGateway, closed: true}
+	stopped           = ending{reason: event.ReasonStopped, state: stateCancelled, code: event.ReasonStopped, from: accesskey.FromGateway, closed: true}
 )
 
-// issuerUnreachable ends a run on the one address whose issuer's introspection endpoint
-// could not be reached after the tries, and issuerAnswerInvalid one whose endpoint gave
-// no valid answer. Neither holds the run key: the next request opens a run as soon as
-// the issuer answers active.
+// checkUnreachable ends a run on the one address whose run credential could not be
+// checked because the introspection endpoint could not be reached after the tries, and
+// checkInvalid one whose endpoint gave no valid answer, each failed. Neither holds the
+// run key: the next request opens a run as soon as the endpoint answers active.
 var (
-	issuerUnreachable   = ending{reason: event.ReasonIssuerUnreachable, code: event.ReasonIssuerUnreachable, from: accesskey.FromGateway, closed: true}
-	issuerAnswerInvalid = ending{reason: event.ReasonIssuerAnswerInvalid, code: event.ReasonIssuerAnswerInvalid, from: accesskey.FromGateway, closed: true}
+	checkUnreachable = ending{reason: event.ReasonCredentialCheckUnreachable, state: stateFailed, code: event.ReasonCredentialCheckUnreachable, from: accesskey.FromGateway, closed: true}
+	checkInvalid     = ending{reason: event.ReasonCredentialCheckInvalid, state: stateFailed, code: event.ReasonCredentialCheckInvalid, from: accesskey.FromGateway, closed: true}
+)
+
+// The states of the dev.qory.run.exited the gateway writes.
+const (
+	stateFailed    = "failed"
+	stateCancelled = "cancelled"
 )
 
 // opening is how a run opens: on the one address with the run credential's identity,
@@ -571,9 +579,9 @@ func (lr *linkRun) renew(id runIdentity) {
 
 // stillActive asks the issuer whether the latest run credential presented for the run
 // is still active, and returns nil when the run goes on. It ends the run otherwise and
-// returns why: issuer_unreachable for [runcredential.ErrIssuerUnreachable],
-// issuer_answer_invalid for [runcredential.ErrAnswerInvalid], and
-// run_ended_at_issuer for any other answer but active. An answer that the run credential
+// returns why: credential_check_unreachable for [runcredential.ErrIssuerUnreachable],
+// credential_check_invalid for [runcredential.ErrAnswerInvalid], and stopped for any
+// other answer but active. An answer that the run credential
 // is no longer active holds the run key whatever else ended the run meanwhile. A
 // request that went, or a run that ended, while the issuer was asked is the context's
 // error, and the run is left as it is. An issuer without introspection is never asked.
@@ -591,7 +599,8 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	}
 	if errors.Is(err, errInactive) {
 		// The issuer's end holds the run key even when the run ended otherwise while it
-		// was asked, issuer_unreachable at another request's say, which holds nothing.
+		// was asked, credential_check_unreachable at another request's say, which holds
+		// nothing.
 		lr.mu.Lock()
 		key, expires := lr.cred.key, lr.cred.expires
 		lr.mu.Unlock()
@@ -607,14 +616,14 @@ func (lr *linkRun) stillActive(ctx context.Context) error {
 	}
 	switch {
 	case errors.Is(err, runcredential.ErrIssuerUnreachable):
-		lr.g.report(fmt.Sprintf("run %s: the issuer's introspection endpoint could not be reached; the run ends, issuer_unreachable", lr.id))
-		lr.end(issuerUnreachable)
+		lr.g.report(fmt.Sprintf("run %s: the introspection endpoint could not be reached; the run ends, credential_check_unreachable", lr.id))
+		lr.end(checkUnreachable)
 	case errors.Is(err, runcredential.ErrAnswerInvalid):
-		lr.g.report(fmt.Sprintf("run %s: %v; the run ends, issuer_answer_invalid", lr.id, err))
-		lr.end(issuerAnswerInvalid)
+		lr.g.report(fmt.Sprintf("run %s: %v; the run ends, credential_check_invalid", lr.id, err))
+		lr.end(checkInvalid)
 	default:
-		lr.g.report(fmt.Sprintf("run %s: the issuer no longer holds its run credential active; the run ends, run_ended_at_issuer", lr.id))
-		lr.end(endedAtIssuer)
+		lr.g.report(fmt.Sprintf("run %s: its run credential is no longer valid; the run ends, stopped", lr.id))
+		lr.end(stopped)
 	}
 	return err
 }
@@ -741,10 +750,10 @@ func (lr *linkRun) end(e ending) {
 				if !startedAt.IsZero() {
 					ran = max(time.Since(startedAt).Milliseconds(), 0)
 				}
-				data := map[string]any{"reason": e.reason, "duration_ms": ran}
+				data := map[string]any{"state": e.state, "reason": e.reason, "duration_ms": ran}
 				if !lr.client {
 					// A session's run: the gateway holds no exit status of its runtime.
-					data["state"], data["exit_code"] = "failed", -1
+					data["exit_code"] = -1
 				}
 				if e.reason == event.ReasonQuiet {
 					data["quiet_seconds"] = e.quietSeconds
@@ -829,11 +838,11 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credential is where the run's credential came from, the credential of its
-// run.started: an issuer, for a run on the one address, which a run credential opened;
+// run.started: starter, for a run on the one address, which a run credential opened;
 // none on the local link.
 func (lr *linkRun) credential() string {
 	if lr.cred != nil {
-		return event.CredentialIssuer
+		return event.CredentialStarter
 	}
 	return event.CredentialNone
 }
