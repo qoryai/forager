@@ -2132,8 +2132,10 @@ apply to every live run of that run key when the answer arrives, as the end of t
 key always has. The starter knows its run keys and never Forager's run ids, so a starter
 that wants one outcome per run gives each run its own run key. The gateway asks on each
 of a session's requests, its heartbeats among them, so a session's run learns the end
-within one heartbeat interval and the answer's `cache`; on a client run's connections; and
-once at a session's runtime's own exit (§The gateway's link, The outcome at
+within one heartbeat interval and the answer's `cache`; on a client run's connections, and
+once per heartbeat interval in which nothing asked of its run credential, so a client run
+with no traffic learns the end within one heartbeat interval and the answer's `cache` too;
+and once at a session's runtime's own exit (§The gateway's link, The outcome at
 the exit).
 
 After the starter's end, `stopped` or its outcome, the gateway holds the run key, refusing

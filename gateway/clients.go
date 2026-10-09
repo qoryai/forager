@@ -286,10 +286,13 @@ func quietSeconds(d time.Duration) int {
 
 // keep is a run with no session while it lives: its heartbeats, the gateway's own,
 // every interval, the seconds counted from its ping, or from its run.started without a
-// server; and, for an issuer with introspection, the issuer asked again at most every
-// cache while the run has connections, or had one since it last asked.
+// server; and, for a starter with introspection, the starter asked again at most every
+// cache while the run has connections, or had one since it last asked, and once per
+// interval when nothing asked of its run credential in the last interval, so a quiet
+// run learns the starter's end of it as a connection's check would.
 func (lr *linkRun) keep() {
-	beat := time.NewTicker(time.Duration(lr.g.interval) * time.Second)
+	interval := time.Duration(lr.g.interval) * time.Second
+	beat := time.NewTicker(interval)
 	defer beat.Stop()
 	lr.mu.Lock()
 	since := lr.startedAt
@@ -304,12 +307,25 @@ func (lr *linkRun) keep() {
 		defer t.Stop()
 		ask = t.C
 	}
+	// looked is when the beat last looked whether the run credential was asked of.
+	looked := time.Now()
 	for {
 		select {
 		case <-lr.ctx.Done():
 			return
 		case <-beat.C:
 			lr.st.Emit(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(since) / time.Second), "interval_seconds": lr.g.interval})
+			lr.mu.Lock()
+			checked := lr.asked.After(looked)
+			lr.mu.Unlock()
+			if lr.ctx.Err() != nil {
+				// The run ended as the beat came.
+				return
+			}
+			if !checked && lr.stillActive(lr.ctx) != nil {
+				return
+			}
+			looked = time.Now()
 		case <-ask:
 			lr.mu.Lock()
 			busy := lr.conns > 0 || lr.lastConn.After(lr.asked)

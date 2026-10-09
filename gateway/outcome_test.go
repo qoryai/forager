@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1177,5 +1178,173 @@ func TestARunIsNotLostWhileItsRunCredentialIsChecked(t *testing.T) {
 	}
 	if got := s.reportsWith("sent nothing"); len(got) != 0 {
 		t.Errorf("reports %q", got)
+	}
+}
+
+// asked is how many asks the starter was asked of the run credential, those at a
+// runtime's exit apart.
+func (st *starter) asked(credential string) int {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.asks[credential]
+}
+
+// TestAQuietClientsRunLearnsItsStartersEnd pins a client's run with no connection: the
+// gateway asks the starter of its run credential once per heartbeat interval, and does
+// with the answer what a connection's check does. Inactive with an outcome ends the run
+// with that outcome and reason, inactive with none cancelled and stopped, each within
+// about one interval, and holds the run key: a later connection is refused, 407. No
+// answer, or none that is valid, ends it failed, credential_check_unreachable or
+// credential_check_invalid, and holds nothing: the next connection opens a new run once
+// the starter answers active. Each end has the operator's line, and a run.exited with no
+// exit_code.
+func TestAQuietClientsRunLearnsItsStartersEnd(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	for _, c := range []struct {
+		name          string
+		answer        runcredential.Answer
+		err           error
+		state, reason string
+		report        string
+		held          bool
+	}{
+		{"an outcome", runcredential.Answer{Outcome: "succeeded", Reason: "all_checks_passed"}, nil, "succeeded", "all_checks_passed",
+			"its run credential is no longer valid; the run ends: succeeded, all checks passed", true},
+		{"no outcome", runcredential.Answer{}, nil, "cancelled", "stopped",
+			"its run credential is no longer valid; the run ends: cancelled, no outcome given", true},
+		{"no answer", runcredential.Answer{}, runcredential.ErrIssuerUnreachable, "failed", "credential_check_unreachable",
+			"its run credential could not be checked: the introspection endpoint could not be reached; the run ends: failed", false},
+		{"no valid answer", runcredential.Answer{}, answerInvalid("the introspection endpoint answered status 401"), "failed", "credential_check_invalid",
+			"its run credential could not be checked: the introspection endpoint answered status 401; the run ends: failed", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := newStarter()
+			s := startStarting(t, gateway.Config{Heartbeat: time.Second}, st, 0)
+			cred := credentialFor("rk-0001")
+			s.secrets = append(s.secrets, cred)
+			code, _, text, conn := connectWith(t, s, loginHead(host, cred))
+			if code != http.StatusOK {
+				t.Fatalf("the first connection: %d %q", code, text)
+			}
+			conn.Close()
+			ids := runsIn(t, s.dir)
+			if len(ids) != 1 {
+				t.Fatalf("runs %v", ids)
+			}
+			st.set(cred, c.answer, c.err)
+			said := time.Now()
+			eventually(t, "the run's end", func() bool {
+				rec := s.record(ids[0])
+				return rec[len(rec)-1].Type == event.RunExited
+			})
+			if took := time.Since(said); took > 2500*time.Millisecond {
+				t.Errorf("the run ended %s after the starter's answer; want about one heartbeat interval", took)
+			}
+			if got := s.reportsWith("the run ends"); !slices.Equal(got, []string{"run " + ids[0] + ": " + c.report}) {
+				t.Errorf("reports %q", got)
+			}
+			if c.held {
+				if code, _, text, _ := connectWith(t, s, loginHead(host, cred)); code != http.StatusProxyAuthRequired {
+					t.Errorf("a later connection: %d %q", code, text)
+				}
+			} else {
+				noHold(t, s.dir)
+				st.set(cred, runcredential.Answer{Active: true}, nil)
+				code, _, text, conn := connectWith(t, s, loginHead(host, cred))
+				if code != http.StatusOK {
+					t.Errorf("once the starter answers active: %d %q", code, text)
+				} else {
+					conn.Close()
+				}
+				if got := runsIn(t, s.dir); len(got) != 2 {
+					t.Errorf("runs %v", got)
+				}
+			}
+			s.close()
+			recordEnds(t, s, ids[0], c.state, c.reason, nil)
+		})
+	}
+}
+
+// TestABusyClientsRunIsNotAskedMore pins a client's run whose connections are checked in
+// every heartbeat interval: the gateway asks the starter of its run credential for its
+// connections alone, never once more for the interval.
+func TestABusyClientsRunIsNotAskedMore(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	st := newStarter()
+	s := startStarting(t, gateway.Config{Heartbeat: time.Second}, st, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	connections := 0
+	for until := time.Now().Add(3500 * time.Millisecond); time.Now().Before(until); time.Sleep(200 * time.Millisecond) {
+		code, _, text, conn := connectWith(t, s, loginHead(host, cred))
+		if code != http.StatusOK {
+			t.Fatalf("connection %d: %d %q", connections+1, code, text)
+		}
+		conn.Close()
+		connections++
+	}
+	if got := runsIn(t, s.dir); len(got) != 1 {
+		t.Fatalf("runs %v", got)
+	}
+	rec := s.record(runsIn(t, s.dir)[0])
+	if !slices.Contains(types(rec), event.RunHeartbeat) {
+		t.Errorf("no heartbeat in %v", types(rec))
+	}
+	if got := st.asked(cred); got != connections {
+		t.Errorf("the starter was asked %d times for %d connections", got, connections)
+	}
+}
+
+// TestTheAsksOfAQuietClientsRunEndWithIt pins the asks of a client's run with no
+// connection: once the run ends, quiet here, between two heartbeats, the starter is
+// asked of its run credential no more, and the run leaves nothing running that asks.
+func TestTheAsksOfAQuietClientsRunEndWithIt(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	st := newStarter()
+	s := startStarting(t, gateway.Config{Heartbeat: time.Second, Runs: gateway.RunsConfig{Quiet: 1500 * time.Millisecond}}, st, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	code, _, text, conn := connectWith(t, s, loginHead(host, cred))
+	if code != http.StatusOK {
+		t.Fatalf("the first connection: %d %q", code, text)
+	}
+	conn.Close()
+	ids := runsIn(t, s.dir)
+	if len(ids) != 1 {
+		t.Fatalf("runs %v", ids)
+	}
+	eventually(t, "the quiet end", func() bool {
+		rec := s.record(ids[0])
+		return rec[len(rec)-1].Type == event.RunExited
+	})
+	before := st.asked(cred)
+	if before != 2 {
+		t.Errorf("the starter was asked %d times before the quiet end; want once at the open and once at the first heartbeat", before)
+	}
+	eventually(t, "the run's keeping to stop", func() bool { return !keeping() })
+	time.Sleep(2500 * time.Millisecond)
+	if got := st.asked(cred); got != before {
+		t.Errorf("the starter was asked %d times after the run ended", got-before)
+	}
+	if keeping() {
+		t.Error("a run's keeping goes on after its end")
+	}
+	s.close()
+	recordEnds(t, s, ids[0], "cancelled", "quiet", nil)
+}
+
+// keeping reports whether a goroutine keeps a client's run.
+func keeping() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Contains(string(buf[:n]), "(*linkRun).keep(")
+		}
+		buf = make([]byte, 2*len(buf))
 	}
 }

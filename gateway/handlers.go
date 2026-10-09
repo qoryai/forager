@@ -558,7 +558,9 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity,
 		// The ask that asks the starter itself.
 		return true
 	}
-	if err := lr.checkActive(r.Context(), lr.sparesCheck()); err != nil {
+	// A reload and a batch renew the run's quiet time once admitted; a later ask at the
+	// exit renews nothing.
+	if err := lr.checkActive(r.Context(), lr.sparesCheck(), what != outcomeRequest); err != nil {
 		if errors.As(err, new(*checkFailed)) {
 			// The run's program has finished: the request goes on as if the run
 			// credential were checked.
