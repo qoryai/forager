@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -295,6 +296,8 @@ type spentRun struct {
 	code, from string
 	started    bool
 	until      time.Time
+	// secretSum is the SHA-256 of the run's secret, which still names it.
+	secretSum [sha256.Size]byte
 }
 
 // retire lets go of a run on the one address that has ended and its record flushed: the
@@ -319,6 +322,7 @@ func (g *Gateway) retire(lr *linkRun, k runKeyID, exp time.Time) {
 	for id, sp := range g.spent {
 		if !now.Before(sp.until) {
 			delete(g.spent, id)
+			delete(g.bySecret, sp.secretSum)
 		}
 	}
 	for ek, until := range g.endedUntil {
@@ -330,7 +334,7 @@ func (g *Gateway) retire(lr *linkRun, k runKeyID, exp time.Time) {
 		delete(g.clientRuns, k)
 	}
 	delete(g.runs, lr.id)
-	g.spent[lr.id] = spentRun{key: k, code: code, from: from, started: started, until: exp.Add(keep)}
+	g.spent[lr.id] = spentRun{key: k, code: code, from: from, started: started, until: exp.Add(keep), secretSum: lr.runSecretSum}
 	g.delivery.Undelivered += lr.result.Undelivered
 	if lr.closed && !g.delivery.RunClosed {
 		g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
@@ -347,6 +351,7 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 	sp, ok := g.spent[runID]
 	if ok && !time.Now().Before(sp.until) {
 		delete(g.spent, runID)
+		delete(g.bySecret, sp.secretSum)
 		return spentRun{}, false
 	}
 	return sp, ok

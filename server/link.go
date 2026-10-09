@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -143,7 +144,8 @@ type LinkImage struct {
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
-// ignored. Its ProxySecret is never printed: fmt and log/slog show it as [redacted].
+// ignored. Its ProxySecret and RunSecret are never printed: fmt and log/slog show each as
+// [redacted].
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -160,6 +162,10 @@ type LinkRunAnswer struct {
 	// ProxySecret is the run's proxy secret, which opens every connection to the
 	// gateway's proxy after the relay's preamble.
 	ProxySecret string `json:"proxy_secret"`
+	// RunSecret is the run's secret, which the gateway makes for this run and gives once:
+	// the session sends it in X-Qory-Run-Secret on every reload and batch, and it never
+	// reaches the agent.
+	RunSecret string `json:"run_secret"`
 	// CertificateAuthority is the run's certificate authority, PEM, when the run has a
 	// wall and the gateway reads inside HTTPS for it.
 	CertificateAuthority string `json:"certificate_authority,omitempty"`
@@ -199,11 +205,14 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	if s.ProxySecret != "" {
 		s.ProxySecret = redactedSecret
 	}
+	if s.RunSecret != "" {
+		s.RunSecret = redactedSecret
+	}
 	return s
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
-// ProxySecret redacted.
+// ProxySecret and RunSecret redacted.
 func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
 	if verb == 'v' && f.Flag('#') {
@@ -212,14 +221,14 @@ func (a LinkRunAnswer) Format(f fmt.State, verb rune) {
 	io.WriteString(f, out)
 }
 
-// String is a as %v prints it, its ProxySecret redacted.
+// String is a as %v prints it, its ProxySecret and RunSecret redacted.
 func (a LinkRunAnswer) String() string { return fmt.Sprintf("%v", a) }
 
-// GoString is a as %#v prints it, its ProxySecret redacted.
+// GoString is a as %#v prints it, its ProxySecret and RunSecret redacted.
 func (a LinkRunAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
 
 // LogValue is a as log/slog logs it: its run id, digest and the names it carries,
-// never a variable's value, the proxy secret or the certificate.
+// never a variable's value, the proxy secret, the run secret or the certificate.
 func (a LinkRunAnswer) LogValue() slog.Value {
 	names := slices.Sorted(maps.Keys(a.Variables))
 	return slog.GroupValue(
@@ -227,6 +236,7 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 		slog.String("digest", a.Digest),
 		slog.Any("variables", names),
 		slog.String("proxy_secret", a.shown().ProxySecret),
+		slog.String("run_secret", a.shown().RunSecret),
 		slog.Any("placeholders", a.Placeholders),
 		slog.Any("reserved", a.Reserved),
 	)
@@ -235,8 +245,8 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 // LinkReloadAnswer is what the gateway answers a reload with,
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run
 // now, its digest and the run's variables, placeholders, reserved names, image and the
-// members of policy_applied the gateway decides. It never holds the proxy secret or the
-// certificate authority.
+// members of policy_applied the gateway decides. It never holds the proxy secret, the
+// run secret or the certificate authority.
 type LinkReloadAnswer struct {
 	Version      int                 `json:"version"`
 	Policy       json.RawMessage     `json:"policy,omitzero"`
@@ -285,12 +295,14 @@ func values(vars map[string]Variable) map[string]string {
 // local link, [NewLocalLink], the socket's peer is this process's user, checked before
 // the link secret is written on each connection, and the secret opens every
 // connection; behind a separate gateway, [NewRemoteLink], TLS 1.3 verifies the
-// gateway, and the run credential on every request the session. Every URL it requests
-// must have its origin, so nothing it sends leaves the link, and it follows no
-// redirect.
+// gateway, and the run credential on every request the session. Once [Link.OpenRun]
+// opened a run, every request on either link carries the run's secret,
+// X-Qory-Run-Secret, which names the run. Every URL it requests must have its origin, so
+// nothing it sends leaves the link, and it follows no redirect.
 //
-// A Link never prints the link secret or the run credential: fmt and log/slog show it
-// by its socket or its URL, and no error it returns contains either.
+// A Link never prints the link secret, the run credential or the run secret: fmt and
+// log/slog show it by its socket or its URL, and no error it returns contains any of
+// them.
 type Link struct {
 	// userAgent is sent as User-Agent.
 	userAgent string
@@ -310,6 +322,9 @@ type Link struct {
 	credential func(context.Context) (string, error)
 	address    string
 	tls        *tls.Config
+	// runSecret is the run's secret, set once the run is open, [Link.UseRunSecret]; nil
+	// before.
+	runSecret atomic.Pointer[string]
 }
 
 // NewLocalLink returns the client of a gateway's local link. Each connection is the
@@ -697,7 +712,7 @@ var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // OpenRun posts the run request to runURL, the discovery's run.url, and returns the
 // run answer: a 200 the schema accepts, whose run_id is the request's. A 410 is the end
 // of the run, [Ended]; a coded refusal is an [*accesskey.Refusal] with its status and
-// who refused, From.
+// who refused, From. Once the run is open, every later request carries its run_secret.
 func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (*LinkRunAnswer, error) {
 	if err := k.onLink("the run URL", runURL); err != nil {
 		return nil, fmt.Errorf("%s: %w", k.name, err)
@@ -733,7 +748,21 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 			return nil, &DocumentError{"the run answer", k.at(runURL), errors.New("/details " + why)}
 		}
 	}
+	k.UseRunSecret(a.RunSecret)
 	return &a, nil
+}
+
+// runSecretShape is a run secret's form, link-run-answer.schema.json's run_secret.
+var runSecretShape = regexp.MustCompile(`^[A-Za-z0-9_-]{22,256}$`)
+
+// UseRunSecret sets the run's secret every later request carries, X-Qory-Run-Secret: a
+// run answer's run_secret, which [Link.OpenRun] sets itself, or the one a run's record
+// kept, for a resend. A value of another form is ignored, and the requests go without
+// one. It never prints or logs the secret.
+func (k *Link) UseRunSecret(secret string) {
+	if runSecretShape.MatchString(secret) {
+		k.runSecret.Store(&secret)
+	}
 }
 
 // Reload fetches the run's configuration again by its run id, a GET of

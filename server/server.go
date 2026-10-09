@@ -54,6 +54,7 @@ const (
 	HeaderRunConfiguration = accesskey.HeaderRunConfiguration
 	HeaderContractVersion  = "X-Qory-Contract-Version"
 	HeaderDelivery         = "X-Qory-Delivery"
+	HeaderRunSecret        = "X-Qory-Run-Secret"
 	ContentType            = "application/cloudevents-batch+json"
 )
 

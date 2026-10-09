@@ -218,6 +218,10 @@ type harness struct {
 	reports []string
 	secrets []string
 	digests []server.Digests
+	// runSecrets are the run secrets of the runs opened, by run id, and links the link of
+	// each run opened on the local link, which carries its secret, as a session's does.
+	runSecrets map[string]string
+	links      map[string]*server.Link
 }
 
 // start starts a gateway with cfg, its Dir a fresh one unless cfg names one, and a
@@ -243,17 +247,16 @@ func start(t *testing.T, cfg gateway.Config) *harness {
 	}
 	h.g = g
 	h.secrets = append(h.secrets, g.LocalLink().Secret)
-	l, err := server.NewLocalLink(g.LocalLink(), accesskey.UserAgent("test"), func(d server.Digests) {
-		h.mu.Lock()
-		h.digests = append(h.digests, d)
-		h.mu.Unlock()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	h.runSecrets, h.links = map[string]string{}, map[string]*server.Link{}
+	l := h.newLink()
 	h.link = l
 	t.Cleanup(func() {
 		l.Close()
+		h.mu.Lock()
+		for _, rl := range h.links {
+			rl.Close()
+		}
+		h.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		g.Close(ctx)
 		cancel()
@@ -270,6 +273,58 @@ func start(t *testing.T, cfg gateway.Config) *harness {
 	return h
 }
 
+// newLink is a client of the gateway's local link, as each session's run has one.
+func (h *harness) newLink() *server.Link {
+	h.t.Helper()
+	l, err := server.NewLocalLink(h.g.LocalLink(), accesskey.UserAgent("test"), func(d server.Digests) {
+		h.mu.Lock()
+		h.digests = append(h.digests, d)
+		h.mu.Unlock()
+	})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return l
+}
+
+// keep notes the secrets of a run answer: none may reach a report, and the run's
+// secret is what the harness's requests of the run carry.
+func (h *harness) keep(a *server.LinkRunAnswer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.secrets = append(h.secrets, a.ProxySecret, a.RunSecret)
+	h.runSecrets[a.RunID] = a.RunSecret
+}
+
+// runSecretOf is the run secret of a run the harness opened, empty for another.
+func (h *harness) runSecretOf(runID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.runSecrets[runID]
+}
+
+// linkOf is the link of a run the harness opened on the local link, which carries its
+// run secret; the harness's own, which carries none, for another.
+func (h *harness) linkOf(runID string) *server.Link {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if l := h.links[runID]; l != nil {
+		return l
+	}
+	return h.link
+}
+
+// subjectOf is the subject of a batch's first event, empty for none.
+func subjectOf(body []byte) string {
+	var evs []struct {
+		Subject string `json:"subject"`
+	}
+	if json.Unmarshal(body, &evs) != nil || len(evs) == 0 {
+		return ""
+	}
+	return evs[0].Subject
+}
+
 // open opens a run on the link.
 func (h *harness) open(req server.LinkRunRequest) *server.LinkRunAnswer {
 	h.t.Helper()
@@ -284,23 +339,28 @@ func (h *harness) tryOpen(req server.LinkRunRequest) (*server.LinkRunAnswer, err
 	if req.RunID == "" {
 		req.RunID = event.NewRunID()
 	}
-	a, err := h.link.OpenRun(context.Background(), server.LocalOrigin+"/v1/run-configuration", req)
-	if err == nil {
-		h.mu.Lock()
-		h.secrets = append(h.secrets, a.ProxySecret)
-		h.mu.Unlock()
+	l := h.newLink()
+	a, err := l.OpenRun(context.Background(), server.LocalOrigin+"/v1/run-configuration", req)
+	if err != nil {
+		l.Close()
+		return a, err
 	}
+	h.keep(a)
+	h.mu.Lock()
+	h.links[a.RunID] = l
+	h.mu.Unlock()
 	return a, err
 }
 
-// post posts one batch of the run's events.
+// post posts one batch of the run's events, on the link of the run its first event
+// names.
 func (h *harness) post(evs ...map[string]any) server.Delivery {
 	h.t.Helper()
 	body, err := json.Marshal(evs)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	d, err := h.link.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+	d, err := h.linkOf(subjectOf(body)).Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -409,14 +469,19 @@ func raw(t *testing.T, l link.Local) *http.Client {
 }
 
 // refusalOf posts body to path on the link and returns the status and the members of
-// the refusal it answers.
+// the refusal it answers. A batch carries the run secret of the run its first event
+// names, when the harness opened it.
 func (h *harness) refusalOf(path, body string) (int, map[string]any) {
 	h.t.Helper()
 	contentType := server.LinkContentType
+	var header http.Header
 	if path == "/v1/events" {
 		contentType = server.ContentType
+		if rs := h.runSecretOf(subjectOf([]byte(body))); rs != "" {
+			header = http.Header{server.HeaderRunSecret: {rs}}
+		}
 	}
-	status, got := rawPost(h.t, raw(h.t, h.g.LocalLink()), path, contentType, body)
+	status, got := rawPostWith(h.t, raw(h.t, h.g.LocalLink()), path, contentType, body, header)
 	var r map[string]any
 	if err := json.Unmarshal([]byte(got), &r); err != nil {
 		h.t.Fatalf("%d %q: %v", status, got, err)
@@ -462,7 +527,21 @@ func closedByPeer(err error) bool {
 // rawPost posts body to path on the link and returns the status and the body.
 func rawPost(t *testing.T, c *http.Client, path, contentType, body string) (int, string) {
 	t.Helper()
-	resp, err := c.Post(server.LocalOrigin+path, contentType, strings.NewReader(body))
+	return rawPostWith(t, c, path, contentType, body, nil)
+}
+
+// rawPostWith is rawPost with the headers given besides.
+func rawPostWith(t *testing.T, c *http.Client, path, contentType, body string, header http.Header) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, server.LocalOrigin+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

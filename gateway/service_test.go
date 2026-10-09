@@ -162,9 +162,13 @@ func (s *service) dial(t *testing.T) net.Conn {
 	return c
 }
 
-// bearerTransport sets a run credential on every request.
+// bearerTransport sets a run credential on every request, and, as a session does, the
+// run secret of a run runSecret knows on its reloads and batches: the run of a reload's
+// path, and of a batch's first event. A request that sets X-Qory-Run-Secret itself keeps
+// its own.
 type bearerTransport struct {
 	credential string
+	runSecret  func(runID string) string
 	next       http.RoundTripper
 }
 
@@ -173,13 +177,32 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if b.credential != "" {
 		r.Header.Set("Authorization", "Bearer "+b.credential)
 	}
+	if _, set := r.Header[server.HeaderRunSecret]; !set && b.runSecret != nil {
+		var runID string
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/run-configuration/"):
+			runID = strings.TrimPrefix(r.URL.Path, "/v1/run-configuration/")
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/events" && r.Body != nil:
+			body, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			runID = subjectOf(body)
+		}
+		if rs := b.runSecret(runID); rs != "" {
+			r.Header.Set(server.HeaderRunSecret, rs)
+		}
+	}
 	return b.next.RoundTrip(r)
 }
 
 // client is a session's client of the contract on the one address, a plain net/http
-// client trusting the gateway's certificate, with the run credential on every request.
+// client trusting the gateway's certificate, with the run credential on every request
+// and the run secret of each run the test opened on its reloads and batches.
 func (s *service) client(credential string) *http.Client {
-	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{credential: credential, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
+	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{credential: credential, runSecret: s.runSecretOf, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
@@ -227,9 +250,7 @@ func (s *service) openWith(t *testing.T, credential string, req server.LinkRunRe
 	if err := json.Unmarshal(b, &a); err != nil {
 		t.Fatal(err)
 	}
-	s.mu.Lock()
-	s.secrets = append(s.secrets, a.ProxySecret)
-	s.mu.Unlock()
+	s.keep(&a)
 	return &a, resp.Header
 }
 

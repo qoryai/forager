@@ -110,6 +110,9 @@ type Gateway struct {
 	// delivery hold what they came to, for Close.
 	spent     map[string]spentRun
 	spentErrs []error
+	// bySecret are the run ids of the session's runs, live, ended or spent, by the
+	// SHA-256 of their run secret.
+	bySecret map[[sha256.Size]byte]string
 
 	closed   chan struct{}
 	delivery Delivery

@@ -244,9 +244,9 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 // quiet_seconds and another reason, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
-// answer without its proxy secret or applied or whose image has no reference, a link
-// reload answer with the proxy secret or the certificate authority or whose applied holds
-// variables, a link batch whose event carries a sequence, that holds a ping or a
+// answer without its proxy secret, its run secret or applied or whose image has no
+// reference, a link reload answer with the proxy secret, the run secret or the certificate
+// authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a ping or a
 // run.egress, a run.started a gateway opened, a run.exited with a reason other than
 // timeout, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or

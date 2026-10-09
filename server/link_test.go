@@ -29,6 +29,7 @@ import (
 const (
 	linkSecret  = "link-secret-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	proxySecret = "proxy-secret-BBBBBBBBBBBBBBBBBBBBBBBB"
+	runSecret   = "run-secret-CCCCCCCCCCCCCCCCCCCCCCCCCC"
 	runID       = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
 	userAgent   = "qory-forager/test"
 	runDigest   = "sha256=" + "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
@@ -40,7 +41,7 @@ const (
 const discovery = `{"version":1,"events":{"url":"http://localhost/v1/events","types":["*"],"interval_seconds":30},"run":{"url":"http://localhost/v1/run-configuration"},"proxy":{"address":"127.0.0.1:41000"},"later":{"a":1}}`
 
 // runAnswer is a run answer with the members the link adds to the schema's.
-var runAnswer = `{"version":1,"run_id":"` + runID + `","credential":"none","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"details":{"requester":"requester"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
+var runAnswer = `{"version":1,"run_id":"` + runID + `","credential":"none","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","run_secret":"` + runSecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"details":{"requester":"requester"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
 
 // reloadAnswer is a reload answer with the members the link adds to the schema's.
 const reloadAnswer = `{"version":1,"policy":{"version":1,"egress":{"mode":"observe"}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"prod"}},"placeholders":[],"reserved":["EXAMPLE_SOURCE_KEY"],"applied":{"mode":"observe","allow":[],"source":"config","digest":"` + policyHex + `"}}`

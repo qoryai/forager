@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -369,10 +370,38 @@ func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
 // gate holds back what the session writes to its gateway while it is shut.
 type gate struct{ mu sync.RWMutex }
 
-// gatedConn is a connection to the gateway whose writes wait while its gate is shut.
+// gatedConn is a connection to the gateway whose writes wait while its gate is shut,
+// and whose reads heard keeps, when not nil.
 type gatedConn struct {
 	net.Conn
-	g *gate
+	g     *gate
+	heard *heard
+}
+
+func (c gatedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if c.heard != nil {
+		c.heard.mu.Lock()
+		c.heard.b = append(c.heard.b, b[:n]...)
+		c.heard.mu.Unlock()
+	}
+	return n, err
+}
+
+// heard is what the session read of the gateway.
+type heard struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+// runSecret is the run secret of the run answer the session read, empty for none.
+func (h *heard) runSecret() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if m := regexp.MustCompile(`"run_secret":"([A-Za-z0-9_-]+)"`).FindSubmatch(h.b); m != nil {
+		return string(m[1])
+	}
+	return ""
 }
 
 func (c gatedConn) Write(b []byte) (int, error) {
@@ -397,12 +426,13 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 			rg := startGateway(t, &sp, gateway.Config{Heartbeat: time.Second})
 			local := rg.g.LocalLink()
 			var shut gate
+			var answers heard
 			sp.Gateway = session.LocalGateway(local.InMemory(func(ctx context.Context) (net.Conn, error) {
 				c, err := local.DialContext(ctx)
 				if err != nil {
 					return nil, err
 				}
-				return gatedConn{Conn: c, g: &shut}, nil
+				return gatedConn{Conn: c, g: &shut, heard: &answers}, nil
 			}))
 			dir := filepath.Join(sp.RunsDir, sp.RunID)
 			going := func() bool {
@@ -429,6 +459,8 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 					t.Error(err)
 					return
 				}
+				// The run's secret, as the session read it in the run answer.
+				k.UseRunSecret(answers.runSecret())
 				body, _ := json.Marshal([]map[string]any{{
 					"specversion": "1.0", "id": event.NewID(), "source": event.Source(sp.RunID), "type": event.Ping, "subject": sp.RunID,
 					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.Ping),

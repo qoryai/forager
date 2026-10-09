@@ -148,20 +148,23 @@ func NewRemoteLink(gatewayURL string, trust RemoteTLS, credential func(context.C
 // handshake included.
 const dialTimeout = 10 * time.Second
 
-// authorize sets the request's Authorization to the run credential, asked for now; on
-// the local link it does nothing.
+// authorize sets the request's authentication, the one place it is set: behind a
+// separate gateway its Authorization, the run credential asked for now; and on either
+// link, once the run is open, X-Qory-Run-Secret, the run's secret.
 func (k *Link) authorize(ctx context.Context, h http.Header) error {
-	if k.credential == nil {
-		return nil
+	if k.credential != nil {
+		c, err := k.credential(ctx)
+		if err != nil {
+			return fmt.Errorf("the run credential: %w", err)
+		}
+		if !bearerToken.MatchString(c) {
+			return errCredentialShape
+		}
+		h.Set("Authorization", link.BearerScheme+" "+c)
 	}
-	c, err := k.credential(ctx)
-	if err != nil {
-		return fmt.Errorf("the run credential: %w", err)
+	if s := k.runSecret.Load(); s != nil {
+		h.Set(HeaderRunSecret, *s)
 	}
-	if !bearerToken.MatchString(c) {
-		return errCredentialShape
-	}
-	h.Set("Authorization", link.BearerScheme+" "+c)
 	return nil
 }
 

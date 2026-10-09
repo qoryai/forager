@@ -167,6 +167,7 @@ func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.Close()
+	again.UseRunSecret(a.RunSecret)
 	if _, err := again.Discover(context.Background()); err != nil {
 		t.Fatalf("with another listener at the socket's path: %v", err)
 	}
@@ -476,7 +477,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			t.Errorf("%s: the 410's message: %d %v", name, status, got)
 		}
 		var r *accesskey.Refusal
-		if _, err := h.link.Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "batch_refused" || r.From != "gateway" {
+		if _, err := h.linkOf(a.RunID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); !errors.As(err, &r) || r.Status != http.StatusGone || r.Code != "batch_refused" || r.From != "gateway" {
 			t.Errorf("%s: a reload after the refusal: %v", name, err)
 		}
 	}
@@ -518,7 +519,7 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 				t.Fatalf("%s: the first batch: %+v", name, d)
 			}
 		}
-		d, err := h.link.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+		d, err := h.linkOf(a.RunID).Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -29,6 +29,7 @@
     },
     "applied": {"$ref": "link-run-answer.schema.json#/properties/applied"},
     "proxy_secret": false,
+    "run_secret": false,
     "certificate_authority": false
   }
 }
