@@ -130,7 +130,8 @@ address of its own, beside its local link. Its `gateway.Config` sets it:
 
 A run of the one address ends as a local run does, and also at its run credential's
 `exp` with no fresher one, `credential_expired`, and when the issuer's introspection no
-longer holds the run credential active, `run_ended_at_issuer`. The gateway writes its
+longer holds the run credential active, or the issuer ended another run of the same run
+key, `run_ended_at_issuer`. The gateway writes its
 `dev.qory.run.exited`; a session's later requests get the `410` with that code in
 `Delivery.Reason`. A run with no session also ends after `Runs.Quiet` with no
 connection, `quiet`. After `run_ended_at_issuer`, the gateway refuses every request of a

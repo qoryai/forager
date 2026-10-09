@@ -815,7 +815,9 @@ session for 3 × its heartbeat interval, or the gateway refused a batch of the s
 gateway's quiet period, which `quiet_seconds` contains; `credential_expired`, the run
 credential's `exp` passed with no fresh credential for the same run key;
 `run_ended_at_issuer`, the issuer's introspection endpoint answered that the run
-credential is no longer active; and `run_closed` when the server closes a session's run
+credential is no longer active, or the issuer ended another run of the same run key,
+which the gateway then holds (§Run credentials); and `run_closed` when the server closes
+a session's run
 on the link. On a session's run the session records, in its own record alone, the code of the
 gateway's `410` as its reason: the same reason after `credential_expired`,
 `run_ended_at_issuer`, the server's `run_closed` and the gateway's `session_lost` from
@@ -1704,7 +1706,7 @@ when the gateway ended the run itself, and the code says why:
 |---|---|---|
 | `run_closed` | `apiary` | the server closed the run |
 | `credential_expired` | `gateway` | the run credential expired with no fresh one |
-| `run_ended_at_issuer` | `gateway` | the issuer reports the run credential no longer active |
+| `run_ended_at_issuer` | `gateway` | the issuer reports the run credential no longer active, or ended another run of the same run key, which the gateway holds (§Run credentials) |
 | `session_lost` | `gateway` | the session was silent for 3 × the heartbeat interval (Heartbeats and liveness, above); the gateway's record says `session_lost` |
 | `batch_refused` | `gateway` | the gateway refused a batch of the session's (Events, above); the gateway's record says `session_lost` |
 | `run_closed` | `gateway` | the run had already ended otherwise: after the session's own final event, or when the gateway stops |

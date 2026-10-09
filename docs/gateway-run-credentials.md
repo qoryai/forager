@@ -344,7 +344,8 @@ The run ends, and the gateway writes its `dev.qory.run.exited`:
 - `quiet`, once it has had no connection for the operator's quiet time;
 - `credential_expired`, at its run credential's latest `exp` with no fresher one;
 - `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
-  credential active.
+  credential active, or the issuer ended another run of the same run key, which the
+  gateway then holds (The lifetime, above).
 
 When the gateway stops with the run live, the run ends without its
 `dev.qory.run.exited`, and resending its record with `qory run resend`, through

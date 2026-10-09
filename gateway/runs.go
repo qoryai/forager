@@ -151,7 +151,7 @@ var serverClosedRun = ending{reason: event.ReasonRunClosed, code: accesskey.Code
 
 // credentialExpired ends a run on the one address whose run credential's exp passed
 // with no fresh one; endedAtIssuer one whose issuer no longer holds its run credential
-// active.
+// active, or ended another run of its run key.
 var (
 	credentialExpired = ending{reason: event.ReasonCredentialExpired, code: event.ReasonCredentialExpired, from: accesskey.FromGateway, closed: true}
 	endedAtIssuer     = ending{reason: event.ReasonRunEndedAtIssuer, code: event.ReasonRunEndedAtIssuer, from: accesskey.FromGateway, closed: true}
