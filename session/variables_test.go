@@ -401,6 +401,7 @@ func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
 // in the error: no equals sign, a name outside the grammar, a value with a carriage
 // return, a line feed or a NUL.
 func TestTheRunsAndTheMachinesVariablesAreChecked(t *testing.T) {
+	t.Parallel()
 	value := "a-value-no-error-quotes"
 	for _, set := range []func(*session.Spec, []string){
 		func(sp *session.Spec, env []string) { sp.Variables.Run = env },

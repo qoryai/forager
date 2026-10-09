@@ -512,6 +512,7 @@ func TestAPlaceInsideAnotherRunsWritableDirectoryIsNoRun(t *testing.T) {
 // TestAWorkingDirectoryInNoBindIsNoPlan pins the last check of a plan: the enclosure
 // binds what the plan lists alone, so a working directory in none of them fails.
 func TestAWorkingDirectoryInNoBindIsNoPlan(t *testing.T) {
+	t.Parallel()
 	mounts := []wall.Mount{{Path: "/w"}, {Path: "/e/link"}}
 	if err := session.DirInBinds("/e/link/ws", mounts); err != nil {
 		t.Error(err)

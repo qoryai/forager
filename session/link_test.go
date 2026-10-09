@@ -24,7 +24,7 @@ import (
 // for what a test does to a live run.
 func sleeps(sp *session.Spec, d time.Duration) {
 	sp.Forwarder = nil
-	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("sleep %.3f", d.Seconds())}
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("exec sleep %.3f", d.Seconds())}
 }
 
 // posted are the types of the events the gateway received.
@@ -34,6 +34,7 @@ func posted(g *linktest.Fake) []string { return types(g.Events()) }
 // without one is no run, before anything is made, and a link whose socket is gone is
 // an error before a run directory is made.
 func TestARunWithoutAGatewayIsNone(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Gateway = nil
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "no gateway") {
@@ -51,6 +52,7 @@ func TestARunWithoutAGatewayIsNone(t *testing.T) {
 
 // TestTheGatewayPrintsNoSecret pins that a Gateway is printed by its socket alone.
 func TestTheGatewayPrintsNoSecret(t *testing.T) {
+	t.Parallel()
 	g := session.LocalGateway(link.Local{Socket: "/tmp/qory-link-x/sock", Secret: "the-link-secret-of-the-test"})
 	for _, s := range []string{g.String(), g.GoString()} {
 		if strings.Contains(s, "the-link-secret") || !strings.Contains(s, "/tmp/qory-link-x/sock") {
@@ -64,6 +66,7 @@ func TestTheGatewayPrintsNoSecret(t *testing.T) {
 // run passes a value for, from what it inherits, what the harness sets and its
 // variables, sorted, never a value, and none outside a variable name's grammar.
 func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
+	t.Parallel()
 	const value = "a-value-no-request-carries"
 	sp, g := specGateway(t, "INHERITED="+value, "not a name="+value, "1BAD="+value)
 	sleeps(&sp, 0)
@@ -100,6 +103,7 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 // failure the gateway's message says, word for word, or one naming its status without
 // one, recorded nowhere. Nothing is posted for any of them.
 func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		reply   linktest.Reply
 		code    string
@@ -143,6 +147,7 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 		"a bare 500": {linktest.Reply{Status: 500}, "", "", nil, "the gateway answered the run request with status 500", nil},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			sp, g := specGateway(t)
 			sleeps(&sp, 0)
 			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
@@ -187,6 +192,7 @@ func equalJSON(a, b map[string]any) bool {
 // gateway decides: the record has exactly the gateway's labels, and each detail the
 // gateway decides with its value beside the run's own.
 func TestRunStartedHasTheGatewaysLabelsAndDetails(t *testing.T) {
+	t.Parallel()
 	sp, g := specGateway(t)
 	sleeps(&sp, 0)
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
@@ -211,7 +217,8 @@ func TestRunStartedHasTheGatewaysLabelsAndDetails(t *testing.T) {
 }
 
 // TestHeartbeatsRunEveryIntervalTheDiscoveryAnnounces pins the heartbeats: every
-// interval of the link's discovery, recorded and posted, with that interval.
+// interval of the link's discovery, recorded and posted, with that interval. It is
+// serial: a 2.5-second run leaves half a second over the two heartbeats it counts.
 func TestHeartbeatsRunEveryIntervalTheDiscoveryAnnounces(t *testing.T) {
 	sp, g := specGateway(t)
 	g.SetInterval(1)
@@ -235,6 +242,7 @@ func TestHeartbeatsRunEveryIntervalTheDiscoveryAnnounces(t *testing.T) {
 // the members the reload answer gives beside its own, and carry the new digest from
 // then on.
 func TestADigestThatChangesIsReloaded(t *testing.T) {
+	t.Parallel()
 	first, second := "sha256="+strings.Repeat("1", 64), "sha256="+strings.Repeat("2", 64)
 	sp, g := specGateway(t)
 	sleeps(&sp, 2*time.Second)
@@ -283,6 +291,7 @@ func TestADigestThatChangesIsReloaded(t *testing.T) {
 // result says who closed it and with what, run.exited with that code as its reason is
 // in the session's record alone, and nothing more is posted.
 func TestTheRunEndsWhenItIsClosed(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		batch, reload *linktest.Reply
 		code, from    string
@@ -299,6 +308,7 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 		"the gateway's 400": {batch: &linktest.Reply{Status: 400, Body: linktest.Refusal("invalid_request", "gateway")}, code: "batch_refused", from: "gateway"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			sp, g := specGateway(t)
 			sleeps(&sp, 30*time.Second)
 			sp.StopGrace = time.Second
@@ -367,6 +377,7 @@ func jsonString(v any) (string, error) {
 // TestTheGatewaysProxyIsOnLoopback pins that a discovery naming a proxy off loopback is
 // no run, before a run directory is made: the local link's proxy is on this machine.
 func TestTheGatewaysProxyIsOnLoopback(t *testing.T) {
+	t.Parallel()
 	for _, addr := range []string{"192.0.2.10:3128", "proxy.example:3128"} {
 		sp, g := specGateway(t)
 		g.SetDiscoveryProxy(addr)
@@ -384,6 +395,7 @@ func TestTheGatewaysProxyIsOnLoopback(t *testing.T) {
 // the gateway, never the link's URLs, which name no place the user knows: a refusal
 // without a message, an answer the session refuses, and a reload that fails.
 func TestNoTextNamesTheLinksURL(t *testing.T) {
+	t.Parallel()
 	sp, g := specGateway(t)
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)

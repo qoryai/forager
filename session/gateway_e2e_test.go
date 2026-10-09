@@ -102,6 +102,7 @@ func record(t *testing.T, res *session.Result) []map[string]any {
 // stream, the session's events among it, and its record and the session's agree on
 // what happened; nothing is undelivered and no secret is in either.
 func TestARunThroughARealGateway(t *testing.T) {
+	t.Parallel()
 	sp := spec(t, "FAKE_DENIED_URL=http://denied.invalid/a", "FAKE_EXIT=0")
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
 	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
@@ -161,6 +162,7 @@ func ofTypes(evs []map[string]any, among []string) []string {
 // policy with path rules and a run without a wall is no run, with the error such a run
 // always had, word for word, and no run at the gateway.
 func TestARealGatewayRefusesARunThatNeedsAWall(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	startGateway(t, &sp, gateway.Config{Policy: &gateway.Policy{Version: 1,
@@ -261,6 +263,7 @@ func (c *control) server() *gateway.Server {
 // session fetches it and records it in a second policy_applied, which the gateway
 // numbers and the server receives.
 func TestARealGatewayReloadsARun(t *testing.T) {
+	t.Parallel()
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
 	sp := spec(t)
@@ -305,7 +308,9 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 // with run.exited run_closed in each record; closed before it started, the run is
 // refused as one the server closed, from apiary.
 func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
+	t.Parallel()
 	t.Run("during the run", func(t *testing.T) {
+		t.Parallel()
 		c := newControl(t)
 		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
 		sp := spec(t)
@@ -344,6 +349,7 @@ func TestARealGatewayPassesOnTheServersClose(t *testing.T) {
 		}
 	})
 	t.Run("before it started", func(t *testing.T) {
+		t.Parallel()
 		c := newControl(t)
 		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
 		c.closeOnFetch.Store(true)
@@ -388,8 +394,10 @@ func (c gatedConn) Write(b []byte) (int, error) {
 // session's record ends with run.exited of that reason, while the gateway's says
 // session_lost for both.
 func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []string{"session_lost", "batch_refused"} {
 		t.Run(cause, func(t *testing.T) {
+			t.Parallel()
 			sp := spec(t)
 			sleeps(&sp, 30*time.Second)
 			sp.StopGrace = time.Second
@@ -469,6 +477,7 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 // the run is a *session.Refusal from apiary whose Error is the text the run always
 // had, word for word, the request the server refused, its code and its status.
 func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
+	t.Parallel()
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
 	c.limit.Store(true)
@@ -488,6 +497,7 @@ func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
 // TestARunIDWithARecordIsNoRun pins a run id used again on this machine: the run is
 // refused with the error it always had, that the run's stream exists.
 func TestARunIDWithARecordIsNoRun(t *testing.T) {
+	t.Parallel()
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	startGateway(t, &sp, gateway.Config{})

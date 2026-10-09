@@ -52,6 +52,11 @@ func must[T any](v T, err error) T {
 // TestMain lets the test binary stand in for a runtime and for the hook forwarder, so
 // no real runtime and no shell script are needed: with FAKE_RUNTIME set it acts as a
 // runtime, and with QORY_TEST_FORWARD set as the forwarder.
+//
+// The tests that call t.Parallel share nothing of the process's. These stay serial: a
+// test that sets the environment, swaps a package hook, or signals the process; every
+// walled run, since the registry this sets up is the process's; and one whose timing
+// has a narrow margin.
 func TestMain(m *testing.M) {
 	switch {
 	case os.Getenv("QORY_TEST_FORWARD") != "":
@@ -241,6 +246,7 @@ func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 // the installed hook reaches the socket and becomes session.ended, and the exit status
 // is the runtime's.
 func TestRunRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
+	t.Parallel()
 	sp, g := specGateway(t, "FAKE_ALLOWED_URL=http://api.example/allowed", "FAKE_DENIED_URL=http://tracker.example/denied", "FAKE_EXIT=3")
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
@@ -348,6 +354,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // TestInteractiveRunsOnAPseudoTerminal pins the PTY path: the output is one terminal
 // stream with the terminal's line endings, and the exit status is the program's.
 func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Interactive = true
@@ -378,7 +385,9 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 // structured output read, exactly as if it had said headless. A runtime that names no
 // such argument keeps the caller's pseudo-terminal, -p or not.
 func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
+	t.Parallel()
 	t.Run("the descriptor names it", func(t *testing.T) {
+		t.Parallel()
 		sp := spec(t)
 		sp.Interactive = true
 		sp.Args = append(sp.Args, "-p", "Reply pong")
@@ -399,6 +408,7 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		}
 	})
 	t.Run("the runtime names none", func(t *testing.T) {
+		t.Parallel()
 		sp := spec(t)
 		sp.Forwarder = nil
 		sp.Interactive = true
@@ -519,10 +529,11 @@ func (b *syncBuffer) String() string {
 // TestContextEndStopsTheRuntime pins that a cancelled context ends the session with a
 // signal, recorded as such.
 func TestContextEndStopsTheRuntime(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Command = "sh"
-	sp.Args = []string{"-c", "sleep 30"}
+	sp.Args = []string{"-c", "exec sleep 30"}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	res, err := session.Run(ctx, sp)
@@ -535,10 +546,11 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 }
 
 func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Command = "sh"
-	sp.Args = []string{"-c", "sleep 30"}
+	sp.Args = []string{"-c", "exec sleep 30"}
 	sp.Timeout = 300 * time.Millisecond
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
@@ -563,6 +575,7 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 }
 
 func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
+	t.Parallel()
 	const id = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	sp := spec(t)
 	sp.RunID = id
@@ -607,6 +620,7 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 // is in the run request and in run.started as the caller passed it, details compacted,
 // and in no other event; an empty one leaves no about.
 func TestAboutIsInRunStartedAlone(t *testing.T) {
+	t.Parallel()
 	sp, g := specGateway(t)
 	sp.Forwarder = nil
 	sp.About = &session.About{Title: "Example",
@@ -691,10 +705,11 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 }
 
 func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Command = "sh"
-	sp.Args = []string{"-c", "trap '' TERM; sleep 30 & wait; wait"}
+	sp.Args = []string{"-c", "trap '' TERM; sleep 30 >/dev/null 2>&1 & wait; wait"}
 	sp.Timeout = 200 * time.Millisecond
 	sp.StopGrace = 300 * time.Millisecond
 	start := time.Now()
@@ -710,19 +725,29 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	}
 }
 
+// TestStopSignalIsTheOneTheRunNames pins the stop signal a run names, and the default
+// stop grace: it is the one test that runs on that default. The background sleep keeps
+// the runtime's stdout and stderr open after the shell leaves on SIGINT, on purpose, so
+// the session waits out the whole grace for them, and the run takes at least
+// DefaultStopGrace.
 func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Forwarder = nil
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
 	sp.Timeout = 300 * time.Millisecond
 	sp.StopSignal = "SIGINT"
+	start := time.Now()
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !res.TimedOut || res.ExitCode != 7 || res.Signal != "" {
 		t.Errorf("a runtime that leaves on SIGINT alone: result %+v", res)
+	}
+	if took := time.Since(start); took < session.DefaultStopGrace {
+		t.Errorf("the run took %s, less than the default stop grace, %s", took, session.DefaultStopGrace)
 	}
 	for _, name := range []string{"SIGKILL", "INT", "sigint", "9"} {
 		sp := spec(t)
@@ -751,12 +776,14 @@ func (l leaves) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
 }
 
 func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T) {
-	script := `test "$ADDED_BY_THE_RUNTIME" = yes || exit 9; trap 'exit 7' INT; trap 'exit 8' HUP; trap '' TERM; sleep 30 & wait`
+	t.Parallel()
+	script := `test "$ADDED_BY_THE_RUNTIME" = yes || exit 9; trap 'exit 7' INT; trap 'exit 8' HUP; trap '' TERM; sleep 30 >/dev/null 2>&1 & wait`
 	for name, c := range map[string]struct {
 		named string
 		code  int
 	}{"the runtime's": {"", 7}, "the run's": {"SIGHUP", 8}} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			sp := spec(t)
 			var got runtimes.Attach
 			sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGINT", Grace: 20 * time.Second}, prepared: &got}
@@ -787,6 +814,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 }
 
 func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
+	t.Parallel()
 	sp := spec(t)
 	sp.Runtime = nil
 	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}

@@ -116,6 +116,7 @@ func TestOverlapComparesWholeComponentsThroughLinks(t *testing.T) {
 // case, a path written in another case is the directory it names, and that an existing
 // directory matching a pattern of Forager's is refused like the pattern.
 func TestOverlapJudgesTheSameDirectoryByTheFilesystem(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, d := range []string{"Home/User/.config/qory", "tmp/qory-tool-abc"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
@@ -338,6 +339,7 @@ func TestTheGatewaysDirectoriesComeAfterTheWalls(t *testing.T) {
 // TestForagerFilesAreAbsolutePaths pins that a Forager file that is no absolute path is
 // a plain error, not a refusal, walled or not.
 func TestForagerFilesAreAbsolutePaths(t *testing.T) {
+	t.Parallel()
 	for _, p := range []string{"relative/qory", "/home/user/\x00qory"} {
 		sp := spec(t, "FAKE_EXIT=0")
 		sp.ForagerFiles = []string{p}

@@ -16,6 +16,7 @@ import (
 // must hold: a name in the policy's grammar, a reference, and, for a Docker of the
 // agent's own, a runtime that runs one.
 func TestAnImageDefinitionThatCannotBeOneIsRefused(t *testing.T) {
+	t.Parallel()
 	if err := (session.Image{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true}).Check(); err != nil {
 		t.Errorf("a whole definition was refused: %v", err)
 	}

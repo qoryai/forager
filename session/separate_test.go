@@ -354,6 +354,7 @@ func denied(rec []map[string]any, host string) int {
 // session's did; and neither the run credential nor the proxy secret is in a record or
 // a report.
 func TestASessionRunsThroughASeparateGateway(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	first := credentialOf("rk-0001")
 	_, read := credentialFile(t, first)
@@ -419,12 +420,13 @@ func TestASessionRunsThroughASeparateGateway(t *testing.T) {
 // file, which the session sends from then on; without a fresh one it would have ended
 // at the first's exp.
 func TestTheRefreshedRunCredentialCarriesTheRun(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	first := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Second))
 	refreshed := credentialOf("rk-0001")
 	file, read := credentialFile(t, first)
 	r := newSepRun(t, s.remote(read))
-	r.sp.Args = []string{"-c", "sleep 4"}
+	r.sp.Args = []string{"-c", "exec sleep 4"}
 	r.sp.OnVariables = func(session.Applied) {
 		if err := os.WriteFile(file, []byte(refreshed), 0o600); err != nil {
 			t.Error(err)
@@ -444,10 +446,11 @@ func TestTheRefreshedRunCredentialCarriesTheRun(t *testing.T) {
 // next request's 410, stops the runtime as at its time limit and records its own
 // run.exited with credential_expired, the run closed by the gateway.
 func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	cred := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Second))
 	r := newSepRun(t, s.remote(fixedCredential(cred)))
-	r.sp.Args = []string{"-c", "sleep 30"}
+	r.sp.Args = []string{"-c", "exec sleep 30"}
 	start := time.Now()
 	res, err := session.Run(context.Background(), r.sp)
 	if err != nil {
@@ -474,11 +477,12 @@ func TestARunCredentialThatExpiresEndsTheRun(t *testing.T) {
 // accepts from its exp on: the session's next request after the end still gets the
 // 410 credential_expired, and the session stops as at any other end of the gateway's.
 func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
+	t.Parallel()
 	none := runcredential.Duration(0)
 	s := startSeparate(t, func(i *runcredential.Issuer) { i.Leeway = &none })
 	cred := mintCredential(sepIssuerKey(), "rk-0001", time.Now().Add(2*time.Second))
 	r := newSepRun(t, s.remote(fixedCredential(cred)))
-	r.sp.Args = []string{"-c", "sleep 30"}
+	r.sp.Args = []string{"-c", "exec sleep 30"}
 	start := time.Now()
 	res, err := session.Run(context.Background(), r.sp)
 	if err != nil {
@@ -500,8 +504,10 @@ func TestARunCredentialThatExpiresWithNoLeewayEndsTheRun(t *testing.T) {
 // run with that code, and its record ends with run.exited of that reason, while the
 // gateway's says session_lost for both.
 func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []string{"session_lost", "batch_refused"} {
 		t.Run(cause, func(t *testing.T) {
+			t.Parallel()
 			s := startSeparate(t)
 			cred := credentialOf("rk-0001")
 			// While shut, the session's requests wait for their run credential, and so
@@ -512,7 +518,7 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 				defer shut.RUnlock()
 				return cred, nil
 			}))
-			r.sp.Args = []string{"-c", "sleep 30"}
+			r.sp.Args = []string{"-c", "exec sleep 30"}
 			r.sp.StopGrace = time.Second
 			r.sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 			own := &session.Result{Dir: filepath.Join(r.sp.RunsDir, r.sp.RunID)}
@@ -743,6 +749,7 @@ func refusedRecord(t *testing.T, r *sepRun) map[string]any {
 // differs_from_credential, each a 403 from the gateway naming the member and the
 // credential's value; nothing opens at the gateway.
 func TestASeparateGatewayRefusesARunDifferentFromItsCredential(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	cred := credentialOf("rk-0001")
 	r := newSepRun(t, s.remote(fixedCredential(cred)))
@@ -776,6 +783,7 @@ func TestASeparateGatewayRefusesARunDifferentFromItsCredential(t *testing.T) {
 // does not require them to be unique: a session of a run key whose run ended opens a
 // run of its own.
 func TestASeparateGatewaysCredentialRefusalsReachTheSession(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	forged := mintCredential(sepOtherKey(), "rk-0001", time.Now().Add(time.Hour))
 	ref := refusedRun(t, newSepRun(t, s.remote(fixedCredential(forged))))
@@ -800,6 +808,7 @@ func TestASeparateGatewaysCredentialRefusalsReachTheSession(t *testing.T) {
 // TestARunIDTheSeparateGatewayHoldsIsRefused pins run_id_used end to end: a run id the
 // gateway already has a run of is its 409, for a run credential of another run key.
 func TestARunIDTheSeparateGatewayHoldsIsRefused(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	r := newSepRun(t, s.remote(fixedCredential(credentialOf("rk-0001"))))
 	r.sp.RunID = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
@@ -818,6 +827,7 @@ func TestARunIDTheSeparateGatewayHoldsIsRefused(t *testing.T) {
 // key, the run does not start and the gateway opens nothing; without a run credential
 // it is no run; and a RemoteGateway prints by its URL, never its run credential.
 func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	cred := credentialOf("rk-0001")
 	sum := sha256.Sum256([]byte("another key"))
@@ -856,6 +866,7 @@ func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
 // separate gateway, through the session's client of its link, since a Spec carries
 // none: the run answer's policy is the gateway's narrowed by it.
 func TestTheRemoteLinkNarrowsTheRunAtARealGateway(t *testing.T) {
+	t.Parallel()
 	s := startSeparate(t)
 	cred := credentialOf("rk-0001")
 	k, err := server.NewRemoteLink(s.url(), server.RemoteTLS{CAFile: s.caFile, CertificateSHA256: s.pin}, fixedCredential(cred), accesskey.UserAgent("test"), nil)
