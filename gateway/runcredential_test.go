@@ -1100,3 +1100,80 @@ func TestNoLinkSocketWithTheOneAddress(t *testing.T) {
 		t.Errorf("record %v", got)
 	}
 }
+
+// TestARenewTheEndedRunKeysCannotKeep pins the renew that fails closed: when the ended
+// run keys cannot be kept to a refreshed run credential's later exp, the request that
+// brought it is refused, a session's 500 internal and a client's connection the
+// unanswered 500, and the run goes on to its earlier end, credential_expired.
+func TestARenewTheEndedRunKeysCannotKeep(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	dir := t.TempDir()
+	s := startVerifying(t, gateway.Config{Dir: dir, Policy: enforce127}, nil, 0)
+	// Whole seconds, as the run credential holds its exp.
+	exp := time.Unix(time.Now().Add(2*time.Second).Unix(), 0)
+	session := mint(issuerKey(), "rk-0001", exp, nil)
+	r := s.openSession(t, session, server.LinkRunRequest{})
+	client := mint(issuerKey(), "rk-0002", exp, nil)
+	s.secrets = append(s.secrets, client)
+	login := func(credential string) string {
+		return "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+credential)) + "\r\n\r\n"
+	}
+	resp, tunnel, _ := s.proxyRequest(t, login(client))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the client's run: %d", resp.StatusCode)
+	}
+	defer tunnel.Close()
+	// The ended run keys can no longer be written.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	later := time.Now().Add(time.Hour)
+	refreshedSession, refreshedClient := mint(issuerKey(), "rk-0001", later, nil), mint(issuerKey(), "rk-0002", later, nil)
+	s.secrets = append(s.secrets, refreshedSession, refreshedClient)
+	if status, b := r.post(t, refreshedSession, heartbeat(r.a.RunID)); status != http.StatusInternalServerError || refusalOf(b)["error"] != "internal" {
+		t.Errorf("a session's refreshed run credential: %d %s", status, b)
+	}
+	resp, conn, _ := s.proxyRequest(t, login(refreshedClient))
+	conn.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("a client's refreshed run credential: %d", resp.StatusCode)
+	}
+	// Both runs end at the earlier exp.
+	eventually(t, "the session's run's end", func() bool {
+		status, b := r.reload(t, refreshedSession, r.a.RunID)
+		return status == http.StatusGone && refusalOf(b)["error"] == "credential_expired"
+	})
+	eventually(t, "the client's run's end", func() bool {
+		for _, id := range runsIn(t, dir) {
+			if id == r.a.RunID {
+				continue
+			}
+			rec := s.record(id)
+			if last := rec[len(rec)-1]; last.Type == event.RunExited && last.Data["reason"] == "credential_expired" {
+				return true
+			}
+		}
+		return false
+	})
+	if time.Now().Before(exp) {
+		t.Error("a run ended before its earlier exp")
+	}
+	var kept struct {
+		Ended []struct {
+			RunKey string `json:"run_key"`
+			Until  int64
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, runcredential.EndedFile))
+	json.Unmarshal(b, &kept)
+	if len(kept.Ended) != 2 {
+		t.Fatalf("the ended run keys: %s", b)
+	}
+	for _, e := range kept.Ended {
+		if e.Until < exp.Unix() || e.Until >= later.Unix() {
+			t.Errorf("%s kept until %d", e.RunKey, e.Until)
+		}
+	}
+}

@@ -121,13 +121,17 @@ func (g *Gateway) openClient(id runIdentity) (*linkRun, error) {
 
 // join is a later connection of the run's run key: a run with no session takes it,
 // once its run credential extends the run and the issuer, when asked, holds it
-// active. A run that ended, and a session's run, refuse it, 407.
+// active. A run that ended, and a session's run, refuse it, 407; a later exp the ended
+// run keys cannot be kept to is not served, 500, and the run goes on to its earlier end.
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
 	if _, _, ended := lr.gone(); ended || !lr.client {
 		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
-	lr.renew(id)
+	if err := lr.renew(id); err != nil {
+		// As a run that fails to open: the connection is not served.
+		return nil, nil, errUnserved
+	}
 	if !lr.stillActive(ctx) {
 		return nil, nil, runcredential.ErrRefused
 	}

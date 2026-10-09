@@ -298,7 +298,8 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request) (*linkRu
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
 // against its ended run key; a run credential with a later exp keeps the run going
-// until then; and an issuer that no longer holds it active ends the run,
+// until then, once the ended run keys keep its run key to it, and the request is a 500
+// internal when they cannot; and an issuer that no longer holds it active ends the run,
 // run_ended_at_issuer, which is the 410. It reports whether the request goes on.
 func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
 	if code, from, ended := lr.gone(); ended {
@@ -306,7 +307,10 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		gone(w, code, from, lr.st.Started())
 		return false
 	}
-	lr.renew(id)
+	if err := lr.renew(id); err != nil {
+		refuse(w, http.StatusInternalServerError, codeInternal, nil, accesskey.FromGateway, gatewayText(codeInternal))
+		return false
+	}
 	if !lr.stillActive(r.Context()) {
 		if code, from, ended := lr.gone(); ended {
 			gone(w, code, from, lr.st.Started())

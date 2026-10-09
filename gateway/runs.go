@@ -396,27 +396,37 @@ func (lr *linkRun) expire() {
 
 // renew takes a run credential presented for the run, verified, of its run key: one
 // with a later exp keeps the run going until then, and the issuer is asked of the
-// latest one presented from now on.
-func (lr *linkRun) renew(id runIdentity) {
+// latest one presented from now on. The run's end moves to the later exp only once the
+// ended run keys keep the run key to it, so a crash past the earlier exp never reopens
+// the run key: when they cannot, the error is returned, the request it came with is
+// refused, and the run goes on to its earlier end.
+func (lr *linkRun) renew(id runIdentity) error {
 	lr.mu.Lock()
 	if lr.ended {
 		lr.mu.Unlock()
-		return
+		return nil
 	}
 	later := id.Expires.After(lr.cred.expires)
+	key := lr.cred.key
+	lr.mu.Unlock()
 	if later {
+		if err := lr.g.holdKey(key, id.Expires); err != nil {
+			lr.g.report(fmt.Sprintf("run %s: keeping its run key to a later exp: %v; the run keeps its earlier end, and the request is refused", lr.id, err))
+			return err
+		}
+	}
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if lr.ended {
+		return nil
+	}
+	if id.Expires.After(lr.cred.expires) {
 		lr.cred.expires = id.Expires
 	}
 	if id.active != nil {
 		lr.cred.active, lr.cred.cache = id.active, id.cache
 	}
-	key := lr.cred.key
-	lr.mu.Unlock()
-	if later {
-		// Kept to the later exp at once, so a crash past the earlier one does not
-		// reopen the run key.
-		lr.g.endKey(key, id.Expires)
-	}
+	return nil
 }
 
 // stillActive asks the issuer whether the latest run credential presented for the run
