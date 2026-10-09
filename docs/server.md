@@ -85,7 +85,9 @@ and reports it once. The run goes on. The gateway keeps numbering the run's even
 recording them in `events.jsonl`, it answers the session's requests as before, and the
 runtime runs to its own exit. A resend of the run's record sends the server nothing.
 A signed `410` to the ping is no run: the server did not accept the ping, and the
-session returns the gateway's error, which names the events URL and the status.
+session returns the gateway's error, which names the events URL and the status. A
+signed `410` to the run configuration as the run opens is no run either, a failure
+without a code, whose error names the run configuration's URL and the status.
 
 ## A policy that changes while the run goes
 

@@ -197,6 +197,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	fail := func(err error) (*linkRun, bool, error) {
 		lr.release()
+		err = codeless(err)
 		if ref := (*accesskey.Refusal)(nil); how.client && errors.As(err, &ref) && ref.Code != "" {
 			// No session tells of a run with no session that did not open: the gateway
 			// does, its dev.qory.run.refused right after the ping, with the refusal's

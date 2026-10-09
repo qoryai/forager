@@ -192,6 +192,8 @@ type control struct {
 	closed, closeOnFetch, limit atomic.Bool
 	// gone counts the deliveries closed answered.
 	gone atomic.Int32
+	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
+	goneOnFetch atomic.Bool
 
 	mu     sync.Mutex
 	run    []byte
@@ -229,8 +231,10 @@ func newControl(t *testing.T) *control {
 		if r.URL.Path == "/v1/run-configuration" && c.closeOnFetch.Load() {
 			c.closed.Store(true)
 		}
-		if r.URL.Path == "/v1/events" && c.closed.Load() {
-			c.gone.Add(1)
+		if (r.URL.Path == "/v1/events" && c.closed.Load()) || (r.URL.Path == "/v1/run-configuration" && c.goneOnFetch.Load()) {
+			if r.URL.Path == "/v1/events" {
+				c.gone.Add(1)
+			}
 			body := []byte(`{"error":"run_closed"}`)
 			w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)
@@ -315,8 +319,9 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 // among them, end to end. During the run, the runtime runs to its own exit: the
 // session's batches all get 202 and are in the gateway's record, the server is sent
 // nothing more, and the gateway reports it once. After the ping, the run opens and runs
-// the same way. To the ping, the run does not open: the session's error is the
-// gateway's message, and nothing is recorded of it.
+// the same way. To the ping, or to the run configuration, the run does not open: the
+// session's error is the gateway's message of a failure without a code, no refusal, and
+// nothing is recorded of it.
 func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 	for _, when := range []string{"during the run", "after the ping"} {
 		t.Run(when, func(t *testing.T) {
@@ -382,6 +387,23 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 		}
 		if b, err := os.ReadFile(filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")); err == nil && bytes.Contains(b, []byte("dev.qory.run.refused")) {
 			t.Errorf("the session recorded the 410 to the ping: %s", b)
+		}
+	})
+	t.Run("to the run configuration", func(t *testing.T) {
+		c := newControl(t)
+		c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+		c.goneOnFetch.Store(true)
+		sp := spec(t)
+		sleeps(&sp, 30*time.Second)
+		sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+		startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+		_, err := session.Run(context.Background(), sp)
+		var r *session.Refusal
+		if err == nil || errors.As(err, &r) || !strings.HasPrefix(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") || !strings.HasSuffix(err.Error(), ": status 410") {
+			t.Errorf("%v, want the failure without a code of a 410 to the run configuration", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(sp.RunsDir, sp.RunID, "session.jsonl")); err == nil && bytes.Contains(b, []byte("dev.qory.run.refused")) {
+			t.Errorf("the session recorded the 410 to the run configuration: %s", b)
 		}
 	})
 }

@@ -214,6 +214,38 @@ func TestASigned410ToThePingIsNoRun(t *testing.T) {
 	}
 }
 
+// TestASigned410ToTheRunConfigurationIsNoRun pins a server's signed 410 with a code,
+// run_closed, to the run configuration a run's opening fetches: no run opens, and the
+// 410 is no refusal. The session's run gets the gateway's 500 internal, from the
+// gateway, with the text of a code-less 410 to that fetch; a run with no session gets
+// the 503 of a failure without a code. Neither record holds a run.refused.
+func TestASigned410ToTheRunConfigurationIsNoRun(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+	c.goneOnFetch.Store(true)
+	h := start(t, gateway.Config{Server: c.server()})
+	want := "run configuration " + c.srv.URL + "/v1/run-configuration: status 410"
+	runID := event.NewRunID()
+	status, got := h.refusalOf("/v1/run-configuration", openBody(runID))
+	if status != http.StatusInternalServerError || got["error"] != "internal" || got["message"] != want || got["from"] != "gateway" {
+		t.Errorf("the 410 to the run configuration: %d %v, want 500 internal: %q", status, got, want)
+	}
+	var se *server.StatusError
+	var r *accesskey.Refusal
+	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &se) || errors.As(err, &r) || se.Status != http.StatusInternalServerError || se.Message != want {
+		t.Errorf("the session's error %v", err)
+	}
+	h.close()
+	if got := types(h.record(runID)); !slices.Equal(got, []string{event.Ping}) {
+		t.Errorf("record %v", got)
+	}
+	for _, l := range c.lines(t) {
+		if l.Type == event.RunRefused {
+			t.Errorf("the server was sent %v", l)
+		}
+	}
+}
+
 // TestRefusalsAtTheStartPassOn pins a refusal at a run's start: the server's reaches the
 // session with its code and status, from apiary; one of the run's configuration the
 // gateway decides is a 403 from the gateway.

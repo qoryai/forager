@@ -1069,6 +1069,41 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 	noSecretIn(t, s.dir, cred)
 }
 
+// TestARunWithNoSessionThatAServers410DoesNotOpen pins a run with no session whose
+// server answers its run configuration with a signed 410 run_closed: no run, as for a
+// failure without a code. The connection gets the 503 that says to try again, and its
+// record, and what the server receives, hold the ping alone.
+func TestARunWithNoSessionThatAServers410DoesNotOpen(t *testing.T) {
+	o := origin(t)
+	host := strings.TrimPrefix(o.URL, "http://")
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
+	c.goneOnFetch.Store(true)
+	s := startVerifying(t, gateway.Config{Server: c.server()}, nil, 0)
+	cred := credentialFor("rk-0001")
+	s.secrets = append(s.secrets, cred)
+	login := "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(":"+cred)) + "\r\n\r\n"
+	resp, conn, _ := s.proxyRequest(t, login)
+	b, _ := io.ReadAll(resp.Body)
+	conn.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || string(b) != "the gateway could not open the run; try again" {
+		t.Errorf("a 410 to the run configuration: %d %q", resp.StatusCode, b)
+	}
+	ids := runsIn(t, s.dir)
+	if len(ids) != 1 {
+		t.Fatalf("runs %v", ids)
+	}
+	if got := types(s.record(ids[0])); !slices.Equal(got, []string{event.Ping}) {
+		t.Errorf("record %v", got)
+	}
+	s.close()
+	for _, l := range c.lines(t) {
+		if l.Type == event.RunRefused {
+			t.Errorf("the server was sent %v", l)
+		}
+	}
+}
+
 // TestNoLinkSocketWithTheOneAddress pins Config.NoLinkSocket beside Listen: the
 // gateway serves the one address over TLS, a session's run on its run credential going
 // as without it, and makes no link directory and no socket; its local link is in

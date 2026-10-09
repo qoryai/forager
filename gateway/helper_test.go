@@ -67,6 +67,8 @@ type control struct {
 	closed, stop, closeOnFetch, limit atomic.Bool
 	// deliveries counts every request to the events endpoint, the ping's included.
 	deliveries atomic.Int32
+	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
+	goneOnFetch atomic.Bool
 	// drop, when set, closes every delivery's connection unanswered.
 	drop    atomic.Bool
 	fetches atomic.Int32
@@ -149,7 +151,7 @@ func newControl(t *testing.T) *control {
 			w.WriteHeader(int(code))
 			return
 		}
-		if c.closed.Load() && r.URL.Path == "/v1/events" {
+		if (c.closed.Load() && r.URL.Path == "/v1/events") || (c.goneOnFetch.Load() && r.URL.Path == "/v1/run-configuration") {
 			body := []byte(`{"error":"run_closed"}`)
 			w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)

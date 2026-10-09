@@ -368,7 +368,8 @@ release may change what an existing document does, and says so under Upgrading.
   `run_closed` to a request of a run already ended is unchanged. A server's signed
   `410`, with any code or none, stops delivery: the gateway sends no further batch for
   the run and marks its record `stopped`, and the run goes on, its record keeping every
-  event. A signed `410` to the ping is no run. The relay opens its
+  event. A signed `410` to the ping, or to the run configuration as a run opens, is no
+  run, and no refusal: no `410` from `apiary` crosses the link. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from

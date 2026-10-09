@@ -270,9 +270,8 @@ func invalid(w http.ResponseWriter) {
 }
 
 // gone answers the 410 of a run that ended at the gateway: its code, and who ended it,
-// always the gateway, since a server's 410 ends no run. Whether the run had started
-// does not change the answer.
-func gone(w http.ResponseWriter, code, from string, _ bool) {
+// always the gateway, since a server's 410 ends no run.
+func gone(w http.ResponseWriter, code, from string) {
 	refuse(w, http.StatusGone, code, nil, from, gatewayText(code))
 }
 
