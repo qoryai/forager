@@ -206,7 +206,7 @@ func TestTheRunSecretIsKeptWhileTheRecordOwes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, fixedCredential(cred)))
-	if err != nil || got != (session.ResendResult{Sent: res.Undelivered}) {
+	if err != nil || got != (session.ResendResult{Sent: res.Undelivered, State: "succeeded"}) {
 		t.Fatalf("the resend %+v %v; the session left %d undelivered", got, err, res.Undelivered)
 	}
 	noRunSecret(t, "after the resend that delivered the rest", res.Dir)
@@ -215,7 +215,7 @@ func TestTheRunSecretIsKeptWhileTheRecordOwes(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{State: "succeeded"}) || n.Load() != 0 {
 		t.Errorf("a resend of a record that owes nothing: %+v %v, %d requests", got, err, n.Load())
 	}
 	noRunSecret(t, "a resend of a record that owes nothing", res.Dir)
@@ -263,7 +263,7 @@ func TestAResendCutShortKeepsTheRunSecret(t *testing.T) {
 		t.Error("the resend cut short changed the run secret")
 	}
 	got, err = session.Resend(context.Background(), resendSpec(s, res.Dir, fixedCredential(cred)))
-	if err != nil || got != (session.ResendResult{Sent: res.Undelivered}) {
+	if err != nil || got != (session.ResendResult{Sent: res.Undelivered, State: "succeeded"}) {
 		t.Fatalf("the resend %+v %v; the session left %d undelivered", got, err, res.Undelivered)
 	}
 	noRunSecret(t, "after the resend that delivered the rest", res.Dir)

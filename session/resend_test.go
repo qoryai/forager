@@ -137,7 +137,7 @@ func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Sent: res.Undelivered}) {
+	if got != (session.ResendResult{Sent: res.Undelivered, State: "succeeded"}) {
 		t.Errorf("the resend %+v; the session left %d undelivered", got, res.Undelivered)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, sink.UndeliveredDir)); err == nil {
@@ -147,7 +147,7 @@ func TestAResendDeliversWhatTheSeparateGatewayDidNotTake(t *testing.T) {
 		t.Error("the resend changed session.jsonl")
 	}
 	again, n := counted(cred)
-	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{}) || got.NotOpened || n.Load() != 0 {
+	if got, err := session.Resend(context.Background(), resendSpec(s, res.Dir, again)); err != nil || got != (session.ResendResult{State: "succeeded"}) || got.NotOpened || n.Load() != 0 {
 		t.Errorf("a resend of a record that owes nothing: %+v %v, %d requests", got, err, n.Load())
 	}
 	s.close(t)
@@ -190,7 +190,7 @@ func TestAResendOfARunTheSeparateGatewayEndedSendsNothingMore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Undelivered: res.Undelivered, RunClosed: true, ClosedBy: accesskey.FromGateway, Reason: "session_lost"}) {
+	if got != (session.ResendResult{Undelivered: res.Undelivered, RunClosed: true, ClosedReason: "session_lost", State: "failed", Reason: "session_lost"}) {
 		t.Errorf("the resend %+v; the session left %d undelivered", got, res.Undelivered)
 	}
 	if !bytes.Equal(sessionLines(t, res.Dir), before) {
@@ -262,7 +262,7 @@ func TestAResendOfARunClosedDuringItsSessionPostsNoOwnEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (session.ResendResult{Undelivered: notAccepted - 1, RunClosed: true, ClosedBy: accesskey.FromGateway, Reason: "session_lost"}) || notAccepted < 2 {
+	if got != (session.ResendResult{Undelivered: notAccepted - 1, RunClosed: true, ClosedReason: "session_lost", State: "failed", Reason: "session_lost"}) || notAccepted < 2 {
 		t.Errorf("the resend %+v; %d events of the record were not accepted, its own run.exited among them", got, notAccepted)
 	}
 	s.close(t)
