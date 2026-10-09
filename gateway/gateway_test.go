@@ -1,11 +1,13 @@
 package gateway_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +90,32 @@ func TestTheLocalLink(t *testing.T) {
 	h.close()
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the link's directory after Close: %v", err)
+	}
+}
+
+// TestTheLinkRefusesAnotherUsersPeer pins the link's first check: a peer that is not
+// the gateway's user, by the uid the kernel recorded, is closed unanswered, even with
+// the right preamble and secret.
+func TestTheLinkRefusesAnotherUsersPeer(t *testing.T) {
+	cfg := gateway.Config{}
+	gateway.SetLinkUID(&cfg, os.Getuid()+1)
+	h := start(t, cfg)
+	l := h.g.LocalLink()
+	c, err := net.Dial("unix", l.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := link.WriteLinkPreamble(c, l.Secret); err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(c, "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(c); len(b) != 0 || err != nil {
+		t.Errorf("answered %q, %v", b, err)
+	}
+	if _, err := h.link.Discover(context.Background()); err == nil {
+		t.Error("the session's client of another user was answered")
 	}
 }
 
@@ -324,6 +352,61 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 			t.Errorf("%s: a reload after the refusal: %v", name, err)
 		}
 	}
+	// What the lenient decoder reads one way and the record's reader another: a member
+	// name twice in one object, where a decoder may keep either copy, and bytes that
+	// are not UTF-8. Each is a batch of its own, after the first when it says so.
+	twice := func(evs []map[string]any, one, both string) []byte {
+		b, err := json.Marshal(evs)
+		if err != nil || !bytes.Contains(b, []byte(one)) {
+			t.Fatalf("%s is not in %s", one, b)
+		}
+		return bytes.Replace(b, []byte(one), []byte(both), 1)
+	}
+	rawCases := map[string]func(runID string, a *server.LinkRunAnswer) (bool, []byte){
+		"a run.exited with its reason twice": func(id string, _ *server.LinkRunAnswer) (bool, []byte) {
+			e := exited(id)
+			e["data"].(map[string]any)["reason"] = "timeout"
+			return true, twice([]map[string]any{e}, `"reason":"timeout"`, `"reason":"session_lost","reason":"timeout"`)
+		},
+		"a run.started with opened_by twice": func(id string, _ *server.LinkRunAnswer) (bool, []byte) {
+			return false, twice([]map[string]any{started(id, labels)}, `"opened_by":"session"`, `"opened_by":"gateway","opened_by":"session"`)
+		},
+		"a policy_applied with its mode twice": func(id string, a *server.LinkRunAnswer) (bool, []byte) {
+			p := applied(id, a.Applied)
+			mode := p["data"].(map[string]any)["mode"].(string)
+			return true, twice([]map[string]any{p}, `"mode":"`+mode+`"`, `"mode":"enforce","mode":"`+mode+`"`)
+		},
+		"a run.started not in UTF-8": func(id string, _ *server.LinkRunAnswer) (bool, []byte) {
+			return false, twice([]map[string]any{started(id, labels)}, `"command":"true"`, "\"command\":\"tr\xffue\"")
+		},
+	}
+	rawRuns := map[string]string{}
+	for name, batch := range rawCases {
+		a := h.open(server.LinkRunRequest{Labels: labels})
+		first, body := batch(a.RunID, a)
+		if first {
+			rawRuns[name] = a.RunID
+			if d := h.post(started(a.RunID, labels), applied(a.RunID, a.Applied)); !d.Accepted() {
+				t.Fatalf("%s: the first batch: %+v", name, d)
+			}
+		}
+		d, err := h.link.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Status != http.StatusBadRequest || d.Code != "invalid_request" || d.End != "run_closed" || d.From != "gateway" {
+			t.Errorf("%s: %+v", name, d)
+		}
+		if d := h.post(heartbeat(a.RunID)); d.Status != http.StatusGone || d.End != "run_closed" || d.From != "gateway" {
+			t.Errorf("%s: after the refusal: %+v", name, d)
+		}
+		if !first {
+			if lines := h.record(a.RunID); len(lines) != 0 {
+				t.Errorf("%s: record %v", name, types(lines))
+			}
+		}
+	}
+	maps.Copy(runs, rawRuns)
 	// A run.started whose labels are not the run's, before any.
 	a := h.open(server.LinkRunRequest{Labels: labels})
 	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "run_closed" {

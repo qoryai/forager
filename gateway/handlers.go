@@ -194,6 +194,10 @@ func (g *Gateway) batch(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 		return
 	}
+	// A batch over the limit, one that does not decode and one whose first event names
+	// no run this gateway holds are refused without ending a run: the gateway ends a
+	// run only when it can tell which one the batch is of; otherwise the run's liveness
+	// ends it, when its session sends nothing it accepts.
 	body, ok := readBody(r, maxBatch)
 	if !ok {
 		invalid(w)
@@ -253,6 +257,12 @@ var gatewayName = regexp.MustCompile(`^(labels|about\.details)\.[^=]*=`)
 // it accepts it. Each event the gateway numbered before, by its id, is the session's
 // sending again and is not looked at twice. Called with lr.batch held.
 func (lr *linkRun) check(body []byte, evs []event.Event) string {
+	// First, before anything decodes it the lenient way: each member name once and
+	// UTF-8 throughout, so what the gateway checks is what the record and the server
+	// read, whichever copy of a name their decoder would keep.
+	if jsonv2.Unmarshal(body, new(any)) != nil {
+		return "a batch with a member name twice in one object, or not in UTF-8"
+	}
 	if !validate(batchSchema, body) {
 		return "one link-batch.schema.json refuses"
 	}

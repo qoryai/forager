@@ -195,7 +195,11 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	})
 	sum := sha256.Sum256(g.discovery)
 	g.discoveryDigest = "sha256=" + hex.EncodeToString(sum[:])
-	g.link = newLinkListener(g.ln, secret)
+	uid := os.Getuid()
+	if cfg.uid != nil {
+		uid = *cfg.uid
+	}
+	g.link = newLinkListener(g.ln, secret, uid)
 	g.http = &http.Server{Handler: g.handler(), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
 	go g.http.Serve(g.link)
 	ok = true

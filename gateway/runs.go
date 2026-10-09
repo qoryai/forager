@@ -239,17 +239,19 @@ func (lr *linkRun) arm() {
 	}
 }
 
-// release lets go of what the run holds on the gateway's side: its reload, its secret
-// and proxy, its tools and its credentials. Each may be absent.
+// release lets go of what the run holds on the gateway's side: its secret and proxy
+// first, so an ended run's secret is refused at once, even while a reload in flight
+// winds down; then its reload, its tools and its credentials. Each may be absent.
 func (lr *linkRun) release() {
-	if lr.live != nil {
-		lr.live.stop()
-	}
+	lr.cancel()
 	if lr.secret != "" {
 		lr.g.proxies.Unregister(lr.secret)
 	}
 	if lr.px != nil {
 		lr.px.Close()
+	}
+	if lr.live != nil {
+		lr.live.stop()
 	}
 	lr.tools.Close()
 	if lr.r != nil {
