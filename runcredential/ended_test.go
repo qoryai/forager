@@ -111,9 +111,6 @@ func TestEndedAddKeepsTheLaterTimeAndPrunes(t *testing.T) {
 }
 
 func TestEndedWrittenIsWhatTheFileHolds(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root writes a directory of mode 0500")
-	}
 	dir := t.TempDir()
 	e, err := openEnded(dir, func() time.Time { return now })
 	if err != nil {
@@ -123,15 +120,21 @@ func TestEndedWrittenIsWhatTheFileHolds(t *testing.T) {
 	if err := e.Add(exampleIssuer, "rk-0001", soon); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o500); err != nil {
+	// A directory that is not empty at the file's path: the rename over it fails, for
+	// root too. The file as written is set aside, and put back below.
+	path := filepath.Join(dir, EndedFile)
+	aside := filepath.Join(t.TempDir(), EndedFile)
+	if err := os.Rename(path, aside); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := os.MkdirAll(filepath.Join(path, "blocked"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.Add(exampleIssuer, "rk-0001", late); err == nil {
-		t.Fatal("a write to a directory of mode 0500")
+		t.Fatal("a write over a directory")
 	}
 	if err := e.Add(exampleIssuer, "rk-0002", late); err == nil {
-		t.Fatal("a write to a directory of mode 0500")
+		t.Fatal("a write over a directory")
 	}
 	past := soon.Add(MaxLeeway + time.Second)
 	switch {
@@ -144,7 +147,12 @@ func TestEndedWrittenIsWhatTheFileHolds(t *testing.T) {
 	case e.Written(exampleIssuer, "rk-0002", now):
 		t.Error("the file holds a run key never written")
 	}
-	os.Chmod(dir, 0o700)
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(aside, path); err != nil {
+		t.Fatal(err)
+	}
 	reopened, err := openEnded(dir, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
