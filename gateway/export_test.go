@@ -3,11 +3,13 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"reflect"
 	"time"
 
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/runcredential"
 )
 
 // SetQuiet makes a run whose session sends nothing for d end, in place of three
@@ -39,8 +41,9 @@ func (f authFunc) authenticate(_ context.Context, credential string) (runIdentit
 // loginFunc is a test's proxy login.
 type loginFunc func(authorization string, first *http.Request) (*proxy.Proxy, error)
 
-func (f loginFunc) login(_ context.Context, authorization string, first *http.Request) (*proxy.Proxy, error) {
-	return f(authorization, first)
+func (f loginFunc) login(_ context.Context, authorization string, first *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
+	px, err := f(authorization, first)
+	return px, nil, err
 }
 
 // SetRunAuth makes f decide the run credential of every request of the contract on the
@@ -79,3 +82,24 @@ func PrintedCopy(g *Gateway, format string) string {
 // PrintedSecret is the gateway's link secret, as its own type holds it, printed with
 // format.
 func PrintedSecret(g *Gateway, format string) string { return fmt.Sprintf(format, g.secret) }
+
+// introspectionFunc is a test's introspection endpoint of an issuer.
+type introspectionFunc struct {
+	issuer string
+	active func(issuer, credential string) bool
+	cache  time.Duration
+}
+
+func (f introspectionFunc) Active(_ context.Context, credential string, _ time.Time) (bool, error) {
+	return f.active(f.issuer, credential), nil
+}
+
+func (f introspectionFunc) Cache() time.Duration { return f.cache }
+
+// SetIntrospector makes active answer the introspection endpoint of every issuer that
+// has one, each answer kept for cache, in place of runcredential's client of it.
+func SetIntrospector(c *Config, active func(issuer, credential string) bool, cache time.Duration) {
+	c.introspector = func(i runcredential.Issuer) activeChecker {
+		return introspectionFunc{issuer: i.Issuer, active: active, cache: cache}
+	}
+}

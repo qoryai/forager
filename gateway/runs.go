@@ -41,6 +41,12 @@ type linkRun struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// cred is what the run credential decides of a run on the one address, nil for a
+	// run of the local link; client says the run has no session: a client's proxy
+	// login opened it.
+	cred   *runCred
+	client bool
+
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
 
@@ -48,6 +54,8 @@ type linkRun struct {
 	// opened says the run answer is made; serverClosed that the server closed the run,
 	// a signed 410 run_closed.
 	opened, serverClosed bool
+	// pingAt is when the gateway's ping for the run was numbered, zero without a server.
+	pingAt time.Time
 	// seen are the ids of the session's events numbered so far; startedID is its
 	// run.started's, startedAt that event's time; final says its run.exited or
 	// run.refused is numbered.
@@ -74,12 +82,36 @@ type linkRun struct {
 	ended            bool
 	endCode, endFrom string
 	closed           bool
+	// conns are the connections a run with no session has open, lastConn when one last
+	// opened or closed, and quiet the timer that ends the run once it has had none for
+	// the gateway's quiet time; asked is when the issuer was last asked of it.
+	conns    int
+	lastConn time.Time
+	quiet    *time.Timer
+	asked    time.Time
 
 	// done is closed once the run's gateway side is over and its stream flushed; result
 	// and err are then set.
 	done   chan struct{}
 	result stream.Result
 	err    error
+}
+
+// runCred is what the run credential decides of a run on the gateway's one address.
+type runCred struct {
+	// key is the run's run key, of its issuer; details are the keys of about.details
+	// the run credential decides.
+	key     runKeyID
+	details map[string]string
+
+	// The rest is held under the run's mu. expires is the latest exp of a run
+	// credential presented for the run, and expiry the timer that ends the run then;
+	// active asks the issuer of the latest run credential presented, nil for an issuer
+	// without introspection, and cache is how long its answer holds.
+	expires time.Time
+	expiry  *time.Timer
+	active  func(context.Context) bool
+	cache   time.Duration
 }
 
 // ending is how a run ends at the gateway.
@@ -90,6 +122,8 @@ type ending struct {
 	code, from string
 	// closed says the run ended before its session ended it.
 	closed bool
+	// quietSeconds is the quiet period of a run with no session that ended quiet.
+	quietSeconds int
 }
 
 // sessionLost ends a run whose session the gateway no longer hears or no longer
@@ -99,23 +133,53 @@ var sessionLost = ending{reason: event.ReasonSessionLost, code: accesskey.CodeRu
 // serverClosed ends a run the server closed.
 var serverClosedRun = ending{reason: event.ReasonRunClosed, code: accesskey.CodeRunClosed, from: accesskey.FromApiary, closed: true}
 
+// credentialExpired ends a run on the one address whose run credential's exp passed
+// with no fresh one; endedAtIssuer one whose issuer no longer holds its run credential
+// active.
+var (
+	credentialExpired = ending{reason: event.ReasonCredentialExpired, code: event.ReasonCredentialExpired, from: accesskey.FromGateway, closed: true}
+	endedAtIssuer     = ending{reason: event.ReasonRunEndedAtIssuer, code: event.ReasonRunEndedAtIssuer, from: accesskey.FromGateway, closed: true}
+)
+
+// opening is how a run opens: on the one address with the run credential's identity,
+// and with no session, for a client's proxy login.
+type opening struct {
+	// remote says the request came to the gateway's one address, whose runs' proxies
+	// are guarded whatever their wall.
+	remote bool
+	// id is the run credential's run, on the one address; nil on the local link.
+	id *runIdentity
+	// client says the run has no session.
+	client bool
+}
+
 // open opens a run for a request the link accepted: the ping and the run configuration
 // with a server, the policy in force, the credentials and the tools, the run's proxy
-// under a fresh secret, and its record. remote says the request came to the gateway's
-// one address, whose runs' proxies are guarded whatever their wall. A refusal is an
-// [*accesskey.Refusal]; recorded says the run's record was made, so its id is used
-// from now on.
-func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, recorded bool, err error) {
+// under a fresh secret, and its record. On the one address the run's labels are the run
+// credential's, and its proxy guarded whatever its wall. A run with no session gets no
+// proxy secret and no answer: its proxy reads inside HTTPS with the gateway's own
+// authority, and the gateway writes its run.started and run.policy_applied. A refusal
+// is an [*accesskey.Refusal]; recorded says the run's record was made, so its id is
+// used from now on.
+func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, recorded bool, err error) {
+	remote := how.remote
 	st, err := g.stream.Open(req.RunID)
 	if err != nil {
 		return nil, false, err
 	}
 	ctx, cancel := context.WithCancel(g.base)
 	labels := maps.Clone(req.Labels)
+	if how.id != nil {
+		// A run's labels on the one address come from the run credential alone.
+		labels = maps.Clone(how.id.Labels)
+	}
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	lr = &linkRun{g: g, id: req.RunID, wall: req.Wall, labels: labels, st: st, ctx: ctx, cancel: cancel, seen: map[string]bool{}, done: make(chan struct{})}
+	lr = &linkRun{g: g, id: req.RunID, wall: req.Wall, labels: labels, st: st, ctx: ctx, cancel: cancel, seen: map[string]bool{}, done: make(chan struct{}), client: how.client}
+	if id := how.id; id != nil {
+		lr.cred = &runCred{key: keyOf(*id), details: maps.Clone(id.Details), expires: id.Expires, active: id.active, cache: id.cache}
+	}
 	fail := func(err error) (*linkRun, bool, error) {
 		lr.release()
 		lr.mu.Lock()
@@ -139,6 +203,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 		if err != nil {
 			return fail(err)
 		}
+		lr.mu.Lock()
+		lr.pingAt = time.Now()
+		lr.mu.Unlock()
 		body, _ := ping.JSON()
 		pingID := event.NewID()
 		if err := g.client.Ping(ctx, g.conf.Events.URL, pingID, []byte("["+string(body)+"]")); err != nil {
@@ -161,9 +228,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 			fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
 		}
 	}
+	var narrowing *run.Narrowing
+	if n := req.Narrowing; n != nil {
+		narrowing = &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
+	}
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: labels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
+		Narrowing: narrowing,
 	})
 	if err != nil {
 		return fail(err)
@@ -199,20 +271,28 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 	}
 	var authority []byte
 	if r.NeedsCA() {
-		ca, err := proxy.NewCA(req.RunID)
+		if how.client {
+			// The clients with no session trust the gateway's own authority, which the
+			// operator installs on their machines.
+			lr.px.Terminate(g.authority, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
+		} else {
+			ca, err := proxy.NewCA(req.RunID)
+			if err != nil {
+				return fail(err)
+			}
+			lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
+			authority = ca.PEM()
+		}
+	}
+	if !how.client {
+		secret, err := proxy.NewSecret()
 		if err != nil {
 			return fail(err)
 		}
-		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
-		authority = ca.PEM()
-	}
-	secret, err := proxy.NewSecret()
-	if err != nil {
-		return fail(err)
-	}
-	lr.secret = newSecretValue(secret)
-	if err := g.proxies.Register(secret, lr.px); err != nil {
-		return fail(err)
+		lr.secret = newSecretValue(secret)
+		if err := g.proxies.Register(secret, lr.px); err != nil {
+			return fail(err)
+		}
 	}
 	lr.mu.Lock()
 	lr.refresh()
@@ -223,6 +303,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 	if closed {
 		return fail(nil)
 	}
+	if how.client {
+		lr.begin()
+		return lr, true, nil
+	}
 	if !req.Wall {
 		authority = nil
 	}
@@ -232,17 +316,105 @@ func (g *Gateway) open(req *server.LinkRunRequest, remote bool) (lr *linkRun, re
 	return lr, true, nil
 }
 
-// arm starts the run's liveness and its reload, once the session has its answer.
+// begin writes what a session writes of a run that opens, for a run with no session:
+// its dev.qory.run.started, opened by the gateway, with the run credential's labels
+// and the about.details its mapping makes, and its dev.qory.run.policy_applied, the
+// members the gateway decides alone. The run has no process, so run.started has none
+// of the members of one.
+func (lr *linkRun) begin() {
+	data := map[string]any{"opened_by": event.OpenedByGateway, "forager_version": lr.g.cfg.Version, "labels": lr.labels}
+	if len(lr.cred.details) > 0 {
+		data["about"] = map[string]any{"details": lr.cred.details}
+	}
+	lr.mu.Lock()
+	lr.startedAt = time.Now()
+	given := lr.given[len(lr.given)-1]
+	lr.mu.Unlock()
+	lr.st.Emit(event.RunStarted, data)
+	lr.st.Emit(event.PolicyApplied, given)
+}
+
+// arm starts the run's liveness and its reload, once the session has its answer, and
+// on the one address the end at its run credential's exp. A run with no session has
+// no session to hear: it lives while it has connections, [linkRun.armClient].
 func (lr *linkRun) arm() {
 	lr.mu.Lock()
 	lr.last = time.Now()
 	if !lr.ended {
-		lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		if lr.client {
+			lr.lastConn = time.Now()
+			lr.quiet = time.AfterFunc(lr.g.runsQuiet, lr.watchQuiet)
+		} else {
+			lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		}
+		if lr.cred != nil {
+			lr.cred.expiry = time.AfterFunc(time.Until(lr.cred.expires), lr.expire)
+		}
 	}
 	lr.mu.Unlock()
+	if lr.client {
+		go lr.keep()
+	}
 	if lr.live != nil {
 		lr.live.start(lr.apply)
 	}
+}
+
+// expire ends the run once the latest exp of a run credential presented for it has
+// passed, credential_expired, and otherwise looks again when that exp would be up.
+func (lr *linkRun) expire() {
+	lr.mu.Lock()
+	if lr.ended {
+		lr.mu.Unlock()
+		return
+	}
+	if left := time.Until(lr.cred.expires); left > 0 {
+		lr.cred.expiry = time.AfterFunc(left, lr.expire)
+		lr.mu.Unlock()
+		return
+	}
+	lr.mu.Unlock()
+	lr.g.report(fmt.Sprintf("run %s: its run credential expired with no fresh one; the run ends, credential_expired", lr.id))
+	lr.end(credentialExpired)
+}
+
+// renew takes a run credential presented for the run, verified, of its run key: one
+// with a later exp keeps the run going until then, and the issuer is asked of the
+// latest one presented from now on.
+func (lr *linkRun) renew(id runIdentity) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if lr.ended {
+		return
+	}
+	if id.Expires.After(lr.cred.expires) {
+		lr.cred.expires = id.Expires
+	}
+	if id.active != nil {
+		lr.cred.active, lr.cred.cache = id.active, id.cache
+	}
+}
+
+// stillActive asks the issuer whether the latest run credential presented for the run
+// is still active, and ends the run, run_ended_at_issuer, when it is not, any answer
+// but active and a failure to ask among it; it reports whether the run goes on. An
+// issuer without introspection is never asked.
+func (lr *linkRun) stillActive(ctx context.Context) bool {
+	lr.mu.Lock()
+	active := lr.cred.active
+	lr.asked = time.Now()
+	lr.mu.Unlock()
+	if active == nil || active(ctx) {
+		return true
+	}
+	if ctx.Err() != nil || lr.ctx.Err() != nil {
+		// The request went, or the run ended, while the issuer was asked: no answer,
+		// and this request alone is not served.
+		return false
+	}
+	lr.g.report(fmt.Sprintf("run %s: the issuer no longer holds its run credential active; the run ends, run_ended_at_issuer", lr.id))
+	lr.end(endedAtIssuer)
+	return false
 }
 
 // release lets go of what the run holds on the gateway's side: its secret and proxy
@@ -325,13 +497,28 @@ func (lr *linkRun) end(e ending) {
 		return
 	}
 	lr.ended, lr.endCode, lr.endFrom, lr.closed = true, e.code, e.from, e.closed
-	if lr.timer != nil {
-		lr.timer.Stop()
+	for _, t := range []*time.Timer{lr.timer, lr.quiet} {
+		if t != nil {
+			t.Stop()
+		}
+	}
+	var key runKeyID
+	var expires time.Time
+	if lr.cred != nil {
+		if lr.cred.expiry != nil {
+			lr.cred.expiry.Stop()
+		}
+		key, expires = lr.cred.key, lr.cred.expires
 	}
 	startedAt := lr.startedAt
 	lr.mu.Unlock()
 	go func() {
 		defer close(lr.done)
+		if lr.cred != nil {
+			// A run key opens one run at a gateway: kept until its run credential's
+			// exp, so no request, and no restart, opens it again.
+			lr.g.endKey(key, expires)
+		}
 		lr.release()
 		if e.reason != "" {
 			switch {
@@ -340,7 +527,15 @@ func (lr *linkRun) end(e ending) {
 				if !startedAt.IsZero() {
 					ran = max(time.Since(startedAt).Milliseconds(), 0)
 				}
-				lr.st.Emit(event.RunExited, map[string]any{"state": "failed", "exit_code": -1, "reason": e.reason, "duration_ms": ran})
+				data := map[string]any{"reason": e.reason, "duration_ms": ran}
+				if !lr.client {
+					// A session's run: the gateway holds no exit status of its runtime.
+					data["state"], data["exit_code"] = "failed", -1
+				}
+				if e.reason == event.ReasonQuiet {
+					data["quiet_seconds"] = e.quietSeconds
+				}
+				lr.st.Emit(event.RunExited, data)
 			case e.from == accesskey.FromApiary:
 				// Closed before it started: what today's session records then.
 				lr.st.Emit(event.RunRefused, map[string]any{"code": accesskey.CodeRunClosed, "status": 410})
@@ -360,6 +555,7 @@ type runAnswerDoc struct {
 	Policy               json.RawMessage            `json:"policy,omitempty"`
 	Digest               string                     `json:"digest,omitempty"`
 	Variables            map[string]server.Variable `json:"variables,omitempty"`
+	Details              map[string]string          `json:"details,omitempty"`
 	ProxySecret          string                     `json:"proxy_secret"`
 	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
 	Placeholders         []string                   `json:"placeholders,omitempty"`
@@ -402,8 +598,12 @@ func (lr *linkRun) refresh() {
 func (lr *linkRun) runAnswer(authority []byte) []byte {
 	pol := lr.r.Policy()
 	doc, digest := policyDocument(pol)
+	var details map[string]string
+	if lr.cred != nil && len(lr.cred.details) > 0 {
+		details = lr.cred.details
+	}
 	b, _ := json.Marshal(runAnswerDoc{
-		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
+		Version: 1, RunID: lr.id, Labels: lr.labels, Details: details, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	})
@@ -541,6 +741,15 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	lr.refresh()
+	if lr.client {
+		// No session writes the run's policy_applied: the gateway does, and the tunnels
+		// the new policy closed right after it.
+		lr.st.Emit(event.PolicyApplied, lr.given[len(lr.given)-1])
+		for _, dec := range refused {
+			lr.st.Emit(event.RunEgress, run.Egress(dec))
+		}
+		return nil
+	}
 	if len(refused) > 0 {
 		// Before the session can see the new digest, so its policy_applied finds them
 		// waiting.

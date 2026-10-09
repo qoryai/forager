@@ -193,11 +193,15 @@ type harness struct {
 	digests []server.Digests
 }
 
-// start starts a gateway with cfg, its Dir a fresh one, and a client of its link. At the
-// test's end the gateway is closed, and no line it reported holds a secret.
+// start starts a gateway with cfg, its Dir a fresh one unless cfg names one, and a
+// client of its link. At the test's end the gateway is closed, and no line it reported
+// holds a secret.
 func start(t *testing.T, cfg gateway.Config) *harness {
 	t.Helper()
-	h := &harness{t: t, dir: t.TempDir()}
+	h := &harness{t: t, dir: cfg.Dir}
+	if h.dir == "" {
+		h.dir = t.TempDir()
+	}
 	cfg.Dir = h.dir
 	cfg.Report = func(line string) {
 		h.mu.Lock()

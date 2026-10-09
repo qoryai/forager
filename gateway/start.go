@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -75,6 +76,9 @@ type Gateway struct {
 	auth      runAuth
 	login     proxyLogin
 	authority *proxy.CA
+	// ended are the run keys whose run ended at this gateway, kept in its directory;
+	// nil without Listen.
+	ended *runcredential.Ended
 	// discovery is the link's discovery answer, and discoveryDigest its digest, the
 	// X-Qory-Configuration of every answer.
 	discovery       []byte
@@ -87,6 +91,12 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
+	// keys are the runs on the one address by their run key, live or ended; opening
+	// the run keys whose run is opening, each closed once it opened or failed to; and
+	// endedUntil the latest exp each ended run key was kept to by this process.
+	keys       map[runKeyID]*linkRun
+	opening    map[runKeyID]chan struct{}
+	endedUntil map[runKeyID]time.Time
 
 	closed   chan struct{}
 	delivery Delivery
@@ -102,8 +112,9 @@ type Gateway struct {
 //
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen that
 // is not loopback without TLS, TLS files it cannot read or whose certificate and key do
-// not match, TLS without a Listen, and a Listen without RunCredentials or without Dir,
-// where the gateway's own certificate authority is kept.
+// not match, TLS without a Listen, a Listen without RunCredentials or without Dir,
+// where the gateway's own certificate authority and the ended run keys are kept, and
+// RunCredentials whose check fails or whose files it cannot read.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cert, err := checkService(&cfg)
 	if err != nil {
@@ -141,7 +152,8 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if report == nil {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
-	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{})}
+	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
+		keys: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
@@ -151,18 +163,29 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		g.runsQuiet = defaultRunsQuiet
 	}
 	g.auth, g.login = cfg.runAuth, cfg.proxyLogin
+	if cfg.Listen != "" {
+		if g.auth == nil {
+			if g.auth, err = newCredentialVerifier(&cfg, cfg.Heartbeat); err != nil {
+				return nil, err
+			}
+		}
+		if g.login == nil {
+			g.login = clientLogin{g}
+		}
+		// Before the server is asked anything: a gateway that cannot keep its authority
+		// or its ended run keys does not start.
+		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
+			return nil, err
+		}
+		if g.ended, err = runcredential.OpenEnded(cfg.Dir); err != nil {
+			return nil, err
+		}
+	}
 	if g.auth == nil {
 		g.auth = refuseAll{}
 	}
 	if g.login == nil {
 		g.login = refuseAll{}
-	}
-	if cfg.Listen != "" {
-		// Before the server is asked anything: a gateway that cannot keep its authority
-		// does not start.
-		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
-			return nil, err
-		}
 	}
 	if cfg.Server != nil {
 		client, err := newClient(cfg.Server, cfg.Version)
