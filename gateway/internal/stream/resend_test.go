@@ -454,3 +454,26 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 		t.Errorf("a run with no server, with none: %+v, %v", res, err)
 	}
 }
+
+// TestResendNumbersOnFromWhatTheServerAccepted pins the numbering of gateway_lost when
+// the run's highest event is a line the gateway did not finish, which the server
+// accepted whole: delivered.log names it, so gateway_lost follows it, not the highest
+// whole event of the record.
+func TestResendNumbersOnFromWhatTheServerAccepted(t *testing.T) {
+	dir, lines := tornRun(t)
+	head := slices.Concat(lines[0], lines[1], lines[2], lines[3])
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), slices.Concat(head, lines[4][:len(lines[4])/2]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("ping-delivery 0000000001\nbatch 0000000002 0000000003 0000000004 0000000005\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Closed || res.Torn != 1 {
+		t.Errorf("result %+v", res)
+	}
+	exitedAfter(t, dir, head, "0000000006")
+}

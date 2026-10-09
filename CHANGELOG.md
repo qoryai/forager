@@ -661,8 +661,9 @@ release may change what an existing document does, and says so under Upgrading.
   Before, it cut the file at that line, and every event after it was lost. A last line
   without its newline that holds a whole event is kept, and gets its newline before
   `gateway_lost` follows it; one that holds none is cut off, as before. `gateway_lost`
-  is numbered after the highest sequence of the whole events, and the file is changed
-  only when `gateway_lost` is added.
+  is numbered after the highest sequence of the whole events or of `delivered.log`,
+  since an event whose line was not finished may have reached the server whole, and the
+  file is changed only when `gateway_lost` is added.
 - `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
   that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
   its `events.jsonl`, and the `Delivery` says `NotOpened`, nothing sent. Before, its

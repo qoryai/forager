@@ -136,16 +136,16 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		}
 		return res, nil
 	}
-	if res.Closed, err = closeRecord(file, runID, rec, cfg.Now); err != nil {
+	accepted, stopped, err := sink.Delivered(cfg.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if res.Closed, err = closeRecord(file, runID, rec, highest(accepted), cfg.Now); err != nil {
 		return nil, err
 	}
 	lines := rec.lines
 	if cfg.Sink == nil {
 		return res, nil
-	}
-	accepted, stopped, err := sink.Delivered(cfg.Dir)
-	if err != nil {
-		return nil, err
 	}
 	if stopped {
 		cfg.Report("the server said stop during the run; nothing is sent")
@@ -308,13 +308,27 @@ func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
 	return false, false, err
 }
 
+// highest is the highest of the sequences the server accepted, 0 for none. A line of
+// delivered.log cut short holds a sequence lower than the one it was to hold.
+func highest(accepted map[string]bool) uint64 {
+	var top uint64
+	for s := range accepted {
+		if n, err := strconv.ParseUint(s, 10, 64); err == nil && n > top {
+			top = n
+		}
+	}
+	return top
+}
+
 // closeRecord appends run.exited to the record of a started run that has none, numbered
-// on from the highest sequence of its whole events, and reports whether it did. Its
-// duration runs from run.started to that event. A last line the gateway did not finish
+// on from the highest sequence of its whole events or of delivered, the highest the
+// server accepted, and reports whether it did: an event whose line in the record the
+// gateway did not finish may have reached the server whole. Its duration runs from
+// run.started to the record's highest event. A last line the gateway did not finish
 // is made a line first, so run.exited starts its own: one that holds a whole event gets
 // its newline, and one that holds none is cut off the file, being no event. Nothing
 // else of the file is changed.
-func closeRecord(file, runID string, rec *recordFile, now func() time.Time) (bool, error) {
+func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func() time.Time) (bool, error) {
 	var started time.Time
 	begun, byGateway := false, false
 	last := rec.lines[0]
@@ -346,7 +360,7 @@ func closeRecord(file, runID string, rec *recordFile, now func() time.Time) (boo
 		// process, and its run.exited neither.
 		data["state"], data["exit_code"] = "failed", -1
 	}
-	ev := event.NewEmitterAfter(runID, last.seq, now).Make(event.RunExited, data)
+	ev := event.NewEmitterAfter(runID, max(last.seq, delivered), now).Make(event.RunExited, data)
 	line, err := ev.JSON()
 	if err != nil {
 		return false, err
