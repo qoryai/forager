@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -350,5 +351,51 @@ func TestIntrospectionRefusesAnUntrustedCertificate(t *testing.T) {
 	}
 	if e.asked.Load() != 0 {
 		t.Error("the run credential reached an endpoint whose certificate is not trusted")
+	}
+}
+
+// TestIntrospectionIgnoresTheProxyVariables pins that the introspector reaches the
+// endpoint directly: with HTTPS_PROXY and HTTP_PROXY set, the run credential goes to
+// the endpoint and never to the proxy. The endpoint is named example.com, which the
+// test server's certificate covers, since no proxy is ever used for a loopback address
+// whatever the variables say.
+func TestIntrospectionIgnoresTheProxyVariables(t *testing.T) {
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		t.Setenv(name, proxy.URL)
+	}
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
+	e := newEndpoint(t, answering(200, `{"active": true}`))
+	_, port, _ := net.SplitHostPort(e.srv.Listener.Addr().String())
+	in := e.introspector(t, Introspection{URL: "https://example.com:" + port + "/introspect"}, IntrospectionTimeout)
+	tr := in.client.Transport.(*http.Transport)
+	if tr.Proxy != nil {
+		t.Fatal("the transport has a proxy")
+	}
+	var mu sync.Mutex
+	var dialed []string
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, addr)
+		mu.Unlock()
+		if addr != "example.com:"+port {
+			return nil, errors.New("not the endpoint")
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, e.srv.Listener.Addr().String())
+	}
+	if active, err := in.Active(context.Background(), exampleCredential, now); !active || err != nil {
+		t.Fatalf("Active = %v, %v", active, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if proxied.Load() != 0 || len(dialed) != 1 || dialed[0] != "example.com:"+port || e.asked.Load() != 1 {
+		t.Errorf("dialed %v, the proxy asked %d times, the endpoint %d", dialed, proxied.Load(), e.asked.Load())
 	}
 }
