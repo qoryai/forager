@@ -341,6 +341,75 @@ func TestAStopFromOutsideIsAStop(t *testing.T) {
 	}
 }
 
+// TestAStopFromOutsideEndsARetry pins Stop while a batch is being retried: no try
+// follows it, and the stop is recorded and reported once, even when a signed 410 to
+// the try on its way as Stop came answers after it.
+func TestAStopFromOutsideEndsARetry(t *testing.T) {
+	t.Run("between tries", func(t *testing.T) {
+		s := newStation(t, nil, false)
+		s.fail.Store(http.StatusServiceUnavailable)
+		dir := t.TempDir()
+		var mu sync.Mutex
+		var notes []string
+		w := sink.NewServer(client(s), target(s), dir, func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }, nil)
+		e := event.NewEmitter(event.NewRunID(), nil)
+		w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
+		waitFor(t, func() bool { return s.hits.Load() >= 1 })
+		w.Stop()
+		hits := s.hits.Load()
+		time.Sleep(sink.Backoff * 5 / 2)
+		// Bounded, so a sink that still retries spools the batch rather than hangs.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		w.Close(ctx)
+		if s.hits.Load() != hits || w.Undelivered() != 0 {
+			t.Errorf("%d tries after the stop, %d undelivered", s.hits.Load()-hits, w.Undelivered())
+		}
+		if b, _ := os.ReadFile(filepath.Join(dir, sink.DeliveredFile)); string(b) != "stopped\n" {
+			t.Errorf("delivered.log %q", b)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(notes) != 1 {
+			t.Errorf("reports %q", notes)
+		}
+	})
+	t.Run("a 410 to the try on its way", func(t *testing.T) {
+		s := newStation(t, func(string) bool { return true }, false)
+		arrived, release := make(chan struct{}), make(chan struct{})
+		inner := s.srv.Config.Handler
+		var once sync.Once
+		s.srv.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(arrived) })
+			<-release
+			inner.ServeHTTP(rw, r)
+		})
+		dir := t.TempDir()
+		var mu sync.Mutex
+		var notes []string
+		w := sink.NewServer(client(s), target(s), dir, func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }, nil)
+		e := event.NewEmitter(event.NewRunID(), nil)
+		w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
+		<-arrived
+		w.Stop()
+		close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		w.Close(ctx)
+		if s.hits.Load() != 1 || !w.Stopped() || w.RunClosed() {
+			t.Errorf("%d deliveries, stopped %v, closed %v", s.hits.Load(), w.Stopped(), w.RunClosed())
+		}
+		if b, _ := os.ReadFile(filepath.Join(dir, sink.DeliveredFile)); string(b) != "stopped\n" {
+			t.Errorf("delivered.log %q", b)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
+			t.Errorf("reports %q", notes)
+		}
+	})
+}
+
 // TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a server's signed 410
 // run_closed stops the deliveries at once: the batches already queued behind the
 // stopped one are dropped, not posted, and no run is closed.

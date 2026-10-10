@@ -34,8 +34,8 @@ const (
 	// CodeRunClosed is the gateway's 410 to a request of a run already ended at the
 	// gateway. A server's 410 never ends a run.
 	CodeRunClosed = "run_closed"
-	// CodeNotFound is the server's signed 404 to a run configuration request of a
-	// workspace with no policy.
+	// CodeNotFound is the server's signed 404 to a run's registration, or to its reload
+	// by its id.
 	CodeNotFound = "not_found"
 )
 

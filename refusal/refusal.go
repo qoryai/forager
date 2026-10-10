@@ -89,10 +89,11 @@ const (
 	// such member and the credential's value, labels.<key>=<value> or
 	// about.details.<key>=<value>.
 	DiffersFromCredential = "differs_from_credential"
-	// RunIDUsed is a run configuration request whose run_id already names a run at this
+	// RunIDUsed is the link's run request whose run_id already names a run at this
 	// gateway: the session chooses the run id, and the gateway takes only an unused
-	// one. It has no names. A run_id that is not a canonical lower-case UUID is
-	// invalid_request.
+	// one. It is also the server's signed 409 to a run's registration whose run id it
+	// accepted with other bytes or under another access key. It has no names. A run_id
+	// that is not a canonical lower-case UUID is invalid_request.
 	RunIDUsed = "run_id_used"
 )
 

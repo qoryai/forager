@@ -332,16 +332,18 @@ func (w *Server) next() ([]queued, bool) {
 // run with it, which the caller hears of once.
 // A batch queued before the stop is dropped, as one written after it is.
 func (w *Server) deliver(batch []queued) {
-	w.mu.Lock()
-	stopped := w.stopped
-	w.mu.Unlock()
-	if stopped {
-		return
-	}
 	body := encode(batch)
 	id := event.NewID()
 	backoff := Backoff
 	for {
+		// Each try first asks whether the deliveries stopped, by an answer of the sink's
+		// own or by [Server.Stop] while the batch was retried: then nothing more is sent.
+		w.mu.Lock()
+		stopped := w.stopped
+		w.mu.Unlock()
+		if stopped {
+			return
+		}
 		ctx, cancel := context.WithTimeout(w.ctx, server.Timeout)
 		digest := ""
 		if d := w.runDigest.Load(); d != nil {
@@ -358,13 +360,18 @@ func (w *Server) deliver(batch []queued) {
 			w.ack(id, batch)
 			return
 		case err == nil && d.Stop():
+			// A Stop while this try was on its way has recorded and reported the stop
+			// already: it is recorded and reported once.
 			w.mu.Lock()
+			already := w.stopped
 			w.stopped = true
 			if d.Closed() {
 				w.runClosed = true
 			}
+			if !already {
+				w.ack(stoppedWord, nil)
+			}
 			w.mu.Unlock()
-			w.ack(stoppedWord, nil)
 			if d.Closed() {
 				w.closeOnce.Do(func() {
 					if w.onEnded != nil {
@@ -373,7 +380,9 @@ func (w *Server) deliver(batch []queued) {
 				})
 				return
 			}
-			w.report("the server wants no more events of this run; the run goes on")
+			if !already {
+				w.report("the server wants no more events of this run; the run goes on")
+			}
 			return
 		}
 		if w.ctx.Err() != nil || !w.sleep(w.ctx, backoff) {

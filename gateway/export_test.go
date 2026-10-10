@@ -10,7 +10,14 @@ import (
 
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/runcredential"
+	"github.com/qoryai/forager/server"
 )
+
+// RegistrationAt is the bytes g sends for the registration reg at now: those it kept
+// for the run id, or new ones.
+func RegistrationAt(g *Gateway, reg server.Registration, now time.Time) ([]byte, error) {
+	return g.registrationAt(reg, now)
+}
 
 // SetQuiet makes a run whose session sends nothing for d end, in place of three
 // heartbeat intervals.

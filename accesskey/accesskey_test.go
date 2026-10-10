@@ -1060,7 +1060,7 @@ func TestReadRefusalIsApiarys(t *testing.T) {
 		t.Errorf("a body without a code: %+v", r)
 	}
 	// A Text, the link's message, is the whole of Error, whatever the members say.
-	r.Detail, r.Text = "ping https://apiary.example/v1/events", "the text the user reads"
+	r.Detail, r.Text = "register https://apiary.example/v1/runs", "the text the user reads"
 	if got := r.Error(); got != "the text the user reads" {
 		t.Errorf("Error() with a Text = %q", got)
 	}

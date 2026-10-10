@@ -24,7 +24,7 @@ const (
 	// ResendNoServer is reported when NoServer is set.
 	ResendNoServer = "the run had no server; nothing is sent"
 	// ResendNotOpened is reported when NotOpened is set and NoServer is not.
-	ResendNotOpened = "the server never accepted the run's registration; nothing is sent"
+	ResendNotOpened = "the run never opened at the server; nothing is sent"
 )
 
 // ResendConfig is what sending one run's record again is given.
@@ -61,14 +61,15 @@ type ResendResult struct {
 	// spools nothing.
 	Sent        int
 	Undelivered int
-	// NotOpened says the run never opened at the server, so nothing of it is sent, and
-	// the record is left as it is: neither the record nor delivered.log marks an
-	// accepted registration, and the record holds no run.started, the server never
-	// having accepted the run's registration; or NoServer.
+	// NotOpened says the record is sent to a server, at which the run never opened, so
+	// nothing of it is sent, and the record is left as it is: neither the record nor
+	// delivered.log marks an accepted registration; or NoServer. With no Sink it is
+	// never set.
 	NotOpened bool
-	// NoServer says neither the record nor delivered.log marks an accepted
-	// registration, and the record holds run.started: the run had no server, so it
-	// never opened at the one it is sent to. NotOpened is set too.
+	// NoServer says the record is sent to a server, neither the record nor
+	// delivered.log marks an accepted registration, and the record holds run.started:
+	// the run had no server, so it never opened at the one it is sent to. NotOpened is
+	// set too.
 	NoServer bool
 	// Torn is how many lines of the record hold bytes that are no whole event: a write
 	// the gateway did not finish. They are skipped and stay in the file, but for a last
@@ -86,14 +87,14 @@ type ResendResult struct {
 // contained is posted, in order and in the run's own batches, until the server accepts
 // it or the context ends. A server that said stop during the run is sent nothing. A
 // line of the record that holds bytes that are no whole event, a write the gateway did
-// not finish, is skipped, and every event after it is read on (see [record]). A record
-// with no mark of an accepted registration, no dev.qory.run.registered and no
-// delivered.log, and no run.started is of a run whose registration the server never
-// accepted, which never opened: it is NotOpened, left as it is, and sent nothing. So is
-// a record with no mark and a run.started, of a run that had no server, when it is sent
-// to one; with no Sink it is completed, as any other. A record that holds no event is
-// NotOpened when there is no delivered.log, and an error otherwise.
-// dev.qory.run.registered is never sent.
+// not finish, is skipped, and every event after it is read on (see [record]). Sent to
+// a server, a record with no mark of an accepted registration, no
+// dev.qory.run.registered and no delivered.log, is of a run that never opened there: it
+// is NotOpened, left as it is, and sent nothing, and NoServer as well when it holds
+// run.started, of a run that had no server. A record that holds no event is NotOpened
+// when there is no delivered.log, and an error otherwise. With no Sink, nothing is
+// NotOpened: every record is completed, as any other, and one that holds no event is
+// left as it is. dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -130,8 +131,9 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if res.NotOpened, res.NoServer, err = notOpened(cfg.Dir, rec); err != nil {
 		return nil, err
 	}
-	if res.NoServer && cfg.Sink == nil {
-		// Nothing is sent, and a run with no server is completed as any other.
+	if cfg.Sink == nil {
+		// Nothing is sent, and every run is completed as any other: whether it opened at
+		// a server matters only to one it is sent to.
 		res.NotOpened, res.NoServer = false, false
 	}
 	if res.NotOpened {
@@ -143,6 +145,10 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 		return res, nil
 	}
 	if len(rec.lines) == 0 {
+		if cfg.Sink == nil {
+			// Nothing to complete, and nothing is sent.
+			return res, nil
+		}
 		return nil, fmt.Errorf("%s holds no event", file)
 	}
 	accepted, stopped, err := sink.Delivered(cfg.Dir)
@@ -370,8 +376,8 @@ func whole(b []byte) (recorded, bool) {
 // run.registered in the record, its line torn on a full disk, and run.registered even
 // with no delivered.log, the gateway stopping before the sink made it. With neither, a
 // record with run.started is of a run that had no server, since a run with one starts
-// only once its registration is accepted, and one without of a run whose registration
-// the server never accepted.
+// only once its registration is accepted, and one without of a run that never opened:
+// its registration refused, or a run with no server refused before it started.
 func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
 	_, err = os.Stat(filepath.Join(dir, sink.DeliveredFile))
 	if err == nil {
