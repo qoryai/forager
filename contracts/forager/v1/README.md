@@ -1240,11 +1240,12 @@ Forager, which compares it byte for byte and never recomputes it.
 of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
 display: `qory` prints it. `apiary_public_key` lists the server's current key, and
 during a rotation the next one, for information: Forager verifies under its pin alone.
-`secrets` is optional, `{url}` with `run.url`'s grammar: present for an access key
+`secrets` is optional, `{url}` with `events.url`'s grammar: present for an access key
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type.
-`run.url` is the run endpoint, `https`, or `http` to a loopback address: a run registers
+`run.url` is the run endpoint, `https`, or `http` to a loopback address, with no query
+and no fragment, since a reload appends a slash and the run's id to it: a run registers
 there, and a reload fetches a run's configuration again there (The run endpoint, below).
 A document without `run` is refused, as any document the schema refuses. A top-level member
 Forager does not recognise is ignored, which is how a new revision adds a section.
