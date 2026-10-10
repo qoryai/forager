@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -47,18 +46,21 @@ func mustKey(k *accesskey.Key, err error) *accesskey.Key {
 	return k
 }
 
-// keys is a lookup that holds the fixture access key and counts how often it is
-// called.
+// keys is a lookup that holds the fixture access key, and a second access key id of
+// the same public key, standing for another node, and counts how often it is called.
 func keys(asked *int) func(string) (receiver.AccessKey, bool) {
 	return func(k string) (receiver.AccessKey, bool) {
 		*asked++
 		switch k {
-		case key:
+		case key, otherNode:
 			return receiver.AccessKey{PublicKey: fixtureKey.PublicKey()}, true
 		}
 		return receiver.AccessKey{}, false
 	}
 }
+
+// otherNode is an access key id the lookup holds beside the fixture's: another node's.
+const otherNode = "ak_f1xt0re000000001"
 
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
@@ -76,9 +78,14 @@ func digestOf(b []byte) string {
 	return "sha256=" + hex.EncodeToString(sum[:])
 }
 
+// refusedRepository is the repository the test's run configuration hook refuses, with
+// a 409 of its own code.
+const refusedRepository = "acme/refused"
+
 // handler is a receiver over a fresh store, serving the contract's fixtures as its
 // documents, with its clock where the test puts it. The run configuration hook records
-// the labels it was last handed in asked.
+// the run it was last handed in lastRun and how often it was called in hooked, and
+// refuses a run of refusedRepository.
 func handler(t *testing.T, now int64) (*receiver.Handler, *receiver.File, *int) {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
@@ -89,26 +96,30 @@ func handler(t *testing.T, now int64) (*receiver.Handler, *receiver.File, *int) 
 	asked := new(int)
 	conf := fixture(t, "fixtures/configuration/with-run.json")
 	run := fixture(t, "fixtures/run-configuration/enforce.json")
+	lastRun, hooked = nil, 0
 	h := &receiver.Handler{
 		Keys:          keys(asked),
 		Signer:        signingKey,
 		Store:         store,
 		Now:           func() time.Time { return time.Unix(now, 0) },
 		Configuration: func() ([]byte, string) { return conf, digestOf(conf) },
-		RunConfiguration: func(labels map[string]string) ([]byte, string, bool) {
-			lastLabels = maps.Clone(labels)
-			if labels["forge"] == "none.example" {
-				return nil, "", false
+		RunConfiguration: func(r receiver.Run) ([]byte, string, *receiver.Refusal) {
+			lastRun, hooked = &r, hooked+1
+			if r.Labels["repository"] == refusedRepository {
+				return nil, "", &receiver.Refusal{Status: http.StatusConflict, Code: "repository_unknown"}
 			}
-			return run, digestOf(run), true
+			return run, digestOf(run), nil
 		},
 	}
 	return h, store, asked
 }
 
-// lastLabels are the labels the run configuration hook was last handed. The tests
-// that read it do not run in parallel.
-var lastLabels map[string]string
+// lastRun is the run the run configuration hook was last handed, and hooked how often
+// it was called. The tests that read them do not run in parallel.
+var (
+	lastRun *receiver.Run
+	hooked  int
+)
 
 // signedGET makes a GET signed under the key as the fixture access key and instance,
 // at the given timestamp.
@@ -137,12 +148,75 @@ func signedPOST(target string, k *accesskey.Key, body []byte) *http.Request {
 	return req
 }
 
+// as signs the request again under the fixture key, as the access key id and the
+// instance id given, an empty instance id sending none.
+func as(id, instance string, r *http.Request) *http.Request {
+	r.Header.Set(server.HeaderAccessKeyID, id)
+	if instance == "" {
+		r.Header.Del(server.HeaderInstanceID)
+	} else {
+		r.Header.Set(server.HeaderInstanceID, instance)
+	}
+	sr := accesskey.Request{AccessKeyID: id, InstanceID: instance, Method: r.Method, Target: r.URL.RequestURI(), Timestamp: r.Header.Get(server.HeaderTimestamp)}
+	if r.Method == http.MethodPost {
+		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
+		sr.Body = b
+		sr.Timestamp = ""
+	}
+	sig, _ := fixtureKey.SignRequest(sr)
+	r.Header.Set(server.HeaderSignature, sig)
+	return r
+}
+
+// registration is a registration body: the run id, its labels, nil for none, the
+// interval, and the time, in Unix seconds.
+func registration(runID string, labels map[string]string, interval int, at int64) []byte {
+	m := map[string]any{"version": 1, "run_id": runID, "forager_version": "test", "contract_version": 1,
+		"interval_seconds": interval, "events": []string{"*"}, "time": time.Unix(at, 0).UTC().Format(time.RFC3339)}
+	if labels != nil {
+		m["labels"] = labels
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// signedRegister makes a registration signed under the fixture key as the fixture
+// access key and instance: Content-Type application/json, and neither X-Qory-Delivery
+// nor X-Qory-Timestamp.
+func signedRegister(body []byte) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, receiver.DefaultRunPath, strings.NewReader(string(body)))
+	req.Header.Set(server.HeaderAccessKeyID, key)
+	req.Header.Set(server.HeaderInstanceID, inst)
+	req.Header.Set(server.HeaderContractVersion, "1")
+	req.Header.Set("Content-Type", receiver.RegistrationType)
+	sig, _ := fixtureKey.SignRequest(accesskey.Request{AccessKeyID: key, InstanceID: inst, Method: http.MethodPost, Target: receiver.DefaultRunPath, Body: body})
+	req.Header.Set(server.HeaderSignature, sig)
+	return req
+}
+
+// reload makes the reload of a run by its id, signed at the given timestamp.
+func reload(runID, ts string) *http.Request {
+	return signedGET(receiver.DefaultRunPath+"/"+runID, fixtureKey, ts)
+}
+
 // signedAnswer reports whether the answer is signed under the receiver's key and
 // bound to the request.
 func signedAnswer(req *http.Request, rec *httptest.ResponseRecorder) bool {
 	return pin.VerifyAnswer(accesskey.Answer{Status: rec.Code, RequestSignature: req.Header.Get(server.HeaderSignature), Body: rec.Body.Bytes(),
 		Configuration: rec.Header().Get(server.HeaderConfiguration), RunConfiguration: rec.Header().Get(server.HeaderRunConfiguration)}, rec.Header().Get(server.HeaderSignature)) &&
 		rec.Header().Get("Cache-Control") == "no-store, no-transform"
+}
+
+// runAnswer reports whether the answer is a signed 200 of the document, with its
+// digest as X-Qory-Run-Configuration and the same digest quoted as the ETag.
+func runAnswer(req *http.Request, rec *httptest.ResponseRecorder, doc []byte) bool {
+	d := digestOf(doc)
+	return rec.Code == http.StatusOK && rec.Body.String() == string(doc) && rec.Header().Get("Content-Type") == "application/json" &&
+		rec.Header().Get(server.HeaderRunConfiguration) == d && rec.Header().Get("ETag") == `"`+d+`"` && signedAnswer(req, rec)
 }
 
 func serve(h *receiver.Handler, req *http.Request) *httptest.ResponseRecorder {
@@ -152,19 +226,23 @@ func serve(h *receiver.Handler, req *http.Request) *httptest.ResponseRecorder {
 }
 
 // TestSignedFixturesReplay pins the receiver against the contract's signed fixtures:
-// each, sent as recorded with the receiver's clock at the fixture time, gets the
-// status and the code the fixture expects, the replayed batch stores nothing twice,
-// every 401 and every refusal before verification goes out unsigned, and every other
-// answer is signed under the receiver's key and bound to the request.
+// each, sent as recorded with the receiver's clock at the fixture time in the order of
+// the names, gets the status and the code the fixture expects, the replayed batch stores
+// nothing twice, every 401 and every refusal before verification goes out unsigned,
+// and every other answer is signed under the receiver's key and bound to the request.
+// The receiver admits the fixture instance only, and its hook is handed the
+// registration's run: its id, labels and about.
 func TestSignedFixturesReplay(t *testing.T) {
 	h, store, _ := handler(t, 1700000000)
+	h.Admit = func(id, instance string) bool { return id == key && instance == inst }
 	names, err := fs.Glob(contracts.FS, "fixtures/signed/*.json")
-	if err != nil || len(names) < 11 {
+	if err != nil || len(names) < 16 {
 		t.Fatalf("signed fixtures: %v, %v", names, err)
 	}
 	sort.Strings(names)
 	var first []json.RawMessage
 	json.Unmarshal(fixture(t, "fixtures/batch/first.json"), &first)
+	run := fixture(t, "fixtures/run-configuration/enforce.json")
 	for _, name := range names {
 		var f struct {
 			Method     string                     `json:"method"`
@@ -196,6 +274,7 @@ func TestSignedFixturesReplay(t *testing.T) {
 				}
 			}
 		}
+		lastRun = nil
 		rec := serve(h, req)
 		if rec.Code != f.Expect {
 			t.Errorf("%s: %d, want %d (%s): %s", name, rec.Code, f.Expect, f.Note, rec.Body.String())
@@ -216,15 +295,18 @@ func TestSignedFixturesReplay(t *testing.T) {
 		if rec.Code == http.StatusOK && strings.HasPrefix(f.Target, server.WellKnown) && rec.Header().Get(server.HeaderConfiguration) == "" {
 			t.Errorf("%s: no configuration digest on the answer", name)
 		}
-		if rec.Code == http.StatusOK && strings.HasPrefix(f.Target, receiver.DefaultRunPath) && (rec.Header().Get(server.HeaderRunConfiguration) == "" || rec.Header().Get("ETag") != `"`+rec.Header().Get(server.HeaderRunConfiguration)+`"`) {
-			t.Errorf("%s: the run configuration answer's headers %v", name, rec.Header())
+		if rec.Code == http.StatusOK && strings.HasPrefix(f.Target, receiver.DefaultRunPath) && !runAnswer(req, rec, run) {
+			t.Errorf("%s: the run configuration answer %q, headers %v", name, rec.Body.String(), rec.Header())
 		}
-		// Each run configuration fetch hands the hook every label its query carries.
-		if want, ok := map[string]map[string]string{
-			"get-run-configuration-valid.json":        {"forge": "github.com", "repository": "acme/shop"},
-			"get-run-configuration-labels-valid.json": {"forge": "github.com", "issue": "77", "repository": "acme/shop"},
-		}[path.Base(name)]; ok && !maps.Equal(lastLabels, want) {
-			t.Errorf("%s: the hook was handed %v, want %v", name, lastLabels, want)
+		// The registration accepted first, register-replayed in the order of the names,
+		// hands the hook the run as it registered; register-valid, the same bytes, then
+		// gets the same answer without it.
+		if path.Base(name) == "register-replayed.json" {
+			want := map[string]string{"forge": "github.com", "repository": "acme/shop"}
+			if lastRun == nil || lastRun.ID != "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f" || lastRun.AccessKeyID != key || lastRun.InstanceID != inst ||
+				!maps.Equal(lastRun.Labels, want) || string(lastRun.About) != `{"title":"Fix the failing build"}` {
+				t.Errorf("%s: the hook was handed %+v", name, lastRun)
+			}
 		}
 	}
 	if store.Count() != len(first) {
@@ -270,6 +352,7 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 		t.Errorf("the lookup was asked %d times for access key ids without the shape", *asked)
 	}
 	other := mustKey(accesskey.NewKey(make([]byte, 32)))
+	body := registration(event.NewRunID(), nil, 30, 1700000000)
 	for name, req := range map[string]*http.Request{
 		"an unknown access key": func() *http.Request {
 			r := signedGET(server.WellKnown, fixtureKey, "1700000000")
@@ -307,6 +390,21 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 			r.Header.Del(server.HeaderSignature)
 			return r
 		}(),
+		"a registration under another access key id than the signed one": func() *http.Request {
+			r := signedRegister(body)
+			r.Header.Set(server.HeaderAccessKeyID, otherNode)
+			return r
+		}(),
+		"a registration whose body is not the signed one": func() *http.Request {
+			r := signedRegister(registration(event.NewRunID(), nil, 30, 1700000000))
+			r.Header.Set(server.HeaderSignature, signedRegister(body).Header.Get(server.HeaderSignature))
+			return r
+		}(),
+		"a reload signed for another run": func() *http.Request {
+			r := reload(event.NewRunID(), "1700000000")
+			r.Header.Set(server.HeaderSignature, reload(event.NewRunID(), "1700000000").Header.Get(server.HeaderSignature))
+			return r
+		}(),
 	} {
 		if rec := serve(h, req); rec.Code != 401 || rec.Body.String() != `{"error":"unauthorized"}` || rec.Header().Get("Content-Type") != "application/json" || rec.Header().Get(server.HeaderSignature) != "" {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
@@ -329,11 +427,7 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 // TestSignedRefusalsComeInTheContractsOrder pins the refusals after verification,
 // each signed and bound to its request: an instance id absent or outside its pattern
 // is 400 bad_request, before another contract revision, which is 400
-// unsupported_contract_version; a batch that is not
-// one, or a ping with an interval over 300 seconds, is 400 invalid_request; and on
-// the events endpoint, a run the receiver wants nothing more of is 410 without a
-// code, and a ping from an instance it does not admit 409
-// instance_limit, while a retried ping it already accepted gets its 202 again.
+// unsupported_contract_version; a batch that is not one is 400 invalid_request.
 func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 	h, _, _ := handler(t, 1700000000)
 	check := func(name string, req *http.Request, status int, code string) {
@@ -347,64 +441,218 @@ func TestSignedRefusalsComeInTheContractsOrder(t *testing.T) {
 			t.Errorf("%s: %d %s, signed %v; want %d %s", name, rec.Code, rec.Body.String(), signedAnswer(req, rec), status, code)
 		}
 	}
-	as := func(id string, r *http.Request) *http.Request {
-		r.Header.Set(server.HeaderAccessKeyID, id)
-		target := r.URL.RequestURI()
-		sr := accesskey.Request{AccessKeyID: id, InstanceID: r.Header.Get(server.HeaderInstanceID), Method: r.Method, Target: target, Timestamp: r.Header.Get(server.HeaderTimestamp)}
-		if r.Method == http.MethodPost {
-			b, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(strings.NewReader(string(b)))
-			sr.Body = b
-		}
-		sig, _ := fixtureKey.SignRequest(sr)
-		r.Header.Set(server.HeaderSignature, sig)
-		return r
-	}
-	instance := func(id string, r *http.Request) *http.Request {
-		if id == "" {
-			r.Header.Del(server.HeaderInstanceID)
-		} else {
-			r.Header.Set(server.HeaderInstanceID, id)
-		}
-		return as(r.Header.Get(server.HeaderAccessKeyID), r)
-	}
-	check("no instance id", instance("", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
-	check("an instance id outside the pattern", instance("-i", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
+	check("no instance id", as(key, "", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
+	check("an instance id outside the pattern", as(key, "-i", signedGET(server.WellKnown, fixtureKey, "1700000000")), 400, "bad_request")
+	check("a registration with no instance id", as(key, "", signedRegister(registration(event.NewRunID(), nil, 30, 1700000000))), 400, "bad_request")
 	revision := signedGET(server.WellKnown, fixtureKey, "1700000000")
 	revision.Header.Set(server.HeaderContractVersion, "2")
 	check("another revision", revision, 400, "unsupported_contract_version")
+	stale := signedRegister(registration(event.NewRunID(), map[string]string{"Forge": "x"}, 30, 1699999000))
+	stale.Header.Set(server.HeaderContractVersion, "2")
+	check("a registration of another revision", stale, 400, "unsupported_contract_version")
 	check("an empty batch", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("[]")), 400, "invalid_request")
-	check("labels the contract refuses", signedGET(receiver.DefaultRunPath+"?Forge=x", fixtureKey, "1700000000"), 400, "invalid_request")
+}
 
-	e := event.NewEmitter(event.NewRunID(), nil)
-	ping, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
-	pingBody := []byte("[" + string(ping) + "]")
-	long, _ := e.Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 301}).JSON()
-	check("a ping with an interval over 300 seconds", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(long)+"]")), 400, "invalid_request")
+// TestTheRunEndpointRefusesInItsOrder pins the run endpoint's own order after the
+// shared one: a body the contract refuses is a signed 400 invalid_request, before a
+// time outside the window, the unsigned 401; then a registration the receiver accepted
+// with the same bytes gets the same answer again, before a run it wants nothing more
+// of, a signed 410 without a code, before an instance it does not admit, a signed 409
+// instance_limit, before a run id it accepted with other bytes, a signed 409
+// run_id_used; then the hook's refusal, which keeps nothing of the run.
+func TestTheRunEndpointRefusesInItsOrder(t *testing.T) {
+	h, _, _ := handler(t, 1700000000)
+	run := fixture(t, "fixtures/run-configuration/enforce.json")
+	check := func(name string, req *http.Request, status int, code string) {
+		t.Helper()
+		rec := serve(h, req)
+		want := ""
+		if code != "" {
+			want = `{"error":"` + code + `"}`
+		}
+		if rec.Code != status || rec.Body.String() != want || !signedAnswer(req, rec) {
+			t.Errorf("%s: %d %s, signed %v; want %d %s", name, rec.Code, rec.Body.String(), signedAnswer(req, rec), status, code)
+		}
+	}
+	unauthorized := func(name string, req *http.Request) {
+		t.Helper()
+		if rec := serve(h, req); rec.Code != 401 || rec.Body.String() != `{"error":"unauthorized"}` || rec.Header().Get(server.HeaderSignature) != "" {
+			t.Errorf("%s: %d %s, want the unsigned 401", name, rec.Code, rec.Body.String())
+		}
+	}
+	accepted := func(name string, req *http.Request) {
+		t.Helper()
+		if rec := serve(h, req); !runAnswer(req, rec, run) {
+			t.Errorf("%s: %d %s %v", name, rec.Code, rec.Body.String(), rec.Header())
+		}
+	}
+	id := event.NewRunID()
+	shop := map[string]string{"forge": "github.com", "repository": "acme/shop"}
+	hooked = 0
+	for name, body := range map[string][]byte{
+		"an interval over 300 seconds":        registration(id, shop, 301, 1700000000),
+		"no interval":                         []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"interval_seconds":30,`, "", 1)),
+		"a member the schema does not define": []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"extra":true`, 1)),
+		"a time with fractional seconds":      []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `22:13:20Z`, `22:13:20.5Z`, 1)),
+		"a time that is no date":              []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `2023-11-14`, `2023-13-14`, 1)),
+		"a run id not in the canonical form":  registration(strings.ToUpper(id), shop, 30, 1700000000),
+		"labels the contract refuses":         registration(id, map[string]string{"Forge": "x"}, 30, 1700000000),
+		"an about the contract refuses":       []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"about":{"subjects":[{"type":"example","ref":"7"},{"type":"example","ref":"7"}]}`, 1)),
+		"a body that is not JSON":             []byte("{"),
+		"a refused body outside the window":   registration(id, map[string]string{"Forge": "x"}, 30, 1699999000),
+	} {
+		check(name, signedRegister(body), 400, "invalid_request")
+	}
+	if hooked != 0 {
+		t.Errorf("the hook was called %d times for registrations the contract refuses", hooked)
+	}
+	unauthorized("a stale time", signedRegister(registration(id, shop, 30, 1699999699)))
+	unauthorized("a time from the future", signedRegister(registration(id, shop, 30, 1700000301)))
+	accepted("a time at the edge of the window", signedRegister(registration(event.NewRunID(), shop, 30, 1699999700)))
+	accepted("a time at the other edge", signedRegister(registration(event.NewRunID(), shop, 30, 1700000300)))
+
 	admitted := true
 	h.Admit = func(id, instance string) bool { return admitted && id == key && instance == inst }
-	check("a ping it admits", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
+	body := registration(id, shop, 30, 1700000000)
+	accepted("a registration it admits", signedRegister(body))
 	admitted = false
-	check("the same ping again", signedPOST(receiver.DefaultEventsPath, fixtureKey, pingBody), 202, "")
-	other, _ := event.NewEmitter(event.NewRunID(), nil).Make(event.Ping, map[string]any{"forager_version": "test", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30}).JSON()
-	check("a ping it does not admit", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(other)+"]")), 409, "instance_limit")
+	accepted("the same bytes again", signedRegister(body))
+	unauthorized("the same bytes outside the window", signedRegister(registration(id, shop, 30, 1699999000)))
+	check("a new run of an instance it does not admit", signedRegister(registration(event.NewRunID(), shop, 30, 1700000000)), 409, "instance_limit")
+	check("other bytes of the run id, from an instance it does not admit", signedRegister(registration(id, nil, 30, 1700000000)), 409, "instance_limit")
+	admitted = true
+	check("other labels for the run id", signedRegister(registration(id, nil, 30, 1700000000)), 409, "run_id_used")
+	check("another time for the run id", signedRegister(registration(id, shop, 30, 1700000001)), 409, "run_id_used")
+	h.Admit = nil
+	check("the same bytes from another node", as(otherNode, inst, signedRegister(body)), 409, "run_id_used")
 
-	beat, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}).JSON()
-	h.Stop = func(run string) bool { return run == e.RunID() }
-	check("a run it wants nothing more of", signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat)+"]")), 410, "")
+	stopped := event.NewRunID()
+	h.Stop = func(run string) bool { return run == stopped || run == id }
+	h.Admit = func(string, string) bool { return false }
+	check("a run it wants nothing more of, from an instance it does not admit", signedRegister(registration(stopped, shop, 30, 1700000000)), 410, "")
+	accepted("the same bytes of a run it accepted, though it wants nothing more of it", signedRegister(body))
+	check("other bytes of a run it accepted and wants nothing more of", signedRegister(registration(id, nil, 30, 1700000000)), 410, "")
+	h.Stop, h.Admit = nil, nil
+
+	refused := event.NewRunID()
+	check("a run the hook refuses", signedRegister(registration(refused, map[string]string{"repository": refusedRepository}, 30, 1700000000)), 409, "repository_unknown")
+	accepted("the refused run id registered again with other labels", signedRegister(registration(refused, shop, 30, 1700000000)))
+	h.RunConfiguration = func(receiver.Run) ([]byte, string, *receiver.Refusal) {
+		return nil, "", &receiver.Refusal{Status: http.StatusGone}
+	}
+	check("a run the hook refuses with no code", signedRegister(registration(event.NewRunID(), shop, 30, 1700000000)), 410, "")
+}
+
+// TestRegistrationAndReload pins the run endpoint's answers: without a hook every run
+// gets {"version":1}, with its digest as X-Qory-Run-Configuration and ETag; the hook
+// is handed a copy of the labels, and its empty digest is the receiver's own; a reload
+// by the run's id gives the run configuration again, and is answered only for a run
+// registered under the same access key, a signed 404 otherwise; a run it wants
+// nothing more of is a reload's 410; the content type is checked per path.
+func TestRegistrationAndReload(t *testing.T) {
+	h, _, _ := handler(t, 1700000000)
+	h.RunConfiguration = nil
+	shop := map[string]string{"forge": "github.com", "repository": "acme/shop"}
+	id := event.NewRunID()
+	req := signedRegister(registration(id, shop, 30, 1700000000))
+	if rec := serve(h, req); !runAnswer(req, rec, []byte(`{"version":1}`)) {
+		t.Errorf("a registration without a hook: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	}
+	req = reload(id, "1700000000")
+	if rec := serve(h, req); !runAnswer(req, rec, []byte(`{"version":1}`)) {
+		t.Errorf("a reload without a hook: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	}
+	notFound := func(name string, req *http.Request) {
+		t.Helper()
+		if rec := serve(h, req); rec.Code != http.StatusNotFound || rec.Body.Len() != 0 || !signedAnswer(req, rec) {
+			t.Errorf("%s: %d %s, signed %v; want a signed 404", name, rec.Code, rec.Body.String(), signedAnswer(req, rec))
+		}
+	}
+	notFound("a reload of a run never registered", reload(event.NewRunID(), "1700000000"))
+	notFound("a reload of the run under another node's access key", as(otherNode, inst, reload(id, "1700000000")))
+	if rec := serve(h, reload(id, "1699999699")); rec.Code != 401 || rec.Header().Get(server.HeaderSignature) != "" {
+		t.Errorf("a reload with a stale timestamp: %d", rec.Code)
+	}
+	if rec := serve(h, as(key, "", reload(id, "1700000000"))); rec.Code != 400 || rec.Body.String() != `{"error":"bad_request"}` {
+		t.Errorf("a reload with no instance id: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var handed receiver.Run
+	doc := []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}}`)
+	h.RunConfiguration = func(r receiver.Run) ([]byte, string, *receiver.Refusal) {
+		handed = r
+		handed.Labels = maps.Clone(r.Labels)
+		r.Labels["repository"] = "changed"
+		return doc, "", nil
+	}
+	req = reload(id, "1700000000")
+	if rec := serve(h, req); !runAnswer(req, rec, doc) {
+		t.Errorf("a reload once the hook gives a policy: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	}
+	req = reload(id, "1700000000")
+	if rec := serve(h, req); !runAnswer(req, rec, doc) || !maps.Equal(handed.Labels, shop) || handed.ID != id || handed.About != nil {
+		t.Errorf("a second reload: %d, the hook handed %+v", rec.Code, handed)
+	}
+	h.Stop = func(run string) bool { return run == id }
+	if req := reload(id, "1700000000"); func() bool {
+		rec := serve(h, req)
+		return rec.Code != 410 || rec.Body.Len() != 0 || !signedAnswer(req, rec)
+	}() {
+		t.Errorf("a reload of a run it wants nothing more of: want a signed 410")
+	}
+	h.Stop = nil
+
+	body := registration(event.NewRunID(), nil, 30, 1700000000)
+	for name, ct := range map[string]string{
+		"the batch type": server.ContentType,
+		"no type":        "",
+		"text":           "text/plain",
+	} {
+		r := signedRegister(body)
+		r.Header.Set("Content-Type", ct)
+		r.Header.Del(server.HeaderSignature)
+		if rec := serve(h, r); rec.Code != http.StatusUnsupportedMediaType || rec.Header().Get(server.HeaderSignature) != "" {
+			t.Errorf("a registration of %s: %d", name, rec.Code)
+		}
+	}
+	r := signedRegister(body)
+	r.Header.Set("Content-Type", "application/json; charset=utf-8")
+	if rec := serve(h, r); !runAnswer(r, rec, doc) || handed.Labels == nil || len(handed.Labels) != 0 {
+		t.Errorf("a registration of application/json with a parameter and no labels: %d %s, the hook handed %v", rec.Code, rec.Body.String(), handed.Labels)
+	}
+	g := reload(id, "1700000000")
+	g.Header.Set("Content-Type", server.ContentType)
+	if rec := serve(h, g); rec.Code != 200 {
+		t.Errorf("a reload with a content type: %d", rec.Code)
+	}
+	for name, req := range map[string]*http.Request{
+		"a reload of a run id in upper case": reload(strings.ToUpper(id), "1700000000"),
+		"a reload of no run id":              signedGET(receiver.DefaultRunPath+"/", fixtureKey, "1700000000"),
+		"a reload below the run id":          signedGET(receiver.DefaultRunPath+"/"+id+"/x", fixtureKey, "1700000000"),
+	} {
+		if rec := serve(h, req); rec.Code != 404 || rec.Header().Get(server.HeaderSignature) != "" {
+			t.Errorf("%s: %d, want the unsigned 404 of a path not served", name, rec.Code)
+		}
+	}
+	if rec := serve(h, signedGET(receiver.DefaultRunPath, fixtureKey, "1700000000")); rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("a GET of the run endpoint: %d", rec.Code)
+	}
+	if rec := serve(h, signedPOST(receiver.DefaultRunPath+"/"+id, fixtureKey, []byte("[]"))); rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("a POST of a run: %d", rec.Code)
+	}
 }
 
 // TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests pins the events endpoint: the
 // wrong content type is 415, before verification, a duplicate is not stored twice, a
-// reopened store still knows its ids, and the answer contains the configuration digest
-// and, once the run's run.started named its labels, the run configuration digest for
-// all of them, both under its signature. It pins the run configuration endpoint too:
-// the query is the run's labels, and one that is not, once the request verifies, is a
-// signed 400 invalid_request the hook never sees.
+// reopened store still knows its ids, and the answer contains the configuration
+// digest and, once the run registered, the run configuration digest the hook gives
+// for it, both under its signature; a run the receiver wants nothing more of is a
+// signed 410 without a code. No delivery is a registration: a batch's labels reach no
+// hook.
 func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	h, store, _ := handler(t, 1700000000)
 	e := event.NewEmitter(event.NewRunID(), nil)
-	started, _ := e.Make(event.RunStarted, map[string]any{"runtime": "x", "labels": map[string]string{"forge": "none.example", "repository": "acme/shop"}}).JSON()
+	started, _ := e.Make(event.RunStarted, map[string]any{"runtime": "x", "labels": map[string]string{"forge": "github.com", "repository": "acme/shop"}}).JSON()
 	body := []byte("[" + string(started) + "," + string(started) + "]")
 	wrong := signedPOST(receiver.DefaultEventsPath, fixtureKey, body)
 	wrong.Header.Set("Content-Type", "application/json")
@@ -414,63 +662,29 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	}
 	first := signedPOST(receiver.DefaultEventsPath, fixtureKey, body)
 	rec := serve(h, first)
-	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) == "" || rec.Header().Get(server.HeaderRunConfiguration) != "" || !signedAnswer(first, rec) {
-		t.Errorf("a delivery for a forge with no run configuration: %d %v", rec.Code, rec.Header())
+	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) == "" || rec.Header().Get(server.HeaderRunConfiguration) != "" || !signedAnswer(first, rec) || hooked != 0 {
+		t.Errorf("a delivery of a run that never registered: %d %v, the hook called %d times", rec.Code, rec.Header(), hooked)
 	}
 	if store.Count() != 1 {
 		t.Errorf("stored %d, want the duplicate dropped", store.Count())
 	}
-	other := event.NewEmitter(event.NewRunID(), nil)
-	labels := map[string]string{"forge": "github.com", "issue": "77", "repository": "acme/shop"}
-	line, _ := other.Make(event.RunStarted, map[string]any{"runtime": "x", "labels": labels}).JSON()
-	second := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(line)+"]"))
-	rec = serve(h, second)
 	run := fixture(t, "fixtures/run-configuration/enforce.json")
-	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderRunConfiguration) != digestOf(run) || !maps.Equal(lastLabels, labels) || !signedAnswer(second, rec) {
-		t.Errorf("a delivery for a forge with a run configuration: %d %v, the hook handed %v", rec.Code, rec.Header(), lastLabels)
+	if req := signedRegister(registration(e.RunID(), map[string]string{"forge": "github.com", "repository": "acme/shop"}, 30, 1700000000)); !runAnswer(req, serve(h, req), run) {
+		t.Fatal("the registration of the run was not accepted")
 	}
-	lastLabels = nil
-	if rec := serve(h, signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(line)+"]"))); rec.Code != http.StatusAccepted || !maps.Equal(lastLabels, labels) {
-		t.Errorf("a later delivery of the run: %d, the hook handed %v", rec.Code, lastLabels)
+	beat, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}).JSON()
+	second := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat)+"]"))
+	rec = serve(h, second)
+	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderRunConfiguration) != digestOf(run) || !signedAnswer(second, rec) {
+		t.Errorf("a delivery of a registered run: %d %v", rec.Code, rec.Header())
 	}
-	unknown := event.NewEmitter(event.NewRunID(), nil)
-	log, _ := unknown.Make(event.RunLog, map[string]any{"stream": "stdout", "bytes": "eA=="}).JSON()
-	if rec := serve(h, signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(log)+"]"))); rec.Code != http.StatusAccepted || lastLabels == nil || len(lastLabels) != 0 {
-		t.Errorf("a delivery of a run whose run.started was not seen: %d, the hook handed %v", rec.Code, lastLabels)
+	h.Stop = func(run string) bool { return run == e.RunID() }
+	beat2, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}).JSON()
+	stop := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat2)+"]"))
+	if rec := serve(h, stop); rec.Code != http.StatusGone || rec.Body.Len() != 0 || !signedAnswer(stop, rec) {
+		t.Errorf("a delivery of a run it wants nothing more of: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := serve(h, signedGET(receiver.DefaultRunPath+"?forge=github.com&repository=acme%2Fshop", fixtureKey, "1700000000")); rec.Code != 200 || rec.Header().Get("ETag") != `"`+digestOf(run)+`"` || rec.Body.String() != string(run) {
-		t.Errorf("the run configuration: %d %v", rec.Code, rec.Header())
-	}
-	if rec := serve(h, signedGET(receiver.DefaultRunPath+"?forge=none.example", fixtureKey, "1700000000")); rec.Code != 404 {
-		t.Errorf("the run configuration of a forge without one: %d", rec.Code)
-	}
-	if rec := serve(h, signedGET(receiver.DefaultRunPath, fixtureKey, "1700000000")); rec.Code != 200 || lastLabels == nil || len(lastLabels) != 0 {
-		t.Errorf("the run configuration of a run with no label: %d, the hook handed %v", rec.Code, lastLabels)
-	}
-	many := make([]string, 17)
-	for i := range many {
-		many[i] = fmt.Sprintf("k%d=v", i)
-	}
-	for name, query := range map[string]string{
-		"a key sent twice":       "forge=github.com&forge=gitlab.com",
-		"an upper-case key":      "Forge=github.com",
-		"an empty key":           "=github.com",
-		"a value over 256 bytes": "note=" + strings.Repeat("v", 257),
-		"a value not UTF-8":      "note=%FF",
-		"a malformed escape":     "note=%zz",
-		"seventeen labels":       strings.Join(many, "&"),
-	} {
-		lastLabels = nil
-		rec := serve(h, signedGET(receiver.DefaultRunPath+"?"+query, fixtureKey, "1700000000"))
-		if rec.Code != http.StatusBadRequest || lastLabels != nil {
-			t.Errorf("%s: %d, the hook handed %v", name, rec.Code, lastLabels)
-		}
-	}
-	bad := signedGET(receiver.DefaultRunPath+"?Forge=github.com", fixtureKey, "1700000000")
-	bad.Header.Set(server.HeaderSignature, signedGET(receiver.DefaultRunPath, fixtureKey, "1700000000").Header.Get(server.HeaderSignature))
-	if rec := serve(h, bad); rec.Code != 401 {
-		t.Errorf("a query that is not labels under a signature that does not verify: %d, want the 401 first", rec.Code)
-	}
+	h.Stop = nil
 	if rec := serve(h, signedGET("/elsewhere", fixtureKey, "1700000000")); rec.Code != 404 {
 		t.Errorf("a path the receiver does not serve: %d", rec.Code)
 	}
