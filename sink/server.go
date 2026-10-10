@@ -39,7 +39,9 @@ const QueueSize = 10000
 
 // DeliveredFile is the file in the run directory that holds what the server accepted,
 // a line per batch written as the answer comes: the delivery id, then the sequence of
-// each event in it. A server's stop, a signed 410 with any code or none, and on the
+// each event in it. Toward the server its first line is the word registered and the
+// sequence of the run's dev.qory.run.registered, the mark of the registration the
+// server accepted: the file is made only once it has. A server's stop, a signed 410 with any code or none, and on the
 // link an answer that ended the run, one [Server.RunEnded] records among them, is the
 // one word stopped. With events.jsonl it says what a run cut short still owes
 // its server.
@@ -47,6 +49,10 @@ const DeliveredFile = "delivered.log"
 
 // stoppedWord is the line of [DeliveredFile] that records the server's stop.
 const stoppedWord = "stopped"
+
+// RegisteredWord begins the line of [DeliveredFile] that marks the run's accepted
+// registration: the word, then the sequence of the run's dev.qory.run.registered.
+const RegisteredWord = "registered"
 
 // UndeliveredDir is the directory under the run directory that holds the batches the
 // server did not accept, one file per delivery id.
@@ -56,14 +62,15 @@ const UndeliveredDir = "undelivered"
 // document as it stands now, since a reload may replace it.
 type Target struct {
 	URL string
-	// Types are full type names, or "*" for every type. The ping is always wanted.
+	// Types are full type names, or "*" for every type.
 	Types []string
 }
 
-// Wants reports whether the target asks for events of the type.
+// Wants reports whether the target asks for events of the type. dev.qory.run.registered
+// is never wanted: it is the record's alone, and never posted.
 func (t Target) Wants(typ string) bool {
-	if typ == "dev.qory.ping" {
-		return true
+	if typ == event.RunRegistered {
+		return false
 	}
 	for _, e := range t.Types {
 		if e == "*" || e == typ {
@@ -381,9 +388,10 @@ func (w *Server) deliver(batch []queued) {
 	}
 }
 
-// Accepted records a delivery the sink did not make itself, the ping, which the session
-// posts before there is a sink.
-func (w *Server) Accepted(id, seq string) { w.ack(id, []queued{{seq: seq}}) }
+// Registered marks the run's accepted registration in [DeliveredFile], with the
+// sequence of its dev.qory.run.registered: what the gateway's record holds of a
+// registration the server accepted before there was a sink, which is never posted.
+func (w *Server) Registered(seq string) { w.ack(RegisteredWord, []queued{{seq: seq}}) }
 
 // ack records an accepted batch, or the server's stop, as it happens: a session that
 // dies after it has nothing to say twice.
@@ -484,6 +492,22 @@ func (w *Server) RunEnded() {
 	}
 	w.stopped = true
 	w.ack(stoppedWord, nil)
+}
+
+// Stop records that an answer of the server's the sink did not read itself, a signed
+// 410 to the reload of the run's run configuration, says the server wants nothing more
+// of the run: as after the sink's own, nothing more is sent, [DeliveredFile] says
+// stopped, once, and the run goes on.
+func (w *Server) Stop() {
+	w.mu.Lock()
+	if w.stopped {
+		w.mu.Unlock()
+		return
+	}
+	w.stopped = true
+	w.ack(stoppedWord, nil)
+	w.mu.Unlock()
+	w.report("the server wants no more events of this run; the run goes on")
 }
 
 // RunClosed reports whether an answer on the link ended the run. A server's signed 410

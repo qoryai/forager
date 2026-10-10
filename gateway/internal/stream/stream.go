@@ -2,8 +2,9 @@
 // run's events, the session's and the gateway's own, and where the numbered stream goes.
 //
 // A [Run] numbers its stream with one contiguous sequence from 0000000001, as the
-// contract's §The events requires. With a server the gateway's ping for the run is the
-// first event. The session's events arrive on the link with their ids and without a
+// contract's §The events requires. With a server the run's dev.qory.run.registered,
+// the record of its accepted registration, is the first event: the record's alone,
+// never posted. The session's events arrive on the link with their ids and without a
 // sequence, and are numbered in the order they arrive, each id once: a batch the session
 // sends again is not numbered twice. The gateway's own run.egress waits until
 // run.started is numbered; in a run that never starts it comes before the run's final
@@ -58,8 +59,9 @@ var (
 type Sink interface {
 	// Write queues an event; it never blocks on the server.
 	Write(*event.Event) error
-	// Accepted records a delivery the sink did not make itself, the ping.
-	Accepted(id, seq string)
+	// Registered marks the run's accepted registration, with the sequence of its
+	// dev.qory.run.registered, which the sink never posts.
+	Registered(seq string)
 	// Resend queues a line the record already holds, waiting for room.
 	Resend(ctx context.Context, line []byte, seq string) bool
 	// Close delivers what is queued until the context ends and spools the rest.
@@ -189,8 +191,8 @@ type Run struct {
 	record *os.File
 	unlock func()
 	server Sink
-	// ping is the sequence of the ping, when there is one.
-	ping string
+	// registered is the sequence of dev.qory.run.registered, when there is one.
+	registered string
 	// seen are the ids numbered so far.
 	seen map[string]bool
 	// started says run.started is numbered; ended that the final event is.
@@ -215,29 +217,31 @@ func (r *Run) ID() string { return r.id }
 // Dir is the run's record directory.
 func (r *Run) Dir() string { return r.dir }
 
-// Ping numbers the gateway's ping for the run, which must be the run's first event,
-// and writes it to the record and to [Config.Events]: the caller posts it to the server
-// as a batch of one, then hands the run its sink with [Run.Deliver].
-func (r *Run) Ping(data any) (*event.Event, error) {
+// Registered numbers the run's dev.qory.run.registered, once the server accepted its
+// registration, which must be the run's first event, and writes it to the record and
+// to [Config.Events]. It is never posted: the caller hands the run its sink after it,
+// with [Run.Deliver].
+func (r *Run) Registered(data any) (*event.Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return nil, ErrClosed
 	}
 	if r.emit.Sequence() != 0 {
-		return nil, errors.New("the ping is the run's first event, and events are numbered already")
+		return nil, errors.New("dev.qory.run.registered is the run's first event, and events are numbered already")
 	}
-	ev := r.make(event.Ping, data)
+	ev := r.make(event.RunRegistered, data)
 	r.number(ev)
-	r.ping = ev.Sequence
+	r.registered = ev.Sequence
 	return ev, nil
 }
 
-// Deliver hands the run its control-plane sink, once the server accepted the ping, and
-// the run closes the sink. pingID, when not empty, is the delivery id the server
-// accepted the ping under, which the sink records. Events numbered before it reach the
-// record alone. A closed run is [ErrClosed], and the sink is the caller's to close.
-func (r *Run) Deliver(s Sink, pingID string) error {
+// Deliver hands the run its control-plane sink, once the server accepted the run's
+// registration, and the run closes the sink. The sink marks the registration with the
+// sequence of the run's dev.qory.run.registered, when there is one. Events numbered
+// before it reach the record alone. A closed run is [ErrClosed], and the sink is the
+// caller's to close.
+func (r *Run) Deliver(s Sink) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -247,8 +251,8 @@ func (r *Run) Deliver(s Sink, pingID string) error {
 		return errors.New("the run has its sink already")
 	}
 	r.server = s
-	if pingID != "" && r.ping != "" {
-		s.Accepted(pingID, r.ping)
+	if r.registered != "" {
+		s.Registered(r.registered)
 	}
 	return nil
 }
@@ -269,11 +273,11 @@ func (r *Run) Ended() bool {
 
 // Accept numbers the session's events in the order given, those of one link batch: an
 // id numbered before is dropped, so a batch sent again is numbered once. Every event
-// must be of this run, have an id and not be a ping; otherwise nothing of the batch is
-// numbered. When the run's final event is numbered already, a batch with an event not
-// numbered before is [ErrEnded], and nothing of it is numbered; within one batch, the
-// events after its final event are not numbered, and the count of them is reported. It
-// returns how many events it numbered.
+// must be of this run, have an id and not be a dev.qory.run.registered; otherwise
+// nothing of the batch is numbered. When the run's final event is numbered already, a
+// batch with an event not numbered before is [ErrEnded], and nothing of it is numbered;
+// within one batch, the events after its final event are not numbered, and the count
+// of them is reported. It returns how many events it numbered.
 func (r *Run) Accept(evs []event.Event) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -289,8 +293,8 @@ func (r *Run) Accept(evs []event.Event) (int, error) {
 			return 0, fmt.Errorf("event %d has no id", i)
 		case ev.Subject != r.id || ev.Source != event.Source(r.id):
 			return 0, fmt.Errorf("event %s is not of the run %s", ev.ID, r.id)
-		case ev.Type == event.Ping:
-			return 0, fmt.Errorf("event %s is a ping, which the gateway sends", ev.ID)
+		case ev.Type == event.RunRegistered:
+			return 0, fmt.Errorf("event %s is a dev.qory.run.registered, which the gateway writes", ev.ID)
 		}
 		if r.seen[ev.ID] || ids[ev.ID] {
 			continue

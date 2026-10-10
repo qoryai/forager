@@ -24,7 +24,7 @@ const (
 	// ResendNoServer is reported when NoServer is set.
 	ResendNoServer = "the run had no server; nothing is sent"
 	// ResendNotOpened is reported when NotOpened is set and NoServer is not.
-	ResendNotOpened = "the server never accepted the run's ping; nothing is sent"
+	ResendNotOpened = "the server never accepted the run's registration; nothing is sent"
 )
 
 // ResendConfig is what sending one run's record again is given.
@@ -62,11 +62,13 @@ type ResendResult struct {
 	Sent        int
 	Undelivered int
 	// NotOpened says the run never opened at the server, so nothing of it is sent, and
-	// the record is left as it is: the record holds a ping and there is no
-	// delivered.log, the server never having accepted the ping, or NoServer.
+	// the record is left as it is: neither the record nor delivered.log marks an
+	// accepted registration, and the record holds no run.started, the server never
+	// having accepted the run's registration; or NoServer.
 	NotOpened bool
-	// NoServer says the record holds no ping and there is no delivered.log: the run had
-	// no server, so it never opened at the one it is sent to. NotOpened is set too.
+	// NoServer says neither the record nor delivered.log marks an accepted
+	// registration, and the record holds run.started: the run had no server, so it
+	// never opened at the one it is sent to. NotOpened is set too.
 	NoServer bool
 	// Torn is how many lines of the record hold bytes that are no whole event: a write
 	// the gateway did not finish. They are skipped and stay in the file, but for a last
@@ -85,10 +87,12 @@ type ResendResult struct {
 // it or the context ends. A server that said stop during the run is sent nothing. A
 // line of the record that holds bytes that are no whole event, a write the gateway did
 // not finish, is skipped, and every event after it is read on (see [record]). A record
-// that holds a ping and no delivered.log is of a run whose ping the server never
+// with no mark of an accepted registration, no dev.qory.run.registered and no
+// delivered.log, and no run.started is of a run whose registration the server never
 // accepted, which never opened: it is NotOpened, left as it is, and sent nothing. So is
-// a record with no ping and no delivered.log, of a run that had no server, when it is
-// sent to one; with no Sink it is completed, as any other.
+// a record with no mark and a run.started, of a run that had no server, when it is sent
+// to one; with no Sink it is completed, as any other. dev.qory.run.registered is never
+// sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -160,7 +164,7 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	}
 	var owed []recorded
 	for _, l := range lines {
-		if cfg.Wants(l.Type) && !accepted[l.Sequence] {
+		if l.Type != event.RunRegistered && cfg.Wants(l.Type) && !accepted[l.Sequence] {
 			owed = append(owed, l)
 		}
 	}
@@ -358,13 +362,15 @@ func whole(b []byte) (recorded, bool) {
 }
 
 // notOpened reports whether the record is of a run that never opened at a server, and
-// whether that is since it had none. The gateway writes the ping to the record before
-// it posts it, and only the sink creates delivered.log, with the ping's delivery its
-// first line, once the server accepted the ping. So a delivered.log says the run
-// opened, even without the ping's line, the gateway stopping before it wrote it, and
-// even with no whole ping in the record, its line torn on a full disk. With no
-// delivered.log, a record with a ping is of a run whose ping was never accepted, and
-// one with no ping of a run that had no server.
+// whether that is since it had none. Two marks say the server accepted the run's
+// registration: the gateway writes dev.qory.run.registered to the record once it has,
+// and only then the sink creates delivered.log, whose first line marks the
+// registration. So either says the run opened: delivered.log even with no whole
+// run.registered in the record, its line torn on a full disk, and run.registered even
+// with no delivered.log, the gateway stopping before the sink made it. With neither, a
+// record with run.started is of a run that had no server, since a run with one starts
+// only once its registration is accepted, and one without of a run whose registration
+// the server never accepted.
 func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
 	_, err = os.Stat(filepath.Join(dir, sink.DeliveredFile))
 	if err == nil {
@@ -373,8 +379,13 @@ func notOpened(dir string, rec *recordFile) (never, noServer bool, err error) {
 	if !os.IsNotExist(err) {
 		return false, false, err
 	}
-	ping := slices.ContainsFunc(rec.lines, func(l recorded) bool { return l.Type == event.Ping })
-	return true, !ping, nil
+	is := func(typ string) bool {
+		return slices.ContainsFunc(rec.lines, func(l recorded) bool { return l.Type == typ })
+	}
+	if is(event.RunRegistered) {
+		return false, false, nil
+	}
+	return true, is(event.RunStarted), nil
 }
 
 // highest is the highest of the sequences the server accepted, 0 for none. A line of
@@ -415,8 +426,8 @@ func closeRecord(file, runID string, rec *recordFile, delivered uint64, now func
 		}
 	}
 	if !begun {
-		// A run the server's ping refused, or one refused after it, never started, and
-		// has no exit to record.
+		// A run whose registration the server refused, or one refused after it, never
+		// started, and has no exit to record.
 		return false, nil
 	}
 	var ran int64

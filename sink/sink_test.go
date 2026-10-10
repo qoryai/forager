@@ -290,6 +290,57 @@ func TestRunClosedIsAStop(t *testing.T) {
 	}
 }
 
+// TestTheRegistrationIsMarkedAndNeverPosted pins dev.qory.run.registered toward the
+// server: the sink marks the accepted registration as delivered.log's first line, which
+// says its sequence was accepted, and never posts the event itself, whatever the
+// target lists.
+func TestTheRegistrationIsMarkedAndNeverPosted(t *testing.T) {
+	s := newStation(t, nil, false)
+	dir := t.TempDir()
+	w := sink.NewServer(client(s), target(s, "*", event.RunRegistered), dir, nil, nil)
+	w.Registered("0000000001")
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunRegistered, map[string]any{"interval_seconds": 30}))
+	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
+	w.Close(context.Background())
+	if got := s.store.Count(); got != 1 {
+		t.Errorf("stored %d events", got)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, sink.DeliveredFile))
+	if !strings.HasPrefix(string(b), sink.RegisteredWord+" 0000000001\n") {
+		t.Errorf("delivered.log:\n%s", b)
+	}
+	if accepted, stopped, err := sink.Delivered(dir); err != nil || stopped || !accepted["0000000001"] || !accepted["0000000002"] || len(accepted) != 2 {
+		t.Errorf("delivered %v, stopped %v, %v", accepted, stopped, err)
+	}
+	if (sink.Target{Types: []string{"*", event.RunRegistered}}).Wants(event.RunRegistered) {
+		t.Error("the target wants run.registered")
+	}
+}
+
+// TestAStopFromOutsideIsAStop pins Stop, a reload's signed 410: the sink sends nothing
+// more, records the stop once, reports the one line of a stop, and ends no run.
+func TestAStopFromOutsideIsAStop(t *testing.T) {
+	s := newStation(t, nil, false)
+	dir := t.TempDir()
+	var notes []string
+	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil)
+	w.Stop()
+	w.Stop()
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
+	w.Close(context.Background())
+	if s.hits.Load() != 0 || !w.Stopped() || w.RunClosed() || w.Undelivered() != 0 {
+		t.Errorf("%d deliveries, stopped %v, closed %v, %d undelivered", s.hits.Load(), w.Stopped(), w.RunClosed(), w.Undelivered())
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, sink.DeliveredFile)); string(b) != "stopped\n" {
+		t.Errorf("delivered.log %q", b)
+	}
+	if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
+		t.Errorf("reports %q", notes)
+	}
+}
+
 // TestRunClosedDropsTheBatchesQueuedBeforeIt pins that a server's signed 410
 // run_closed stops the deliveries at once: the batches already queued behind the
 // stopped one are dropped, not posted, and no run is closed.
