@@ -20,8 +20,8 @@
         "url": {"$ref": "configuration.schema.json#/properties/events/properties/url"},
         "types": {"$ref": "configuration.schema.json#/properties/events/properties/types"},
         "interval_seconds": {
-          "description": "The gateway's heartbeat interval, which the ping announces toward the server: the session sends its heartbeats every interval_seconds, and the gateway ends a run whose session sends nothing for 3 × interval_seconds from the run answer, session_lost.",
-          "$ref": "events/ping.schema.json#/properties/interval_seconds"
+          "description": "The gateway's heartbeat interval, which its registration of the run announces toward the server: the session sends its heartbeats every interval_seconds, and the gateway ends a run whose session sends nothing for 3 × interval_seconds from the run answer, session_lost.",
+          "$ref": "run-registration.schema.json#/properties/interval_seconds"
         }
       }
     },

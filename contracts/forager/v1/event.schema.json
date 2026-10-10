@@ -38,7 +38,7 @@
         "type": {
           "type": "string",
           "enum": [
-            "dev.qory.ping",
+            "dev.qory.run.registered",
             "dev.qory.run.started",
             "dev.qory.run.heartbeat",
             "dev.qory.run.log",
@@ -96,13 +96,13 @@
         {
           "properties": {
             "type": {
-              "const": "dev.qory.ping"
+              "const": "dev.qory.run.registered"
             },
             "dataschema": {
-              "const": "https://qory.dev/contracts/forager/v1/events/ping.schema.json"
+              "const": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json"
             },
             "data": {
-              "$ref": "events/ping.schema.json"
+              "$ref": "events/run.registered.schema.json"
             }
           }
         },

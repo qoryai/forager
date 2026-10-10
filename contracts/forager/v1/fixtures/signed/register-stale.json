@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "KEnode37RNtwsX_ABUye3JbSIN9HXUE9BxOVq5s0JS9GCTZC4Z63XlNLInuQdOcCGK1siESFnL1m-DGOF126DQ"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T21:56:40Z\"}",
+  "expect": 401,
+  "expect_code": "unauthorized",
+  "note": "register-valid built a thousand seconds before the receiver's clock: a correct signature over a body whose time is outside the window of three hundred seconds either way. The time is checked after the body, and before the run endpoint's own checks, so this is an unsigned 401 even after register-valid's run id was accepted."
+}

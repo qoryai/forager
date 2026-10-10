@@ -1,0 +1,1 @@
+{"version":1,"run_id":"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f","labels":{"forge":"github.com","repository":"acme/shop"},"about":{"title":"Fix the failing build"},"forager_version":"0.7.0","contract_version":1,"interval_seconds":30,"events":["*"],"time":"2023-11-14T22:13:20Z"}

@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "FhszrzHE0oeWUpqk2GXmBnzeEGU9SaZ8oEihxdGkMl2yStFqiNXWkA17ga0FGOdWIcOv1Y1RQVfeK-vWZQbMCg"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":301,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
+  "expect": 400,
+  "expect_code": "invalid_request",
+  "note": "register-valid with interval_seconds 301, signed. The registration schema caps the interval at 300 seconds, so a receiver answers a signed 400 invalid_request, before it looks at the time or the run id."
+}
