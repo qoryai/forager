@@ -231,9 +231,12 @@ func status(cmd *exec.Cmd, err error) (exitStatus, error) {
 	}
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
-		// A process that exits 0 once the context's end has stopped it is given as the
-		// context's error, or as ErrWaitDelay when its output stayed open past the grace,
-		// in place of its status: it exited, and 0 is its status.
+		// Wait gives a process that exited 0 another error in place of its status in two
+		// cases: the context's error, when the stop signal reached it and it exited 0;
+		// and ErrWaitDelay, when no stop reached it, it exited 0 by itself, and a
+		// descendant held its standard output or standard error open past the grace,
+		// whose output after the grace is not kept. Either way it exited, and 0 is its
+		// status.
 		if cmd.ProcessState != nil && cmd.ProcessState.Success() && stoppedErr(err) {
 			return exitStatus{code: 0}, nil
 		}
@@ -247,8 +250,10 @@ func status(cmd *exec.Cmd, err error) (exitStatus, error) {
 	return st, nil
 }
 
-// stoppedErr reports whether Wait's error is the context's end or the grace's, which
-// Wait gives for a process that exited 0 after the stop.
+// stoppedErr reports whether Wait's error is one it gives in place of a 0 exit: the
+// context's error, Canceled or DeadlineExceeded, for a process the stop signal reached,
+// or ErrWaitDelay for one that exited by itself while a descendant held its output open
+// past the grace.
 func stoppedErr(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay)
 }

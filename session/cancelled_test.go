@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -391,5 +392,33 @@ func TestTheTimeLimitIsTheStopSignal(t *testing.T) {
 				t.Errorf("run.exited %s %s %d", state, reason, code)
 			}
 		})
+	}
+}
+
+// TestAnExitWhoseOutputStaysOpenPastTheGrace pins a runtime that exits 0 by itself,
+// with the context alive, while a descendant holds its standard output open past the
+// stop grace: its exit is observed at the grace, succeeded with exit 0, Run returns its
+// result with no error, run.exited is recorded, and Cancelled is false. What the
+// descendant writes after the grace is not kept.
+func TestAnExitWhoseOutputStaysOpenPastTheGrace(t *testing.T) {
+	sp := shellSpec(t, `(sleep 1.5; echo late) & echo early; exit 0`)
+	sp.StopGrace = 300 * time.Millisecond
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatalf("Run returned %v", err)
+	}
+	if res.State != "succeeded" || res.Reason != "" || res.ExitCode != 0 || res.Signal != "" || res.Cancelled || res.TimedOut {
+		t.Errorf("result %+v", res)
+	}
+	if state, reason, code := endedWith(t, res); state != "succeeded" || reason != "" || code != 0 {
+		t.Errorf("run.exited %s %q %d", state, reason, code)
+	}
+	var logged strings.Builder
+	for _, e := range ofType(events(t, res), "dev.qory.run.log") {
+		b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(data(e)["bytes"]))
+		logged.Write(b)
+	}
+	if !strings.Contains(logged.String(), "early") || strings.Contains(logged.String(), "late") {
+		t.Errorf("the record's output %q", logged.String())
 	}
 }

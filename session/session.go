@@ -545,6 +545,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	beats, endBeats := context.WithCancel(closing)
 	defer endBeats()
 	beatsFollowCaller := context.AfterFunc(ctx, endBeats)
+	defer beatsFollowCaller()
 	stopBeat := heartbeat(beats, interval, discovered, write)
 	// quit ends a run that does not start: the heartbeats stop, and the sinks are
 	// closed, within closeWait.

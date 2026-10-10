@@ -394,8 +394,9 @@ A program that needs code of its own implements the interface.
   the context ended, which is `RunClosed`, and a signal from elsewhere while the
   context lasts: `Cancelled` is never true with `TimedOut` or with `RunClosed`. On
   pipes, the exit is observed when the runtime's standard output and standard error
-  close: a descendant that holds them open delays it by up to the stop grace. When it
-  is true, `dev.qory.run.exited` is `cancelled` with `interrupted`.
+  close: a descendant that holds them open delays it by up to the stop grace, and what
+  it writes after the grace is not kept. When it is true, `dev.qory.run.exited` is
+  `cancelled` with `interrupted`.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the

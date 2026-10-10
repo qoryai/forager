@@ -28,10 +28,11 @@ release may change what an existing document does, and says so under Upgrading.
   stopped before it said how it went. A run stopped at its time limit, `timeout`, is
   `cancelled`, and so is `session.Result.State`; so is a session's run stopped from
   where it was started, `interrupted`, a Ctrl-C or a signal to the program that runs
-  the session, which was `failed`, with the runtime's own `exit_code` and `signal`. Its `reason` is an open code,
-  `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's own codes, or the run's starter's,
-  carried as given. A receiver reads the state from `state`, and shows a reason it does
-  not know as it is.
+  the session, with the runtime's own `exit_code` and `signal`; such a run was recorded
+  `failed`, or not at all when the runtime exited 0 at the stop. Its `reason` is an
+  open code, `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's own codes, or the run's
+  starter's, carried as given. A receiver reads the state from `state`, and shows a
+  reason it does not know as it is.
 - `server.Ended` returns a `server.RunEnd`, the code, who ended the run, and the state
   and the reason of that end, in place of the code alone, and `sink.Config.OnEnded`
   takes a `server.RunEnd` in place of the code and who ended it.
