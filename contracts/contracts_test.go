@@ -90,15 +90,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// configuration and run credentials fixture passes its schema, the run credentials of
-// the known answers included.
+// registration, run configuration and run credentials fixture passes its schema, the
+// run credentials of the known answers included.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-configuration.schema.json", "run-credentials.schema.json")
+		"run-registration.schema.json", "run-configuration.schema.json", "run-credentials.schema.json")
 	dirs := map[string]string{
 		"fixtures/policy":            "policy.schema.json",
 		"fixtures/server":            "server.schema.json",
 		"fixtures/configuration":     "configuration.schema.json",
+		"fixtures/run-registration":  "run-registration.schema.json",
 		"fixtures/run-configuration": "run-configuration.schema.json",
 		"fixtures/run-credentials":   "run-credentials.schema.json",
 	}
@@ -249,8 +250,10 @@ const beyondLinkSchema = "-beyond-schema-"
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
 // schema its name starts with: a policy that widens, a server without its access key id
-// or its pin or with a secret, a configuration without events, a ping whose interval is
-// over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
+// or its pin or with a secret, a configuration without events or without its run
+// endpoint, a run registration with a member it does not define, with an interval over
+// 300 seconds or with a time that is not UTC in whole seconds, a run.registered whose
+// interval is over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session without its command or by a gateway with one,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
@@ -261,8 +264,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // answer without its proxy secret, its run secret or applied or whose image has no
 // reference, a link reload answer with the proxy secret, the run secret or the certificate
 // authority or whose applied holds variables, a link outcome answer with a reason and no
-// state or with a state other than the three, a link batch whose event carries a sequence, that holds a ping or a
-// run.egress, a run.started a gateway opened, a run.exited with one of Forager's reasons
+// state or with a state other than the three, a link batch whose event carries a sequence, that holds a
+// run.registered or a run.egress, a run.started a gateway opened, a run.exited with one of Forager's reasons
 // other than timeout or with timeout and a state other than cancelled, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
 // has no heartbeat interval or proxy, a link refusal without from, with a control
@@ -276,7 +279,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // configuration and not to a schema named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
+		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
 		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal,
 		"run-credentials.schema.json")
@@ -313,7 +316,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 
 // TestRecordedRunValidates pins the recorded run directory: every line of events.jsonl
 // is an event of the contract, the sequence starts at one and is contiguous, every event
-// names the same run in source and subject, the run starts with ping or run.started and
+// names the same run in source and subject, the run starts with run.registered, the
+// gateway's record of the server's accepted registration, or with run.started, and
 // ends with run.exited, and output.log is the concatenation of the run.log chunks. What
 // the schema cannot state, since run.exited does not contain opened_by, is pinned here: a
 // session's run.exited contains exit_code, and a run a gateway opened has no process, so
@@ -378,8 +382,8 @@ func TestRecordedRunValidates(t *testing.T) {
 			}
 		}
 		first := events[0].(map[string]any)["type"]
-		if first != "dev.qory.ping" && first != "dev.qory.run.started" {
-			t.Errorf("%s: first event is %v; want ping or run.started", dir, first)
+		if first != "dev.qory.run.registered" && first != "dev.qory.run.started" {
+			t.Errorf("%s: first event is %v; want run.registered or run.started", dir, first)
 		}
 		if last := events[len(events)-1].(map[string]any)["type"]; last != "dev.qory.run.exited" {
 			t.Errorf("%s: last event is %v; want run.exited", dir, last)
@@ -521,21 +525,22 @@ func TestBatchFixturesValidate(t *testing.T) {
 // TestSignedFixtures pins the shape of every request under fixtures/signed, what any
 // receiver is replayed: a method the contract signs, a target from the root, the
 // headers every request contains and the ones its method adds, a revision from 1 to
-// the contract's own, a body on a POST that is a batch and none on a GET, a status a
-// receiver answers, the code of a coded refusal, and a note. A header a list holds is
+// the contract's own, a body on a POST that is a batch, with X-Qory-Delivery, or a run
+// registration, application/json without X-Qory-Delivery, and none on a GET, a status
+// a receiver answers, the code of a coded refusal, and a note. A header a list holds is
 // one sent once per value. On every request whose signature a receiver verifies, the
 // signature is the Ed25519 one under the fixture access key secret over the request
 // string, its lines the domain, the access key id and the instance id as the headers
 // contain them, the method, the target, then the timestamp on a GET or the raw body on
 // a POST, so the published signatures cannot drift from the fixtures they sign. Under
-// -update-signed it signs the batches again instead (signBatches), after a change to a
+// -update-signed it signs the POSTs again instead (signBatches), after a change to a
 // body; the command is updateSignedCommand.
 func TestSignedFixtures(t *testing.T) {
 	if *updateSigned {
 		signBatches(t)
 		return
 	}
-	s := compile(t, "batch.schema.json")
+	s := compile(t, "batch.schema.json", "run-registration.schema.json")
 	var keys struct {
 		AccessKey struct {
 			PublicKey  string `json:"public_key"`
@@ -575,9 +580,10 @@ func TestSignedFixtures(t *testing.T) {
 		status := expect.String()
 		seen[status+" "+code] = true
 		switch status + " " + code {
-		case "200 ", "202 ", "401 unauthorized", "400 bad_request":
+		case "200 ", "202 ", "401 unauthorized", "400 bad_request", "400 invalid_request", "409 instance_limit", "409 run_id_used":
 		default:
-			t.Errorf("%s: expect %s %s; want 200, 202, 401 unauthorized or 400 bad_request", f, status, code)
+			t.Errorf("%s: expect %s %s; want 200, 202, 401 unauthorized, 400 bad_request, 400 invalid_request, "+
+				"409 instance_limit or 409 run_id_used", f, status, code)
 		}
 		twice := false
 		value := func(name string, required bool) string {
@@ -617,19 +623,32 @@ func TestSignedFixtures(t *testing.T) {
 				t.Errorf("%s: a POST carries a body", f)
 				continue
 			}
-			value("X-Qory-Delivery", true)
-			if ct := value("Content-Type", true); ct != "application/cloudevents-batch+json" {
-				t.Errorf("%s: Content-Type %q", f, ct)
-			}
 			if _, ok := headers["X-Qory-Timestamp"]; ok {
 				t.Errorf("%s: a POST carries no timestamp", f)
 			}
-			batch, err := contracts.Decode(f, []byte(body))
+			// A POST is a batch to the events endpoint or a run's registration to the run
+			// endpoint, told apart by its type. A registration carries no delivery id,
+			// and its body passes the registration's schema, but where the body is what
+			// the fixture's receiver refuses as the contract does: interval_seconds over
+			// 300, a 400 invalid_request.
+			schema := "batch.schema.json"
+			switch ct := value("Content-Type", true); ct {
+			case "application/cloudevents-batch+json":
+				value("X-Qory-Delivery", true)
+			case "application/json":
+				schema = "run-registration.schema.json"
+				if _, ok := headers["X-Qory-Delivery"]; ok {
+					t.Errorf("%s: a registration carries no X-Qory-Delivery", f)
+				}
+			default:
+				t.Errorf("%s: Content-Type %q", f, ct)
+			}
+			doc, err := contracts.Decode(f, []byte(body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s["batch.schema.json"].Validate(batch); err != nil {
-				t.Errorf("%s: body: %v", f, err)
+			if err := s[schema].Validate(doc); (err != nil) != (status+" "+code == "400 invalid_request") {
+				t.Errorf("%s: body against %s: %v, expecting %s %s", f, schema, err, status, code)
 			}
 			last = body
 		case "GET":
@@ -652,13 +671,13 @@ func TestSignedFixtures(t *testing.T) {
 		case status == "401":
 		case !valid:
 			t.Errorf("%s: the signature does not verify under the fixture access key over\n%s\n"+
-				"after a change to a batch's body, sign the batches again: %s", f, request, updateSignedCommand)
+				"after a change to a POST's body, sign the POSTs again: %s", f, request, updateSignedCommand)
 		}
 		if status[0] == '2' && (accessKeyID != "ak_f1xt0re000000000" || instanceID != keys.AccessKey.InstanceID) {
 			t.Errorf("%s: accepted as %s, %s; want the fixture access key and instance", f, accessKeyID, instanceID)
 		}
 	}
-	for _, want := range []string{"200 ", "202 ", "401 unauthorized", "400 bad_request"} {
+	for _, want := range []string{"200 ", "202 ", "401 unauthorized", "400 bad_request", "400 invalid_request", "409 instance_limit", "409 run_id_used"} {
 		if !seen[want] {
 			t.Errorf("no signed fixture expects %s", want)
 		}
@@ -673,9 +692,9 @@ func requestString(accessKeyID, instanceID, method, target, last string) string 
 }
 
 var updateSigned = flag.Bool("update-signed", false,
-	"sign the batches under fixtures/signed again, over their bodies as they are, and write them")
+	"sign the POSTs under fixtures/signed again, over their bodies as they are, and write them")
 
-// updateSignedCommand signs the batches under fixtures/signed again and checks them.
+// updateSignedCommand signs the POSTs under fixtures/signed again and checks them.
 const updateSignedCommand = "go test ./contracts -run TestSignedFixtures -update-signed && " +
 	"go test ./contracts -run TestSignedFixtures"
 
@@ -687,7 +706,8 @@ var signedWith = map[string]string{"batch-tampered.json": "batch-valid.json"}
 // signatureHeader is the signature's member in a signed fixture, as the files write it.
 var signatureHeader = regexp.MustCompile(`("X-Qory-Signature-Ed25519": )"[^"]*"`)
 
-// signBatches writes the signature of every POST under fixtures/signed again: under the
+// signBatches writes the signature of every POST under fixtures/signed again, a batch or
+// a registration: under the
 // fixture access key secret over its own request string, its access key id and instance id
 // as its headers contain them and its body as it is, or the signature of the batch that
 // signedWith names. A GET is left as it is: its signature covers a timestamp and no body,

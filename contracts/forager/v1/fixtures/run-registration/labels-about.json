@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "run_id": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+  "labels": {
+    "forge": "example-forge",
+    "issue": "77",
+    "repository": "example-namespace/project"
+  },
+  "about": {
+    "kind": "fix",
+    "title": "Fix the failing build",
+    "subjects": [
+      {
+        "type": "issue",
+        "ref": "77",
+        "url": "https://git.example/example-namespace/project/issues/77"
+      }
+    ],
+    "details": {
+      "requester": "example-requester"
+    }
+  },
+  "forager_version": "0.7.0",
+  "contract_version": 1,
+  "interval_seconds": 30,
+  "events": [
+    "*"
+  ],
+  "time": "2026-10-10T12:00:00Z"
+}

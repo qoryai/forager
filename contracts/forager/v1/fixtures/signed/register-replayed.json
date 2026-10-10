@@ -1,0 +1,16 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
+  "expect": 200,
+  "note": "register-valid sent again, byte for byte, time included: a try after a lost answer. A receiver that already accepted the registration for this run id with the same bytes gives the same answer again."
+}

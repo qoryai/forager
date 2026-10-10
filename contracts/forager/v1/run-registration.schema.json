@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-registration.schema.json",
+  "title": "Run registration",
+  "description": "The body of the signed POST to the server's run endpoint, run.url, application/json, with which the gateway registers a run before it starts: the run's id, its labels and what it is about, and what the gateway announces for the run. The answer is a signed 200 whose body is the run's run configuration, run-configuration.schema.json; {\"version\": 1} is an answer of no policy. The gateway builds the body once and sends the same bytes on every try, time included; the signature covers the body, and a server refuses a time outside 300 seconds of its clock, either way, with an unsigned 401. A member this schema does not define is refused, invalid_request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_id", "forager_version", "contract_version", "interval_seconds", "events", "time"],
+  "properties": {
+    "version": {
+      "description": "The document format. A server refuses a version it does not read.",
+      "const": 1
+    },
+    "run_id": {
+      "description": "The run's id: a UUID in the canonical lower-case form, the subject of every event of the run.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "labels": {
+      "description": "The run's labels, as dev.qory.run.started contains them. The server decides which labels identify what the run works on, and chooses the run configuration for them. Absent means none.",
+      "$ref": "events/run.started.schema.json#/properties/labels"
+    },
+    "about": {
+      "description": "What the run is about, as dev.qory.run.started contains it. It is for display: it never selects or changes a security policy. Absent means none.",
+      "$ref": "events/run.started.schema.json#/properties/about"
+    },
+    "forager_version": {
+      "description": "The Forager module version, as Go stamps it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_version": {
+      "description": "The revision of this contract Forager implements, the same integer as the X-Qory-Contract-Version header.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "interval_seconds": {
+      "description": "The heartbeat interval the run uses, in seconds: heartbeats run from the accepted registration until the run's final event, so the server's liveness window follows the run's own value. A larger value fails the schema, a signed 400 invalid_request.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300
+    },
+    "events": {
+      "description": "The event types the server receives, as its configuration lists them.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "time": {
+      "description": "When the gateway built the body, RFC 3339 in UTC with whole seconds, such as 2026-10-10T12:00:00Z. A server refuses a time more than 300 seconds from its clock, either way, with an unsigned 401, as it refuses a GET's timestamp.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

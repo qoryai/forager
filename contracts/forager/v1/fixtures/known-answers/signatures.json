@@ -11,6 +11,13 @@
       "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "GET", "/.well-known/qory-configuration?x=1", "1700000000"],
       "length": 119,
       "signature": "XNhwjf5F3CaZENTcEE2J8U1eCk4dh0y0IdZdSMf6rJqdTZMN8lNq1a98GGIPiiVn3Mh0EPGEDFzRI12zMDMRBQ"
+    },
+    {
+      "note": "The registration of a run, a POST to the run endpoint with the body of fixtures/known-answers/registration.json, signed under the fixture access key secret; the last line is the raw body, its time included. fixtures/signed/register-valid.json is this request.",
+      "body": "fixtures/known-answers/registration.json",
+      "lines": ["qory-request-ed25519-v1", "ak_f1xt0re000000000", "i_gYKDhIWGh4iJiouMjY6PkA", "POST", "/v1/runs", "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}"],
+      "length": 357,
+      "signature": "6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ"
     }
   ],
   "enrolment": [
@@ -29,12 +36,12 @@
   ],
   "answers": [
     {
-      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, in a workspace with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
+      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, with its run endpoint, in a workspace with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
       "body": "fixtures/known-answers/discovery.json",
-      "body_length": 208,
-      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "b6813bc64b11564b8a58b39b8d7ccdf947bcadcde5c1744dd01894f941a52862", "sha256=b6813bc64b11564b8a58b39b8d7ccdf947bcadcde5c1744dd01894f941a52862", ""],
+      "body_length": 253,
+      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", "sha256=bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", ""],
       "length": 251,
-      "signature": "KR8RzAb1z5MnEj2SPYFrghfXqVdU7Da2Yu0qU1-VQhmuObVUiKLywh8FoTawEfg9u0VgOgFQJhutD3-w4a55Bg"
+      "signature": "pABYqjJR87W7mF8ofjwV_BAbkpLZXukQBW9HsuHinJ1aA8YXGrGacr0jnpB3PTKt16DUgwOSGC9oO487AF8lAA"
     },
     {
       "note": "404 to the GET of discovery above, with an empty body and no digest, signed under the fixture signing key.",
@@ -91,6 +98,14 @@
       "lines": ["qory-enrol-answer-ed25519-v1", "429", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "01ddb169d4ea2fcf459a423a5c20d42010ea0c686b63415278cf5cc6f64005c4", "", ""],
       "length": 186,
       "signature": "Fp4HSpmKWIdIqPCZEcGwB98PeYCM2rZpikfvXilxXHdo23g40RJxaDRJznxa6lLEzeDa4tGjG7XsllWvxoQRCw"
+    },
+    {
+      "note": "200 to the registration above, signed under the fixture signing key: the run configuration of fixtures/known-answers/registration-answer.json, with X-Qory-Run-Configuration, here sha256= and the hex SHA-256 of the body, and no configuration digest; line 3 is the registration's signature.",
+      "body": "fixtures/known-answers/registration-answer.json",
+      "body_length": 97,
+      "lines": ["qory-answer-ed25519-v1", "200", "6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ", "6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5", "", "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"],
+      "length": 251,
+      "signature": "dH803Liu9KVYDlxZ12OQDx8JyZh4JRXRoKJY8yzNgO9wLRQSYm6zZbOvSjL2o9TT5wOubS7MF0Z6JZrjsmLxDg"
     }
   ]
 }

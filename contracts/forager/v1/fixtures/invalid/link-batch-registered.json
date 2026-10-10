@@ -3,10 +3,10 @@
     "specversion": "1.0",
     "id": "7e1c0000-0000-7000-8000-000000000100",
     "source": "urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
-    "type": "dev.qory.ping",
+    "type": "dev.qory.run.registered",
     "subject": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
     "time": "2026-09-16T12:00:00.000Z",
-    "dataschema": "https://qory.dev/contracts/forager/v1/events/ping.schema.json",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
     "data": {
       "forager_version": "0.4.0",
       "events": [

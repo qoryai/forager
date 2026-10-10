@@ -6,7 +6,7 @@
     "types": ["*"]
   },
   "run": {
-    "url": "http://127.0.0.1:8787/v1/run-configuration"
+    "url": "http://127.0.0.1:8787/v1/runs"
   },
   "artifacts": {
     "url": "http://127.0.0.1:8787/v1/artifacts"

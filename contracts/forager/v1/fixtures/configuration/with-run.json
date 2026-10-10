@@ -12,7 +12,7 @@
     ]
   },
   "run": {
-    "url": "https://qory.example/v1/run-configuration"
+    "url": "https://qory.example/v1/runs"
   },
   "apiary_public_key": [
     {"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}
