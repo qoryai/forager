@@ -299,7 +299,8 @@ type registrationBody struct {
 
 // readRegistration reads a registration's body and refuses what the contract refuses:
 // a body the schema refuses, interval_seconds over 300 among it, labels or an about
-// outside the rules the schema cannot state. A time that is no date is refused by the
+// outside the rules the schema cannot state: a label value over 256 bytes of UTF-8,
+// which the schema's maxLength, counting characters, lets through, among them. A time that is no date is refused by the
 // caller.
 func readRegistration(body []byte) (*registrationBody, error) {
 	schema, err := registrationSchema()

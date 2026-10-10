@@ -1153,7 +1153,7 @@ for a registration any type but `application/json` and for a batch any type but
 `X-Qory-Timestamp`, unsigned; `401`; `429`; `400` `bad_request` for an instance id
 absent or outside its pattern, signed; `400` `unsupported_contract_version`; `400`
 `invalid_request` for a body the contract refuses, a registration with
-`interval_seconds` above 300 included; `401` for a GET's timestamp, or a registration's
+`interval_seconds` above 300 or a label value over 256 bytes included; `401` for a GET's timestamp, or a registration's
 `time`, outside ±300 seconds; then each endpoint's own.
 The events endpoint's own, in order: deduplication, so a batch whose delivery id or
 event ids the server already accepted gets the same `2xx` again; then `410` for an event
@@ -1268,9 +1268,12 @@ signed `POST <run.url>`, `Content-Type: application/json`, whose body is a
 
 - `run_id`, required: the run's id, a UUID in the canonical lower-case form.
 - `labels`: the run's labels, as `dev.qory.run.started` contains them; absent means none.
-  They travel in the body, never in a URL. The server decides which labels identify
-  what the run works on and returns the policy for that; Forager reads nothing into
-  them.
+  At most 16, each key 1 to 64 of `a-z`, `0-9`, underscore, dot and dash, and each value
+  at most 256 bytes of UTF-8. Each maxLength counts characters and is an upper bound of
+  the byte limit: a body with a value over 256 bytes is a signed `400`
+  `invalid_request`, though the schema passes it. They travel in the body, never in a
+  URL. The server decides which labels identify what the run works on and returns the
+  policy for that; Forager reads nothing into them.
 - `about`: what the run is about (§What a run is about); absent means none. It is for
   display: it never selects or changes a security policy.
 - `forager_version`, `contract_version`, `interval_seconds` and `events`, required: the

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/run-registration.schema.json",
   "title": "Run registration",
-  "description": "The body of the signed POST to the server's run endpoint, run.url, application/json, with which the gateway registers a run before it starts: the run's id, its labels and what it is about, and what the gateway announces for the run. The answer is a signed 200 whose body is the run's run configuration, run-configuration.schema.json; {\"version\": 1} is an answer of no policy. The gateway builds the body once and sends the same bytes on every try, time included; the signature covers the body, and a server refuses a time outside 300 seconds of its clock, either way, with an unsigned 401. A member this schema does not define is refused, invalid_request.",
+  "description": "The body of the signed POST to the server's run endpoint, run.url, application/json, with which the gateway registers a run before it starts: the run's id, its labels and what it is about, and what the gateway announces for the run. The answer is a signed 200 whose body is the run's run configuration, run-configuration.schema.json; {\"version\": 1} is an answer of no policy. The gateway builds the body once and sends the same bytes on every try, time included; the signature covers the body, and a server refuses a time outside 300 seconds of its clock, either way, with an unsigned 401. A member this schema does not define is refused, invalid_request, and so is a label value over 256 bytes of UTF-8, which the schema cannot state.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "run_id", "forager_version", "contract_version", "interval_seconds", "events", "time"],
@@ -17,7 +17,7 @@
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     },
     "labels": {
-      "description": "The run's labels, as dev.qory.run.started contains them. The server decides which labels identify what the run works on, and chooses the run configuration for them. Absent means none.",
+      "description": "The run's labels, as dev.qory.run.started contains them: at most 16, each value at most 256 bytes of UTF-8. Each maxLength counts characters and is an upper bound of the byte limit: a body with a value over 256 bytes is a signed 400 invalid_request, though this schema passes it. The server decides which labels identify what the run works on, and chooses the run configuration for them. Absent means none.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "about": {
