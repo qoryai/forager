@@ -178,13 +178,14 @@ func signedFixture(t *testing.T, name string) signed {
 // TestTheClientSignsTheFixturesRequests pins that the request string the client signs
 // is the one the signed fixtures carry: under the fixture access key, each accepted
 // fixture's signature verifies over the request the client would build from its
-// method, target, timestamp and body.
+// method, target, timestamp and body. The registration the client builds from the
+// registration fixture's members is its body, byte for byte.
 func TestTheClientSignsTheFixturesRequests(t *testing.T) {
 	key, err := accesskey.ParseSecret("qak_AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"get-configuration-valid", "get-run-configuration-valid", "get-run-configuration-labels-valid", "batch-valid"} {
+	for _, name := range []string{"get-configuration-valid", "register-valid", "reload-valid", "batch-valid"} {
 		f := signedFixture(t, name)
 		r := accesskey.Request{AccessKeyID: f.Headers[server.HeaderAccessKeyID], InstanceID: f.Headers[server.HeaderInstanceID], Method: f.Method, Target: f.Target, Timestamp: f.Headers[server.HeaderTimestamp], Body: []byte(f.Body)}
 		if got, _ := key.SignRequest(r); got != f.Headers[server.HeaderSignature] {
@@ -193,6 +194,11 @@ func TestTheClientSignsTheFixturesRequests(t *testing.T) {
 	}
 	if got := accesskey.Timestamp(time.Unix(1700000000, 999)); got != "1700000000" {
 		t.Errorf("Timestamp = %s", got)
+	}
+	reg := server.Registration{Version: 1, RunID: "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f", Labels: map[string]string{"repository": "acme/shop", "forge": "github.com"},
+		About: &server.About{Title: "Fix the failing build"}, ForagerVersion: "0.7.0", ContractVersion: 1, IntervalSeconds: 30, Events: []string{"*"}, Time: server.RegistrationTime(time.Unix(1700000000, 999))}
+	if body, err := reg.Body(); err != nil || string(body) != signedFixture(t, "register-valid").Body {
+		t.Errorf("the registration is %s, %v; the fixture has %s", body, err, signedFixture(t, "register-valid").Body)
 	}
 }
 

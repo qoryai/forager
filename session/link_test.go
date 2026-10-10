@@ -149,8 +149,8 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 			"example_server_code", accesskey.FromApiary, nil, "the gateway: example_server_code (status 404)", map[string]any{"code": "example_server_code", "status": 404.0}},
 		"a 500 with a message": {linktest.Reply{Status: 500, Body: map[string]any{"message": "credential git: the adapter exited with status 1"}},
 			"", "", nil, "credential git: the adapter exited with status 1", nil},
-		"a refusal with a message": {linktest.Reply{Status: 409, Body: map[string]any{"error": "instance_limit", "from": "apiary", "message": "ping https://apiary.example/v1/events: instance_limit (status 409)"}},
-			"instance_limit", accesskey.FromApiary, nil, "ping https://apiary.example/v1/events: instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
+		"a refusal with a message": {linktest.Reply{Status: 409, Body: map[string]any{"error": "instance_limit", "from": "apiary", "message": "register https://apiary.example/v1/runs: instance_limit (status 409)"}},
+			"instance_limit", accesskey.FromApiary, nil, "register https://apiary.example/v1/runs: instance_limit (status 409)", map[string]any{"code": "instance_limit", "status": 409.0}},
 		"a 500 internal": {linktest.Reply{Status: 500, Body: map[string]any{"error": "internal", "from": "gateway", "message": "credential git: the adapter exited with status 1"}},
 			"", "", nil, "credential git: the adapter exited with status 1", nil},
 		"a bare 500": {linktest.Reply{Status: 500}, "", "", nil, "the gateway answered the run request with status 500", nil},
@@ -258,7 +258,7 @@ func TestADigestThatChangesIsReloaded(t *testing.T) {
 		return linktest.Reply{Status: 200}
 	})
 	reloaded := map[string]any{"mode": "enforce", "allow": []any{"api.example"}, "deny": []any{}, "source": "fetched", "digest": strings.Repeat("e", 64),
-		"url": "https://apiary.example/v1/run-configuration", "run_configuration": second}
+		"url": "https://apiary.example/v1/runs", "run_configuration": second}
 	g.OnReload(func(string) linktest.Reply {
 		return linktest.Reply{Status: 200, Body: map[string]any{"version": 1,
 			"policy": map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.example"}}},
