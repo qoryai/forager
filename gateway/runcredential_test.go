@@ -583,9 +583,9 @@ func runsIn(t *testing.T, dir string) []string {
 
 // TestARunWithNoSession pins the run of a client with no session: without a login or
 // with a run credential the gateway refuses, 407 with Proxy-Authenticate; the first
-// connection with a good one opens the run, with the ping, run.started opened by the
-// gateway with the run credential's labels and details, the gateway's own
-// policy_applied, and the connection's egress; a second connection, with a refreshed
+// connection with a good one opens the run, with its registration, run.started
+// opened by the gateway with the run credential's labels and details, the gateway's
+// own policy_applied, and the connection's egress; a second connection, with a refreshed
 // run credential of the same run key, joins the run; the gateway's own heartbeats
 // while it lives; the run ends quiet after the quiet time with no connection, its
 // run.exited with quiet_seconds, the state cancelled and no exit_code; and the next

@@ -457,8 +457,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			return err
 		})
 		// A signed 200 whose run configuration Forager refuses is a registration the
-		// server accepted: the run is recorded and told to the server as one refused
-		// after it.
+		// server accepted: the record gets its run.registered, then the run is refused
+		// without a code, so no run.refused is written and nothing of the refusal reaches
+		// the server.
 		var refusedDocument *server.DocumentError
 		if regErr != nil && !errors.As(regErr, &refusedDocument) {
 			return fail(regErr)
@@ -578,12 +579,12 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 }
 
 // keepRegistration is how long a registration built for a run id is kept for a retry
-// of the run id: half the window a server holds its time to, so a retry's time is
-// still within it.
+// of the run id, by the wall clock from the time it holds: half the window a server
+// holds its time to, so a retry's time is still within it.
 const keepRegistration = server.Window / 2
 
 // keptRegistration is a registration built for a run id: its members, its bytes and
-// when it was built.
+// the time it holds, read back, which carries no monotonic clock reading.
 type keptRegistration struct {
 	reg  server.Registration
 	body []byte
@@ -594,11 +595,19 @@ type keptRegistration struct {
 // [keepRegistration] when every member but the time is the same, the retry of a run id
 // whose session gave up as it opened, else new ones, kept.
 func (g *Gateway) registration(reg server.Registration) ([]byte, error) {
+	return g.registrationAt(reg, time.Now())
+}
+
+// registrationAt is [Gateway.registration] at now. A kept registration's age is
+// measured by the wall clock, its monotonic reading stripped, from the time it holds,
+// so a host that slept does not keep one the server would refuse as stale; a negative
+// age, a clock set back, has it expire as well.
+func (g *Gateway) registrationAt(reg server.Registration, now time.Time) ([]byte, error) {
 	g.regMu.Lock()
 	defer g.regMu.Unlock()
-	now := time.Now()
+	now = now.Round(0)
 	for id, k := range g.registrations {
-		if now.Sub(k.at) > keepRegistration {
+		if age := now.Sub(k.at); age < 0 || age > keepRegistration {
 			delete(g.registrations, id)
 		}
 	}
@@ -616,8 +625,13 @@ func (g *Gateway) registration(reg server.Registration) ([]byte, error) {
 	if g.registrations == nil {
 		g.registrations = map[string]keptRegistration{}
 	}
+	at, err := time.Parse(time.RFC3339, reg.Time)
+	if err != nil {
+		// A time that does not read back is not kept: a retry builds its own.
+		return body, nil
+	}
 	reg.Labels = maps.Clone(reg.Labels)
-	g.registrations[reg.RunID] = keptRegistration{reg: reg, body: body, at: now}
+	g.registrations[reg.RunID] = keptRegistration{reg: reg, body: body, at: at}
 	return body, nil
 }
 

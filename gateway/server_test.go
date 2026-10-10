@@ -265,6 +265,46 @@ func TestASigned410ToTheReloadStopsTheDeliveries(t *testing.T) {
 	}
 }
 
+// TestA404ToTheReloadKeepsThePolicy pins a server's signed 404 to the reload of a
+// run's run configuration by its id, which a server answers a run it does not know
+// under the access key: the reload fails, the user is told as of any failed reload,
+// the policy in force stays, its digest too, and the deliveries go on.
+func TestA404ToTheReloadKeepsThePolicy(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	sc := script(c)
+	sc.then(runsPath+"/"+runID, apiaryReply{status: http.StatusNotFound, signed: true})
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["other.example"]}}`, 'b')
+	h.post(started(runID, nil), applied(runID, a.Applied))
+	eventually(t, "the failed reload's report", func() bool { return h.reported("the reload failed: ") })
+	if got := h.reportsWith("the reload failed"); len(got) != 1 || !strings.Contains(got[0], runsPath+"/"+runID) || !strings.Contains(got[0], "404") {
+		t.Errorf("reports %q", got)
+	}
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct{ Egress struct{ Allow []string } }
+	json.Unmarshal(r.Policy, &pol)
+	if r.Digest != a.Digest || !slices.Equal(pol.Egress.Allow, []string{"api.example"}) {
+		t.Errorf("after a 404 to the reload: %s, digest %s, want %s", r.Policy, r.Digest, a.Digest)
+	}
+	if stopped(h, runID) {
+		t.Error("a 404 to the reload stopped the deliveries")
+	}
+	sent := c.deliveries.Load()
+	if d := h.post(exited(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("the run.exited after the 404: %+v", d)
+	}
+	h.close()
+	if c.deliveries.Load() == sent {
+		t.Error("nothing reached the server after the 404")
+	}
+}
+
 // TestRefusalsAtTheStartPassOn pins a refusal at a run's start: the server's reaches the
 // session with its code and status, from apiary; one of the run's configuration the
 // gateway decides is a 403 from the gateway.
@@ -639,7 +679,7 @@ func TestAResendTheServerStopsMidway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owed := len(h.record(a.RunID)) - 1 // all but the ping, which the server accepted
+	owed := len(h.record(a.RunID)) - 1 // all but the run.registered, which is never posted
 	c.refuse.Store(0)
 	c.goneAfter.Store(c.deliveries.Load() + 1)
 	stored := c.store.Count()
@@ -751,7 +791,7 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"the server never accepted the run's registration; nothing is sent"}; !slices.Equal(reports, want) {
+	if want := []string{"the run never opened at the server; nothing is sent"}; !slices.Equal(reports, want) {
 		t.Errorf("reports %q", reports)
 	}
 	if r != (gateway.Delivery{NotOpened: true}) {

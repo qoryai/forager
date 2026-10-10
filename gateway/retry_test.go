@@ -840,3 +840,53 @@ func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
 		t.Errorf("the gateway's directory holds no refused run key: %s %v", b, err)
 	}
 }
+
+// TestARegistrationIsKeptForARetryOfItsRunID pins the bytes a retry of a run id sends:
+// within half the server's window of the time the first registration holds, by the
+// wall clock, the same registration but for its time sends the same bytes; other labels
+// or another about build new bytes; and past that half window, or before the time it
+// holds, a clock set back, the registration is built anew, its own time in it.
+func TestARegistrationIsKeptForARetryOfItsRunID(t *testing.T) {
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	reg := func(at time.Time, labels map[string]string, about *server.About) server.Registration {
+		return server.Registration{Version: 1, RunID: event.NewRunID(), Labels: labels, About: about, ForagerVersion: "test",
+			ContractVersion: server.Revision, IntervalSeconds: 30, Events: []string{"*"}, Time: server.RegistrationTime(at)}
+	}
+	labels := map[string]string{"repository": "acme/shop"}
+	for name, tc := range map[string]struct {
+		after  time.Duration
+		labels map[string]string
+		about  *server.About
+		same   bool
+	}{
+		"the same, at once":             {time.Second, labels, nil, true},
+		"the same, within half":         {server.Window/2 - time.Second, labels, nil, true},
+		"the same, past half":           {server.Window/2 + time.Second, labels, nil, false},
+		"the same, with the clock back": {-time.Second, labels, nil, false},
+		"other labels":                  {time.Second, map[string]string{"repository": "acme/other"}, nil, false},
+		"another about":                 {time.Second, labels, &server.About{Title: "Fix the build"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &gateway.Gateway{}
+			first := reg(t0, labels, nil)
+			b1, err := gateway.RegistrationAt(g, first, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at := t0.Add(tc.after)
+			retry := reg(at, tc.labels, tc.about)
+			retry.RunID = first.RunID
+			b2, err := gateway.RegistrationAt(g, retry, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := retry.Body()
+			if tc.same {
+				want = b1
+			}
+			if !bytes.Equal(b2, want) {
+				t.Errorf("sent %s, want %s", b2, want)
+			}
+		})
+	}
+}

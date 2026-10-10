@@ -51,9 +51,22 @@ func TestResendReportsItsConstants(t *testing.T) {
 	})
 	t.Run("not opened", func(t *testing.T) {
 		dir := run(t, line(event.RunRefused, "0000000001"))
-		d, reports := resend(t, gateway.ResendConfig{Dir: dir})
+		d, reports := resend(t, gateway.ResendConfig{Server: newControl(t).server(), Dir: dir})
 		if !slices.Equal(reports, []string{gateway.ResendNotOpened}) || !d.NotOpened {
 			t.Errorf("reports %q, delivery %+v", reports, d)
+		}
+	})
+	// With no server, no record is reported never opened: the refused run's and the
+	// empty one are left as they are, with no line and no error.
+	t.Run("not opened, with no server", func(t *testing.T) {
+		for _, record := range []string{line(event.RunRefused, "0000000001"), ""} {
+			dir := run(t, record)
+			if d, reports := resend(t, gateway.ResendConfig{Dir: dir}); len(reports) != 0 || d != (gateway.Delivery{}) {
+				t.Errorf("%q: reports %q, delivery %+v", record, reports, d)
+			}
+			if b, _ := os.ReadFile(filepath.Join(dir, "events.jsonl")); string(b) != record {
+				t.Errorf("%q: the record is %q", record, b)
+			}
 		}
 	})
 	t.Run("no server", func(t *testing.T) {
