@@ -285,19 +285,20 @@ func quietSeconds(d time.Duration) int {
 }
 
 // keep is a run with no session while it lives: its heartbeats, the gateway's own,
-// every interval, the seconds counted from its ping, or from its run.started without a
-// server; and, for a starter with introspection, the starter asked again at most every
-// cache while the run has connections, or had one since it last asked, and once per
-// interval when nothing asked of its run credential in the last interval, so a quiet
-// run learns the starter's end of it as a connection's check would.
+// every interval, the seconds counted from its accepted registration, or from its
+// run.started without a server; and, for a starter with introspection, the starter
+// asked again at most every cache while the run has connections, or had one since it
+// last asked, and once per interval when nothing asked of its run credential in the
+// last interval, so a quiet run learns the starter's end of it as a connection's check
+// would.
 func (lr *linkRun) keep() {
 	interval := time.Duration(lr.g.interval) * time.Second
 	beat := time.NewTicker(interval)
 	defer beat.Stop()
 	lr.mu.Lock()
 	since := lr.startedAt
-	if !lr.pingAt.IsZero() {
-		since = lr.pingAt
+	if !lr.registeredAt.IsZero() {
+		since = lr.registeredAt
 	}
 	cache := lr.cred.cache
 	lr.mu.Unlock()
