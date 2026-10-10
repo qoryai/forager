@@ -317,7 +317,8 @@ func (v *verified) client() *server.Client {
 // the document decoded with a section Forager does not know ignored, the node id,
 // the run endpoint, the digest from the header, the filter, which never wants
 // dev.qory.run.registered, and no run on a status that is not 200 or on a document
-// without the run endpoint.
+// without the run endpoint or whose run endpoint has a trailing slash, a query or a
+// fragment.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -336,15 +337,18 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		t.Error("the filter of a listed configuration is wrong")
 	}
 	inner := v.srv.Config.Handler
-	v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]},"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
-		w.Header().Set(server.HeaderConfiguration, "sha256=c0")
-		w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
-		w.Write(doc)
-	})
-	var de *server.DocumentError
-	if _, _, err := c.Discover(context.Background()); !errors.As(err, &de) || de.URL != v.srv.URL+server.WellKnown {
-		t.Errorf("a configuration without the run endpoint: %v", err)
+	for name, run := range map[string]string{"without the run endpoint": "", "with a trailing slash": `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`,
+		"with a query": `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, "with a fragment": `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`} {
+		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
+			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
+			w.Write(doc)
+		})
+		var de *server.DocumentError
+		if _, _, err := c.Discover(context.Background()); !errors.As(err, &de) || de.URL != v.srv.URL+server.WellKnown {
+			t.Errorf("a configuration %s: %v", name, err)
+		}
 	}
 	v.srv.Config.Handler = inner
 	c.Config.URL = v.srv.URL + "/elsewhere"
@@ -582,17 +586,15 @@ func TestRegisterPostsTheBodyAndReadsTheRunConfiguration(t *testing.T) {
 func TestRunConfigurationFetchesByTheRunsID(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
-	for _, runs := range []string{v.srv.URL + "/v1/runs", v.srv.URL + "/v1/runs/"} {
-		rc, digest, err := c.RunConfiguration(context.Background(), runs, runID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if digest != "sha256="+strings.Repeat("1", 64) || rc.Version != 1 || rc.SecurityPolicy == nil {
-			t.Errorf("run configuration %+v, digest %s", rc, digest)
-		}
-		if v.seen.Method != http.MethodGet || v.seen.URL.RequestURI() != "/v1/runs/"+runID || v.seen.Header.Get(server.HeaderTimestamp) == "" {
-			t.Errorf("%s %s, headers %v", v.seen.Method, v.seen.URL.RequestURI(), v.seen.Header)
-		}
+	rc, digest, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != "sha256="+strings.Repeat("1", 64) || rc.Version != 1 || rc.SecurityPolicy == nil {
+		t.Errorf("run configuration %+v, digest %s", rc, digest)
+	}
+	if v.seen.Method != http.MethodGet || v.seen.RequestURI != "/v1/runs/"+runID || v.seen.Header.Get(server.HeaderTimestamp) == "" {
+		t.Errorf("%s %s, headers %v", v.seen.Method, v.seen.RequestURI, v.seen.Header)
 	}
 	other := "1b5c1c2e-3f4a-4b6c-8d7e-9f0a1b2c3d4e"
 	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", other); err == nil || errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), "status 404") || !strings.Contains(err.Error(), "/v1/runs/"+other) {

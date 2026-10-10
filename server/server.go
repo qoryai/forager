@@ -33,7 +33,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -583,16 +582,14 @@ func (c *Client) Register(ctx context.Context, runURL string, body []byte) (*Run
 }
 
 // RunConfiguration fetches the run configuration of the run runID again, by a signed
-// GET of the run endpoint runURL followed by the run's id, and returns it with the
-// server's digest of it: what a reload asks when an answer's X-Qory-Run-Configuration
-// differs from the one in force. A signed 410 is [ErrNotAccepted]: the server wants
+// GET of the run endpoint runURL followed by a slash and the run's id, and returns it
+// with the server's digest of it: what a reload asks when an answer's
+// X-Qory-Run-Configuration differs from the one in force. The configuration's schema
+// refuses a run.url with a query, a fragment or a trailing slash, so the URL has
+// exactly one slash before the id. A signed 410 is [ErrNotAccepted]: the server wants
 // nothing more of the run.
 func (c *Client) RunConfiguration(ctx context.Context, runURL, runID string) (*RunConfiguration, string, error) {
-	base, err := url.Parse(runURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("run configuration %s: %w", runURL, err)
-	}
-	u := base.JoinPath(runID).String()
+	u := runURL + "/" + runID
 	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("run configuration %s: %w", u, err)
