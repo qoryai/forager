@@ -91,8 +91,9 @@ type ResendResult struct {
 // delivered.log, and no run.started is of a run whose registration the server never
 // accepted, which never opened: it is NotOpened, left as it is, and sent nothing. So is
 // a record with no mark and a run.started, of a run that had no server, when it is sent
-// to one; with no Sink it is completed, as any other. dev.qory.run.registered is never
-// sent.
+// to one; with no Sink it is completed, as any other. A record that holds no event is
+// NotOpened when there is no delivered.log, and an error otherwise.
+// dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -140,6 +141,9 @@ func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 			cfg.Report(ResendNotOpened)
 		}
 		return res, nil
+	}
+	if len(rec.lines) == 0 {
+		return nil, fmt.Errorf("%s holds no event", file)
 	}
 	accepted, stopped, err := sink.Delivered(cfg.Dir)
 	if err != nil {
@@ -263,9 +267,6 @@ func record(file string) (*recordFile, error) {
 			rec.tailKept = len(kept) > 0
 		}
 		off = end + 1
-	}
-	if len(rec.lines) == 0 {
-		return nil, fmt.Errorf("%s holds no event", file)
 	}
 	return rec, nil
 }

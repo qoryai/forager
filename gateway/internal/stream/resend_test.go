@@ -474,6 +474,28 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	}
 }
 
+// TestResendOfAnEmptyRecord pins the record of a session's run whose registration the
+// server never accepted, which holds no event: with no delivered.log it never opened,
+// so it is NotOpened, sent nothing and left as it is; with one it is an error.
+func TestResendOfAnEmptyRecord(t *testing.T) {
+	srv, store := station(t, nil)
+	s := New(Config{Dir: t.TempDir()})
+	r, _ := s.Open(event.NewRunID())
+	r.Close(context.Background())
+	var reports []string
+	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir(), Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
+	if err != nil || !res.NotOpened || res.NoServer || res.Sent != 0 || !slices.Equal(reports, []string{ResendNotOpened}) {
+		t.Errorf("%+v, %v, reports %q", res, err, reports)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile)); len(b) != 0 || store.Count() != 0 {
+		t.Errorf("the record %q, the receiver stored %d", b, store.Count())
+	}
+	registrationAccepted(t, r.Dir())
+	if _, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()}); err == nil || !strings.Contains(err.Error(), "holds no event") {
+		t.Errorf("an empty record with a delivered.log: %v", err)
+	}
+}
+
 // TestResendSendsARunWhoseRegistrationWasAccepted pins the record's own mark of an
 // accepted registration: a record that holds run.registered and no delivered.log, the
 // gateway stopping before its sink made one, is of a run that opened, so it is
