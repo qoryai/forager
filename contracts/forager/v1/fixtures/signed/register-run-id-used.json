@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "JapGglTk6gVtahg7rCey_0jJyvdmXlDik_VtFWsBaa131Pth-yokfmyT7dTAfDV-AcwQjlo0vpQ5j16NEGWiCA"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/warehouse\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
+  "expect": 409,
+  "expect_code": "run_id_used",
+  "note": "A registration of register-valid's run id with other bytes, the repository acme/warehouse, signed. Replayed after register-replayed, which the receiver accepted for that run id: a registration whose run id the server already accepted under another access key, even with the same bytes, or with other bytes, other labels or another body, is a signed 409 run_id_used, and the run does not start."
+}

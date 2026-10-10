@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"context"
-	"maps"
+	"errors"
 	"sync"
 
 	"github.com/qoryai/forager/gateway/internal/run"
@@ -18,8 +18,8 @@ import (
 // reload, moved to the gateway, which applies what it fetches to the run's proxy.
 type live struct {
 	client *server.Client
-	// labels are the run's, sent on every run configuration request.
-	labels map[string]string
+	// runID is the run's id, by which its run configuration is fetched again.
+	runID  string
 	report func(string)
 	// read reads a run configuration the server answered into the policy it puts in
 	// force, narrowed by the node's; set once the run is decided.
@@ -31,8 +31,8 @@ type live struct {
 	mu         sync.Mutex
 	conf       *server.Configuration
 	confDigest string
-	// runDigest is the server's digest of the run configuration in force, empty when
-	// none was fetched.
+	// runDigest is the server's digest of the run configuration in force, the one the
+	// accepted registration answered until a reload puts another in force.
 	runDigest string
 	posts     *sink.Server
 	// apply puts a fetched policy in force, or says why it cannot; nil until the run
@@ -49,16 +49,17 @@ type live struct {
 
 // newLive is the reload of one run, from the configuration document the gateway
 // discovered.
-func newLive(ctx context.Context, client *server.Client, conf *server.Configuration, digest string, labels map[string]string, report func(string)) *live {
-	l := &live{client: client, labels: maps.Clone(labels), report: report, conf: conf, confDigest: digest}
+func newLive(ctx context.Context, client *server.Client, conf *server.Configuration, digest, runID string, report func(string)) *live {
+	l := &live{client: client, runID: runID, report: report, conf: conf, confDigest: digest}
 	l.ctx, l.cancel = context.WithCancel(ctx)
 	return l
 }
 
-// fetch fetches the run configuration at runURL for the run's labels and reads it: the
-// policy it puts in force.
+// fetch fetches the run's run configuration again by its id from the run endpoint
+// runURL and reads it: the policy it puts in force. The policy names runURL as where
+// it came from, as at the run's registration.
 func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, error) {
-	rc, digest, err := l.client.RunConfiguration(ctx, runURL, l.labels)
+	rc, digest, err := l.client.RunConfiguration(ctx, runURL, l.runID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,17 +143,18 @@ func (l *live) loop() {
 }
 
 // pass reloads what differs: the configuration document first, whose sections are
-// used from then on, then the run configuration, which is put in force. A fetch the
-// server did not answer is reported and leaves what the run holds; the next answer
-// asks again. A fetch it answered is not repeated until the answered digest changes:
-// a document that is the one in force changes nothing and says nothing, and one that
-// cannot be put in force is reported once and the policy in force stays.
+// used from then on, then the run configuration, fetched by the run's id, which is put
+// in force. A fetch the server did not answer is reported and leaves what the run
+// holds; the next answer asks again. A fetch it answered is not repeated until the
+// answered digest changes: a document that is the one in force changes nothing and
+// says nothing, and one that cannot be put in force is reported once and the policy in
+// force stays. A signed 410 to the run configuration stops the run's deliveries, as a
+// signed 410 to a delivery does, and the run goes on.
 func (l *live) pass() {
 	l.mu.Lock()
 	want, conf, confDigest, runDigest, tried, apply := l.want, l.conf, l.confDigest, l.runDigest, l.tried, l.apply
 	l.dirty = false
 	l.mu.Unlock()
-	fetchRun := false
 	if want.Configuration != "" && want.Configuration != confDigest {
 		next, digest, err := l.client.Discover(l.ctx)
 		if err != nil {
@@ -163,16 +165,18 @@ func (l *live) pass() {
 		l.conf, l.confDigest = next, digest
 		l.mu.Unlock()
 		l.posts.SetTarget(sink.Target{URL: next.Events.URL, Types: next.Events.Types})
-		// A run section that appears names a run configuration the run does not hold
-		// yet; one that disappears leaves the policy in force as it is.
-		fetchRun = next.Run != nil && runDigest == ""
 		conf = next
 	}
-	if conf.Run == nil || !(fetchRun || (want.RunConfiguration != "" && want.RunConfiguration != runDigest && want.RunConfiguration != tried)) {
+	if conf.Run == nil || want.RunConfiguration == "" || want.RunConfiguration == runDigest || want.RunConfiguration == tried {
 		return
 	}
 	// The variables are the run's from its start to its end: a reload leaves them.
 	pol, err := l.fetch(l.ctx, conf.Run.URL)
+	if errors.Is(err, server.ErrNotAccepted) {
+		// The server wants nothing more of the run.
+		l.posts.Stop()
+		return
+	}
 	if err != nil && !run.Settled(err) {
 		// Only a document the server answered and Forager refuses is not asked for
 		// again; a fetch the server did not answer is.

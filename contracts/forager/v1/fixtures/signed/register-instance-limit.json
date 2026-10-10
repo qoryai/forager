@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_AAECAwQFBgcICQoLDA0ODw",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "Je-qDVcZ0jPxtaxr9ZnPzwuTw88Zjcmkkmg09WvJd-NtmCffrCheEtMZNVgTwOsfv1ypHrPXI5lxEjep_TSWCw"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
+  "expect": 409,
+  "expect_code": "instance_limit",
+  "note": "The registration of run 0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d as the instance i_AAECAwQFBgcICQoLDA0ODw, a new instance id beyond its node's limit, signed. A receiver under test counts the fixture instance as the one live instance its node allows, so it answers a signed 409 instance_limit, and the run does not start."
+}

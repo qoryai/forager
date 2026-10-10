@@ -1,0 +1,51 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000001",
+    "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "type": "dev.qory.run.registered",
+    "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "time": "2026-09-16T12:00:00.000Z",
+    "sequence": "0000000001",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
+    "data": {
+      "forager_version": "0.4.0",
+      "events": [
+        "*"
+      ],
+      "contract_version": 1,
+      "interval_seconds": 30
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000002",
+    "source": "urn:qory:run:0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "type": "dev.qory.run.started",
+    "subject": "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f",
+    "time": "2026-09-16T12:00:00.120Z",
+    "sequence": "0000000002",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
+    "data": {
+      "opened_by": "session",
+      "credential": "none",
+      "runtime": "claude",
+      "runtime_version": "2.1.273",
+      "command": "claude",
+      "args": [
+        "--settings",
+        "/home/dev/.cache/qory/homes/app/claude/settings.json",
+        "--setting-sources",
+        "user"
+      ],
+      "dir": "/home/dev/app",
+      "interactive": true,
+      "terminal": {
+        "cols": 120,
+        "rows": 40
+      },
+      "forager_version": "0.4.0",
+      "host": "dev-laptop"
+    }
+  }
+]

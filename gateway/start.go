@@ -56,6 +56,12 @@ type Gateway struct {
 	client     *server.Client
 	conf       *server.Configuration
 	confDigest string
+	// registrations are the registrations built for run ids, each kept for
+	// [keepRegistration], so the retry of a run id whose session gave up as it opened
+	// sends the same bytes, which the server answers alike, where other bytes would be
+	// refused run_id_used.
+	regMu         sync.Mutex
+	registrations map[string]keptRegistration
 
 	// base is the context of everything a run starts, cancelled when Close is done.
 	base   context.Context

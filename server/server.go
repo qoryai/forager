@@ -6,9 +6,10 @@
 // secret lives outside the document, and a [Client] holds it as an [accesskey.Key]
 // with the instance id. A [Client] speaks to the server the way the contract says:
 // [Client.Discover] fetches the configuration document with a signed GET and learns
-// where events go and where the run configuration is; [Client.RunConfiguration]
-// fetches that; [Client.Deliver] posts one signed batch and reads the digests the
-// answer contains; [Client.Ping] posts the ping a run starts with. Every request
+// where events go and where runs register; [Client.Register] posts the registration a
+// run starts with and reads the run configuration its answer carries;
+// [Client.RunConfiguration] fetches that again by the run's id; [Client.Deliver] posts
+// one signed batch and reads the digests the answer contains. Every request
 // contains the access key id, the instance id and name, the contract revision and the
 // user agent, and is signed with Ed25519 under the access key. Every answer but a 401
 // is verified under the pin before its body or headers are read, and the client logs
@@ -32,7 +33,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,6 +41,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
 )
 
 // The headers of the contract and the content type of a delivery.
@@ -58,8 +59,8 @@ const (
 	ContentType            = "application/cloudevents-batch+json"
 )
 
-// Revision is the contract revision the client announces, in the header and in the
-// ping: the contract's own.
+// Revision is the contract revision the client announces, in the header and in a
+// run's registration: the contract's own.
 const Revision = contracts.Revision
 
 // WellKnown is the path of the configuration document under the server's URL.
@@ -79,7 +80,8 @@ const MaxDocument = 1 << 20
 // counts as unsigned.
 const MaxRefusal = accesskey.MaxAnswer
 
-// MaxInterval is the longest heartbeat interval a ping may announce, in seconds.
+// MaxInterval is the longest heartbeat interval a registration may announce, in
+// seconds.
 const MaxInterval = 300
 
 // Config is the server document: where Forager reports, as which access key, and
@@ -197,15 +199,17 @@ func decode(name, schemaName string, b []byte, out any) error {
 }
 
 // Configuration is the configuration document the server answers discovery with:
-// the access key's node, where events go and which, where the run configuration is
-// when the server offers one, a secrets section for an access key allowed stored
-// secrets, and the server's keys. A section Forager does not know is ignored.
+// the access key's node, where events go and which, where runs register, a secrets
+// section for an access key allowed stored secrets, and the server's keys. A section
+// Forager does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
 	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
 	NodeID string `json:"node_id"`
 	Events Events `json:"events"`
-	// Run is nil when the server offers no run configuration.
+	// Run is the run endpoint, which every discovered configuration has: a run
+	// registers with a POST to its URL, and its run configuration is fetched again at
+	// the URL and the run's id.
 	Run *Endpoint `json:"run,omitempty"`
 	// Secrets is nil unless the access key is allowed stored secrets.
 	Secrets *Endpoint `json:"secrets,omitempty"`
@@ -217,21 +221,23 @@ type Configuration struct {
 // Events is the events section: the URL to post to and the types wanted.
 type Events struct {
 	URL string `json:"url"`
-	// Types are full type names, or "*" for every type. The ping is always sent.
+	// Types are full type names, or "*" for every type.
 	Types []string `json:"types"`
 }
 
-// Endpoint is a section that defines one URL: run, where the run configuration is
-// fetched from, or secrets, listed for an access key allowed stored secrets.
+// Endpoint is a section that defines one URL: run, where runs register and their run
+// configuration is fetched from, or secrets, listed for an access key allowed stored
+// secrets.
 type Endpoint struct {
 	URL string `json:"url"`
 }
 
 // Wants reports whether the events section asks for events of the type: every type
-// when it holds "*", else the listed ones. The ping is always wanted.
+// when it holds "*", else the listed ones. dev.qory.run.registered is never wanted: it
+// is the record's alone, and never posted.
 func (c *Configuration) Wants(typ string) bool {
-	if typ == "dev.qory.ping" {
-		return true
+	if typ == event.RunRegistered {
+		return false
 	}
 	for _, e := range c.Events.Types {
 		if e == "*" || e == typ {
@@ -476,7 +482,8 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
-// the schema refuses, means no run; it names the URL. A 401 is unauthorized, a signed
+// the schema refuses, means no run; it names the URL. A document without the run
+// endpoint is refused as one the schema refuses. A 401 is unauthorized, a signed
 // refusal is the code its body contains, rate_limited say, and an answer that does not
 // verify is answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
@@ -484,40 +491,133 @@ func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 		return nil, "", err
 	}
 	var conf Configuration
-	digest, err := c.fetch(ctx, "configuration", strings.TrimSuffix(c.Config.URL, "/")+WellKnown, HeaderConfiguration, "configuration.schema.json", &conf)
+	u := strings.TrimSuffix(c.Config.URL, "/") + WellKnown
+	digest, err := c.fetch(ctx, "configuration", u, HeaderConfiguration, "configuration.schema.json", &conf)
 	if err != nil {
 		return nil, "", err
+	}
+	if conf.Run == nil || conf.Run.URL == "" {
+		return nil, "", &DocumentError{"configuration", u, errors.New("the document has no run endpoint, run.url")}
 	}
 	return &conf, digest, nil
 }
 
-// RunConfiguration fetches the run configuration from the run section's URL for the
-// run's labels, and returns it with the server's digest of it. Every label is one query
-// parameter, its key the name and its value the value, added to any query the URL has,
-// sorted by key and percent-encoded; no label is no query. Which labels name what the
-// run works on is the server's to decide. The query is part of the signed target.
-func (c *Client) RunConfiguration(ctx context.Context, runURL string, labels map[string]string) (*RunConfiguration, string, error) {
-	u, err := url.Parse(runURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("run configuration %s: %w", runURL, err)
+// RegistrationContentType is the content type of a run's registration.
+const RegistrationContentType = "application/json"
+
+// Registration is the body of a run's registration, run-registration.schema.json:
+// the run's id, its labels and what it is about, and what the run tells the server of
+// itself, Forager's version, the event types the server receives, the contract
+// revision and the heartbeat interval. About never selects or changes a security
+// policy. Time is when the body was built, RFC 3339 in UTC with seconds, signed with the
+// body: a run builds its body once and sends the same bytes on every try.
+type Registration struct {
+	Version int `json:"version"`
+	// RunID is the run's id: a UUID in the canonical lower-case form.
+	RunID string `json:"run_id"`
+	// Labels are the run's labels; none is left out.
+	Labels map[string]string `json:"labels,omitempty"`
+	// About is what the run is about, as run.started reports it; nil is left out.
+	About           *About   `json:"about,omitempty"`
+	ForagerVersion  string   `json:"forager_version"`
+	ContractVersion int      `json:"contract_version"`
+	IntervalSeconds int      `json:"interval_seconds"`
+	Events          []string `json:"events"`
+	Time            string   `json:"time"`
+}
+
+// RegistrationTime is a registration's time: t in UTC, RFC 3339 with whole seconds.
+func RegistrationTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
+
+// Body is the registration's bytes, built once: every try sends them as they are.
+// Labels [CheckLabels] refuses are its error, and no body is built.
+func (r Registration) Body() ([]byte, error) {
+	if err := CheckLabels(r.Labels); err != nil {
+		return nil, err
 	}
-	q := u.Query()
-	for k, v := range labels {
-		q.Set(k, v)
+	if r.Events == nil {
+		r.Events = []string{}
 	}
-	u.RawQuery = q.Encode()
-	body, digest, err := c.fetchBody(ctx, "run configuration", u.String(), HeaderRunConfiguration)
+	if len(r.Labels) == 0 {
+		r.Labels = nil
+	}
+	return json.Marshal(r)
+}
+
+// ErrNotAccepted is the error of a registration the server answered, signed, with
+// neither a 200 nor a code, or with a 410, whatever its code.
+var ErrNotAccepted = errors.New("the server did not accept the run")
+
+// Register posts a run's registration, body, to the run endpoint runURL and returns the
+// run configuration the server answered with its digest. It is what makes a configured
+// server fail closed: the run does not start otherwise. The answer is a signed 200
+// with a run configuration document, read up to MaxDocument, and the
+// X-Qory-Run-Configuration header; a document Forager refuses, or a digest header
+// missing or misshapen, is a [*DocumentError]. A 401 is unauthorized, an answer that
+// does not verify answer_unsigned, and a signed refusal its code, instance_limit,
+// rate_limited or a 409 code of the server's own say, each an [*accesskey.Refusal]; a
+// signed 410, with any code or none, is [ErrNotAccepted]: the server takes no run here.
+// The error names the URL and the status. A caller that tries again sends the same
+// body.
+func (c *Client) Register(ctx context.Context, runURL string, body []byte) (*RunConfiguration, string, error) {
+	what := "register " + runURL
+	a, err := c.send(ctx, http.MethodPost, runURL, body, MaxDocument, func(h http.Header) {
+		h.Set("Content-Type", RegistrationContentType)
+	})
 	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", what, err)
+	}
+	if a.signed && a.status == http.StatusGone {
+		return nil, "", fmt.Errorf("%s: status %d: %w", what, a.status, ErrNotAccepted)
+	}
+	if a.status != http.StatusOK || !a.signed {
+		err = a.refusal(what)
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) {
+			return nil, "", fmt.Errorf("%w: %w", err, ErrNotAccepted)
+		}
 		return nil, "", err
 	}
-	rc, err := readRunConfiguration(body)
+	return runConfigurationOf(a, runURL)
+}
+
+// RunConfiguration fetches the run configuration of the run runID again, by a signed
+// GET of the run endpoint runURL followed by a slash and the run's id, and returns it
+// with the server's digest of it: what a reload asks when an answer's
+// X-Qory-Run-Configuration differs from the one in force. The configuration's schema
+// refuses a run.url with a query, a fragment or a trailing slash, so the URL has
+// exactly one slash before the id. A signed 410 is [ErrNotAccepted]: the server wants
+// nothing more of the run.
+func (c *Client) RunConfiguration(ctx context.Context, runURL, runID string) (*RunConfiguration, string, error) {
+	u := runURL + "/" + runID
+	a, err := c.send(ctx, http.MethodGet, u, nil, MaxDocument, nil)
 	if err != nil {
-		return nil, "", &DocumentError{"run configuration", u.String(), err}
+		return nil, "", fmt.Errorf("run configuration %s: %w", u, err)
+	}
+	if a.signed && a.status == http.StatusGone {
+		return nil, "", fmt.Errorf("run configuration %s: status %d: %w", u, a.status, ErrNotAccepted)
+	}
+	if a.status != http.StatusOK || !a.signed {
+		return nil, "", a.refusal("run configuration " + u)
+	}
+	return runConfigurationOf(a, u)
+}
+
+// runConfigurationOf reads a signed 200 that carries a run configuration, fetched from
+// u: the document and its digest header, both checked.
+func runConfigurationOf(a *answer, u string) (*RunConfiguration, string, error) {
+	digest := a.header.Get(HeaderRunConfiguration)
+	if digest == "" {
+		return nil, "", &DocumentError{"run configuration", u, fmt.Errorf("the answer contains no %s header", HeaderRunConfiguration)}
+	}
+	rc, err := readRunConfiguration(a.body)
+	if err != nil {
+		return nil, "", &DocumentError{"run configuration", u, err}
 	}
 	// The digest is recorded in the run's events, whose schema holds it to this shape;
 	// it is not recomputed.
 	if !digestShape.MatchString(digest) {
-		return nil, "", &DocumentError{"run configuration", u.String(), fmt.Errorf("the %s header is not sha256= and 64 hex digits", HeaderRunConfiguration)}
+		return nil, "", &DocumentError{"run configuration", u, fmt.Errorf("the %s header is not sha256= and 64 hex digits", HeaderRunConfiguration)}
 	}
 	return rc, digest, nil
 }
@@ -530,8 +630,7 @@ var labelKeyShape = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
 
 // CheckLabels refuses labels the contract's schema would: too many, a key outside its
 // grammar, a value longer than 256 bytes or not UTF-8. Forager checks a run's labels
-// with it before they are sent, and the receiver the labels a run configuration request
-// carries.
+// with it before they are sent, and the receiver the labels a registration carries.
 func CheckLabels(labels map[string]string) error {
 	if len(labels) > MaxLabels {
 		return fmt.Errorf("%d labels; a run carries at most %d", len(labels), MaxLabels)
@@ -632,36 +731,4 @@ func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body
 		}
 	}
 	return d, nil
-}
-
-// ErrNotAccepted is the error of a ping the server answered, signed, with neither a
-// 2xx nor a code, or with a 410, whatever its code.
-var ErrNotAccepted = errors.New("the server did not accept the ping")
-
-// Ping delivers a batch of one ping event to the events URL and returns nil only on a
-// signed 2xx. It is what makes a configured server fail closed: the run does not start
-// otherwise. A 401 is unauthorized, an answer that does not verify answer_unsigned,
-// and a signed refusal its code, instance_limit or rate_limited say, each an
-// [*accesskey.Refusal]; a signed 410, with any code or none, is [ErrNotAccepted]: the
-// server would record nothing of the run. The error names the URL and the status.
-func (c *Client) Ping(ctx context.Context, eventsURL, deliveryID string, body []byte) error {
-	a, err := c.send(ctx, http.MethodPost, eventsURL, body, MaxRefusal, func(h http.Header) {
-		h.Set("Content-Type", ContentType)
-		h.Set(HeaderDelivery, deliveryID)
-	})
-	if err != nil {
-		return fmt.Errorf("ping %s: %w", eventsURL, err)
-	}
-	if a.signed && a.status >= 200 && a.status < 300 {
-		return nil
-	}
-	if a.signed && a.status == http.StatusGone {
-		return fmt.Errorf("ping %s: status %d: %w", eventsURL, a.status, ErrNotAccepted)
-	}
-	err = a.refusal("ping " + eventsURL)
-	var r *accesskey.Refusal
-	if !errors.As(err, &r) {
-		return fmt.Errorf("%w: %w", err, ErrNotAccepted)
-	}
-	return err
 }

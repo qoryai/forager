@@ -1,6 +1,6 @@
 {
   "version": 1,
   "run": {
-    "url": "https://qory.example/v1/run-configuration"
+    "url": "https://qory.example/v1/runs"
   }
 }

@@ -26,7 +26,8 @@ server. The example is in [the policy](policy.md#in-forageryaml).
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - The run's variables come from the server as well. See [variables](#variables).
 - With `gateway.server` set, the run starts only when the server answers the fetch and
-  a ping, signed. So a run meant to be observed never runs unobserved.
+  accepts the run's registration, signed. So a run meant to be observed never runs
+  unobserved.
 - `qory run --local` runs with the files alone.
 - Without `gateway.server`, the run writes files only.
 
@@ -36,13 +37,18 @@ The gateway reports to the server; the session never speaks to it. A
 `gateway.Server` in `gateway.Config` defines the server. The gateway:
 
 1. fetches the server's configuration document when it starts, with a signed `GET` of
-   `/.well-known/qory-configuration`;
-2. for each run a session asks it for, pings first: the ping announces the heartbeat
-   interval and opens the run at the server, which decides `instance_limit` there;
-3. then fetches the run configuration when the document contains one, with every label
-   of the run as its query. Its `security_policy`, narrowed by the node's policy, is
-   the run's policy. Its `variables` are the server's variables for the run. The
-   gateway answers the session's run request with what follows of them;
+   `/.well-known/qory-configuration`. The document names the run endpoint, `run.url`,
+   with no trailing slash, query or fragment; a document without it is refused;
+2. for each run a session asks it for, registers the run with one signed `POST` to
+   `run.url`. The body holds the run's id, its labels, what it is about, the heartbeat
+   interval, the event types the server receives, the contract and Forager versions,
+   and the time. The labels travel in the body, never in a URL, and what the run is
+   about never selects a policy. The registration opens the run at the server, which
+   decides `instance_limit` there;
+3. reads the answer, the run's run configuration. Its `security_policy`, narrowed by
+   the node's policy, is the run's policy. Its `variables` are the server's variables
+   for the run. A server with no policy answers `{"version":1}`. The gateway answers
+   the session's run request with what follows of them;
 4. posts the events the document selects to the URL it defines, signed: the
    session's, which it receives on its link and numbers, and its own.
 
@@ -84,15 +90,17 @@ the gateway sends it no further batch, writes `stopped` to the run's `delivered.
 and reports it once. The run goes on. The gateway keeps numbering the run's events and
 recording them in `events.jsonl`, it answers the session's requests as before, and the
 runtime runs to its own exit. A resend of the run's record sends the server nothing.
-A `410` to the ping, signed or not, is no run: the server did not accept the ping, and
-the session returns the gateway's error, which names the events URL and the status. A
-`410` to the run configuration as the run opens, signed or not, is no run either, a
-failure without a code, whose error names the run configuration's URL and the status.
+A `410` to the registration, signed or not, with any code or none, is no run, a failure
+without a code: the session returns the gateway's error, which names `run.url` and the
+status, such as
+`register https://qory.example/v1/runs: status 410: the server did not accept the run`
+for a signed one.
 
 ## A policy that changes while the run goes
 
-A server may answer a later batch with another digest. The gateway then fetches the run
-configuration again, and puts it in force while the run goes, narrowed by the same node
+A server may answer a later batch with another digest. The gateway then fetches the
+run's configuration again by the run's id, with a signed `GET <run.url>/<run_id>`, and
+puts it in force while the run goes, narrowed by the same node
 policy. Its answers to the session then carry the new run-configuration digest, and the
 session fetches the run's configuration from the gateway and records it in another
 `dev.qory.run.policy_applied`. The variables stay as they were when the run started.
@@ -180,8 +188,9 @@ list, as `session.Applied`.
 
 A control plane is the same server every run has:
 
-- it creates the run from the first event it sees;
-- it supplies the run's policy, as the server's run configuration.
+- it opens the run at its registration;
+- it supplies the run's policy, as the server's run configuration, the registration's
+  answer.
 
 ## Writing a server
 

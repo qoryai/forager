@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+  "forager_version": "0.7.0",
+  "contract_version": 1,
+  "interval_seconds": 30,
+  "events": [
+    "*"
+  ],
+  "time": "2026-10-10T12:00:00Z"
+}

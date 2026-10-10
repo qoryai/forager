@@ -126,8 +126,8 @@ that runs agents for others: [docs/node.md](docs/node.md).
 
 Every event goes to files. With a server, the events it selects go there too:
 
-- Before the run starts, Forager fetches the server's configuration, signed. The run
-  starts only when the server answers.
+- Before the run starts, Forager fetches the server's configuration and registers the
+  run, both signed. The run starts only when the server accepts it.
 - It posts them in batches. Every request is signed with the machine's access key, an
   Ed25519 key, and every answer is verified under the server's key the machine pins.
 - The server can return the run's policy and variables, chosen by the run's labels. It

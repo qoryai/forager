@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
+  "title": "dev.qory.run.registered",
+  "description": "The server accepted the run's registration. The gateway writes it in its own record once the registration is accepted, as the record's first event, sequence 1, with the values the registration announced. It is in the record alone and never posted: the server has its values from the registration. A run with no server has none.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["forager_version", "events", "contract_version", "interval_seconds"],
+  "properties": {
+    "forager_version": {"description": "The registration's forager_version: the Forager module version, as Go stamps it.", "type": "string", "minLength": 1},
+    "events": {"description": "The registration's events: the event types the server receives, as its configuration lists them.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "contract_version": {"description": "The registration's contract_version: the revision of this contract Forager implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
+    "interval_seconds": {"description": "The registration's interval_seconds: the heartbeat interval the run uses, in seconds.", "type": "integer", "minimum": 1, "maximum": 300}
+  }
+}

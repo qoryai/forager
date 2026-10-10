@@ -23,9 +23,10 @@ import (
 const Base = "https://qory.dev/contracts/forager/v1"
 
 // The event types of the contract. A type name is stable; a breaking change to its data
-// is a new type.
+// is a new type. RunRegistered is the gateway's own record of a run's accepted
+// registration, the first event of its record: record-only, it is never posted.
 const (
-	Ping          = "dev.qory.ping"
+	RunRegistered = "dev.qory.run.registered"
 	RunStarted    = "dev.qory.run.started"
 	RunHeartbeat  = "dev.qory.run.heartbeat"
 	RunLog        = "dev.qory.run.log"

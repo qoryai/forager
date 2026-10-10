@@ -112,8 +112,9 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 }
 
 // TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
-// answers passes its schema: discovery, and the enrolment request, answer and signed
-// refusals each against the part of enrolment.schema.json it is.
+// answers passes its schema: discovery, the registration and its answer, and the
+// enrolment request, answer and signed refusals each against the part of
+// enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -128,6 +129,8 @@ func TestSecretsFixturesValidate(t *testing.T) {
 	}
 	want := map[string][]string{
 		"fixtures/known-answers/discovery.json":                {"configuration.schema.json"},
+		"fixtures/known-answers/registration.json":             {"run-registration.schema.json"},
+		"fixtures/known-answers/registration-answer.json":      {"run-configuration.schema.json"},
 		"fixtures/enrolment/request.json":                      {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/request-two-fingerprints.json":     {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/answer.json":                       {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
@@ -289,26 +292,43 @@ func signs(t *testing.T, what string, priv ed25519.PrivateKey, m []byte, sig str
 }
 
 // TestRequestSignatures pins the request strings and their known answers under the
-// fixture access key: a GET's six lines with the timestamp, and the same with a query.
+// fixture access key: a GET's six lines with the timestamp, the same with a query, and
+// a registration's POST, whose sixth line is its raw body, the file the vector names,
+// and which is the request of fixtures/signed/register-valid.json.
 func TestRequestSignatures(t *testing.T) {
 	k := loadKeys(t)
 	priv := k.accessKey(t)
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Requests) != 2 {
-		t.Fatalf("%d request vectors; want 2", len(v.Requests))
+	if len(v.Requests) != 3 {
+		t.Fatalf("%d request vectors; want 3", len(v.Requests))
 	}
-	for _, r := range v.Requests {
+	for i, r := range v.Requests {
 		if len(r.Lines) != 6 || r.Lines[0] != "qory-request-ed25519-v1" ||
 			r.Lines[1] != k.AccessKey.AccessKeyID || r.Lines[2] != k.AccessKey.InstanceID {
 			t.Errorf("%s: lines %q; want the domain line, the access key id and the instance id, then three", r.Note, r.Lines)
 			continue
 		}
-		if r.Lines[3] != "GET" {
-			t.Errorf("%s: method %q", r.Note, r.Lines[3])
-		}
-		if _, err := strconv.ParseUint(r.Lines[5], 10, 64); err != nil {
-			t.Errorf("%s: timestamp line %q", r.Note, r.Lines[5])
+		switch want := map[bool]string{true: "GET", false: "POST"}[i < 2]; {
+		case r.Lines[3] != want:
+			t.Errorf("%s: method %q; want %s", r.Note, r.Lines[3], want)
+		case want == "GET":
+			if _, err := strconv.ParseUint(r.Lines[5], 10, 64); err != nil {
+				t.Errorf("%s: timestamp line %q", r.Note, r.Lines[5])
+			}
+		default:
+			if body := r.body(t); string(body) != r.Lines[5] {
+				t.Errorf("%s: the body line is not the file %s", r.Note, *r.Body)
+			}
+			var signed struct {
+				Target  string            `json:"target"`
+				Headers map[string]string `json:"headers"`
+				Body    string            `json:"body"`
+			}
+			load(t, "fixtures/signed/register-valid.json", &signed)
+			if signed.Target != r.Lines[4] || signed.Body != r.Lines[5] || signed.Headers["X-Qory-Signature-Ed25519"] != r.Signature {
+				t.Errorf("%s: fixtures/signed/register-valid.json is not this request", r.Note)
+			}
 		}
 		signs(t, r.Note, priv, r.message(t), r.Signature)
 	}
@@ -354,7 +374,8 @@ func TestEnrolmentProofs(t *testing.T) {
 
 // TestAnswerSignatures pins the six lines of a signed answer and their known answers
 // under the fixture signing key: 200 with the discovery body and 404 with an empty
-// body, under qory-answer-ed25519-v1; 201 to the enrolment request, whose line 3 is the
+// body, to the GET of discovery, and 200 to the registration with its run
+// configuration and that digest alone, under qory-answer-ed25519-v1; 201 to the enrolment request, whose line 3 is the
 // request's proof, the signed 409s key_limit and key_invalid at enrolment, with one key
 // and, during a rotation, to the request with two fingerprints, with two keys, current
 // first, and the signed 429 rate_limited per code with one key, under
@@ -365,8 +386,8 @@ func TestAnswerSignatures(t *testing.T) {
 	signing := ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed))
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Answers) != 8 {
-		t.Fatalf("%d answer vectors; want 8", len(v.Answers))
+	if len(v.Answers) != 9 {
+		t.Fatalf("%d answer vectors; want 9", len(v.Answers))
 	}
 	var proof, rotation struct {
 		Proof string `json:"proof"`
@@ -389,8 +410,12 @@ func TestAnswerSignatures(t *testing.T) {
 		if a.Lines[3] != hexSHA256(body) {
 			t.Errorf("%s: line 4 %s; want the body's SHA-256 %s", a.Note, a.Lines[3], hexSHA256(body))
 		}
-		switch a.Lines[1] {
-		case "200":
+		switch {
+		case a.Lines[1] == "200" && a.Lines[5] != "":
+			if a.Lines[2] != v.Requests[2].Signature || a.Lines[4] != "" || a.Lines[5] != "sha256="+hexSHA256(body) {
+				t.Errorf("%s: lines %q; want the registration's signature, no configuration digest and the run configuration's", a.Note, a.Lines)
+			}
+		case a.Lines[1] == "200":
 			if a.Lines[2] != v.Requests[0].Signature || a.Lines[4] != "sha256="+hexSHA256(body) || a.Lines[5] != "" {
 				t.Errorf("%s: lines %q; want the GET's signature, the discovery digest and no run-configuration digest", a.Note, a.Lines)
 			}
@@ -402,11 +427,11 @@ func TestAnswerSignatures(t *testing.T) {
 			if err := json.Unmarshal(body, &d); err != nil || len(d.APIaryPublicKey) != 1 || d.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
 				t.Errorf("%s: discovery lists %v; want the fixture signing key", a.Note, d.APIaryPublicKey)
 			}
-		case "404":
+		case a.Lines[1] == "404":
 			if a.Lines[2] != v.Requests[0].Signature || a.Lines[4] != "" || a.Lines[5] != "" {
 				t.Errorf("%s: lines %q; want the GET's signature and no digest", a.Note, a.Lines)
 			}
-		case "201":
+		case a.Lines[1] == "201":
 			if a.Lines[2] != proof.Proof || a.Lines[4] != "" || a.Lines[5] != "" {
 				t.Errorf("%s: lines %q; want the enrolment proof and no digest", a.Note, a.Lines)
 			}
@@ -420,7 +445,7 @@ func TestAnswerSignatures(t *testing.T) {
 				len(e.APIaryPublicKey) != 1 || e.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
 				t.Errorf("%s: the answer contains %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
 			}
-		case "409", "429":
+		case a.Lines[1] == "409" || a.Lines[1] == "429":
 			two := a.Body != nil && strings.HasSuffix(*a.Body, "-rotation.json")
 			want := proof.Proof
 			if two {

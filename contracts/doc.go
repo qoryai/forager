@@ -2,8 +2,9 @@
 // schemas.
 //
 // The contract is the set of documents Forager reads and writes: the policy, the
-// server, the configuration and the run configuration a server answers, the events, a
-// batch, a record and a runtime descriptor. Each has a JSON schema whose $id is [Base]
+// server, the configuration a server answers, a run's registration and the run
+// configuration a server answers it with, the events, a batch, a record and a runtime
+// descriptor. Each has a JSON schema whose $id is [Base]
 // followed by the file's path under forager/v1, so a $ref between schemas resolves
 // without a network. [Compiler] returns a compiler that
 // knows every schema of the contract under that $id, and [Compile] compiles one by its

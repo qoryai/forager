@@ -135,8 +135,8 @@ wall:
   command: podman               # only for another command than docker
 ```
 
-- `gateway.egress` is the policy when the server offers no run configuration, and it
-  narrows the server's when the server offers one. See [the policy](policy.md).
+- `gateway.egress` is the policy when the server's run configuration holds none, and
+  it narrows the server's when it holds one. See [the policy](policy.md).
 - `gateway.server` defines Qory Apiary. See [the server](server.md).
 - `wall.env` is the whole of the node's environment that goes in, by name: the
   machine's variables. A server's value of the same name wins over one, and `--env`
@@ -192,7 +192,7 @@ res, err := session.Run(ctx, session.Spec{
 	},
 	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use: at most 8 GB of memory, 2 GB of /dev/shm; zero is the engine's default
 	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
-	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run configuration request
+	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run's registration
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay

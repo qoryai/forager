@@ -23,8 +23,8 @@ type Config struct {
 	// among them by name. Each needs a wall.
 	Credentials []Credential
 	Tools       []Tool
-	// Version is Forager's version, reported in the ping and in the user agent of every
-	// request to the Server; empty means "dev".
+	// Version is Forager's version, reported in each run's registration and in the user
+	// agent of every request to the Server; empty means "dev".
 	Version string
 	// Discovered, when not nil, is called once the Server's signed configuration
 	// document is read, before Start returns, with what it lists of the access key: qory
@@ -45,8 +45,8 @@ type Config struct {
 	// Stderr. It never receives the link secret, a proxy secret, an access key or an
 	// image reference.
 	Report func(string)
-	// Heartbeat is the interval the link's discovery announces, and the ping toward the
-	// Server: a whole number of seconds from 1 to 300; zero means 30 seconds. The
+	// Heartbeat is the interval the link's discovery announces, and each run's
+	// registration toward the Server: a whole number of seconds from 1 to 300; zero means 30 seconds. The
 	// session sends a heartbeat every interval, and the gateway ends a run whose session
 	// sends nothing for three.
 	Heartbeat time.Duration
@@ -227,8 +227,8 @@ type Delivery struct {
 	Sent      int
 	Completed bool
 	// NotOpened says a resend sent nothing, and left the record as it is, since the run
-	// never opened at the server: the server never accepted its ping, or the run had no
-	// server. Sent and Undelivered are then 0. False for Close.
+	// never opened at the server: the server never accepted its registration, or the run
+	// had no server. Sent and Undelivered are then 0. False for Close.
 	NotOpened bool
 	// Stopped says the server answered a signed 410 and wants no more events of the
 	// run: during the run, so the record is marked stopped and the resend sent nothing,
