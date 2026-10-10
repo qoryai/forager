@@ -209,6 +209,13 @@ One run, on a developer machine, with a server configured:
 
 A run may have a time limit. When the runtime still runs at the limit the session stops
 it, and `dev.qory.run.exited` contains `reason: timeout` with the state `cancelled`; step 9
+is otherwise the same. A runtime that exited by itself before the session's stop signal
+is decided by its exit.
+
+A run stopped from where it was started (a Ctrl-C, or a signal to the program that runs
+the session) is stopped the same way: when that stop came before the session observed
+the runtime's exit, `dev.qory.run.exited` contains `reason: interrupted` with the state
+`cancelled`, beside the runtime's own `exit_code` and `signal`, whatever they are; step 9
 is otherwise the same. A denied connection never ends a run; the limit is the one thing
 of Forager's that does. A server's `410` never ends a run: Qory Apiary records what a
 run reports and never ends a run it did not start, so its signed `410` stops the
@@ -820,16 +827,16 @@ gives the reason the run's starter gave. It is an open code: a lower-case letter
 lower-case letters, digits and `_`, up to 64 characters, `^[a-z][a-z0-9_]{0,63}$`.
 The pattern is anchored at both ends; a receiver in another language anchors to the
 absolute end, such as `\z` (`\Z` in Python's `re`).
-Forager's own codes are reserved: `timeout`, `quiet`, `credential_expired`, `stopped`,
-`session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable`,
-`credential_check_invalid` and `run_closed`; and so are three old names, which Forager
-never writes:
+Forager's own codes are reserved: `timeout`, `interrupted`, `quiet`,
+`credential_expired`, `stopped`, `session_lost`, `gateway_lost`, `batch_refused`,
+`credential_check_unreachable`, `credential_check_invalid` and `run_closed`; and so are
+three old names, which Forager never writes:
 `run_ended_at_issuer`, `issuer_unreachable` and `issuer_answer_invalid`. Any other code
 is the starter's, carried as given, and a receiver shows a code it does not know as it
 is. A starter's reason that equals a reserved code is dropped, and the run has no
-reason, its outcome kept. The session writes `timeout`, the resend of a record writes
-`gateway_lost` (§The server), and the gateway writes the others, on a run with no
-session and on a session's run on its link alike. The state of each of Forager's own
+reason, its outcome kept. The session writes `timeout` and `interrupted`, the resend of
+a record writes `gateway_lost` (§The server), and the gateway writes the others, on a
+run with no session and on a session's run on its link alike. The state of each of Forager's own
 endings:
 
 | Ending | `state` | `reason` |
@@ -837,6 +844,7 @@ endings:
 | the run's starter answered that the run credential is no longer active, with an outcome | that outcome | the starter's reason, or none |
 | the starter answered so with no outcome, or ended so another run of the same run key, which the gateway then holds (§Run credentials) | `cancelled` | `stopped` |
 | the run's time limit was reached, and the session stopped the runtime | `cancelled` | `timeout` |
+| the run was stopped from where it was started (a Ctrl-C) before the session observed the runtime's exit; `exit_code` and `signal` are the runtime's | `cancelled` | `interrupted` |
 | a run with no session had no connection for the gateway's quiet period, which `quiet_seconds` contains | `cancelled` | `quiet` |
 | the run credential's `exp` passed with no fresh credential for the same run key | `cancelled` | `credential_expired` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
@@ -1745,8 +1753,9 @@ its events:
   answer's `state` and `reason`; with none, an answer of `{}`, no ask or on the local
   link, one that is not `succeeded` with `exit_code` 0 and no `reason`, `failed` with any
   other exit status or a signal and no `reason`, or `cancelled` with `reason`
-  `timeout`. A session's batch carries only its own `dev.qory.run.exited`, the
-  runtime's exit, its time limit or the starter's outcome at the exit, and the gateway
+  `timeout` or `interrupted` and any exit status or signal. A session's batch carries
+  only its own `dev.qory.run.exited`, the runtime's exit, its time limit, its stop from
+  where it was started or the starter's outcome at the exit, and the gateway
   writes the event of every other reason itself (The end of a run at the gateway,
   below);
 - is a `dev.qory.run.policy_applied` that is not `applied` from an answer of this run,
@@ -1769,8 +1778,8 @@ its events:
   refusal carries.
 
 `link-batch.schema.json` states what a schema can: neither type the gateway writes, an
-`opened_by` of `session`, `timeout` as the only one of Forager's reasons of a
-`dev.qory.run.exited`, and `cancelled` as its state, a
+`opened_by` of `session`, `timeout` and `interrupted` as the only ones of Forager's
+reasons of a `dev.qory.run.exited`, and `cancelled` as their state, a
 `dev.qory.run.refused` code among the session's own, and no name of the form
 `<member>=<value>`. The gateway checks the rest.
 
@@ -2649,9 +2658,9 @@ the option experimental.
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal | the receiver, replaying each with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one a gateway opened, with no process, that ends `quiet` | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state`, a session's `exit_code` too and a gateway-opened run's none |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its `credential` `starter`, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, an outcome answer with the outcome `cancelled` and the reason `no_longer_needed`, one with an outcome alone and one with none, `{}`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, one of a session's `dev.qory.run.exited` with the starter's outcome at the exit, and refusals: `run_closed`, `credential_expired`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and the signed `409` `instance_limit` to the ping from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its `credential` `starter`, the run credential's labels and `details`, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, an outcome answer with the outcome `cancelled` and the reason `no_longer_needed`, one with an outcome alone and one with none, `{}`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, one of a session's `dev.qory.run.exited` with the starter's outcome at the exit, and refusals: `run_closed`, `credential_expired`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `differs_from_credential` with its name, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, `credential_expired` and `differs_from_credential`, which show it optional, and the signed `409` `instance_limit` to the ping from `apiary` with Qory Apiary's URL in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one starter with one key without a kid, and one starter during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
-| `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded` among them, and an outcome answer whose `reason` is one of Forager's reserved codes; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with no outcome answer, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
+| `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them, and an outcome answer whose `reason` is one of Forager's reserved codes; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with no outcome answer, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
 | `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture starter's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture starter; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the serialisation (padding, a line feed, a space, four parts, two parts), the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's, `crit`, a `typ` other than `JWT`, a member name twice), the signature (over an altered payload, over an altered header, an `ES256` signature of 63 or 65 bytes, with `R` zero or `S` the order), the claims (a member name twice, `aud` and `iss` another's, no `aud`, expired, no `exp`, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string, a `project` with a control character); accepted ones per algorithm, with `typ` `jwt` and without `typ`, and one without `requester`, which leaves that key of `about.details` to the session. The keys are public: Forager refuses each in a configuration, and they are never pinned | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, run `Verifier.Verify` on each, and check each on its own against the serialisation, the header, the claims, the scope and the mapping up to the step that refuses it, and verify the signature of each that reaches the signature step |

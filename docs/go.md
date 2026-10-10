@@ -364,13 +364,23 @@ A program that needs code of its own implements the interface.
     such as `failed` and `checks_failed` for a runtime that exited 0; the reason is
     empty when the starter gave none, and a reason that is one of Forager's reserved
     codes, or not a code, is dropped alone, the starter's state kept. The heartbeats go
-    on while the session waits.
+    on while the session waits. Once the runtime has exited, a context that ends cuts
+    neither the ask nor the record short: the answer still decides, the session still
+    writes and posts `dev.qory.run.exited`, and `Run` returns after them, within their
+    bounds. The gateway closing the run still ends the ask.
   - With no outcome, an answer of `{}`, one that is not valid, a refusal or no answer
     in time, the runtime's exit decides: `succeeded` on 0, `failed` otherwise, with no
     reason, and nothing is added to the record. On the local link there is no starter to
     ask: the session asks nothing and does not wait.
-  - At `Timeout`, `cancelled` and `timeout`, with `TimedOut`; nothing is asked. A
-    runtime the context's end stopped is decided by its exit, and nothing is asked.
+  - At `Timeout`, `cancelled` and `timeout`, with `TimedOut`, when the session's stop
+    signal reached the runtime at the limit before its exit was observed; nothing is
+    asked. A runtime that exited by itself before that signal is decided by its exit.
+  - When the run was stopped from where it was started, a Ctrl-C or a signal to the
+    caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`;
+    nothing is asked. `ExitCode` and `Signal` are the runtime's, whatever they are.
+  - A runtime that exits 0 at the session's stop, at the context's end or at the
+    limit, has exited 0: `Run` records its `dev.qory.run.exited` and returns its
+    `Result`, with no error.
   - When the gateway closed the run, `RunClosed`, the state and the reason its `410`
     says, such as `cancelled` and `no_longer_needed`; `batch_refused` as the reason after
     a refused batch; and `failed` with the code as the reason for an end that carries
@@ -384,8 +394,9 @@ A program that needs code of its own implements the interface.
   the context ended, which is `RunClosed`, and a signal from elsewhere while the
   context lasts: `Cancelled` is never true with `TimedOut` or with `RunClosed`. On
   pipes, the exit is observed when the runtime's standard output and standard error
-  close: a descendant that holds them open delays it by up to the stop grace. It is
-  the result's alone: `dev.qory.run.exited` is as it was.
+  close: a descendant that holds them open delays it by up to the stop grace, and what
+  it writes after the grace is not kept. When it is true, `dev.qory.run.exited` is
+  `cancelled` with `interrupted`.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the

@@ -83,8 +83,10 @@ Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `fai
 `succeeded` on 0 and `failed` otherwise, unless the run's starter gives an outcome. When
 a run ends other than by the runtime's own exit, or its starter gives a reason,
 `dev.qory.run.exited` says why in `reason`: an open code, Forager's own or the starter's,
-carried as given. The session writes `timeout`, `cancelled`, and posts it. The gateway
-writes the others: `session_lost`, `failed`, the session was silent; `batch_refused`,
+carried as given. The session writes `timeout`, `cancelled`, and `interrupted`,
+`cancelled`, a run stopped from where it was started (a Ctrl-C), and posts them. The
+gateway writes the others: `session_lost`, `failed`, the session was silent;
+`batch_refused`,
 `failed`, the gateway refused a batch of the session's (see the contract's §The
 gateway's link); `quiet`, `cancelled`;
 `credential_expired`, `cancelled`; `stopped`, `cancelled`, the starter ended the run

@@ -73,7 +73,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	}
 	pattern := regexp.MustCompile(reason["pattern"].(string))
 	description := reason["description"].(string)
-	for _, code := range []string{event.ReasonTimeout, event.ReasonRunClosed, event.ReasonGatewayLost,
+	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
 		event.ReasonSessionLost, event.ReasonQuiet, event.ReasonCredentialExpired, event.ReasonStopped,
 		event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid,
 		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
@@ -92,7 +92,7 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 
 // TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
 // schema of run.exited names in its reason's description, and those link-batch.schema.json
-// refuses beside timeout, and event.StarterReason to the reason's pattern less them: a
+// refuses beside timeout and interrupted, and event.StarterReason to the reason's pattern less them: a
 // starter's code is any other code.
 func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	doc, err := contracts.Document("events/run.exited.schema.json")
@@ -104,10 +104,10 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	_, rest, _ := strings.Cut(description, "Forager's own codes are reserved: ")
 	listed, _, _ := strings.Cut(rest, ", which Forager never writes")
 	var want []string
-	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
+	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
 		want = append(want, w)
 	}
-	if len(want) != 13 {
+	if len(want) != 14 {
 		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
 	}
 	for _, code := range want {
@@ -125,8 +125,9 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may carry timeout, its own; the starter's outcome answer none.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout}, "link-outcome-answer.schema.json": nil} {
+	// A session's batch may carry timeout and interrupted, its own; the starter's outcome
+	// answer none.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}, "link-outcome-answer.schema.json": nil} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)

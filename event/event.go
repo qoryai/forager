@@ -56,11 +56,15 @@ const (
 // runtime's own exit. A reason is an open code: one of these, or the code the run's
 // starter gave, carried as given. Forager's codes are reserved, and so are the old
 // names run_ended_at_issuer, issuer_unreachable and issuer_answer_invalid, which
-// Forager never writes. The session writes timeout and run_closed, and in its own
-// record the code of the gateway's 410, batch_refused among them; the resend of a
-// record writes gateway_lost; the gateway writes the others.
+// Forager never writes. The session writes timeout, interrupted and run_closed, and in
+// its own record the code of the gateway's 410, batch_refused among them; the resend
+// of a record writes gateway_lost; the gateway writes the others.
 const (
-	ReasonTimeout           = "timeout"
+	ReasonTimeout = "timeout"
+	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
+	// the session's context, a Ctrl-C or a signal to the program that runs it, had ended
+	// when the runtime's exit was observed.
+	ReasonInterrupted       = "interrupted"
 	ReasonRunClosed         = "run_closed"
 	ReasonGatewayLost       = "gateway_lost"
 	ReasonSessionLost       = "session_lost"
@@ -99,7 +103,7 @@ func IsState(s string) bool {
 // reserved are the reasons of dev.qory.run.exited that are Forager's: its own codes,
 // and the three old names it never writes.
 var reserved = map[string]bool{
-	ReasonTimeout: true, ReasonQuiet: true, ReasonCredentialExpired: true, ReasonStopped: true,
+	ReasonTimeout: true, ReasonInterrupted: true, ReasonQuiet: true, ReasonCredentialExpired: true, ReasonStopped: true,
 	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true,
 	ReasonCredentialCheckUnreachable: true, ReasonCredentialCheckInvalid: true, ReasonRunClosed: true,
 	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,

@@ -78,6 +78,7 @@ func TestABadReasonIsDroppedAlone(t *testing.T) {
 		`{"state":"failed","reason":""}`:                   {State: "failed"},
 		`{"state":"succeeded","reason":7}`:                 {State: "succeeded"},
 		`{"state":"cancelled","reason":"timeout"}`:         {State: "cancelled"},
+		`{"state":"cancelled","reason":"interrupted"}`:     {State: "cancelled"},
 		`{"state":"cancelled","reason":"stopped"}`:         {State: "cancelled"},
 		`{"state":"failed","reason":"session_lost"}`:       {State: "failed"},
 		`{"state":"failed","reason":"run_closed"}`:         {State: "failed"},
