@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where Forager posts its events, where it fetches a run configuration when the server offers one, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, where Forager posts its events, where a run registers, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "node_id", "events", "apiary_public_key"],
+  "required": ["version", "node_id", "events", "run", "apiary_public_key"],
   "properties": {
     "version": {
       "description": "The document format. Forager refuses a version it does not read.",
@@ -29,7 +29,7 @@
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
         },
         "types": {
-          "description": "The event types the server wants, by full type name, or * for every type. The ping is always sent.",
+          "description": "The event types the server wants, by full type name, or * for every type.",
           "type": "array",
           "uniqueItems": true,
           "minItems": 1,
@@ -41,13 +41,13 @@
       }
     },
     "run": {
-      "description": "Where the run configuration is fetched from, when the server offers one. A server whose document has no run section offers none, and the run's policy is the machine's.",
+      "description": "The run endpoint, which every server has. A run registers with a signed POST to url, whose body is a run-registration.schema.json document and whose answer is the run's run configuration; a reload fetches the run configuration again with a signed GET of url followed by a slash and the run's id. A document without run is refused.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url"],
       "properties": {
         "url": {
-          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels identify what the run works on is the server's to decide. https, or http to a loopback address only.",
+          "description": "The run endpoint. https, or http to a loopback address only.",
           "type": "string",
           "format": "uri",
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"

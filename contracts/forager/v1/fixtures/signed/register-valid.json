@@ -1,0 +1,16 @@
+{
+  "method": "POST",
+  "target": "/v1/runs",
+  "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "qory-forager/0.7.0",
+    "X-Qory-Access-Key-Id": "ak_f1xt0re000000000",
+    "X-Qory-Instance-Id": "i_gYKDhIWGh4iJiouMjY6PkA",
+    "X-Qory-Instance-Name": "build-01",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Signature-Ed25519": "6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ"
+  },
+  "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
+  "expect": 200,
+  "note": "The registration of run 0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f, labelled forge github.com and repository acme/shop, with its about, built at 1700000000, signed under the fixture access key secret: the request string is qory-request-ed25519-v1, the access key id, the instance id, POST, the target and the raw body, so time is signed with the body. Content-Type is application/json, and neither X-Qory-Delivery nor X-Qory-Timestamp is sent. A receiver answers a signed 200 whose body is the run's run configuration, with X-Qory-Run-Configuration and ETag. The request and its signature are the published known answer."
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/server.schema.json",
   "title": "Server",
-  "description": "The server Forager is a client of: where it fetches its configuration from, the access key it signs every request as, and the pin, the server's keys it verifies every answer under. The access key's secret lives outside this document: the command reads it from a file descriptor, else QORY_ACCESS_KEY_SECRET, else the file access-key-secret. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns a signed 200 and the server accepts the ping.",
+  "description": "The server Forager is a client of: where it fetches its configuration from, the access key it signs every request as, and the pin, the server's keys it verifies every answer under. The access key's secret lives outside this document: the command reads it from a file descriptor, else QORY_ACCESS_KEY_SECRET, else the file access-key-secret. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns a signed 200 and the server accepts the run's registration with a signed 200.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "url", "access_key_id", "apiary_public_key"],
