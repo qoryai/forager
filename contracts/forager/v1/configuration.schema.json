@@ -47,10 +47,10 @@
       "required": ["url"],
       "properties": {
         "url": {
-          "description": "The run endpoint. https, or http to a loopback address only.",
+          "description": "The run endpoint. https, or http to a loopback address only, with no query, no fragment and no trailing slash: a reload appends a slash and the run's id to it.",
           "type": "string",
           "format": "uri",
-          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s?#]*[^\\s?#/])?$"
         }
       }
     },

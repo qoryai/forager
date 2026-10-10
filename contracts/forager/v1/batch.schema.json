@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/batch.schema.json",
   "title": "Batch",
-  "description": "The body of one delivery to the server's events endpoint: a CloudEvents JSON batch, media type application/cloudevents-batch+json. Events of one run, in sequence order, never empty.",
+  "description": "The body of one delivery to the server's events endpoint: a CloudEvents JSON batch, media type application/cloudevents-batch+json. Events of one run, in sequence order, never empty, and never dev.qory.run.registered, which is record-only and never posted.",
   "type": "array",
   "minItems": 1,
   "items": {
-    "$ref": "event.schema.json"
+    "$ref": "event.schema.json",
+    "not": {"required": ["type"], "properties": {"type": {"const": "dev.qory.run.registered"}}}
   }
 }

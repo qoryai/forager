@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "node_id": "nd_f1xt0re000000000",
+  "events": {
+    "url": "https://qory.example/v1/events",
+    "types": [
+      "dev.qory.run.started",
+      "dev.qory.run.policy_applied",
+      "dev.qory.run.egress",
+      "dev.qory.run.heartbeat",
+      "dev.qory.run.exited"
+    ]
+  },
+  "run": {
+    "url": "https://qory.example/v1/runs/"
+  },
+  "apiary_public_key": [
+    {
+      "alg": "ed25519",
+      "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"
+    }
+  ]
+}

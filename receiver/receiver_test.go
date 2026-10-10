@@ -490,16 +490,19 @@ func TestTheRunEndpointRefusesInItsOrder(t *testing.T) {
 	shop := map[string]string{"forge": "github.com", "repository": "acme/shop"}
 	hooked = 0
 	for name, body := range map[string][]byte{
-		"an interval over 300 seconds":        registration(id, shop, 301, 1700000000),
-		"no interval":                         []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"interval_seconds":30,`, "", 1)),
-		"a member the schema does not define": []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"extra":true`, 1)),
-		"a time with fractional seconds":      []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `22:13:20Z`, `22:13:20.5Z`, 1)),
-		"a time that is no date":              []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `2023-11-14`, `2023-13-14`, 1)),
-		"a run id not in the canonical form":  registration(strings.ToUpper(id), shop, 30, 1700000000),
-		"labels the contract refuses":         registration(id, map[string]string{"Forge": "x"}, 30, 1700000000),
-		"an about the contract refuses":       []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"about":{"subjects":[{"type":"example","ref":"7"},{"type":"example","ref":"7"}]}`, 1)),
-		"a body that is not JSON":             []byte("{"),
-		"a refused body outside the window":   registration(id, map[string]string{"Forge": "x"}, 30, 1699999000),
+		"an interval over 300 seconds":                   registration(id, shop, 301, 1700000000),
+		"no interval":                                    []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"interval_seconds":30,`, "", 1)),
+		"a member the schema does not define":            []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"extra":true`, 1)),
+		"a time with fractional seconds":                 []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `22:13:20Z`, `22:13:20.5Z`, 1)),
+		"a time that is no date":                         []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `2023-11-14`, `2023-13-14`, 1)),
+		"a run id not in the canonical form":             registration(strings.ToUpper(id), shop, 30, 1700000000),
+		"labels the contract refuses":                    registration(id, map[string]string{"Forge": "x"}, 30, 1700000000),
+		"a label value of 256 characters over 256 bytes": registration(id, map[string]string{"repository": strings.Repeat("é", 256)}, 30, 1700000000),
+		"seventeen labels": registration(id, map[string]string{"k0": "v", "k1": "v", "k2": "v", "k3": "v", "k4": "v", "k5": "v", "k6": "v", "k7": "v",
+			"k8": "v", "k9": "v", "k10": "v", "k11": "v", "k12": "v", "k13": "v", "k14": "v", "k15": "v", "k16": "v"}, 30, 1700000000),
+		"an about the contract refuses":     []byte(strings.Replace(string(registration(id, shop, 30, 1700000000)), `"version":1`, `"version":1,"about":{"subjects":[{"type":"example","ref":"7"},{"type":"example","ref":"7"}]}`, 1)),
+		"a body that is not JSON":           []byte("{"),
+		"a refused body outside the window": registration(id, map[string]string{"Forge": "x"}, 30, 1699999000),
 	} {
 		check(name, signedRegister(body), 400, "invalid_request")
 	}
@@ -510,6 +513,7 @@ func TestTheRunEndpointRefusesInItsOrder(t *testing.T) {
 	unauthorized("a time from the future", signedRegister(registration(id, shop, 30, 1700000301)))
 	accepted("a time at the edge of the window", signedRegister(registration(event.NewRunID(), shop, 30, 1699999700)))
 	accepted("a time at the other edge", signedRegister(registration(event.NewRunID(), shop, 30, 1700000300)))
+	accepted("a label value of 256 bytes", signedRegister(registration(event.NewRunID(), map[string]string{"repository": strings.Repeat("é", 128)}, 30, 1700000000)))
 
 	admitted := true
 	h.Admit = func(id, instance string) bool { return admitted && id == key && instance == inst }
