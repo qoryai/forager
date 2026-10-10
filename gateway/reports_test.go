@@ -50,7 +50,7 @@ func TestResendReportsItsConstants(t *testing.T) {
 		}
 	})
 	t.Run("not opened", func(t *testing.T) {
-		dir := run(t, line(event.Ping, "0000000001"))
+		dir := run(t, line(event.RunRefused, "0000000001"))
 		d, reports := resend(t, gateway.ResendConfig{Dir: dir})
 		if !slices.Equal(reports, []string{gateway.ResendNotOpened}) || !d.NotOpened {
 			t.Errorf("reports %q, delivery %+v", reports, d)

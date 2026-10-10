@@ -296,9 +296,6 @@ func validEvents(t *testing.T, rec []recorded) {
 	t.Helper()
 	for _, l := range rec {
 		name := "events/" + strings.TrimPrefix(l.Type, "dev.qory.") + ".schema.json"
-		if l.Type == event.Ping {
-			name = "events/ping.schema.json"
-		}
 		schema, err := contracts.Compile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -355,7 +352,7 @@ func TestASessionsRunOnARunCredential(t *testing.T) {
 	}
 	s.close()
 	rec := s.record(r.a.RunID)
-	if got := types(rec); !slices.Equal(got, []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunExited}) {
+	if got := types(rec); !slices.Equal(got, []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunExited}) {
 		t.Errorf("record %v", got)
 	}
 	validEvents(t, rec)
@@ -661,7 +658,7 @@ func TestARunWithNoSession(t *testing.T) {
 	}
 	rec := s.record(runID)
 	got := types(rec)
-	if len(got) < 6 || !slices.Equal(got[:5], []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunEgress}) || !slices.Contains(got, event.RunHeartbeat) || got[len(got)-1] != event.RunExited {
+	if len(got) < 6 || !slices.Equal(got[:5], []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunEgress}) || !slices.Contains(got, event.RunHeartbeat) || got[len(got)-1] != event.RunExited {
 		t.Errorf("record %v", got)
 	}
 	st := rec[1].Data
@@ -1007,8 +1004,8 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 }
 
 // TestARunWithNoSessionThatDoesNotOpen pins a run with no session the gateway cannot
-// open. Refused with a code, its record, and what the server receives, hold the ping
-// and then dev.qory.run.refused with that code, and the connection gets the 403 that
+// open. Refused with a code after its registration, its record holds run.registered
+// and then dev.qory.run.refused with that code, which the server receives alone, and the connection gets the 403 that
 // says who refused it and the code; failing without a code, after its tries, the
 // connection gets the 503 that says to try again. Either way the next connection of
 // the run key opens a run.
@@ -1041,7 +1038,7 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 		t.Fatalf("runs %v", ids)
 	}
 	rec := s.record(ids[0])
-	if got := types(rec); !slices.Equal(got, []string{event.Ping, event.RunRefused}) || rec[1].Data["code"] != "image_unknown" {
+	if got := types(rec); !slices.Equal(got, []string{event.RunRegistered, event.RunRefused}) || rec[1].Data["code"] != "image_unknown" {
 		t.Errorf("record %v %v", got, rec[len(rec)-1].Data)
 	}
 	validEvents(t, rec)
@@ -1052,15 +1049,14 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 				got = append(got, l.Type)
 			}
 		}
-		return slices.Equal(got, []string{event.Ping, event.RunRefused})
+		return slices.Equal(got, []string{event.RunRefused})
 	})
 	// Without a code: the server closes the connection unanswered.
-	c.drop.Store(true)
+	script(c).then(runPath, dropped, dropped, dropped)
 	resp, b := connect()
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || resp.ContentLength != int64(len(b)) || string(b) != "the gateway could not open the run; try again" {
 		t.Errorf("a failure without a code: %d %v %q", resp.StatusCode, resp.Header, b)
 	}
-	c.drop.Store(false)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'b')
 	if resp, _ := connect(); resp.StatusCode != http.StatusOK {
 		t.Errorf("the next connection: %d", resp.StatusCode)
@@ -1073,9 +1069,9 @@ func TestARunWithNoSessionThatDoesNotOpen(t *testing.T) {
 }
 
 // TestARunWithNoSessionThatAServers410DoesNotOpen pins a run with no session whose
-// server answers its run configuration with a signed 410 run_closed: no run, as for a
-// failure without a code. The connection gets the 503 that says to try again, and its
-// record, and what the server receives, hold the ping alone.
+// server answers its registration with a signed 410 run_closed: no run, as for a
+// failure without a code. The connection gets the 503 that says to try again, its
+// record holds nothing, and the server receives nothing.
 func TestARunWithNoSessionThatAServers410DoesNotOpen(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -1096,14 +1092,12 @@ func TestARunWithNoSessionThatAServers410DoesNotOpen(t *testing.T) {
 	if len(ids) != 1 {
 		t.Fatalf("runs %v", ids)
 	}
-	if got := types(s.record(ids[0])); !slices.Equal(got, []string{event.Ping}) {
+	if got := types(s.record(ids[0])); len(got) != 0 {
 		t.Errorf("record %v", got)
 	}
 	s.close()
-	for _, l := range c.lines(t) {
-		if l.Type == event.RunRefused {
-			t.Errorf("the server was sent %v", l)
-		}
+	if got := c.lines(t); len(got) != 0 {
+		t.Errorf("the server was sent %v", types(got))
 	}
 }
 
@@ -1569,9 +1563,9 @@ func TestCloseWaitsForARunEndedAsItOpened(t *testing.T) {
 			if d.Undelivered == 0 {
 				t.Errorf("delivery %+v", d)
 			}
-		} else if got := types(rec); !slices.Equal(got, []string{event.Ping}) {
-			// A session's run: its ping, which the server took as it opened, and nothing
-			// after.
+		} else if got := types(rec); !slices.Equal(got, []string{event.RunRegistered}) {
+			// A session's run: its run.registered, the registration the server accepted
+			// as it opened, and nothing after.
 			t.Errorf("the session's run: the record %v", got)
 		}
 	}
@@ -1776,12 +1770,12 @@ func TestAHoldThatFailsToWrite(t *testing.T) {
 }
 
 // TestARunWhoseSessionGaveUpDoesNotOpen pins a run request whose session gives up
-// waiting for its answer, while Qory Apiary is slow on the ping or on the run
-// configuration, or as the run opens: no run opens, Qory Apiary's events hold nothing of
-// it but what it took before the session gave up, the ping when the ping was taken, and
-// a retry of the same run id opens the run.
+// waiting for its answer, while Qory Apiary is slow on the registration, or as the run
+// opens: no run opens, Qory Apiary's events hold nothing of it, and a retry of the same
+// run id opens the run, its registration the same bytes, which Qory Apiary, which took
+// the first when the run was slow to open, answers alike.
 func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
-	for _, slowAt := range []string{"ping", "fetch", "open"} {
+	for _, slowAt := range []string{"registration", "open"} {
 		c := newControl(t)
 		c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, 'a')
 		cfg := gateway.Config{Server: c.server()}
@@ -1795,12 +1789,9 @@ func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
 		cred := credentialFor("rk-0001")
 		s.secrets = append(s.secrets, cred)
 		runID := event.NewRunID()
-		want := []string{event.Ping}
+		var want []string
 		switch slowAt {
-		case "ping":
-			c.slowEvents.Store(int64(5 * time.Second))
-			want = nil
-		case "fetch":
+		case "registration":
 			c.slowFetch.Store(int64(5 * time.Second))
 		case "open":
 			slowOpen.Store(true)
@@ -1834,6 +1825,13 @@ func TestARunWhoseSessionGaveUpDoesNotOpen(t *testing.T) {
 		r := s.openSession(t, cred, server.LinkRunRequest{RunID: runID})
 		if r.a == nil || r.a.RunID != runID {
 			t.Fatalf("slow at the %s: the retry %+v", slowAt, r.a)
+		}
+		c.mu.Lock()
+		regs := slices.Clone(c.registrations)
+		c.mu.Unlock()
+		// Slow at the registration, Qory Apiary took none of the first.
+		if n := map[string]int{"registration": 1, "open": 2}[slowAt]; len(regs) != n || !bytes.Equal(regs[0], regs[n-1]) {
+			t.Errorf("slow at the %s: the registrations %q", slowAt, regs)
 		}
 		if status, b := r.reload(t, cred, runID); status != http.StatusOK {
 			t.Errorf("slow at the %s: a reload of the retry: %d %s", slowAt, status, b)

@@ -446,17 +446,22 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 			ForagerVersion: g.cfg.Version, ContractVersion: server.Revision, IntervalSeconds: g.interval, Events: g.conf.Events.Types,
 			Time: server.RegistrationTime(time.Now()),
 		}
-		body, err := reg.Body()
+		body, err := g.registration(reg)
 		if err != nil {
 			return fail(err)
 		}
 		var rc *server.RunConfiguration
 		var digest string
-		if err := g.tries(ask, how.deadline, func() (err error) {
+		regErr := g.tries(ask, how.deadline, func() (err error) {
 			rc, digest, err = g.client.Register(ask, g.conf.Run.URL, body)
 			return err
-		}); err != nil {
-			return fail(err)
+		})
+		// A signed 200 whose run configuration Forager refuses is a registration the
+		// server accepted: the run is recorded and told to the server as one refused
+		// after it.
+		var refusedDocument *server.DocumentError
+		if regErr != nil && !errors.As(regErr, &refusedDocument) {
+			return fail(regErr)
 		}
 		lr.mu.Lock()
 		lr.registeredAt = time.Now()
@@ -471,6 +476,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if err := st.Deliver(lr.posts); err != nil {
 			lr.posts.Close(g.base)
 			return fail(err)
+		}
+		if regErr != nil {
+			return fail(regErr)
 		}
 		fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
 	}
@@ -567,6 +575,50 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
 	return lr, true, nil
+}
+
+// keepRegistration is how long a registration built for a run id is kept for a retry
+// of the run id: half the window a server holds its time to, so a retry's time is
+// still within it.
+const keepRegistration = server.Window / 2
+
+// keptRegistration is a registration built for a run id: its members, its bytes and
+// when it was built.
+type keptRegistration struct {
+	reg  server.Registration
+	body []byte
+	at   time.Time
+}
+
+// registration is the bytes of a run's registration: those built for the run id within
+// [keepRegistration] when every member but the time is the same, the retry of a run id
+// whose session gave up as it opened, else new ones, kept.
+func (g *Gateway) registration(reg server.Registration) ([]byte, error) {
+	g.regMu.Lock()
+	defer g.regMu.Unlock()
+	now := time.Now()
+	for id, k := range g.registrations {
+		if now.Sub(k.at) > keepRegistration {
+			delete(g.registrations, id)
+		}
+	}
+	if k, ok := g.registrations[reg.RunID]; ok {
+		same := reg
+		same.Time = k.reg.Time
+		if reflect.DeepEqual(same, k.reg) {
+			return k.body, nil
+		}
+	}
+	body, err := reg.Body()
+	if err != nil {
+		return nil, err
+	}
+	if g.registrations == nil {
+		g.registrations = map[string]keptRegistration{}
+	}
+	reg.Labels = maps.Clone(reg.Labels)
+	g.registrations[reg.RunID] = keptRegistration{reg: reg, body: body, at: now}
+	return body, nil
 }
 
 // about is what the run's registration says the run is about: the session's about, as

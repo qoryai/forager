@@ -406,8 +406,8 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 		"another run's event": func(id string, _ *server.LinkRunAnswer) []map[string]any {
 			return []map[string]any{heartbeat(id), heartbeat(event.NewRunID())}
 		},
-		"a ping": func(id string, _ *server.LinkRunAnswer) []map[string]any {
-			return []map[string]any{ev(id, event.Ping, map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})}
+		"a run.registered": func(id string, _ *server.LinkRunAnswer) []map[string]any {
+			return []map[string]any{ev(id, event.RunRegistered, map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})}
 		},
 		"an egress": func(id string, _ *server.LinkRunAnswer) []map[string]any {
 			return []map[string]any{ev(id, event.RunEgress, map[string]any{"host": "a.example", "port": 443, "method": "CONNECT", "decision": "allowed", "mode": "observe", "rule": "", "outcome": "connected"})}
