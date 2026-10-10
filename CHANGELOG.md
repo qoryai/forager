@@ -61,8 +61,8 @@ release may change what an existing document does, and says so under Upgrading.
   such as `register https://apiary.example/v1/runs: instance_limit (status 409)`, in
   place of `ping <events URL>: …`. `server.ErrNotAccepted` reads "the server did not
   accept the run", and a signed `410` to the registration "register <run.url>: status
-  410: the server did not accept the run". `gateway.ResendNotOpened` reads "the server
-  never accepted the run's registration; nothing is sent".
+  410: the server did not accept the run". `gateway.ResendNotOpened` reads "the run never
+  opened at the server; nothing is sent", reported only by a resend to a server.
 - `receiver.Handler` serves the run endpoint at `receiver.DefaultRunPath`, `/v1/runs`
   in place of `/v1/run-configuration`: a run's registration, and its reload by id. Its
   `RunConfiguration` hook is
@@ -903,9 +903,10 @@ release may change what an existing document does, and says so under Upgrading.
   refused.
 - `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
   30 minutes when zero.
-- `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
-  is, since the run never opened at the server: its registration was never accepted, or
-  it had no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
+- `gateway.Delivery.NotOpened` says a resend to a server sent nothing, and left the
+  record as it is, since the run never opened at that server: its registration was
+  refused, or it had no server. With no server it is never set: the resend completes
+  every record, and leaves one that holds no event as it is, with no error. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
   resend reports then, which a caller that reports `NotOpened` itself may leave out,
   and `gateway.ResendTorn` the one for lines of the record that are not whole events,
   a format of their count and the record's path. `gateway.Delivery.Stopped` says the
@@ -919,7 +920,8 @@ release may change what an existing document does, and says so under Upgrading.
 - A run request whose session gives up waiting for its run answer, ten seconds, opens
   no run: once its connection goes, the gateway asks Qory Apiary nothing more for it,
   its registration among it, and removes what it recorded of the run, so the same
-  `run_id` sent again opens the run instead of `run_id_used`. Within 150 seconds, with
+  `run_id` sent again opens the run instead of `run_id_used`. Within 150 seconds of its
+  `time`, with
   every member of the registration but `time` the same, the gateway sends the server
   the same registration bytes again, which a server that accepted them answers the
   same; after that, or with other labels or another `about`, the server answers
@@ -951,16 +953,18 @@ release may change what an existing document does, and says so under Upgrading.
   is numbered after the highest sequence of the whole events or of `delivered.log`,
   since an event whose line was not finished may have reached the server whole, and the
   file is changed only when `gateway_lost` is added.
-- `gateway.Resend` sends nothing of a record whose registration the server never
-  accepted, one with no `dev.qory.run.registered`, no `delivered.log` and no
-  `dev.qory.run.started`: the run never opened. Nothing is added to its
-  `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend reports
-  "the server never accepted the run's registration; nothing is sent". Before, its
-  ping and events were posted, which reported a run that never opened. The same holds
-  of a record with neither mark and a `dev.qory.run.started`, of a run that had no
-  server, sent to a server: it never opened there, and the resend reports "the run had
-  no server; nothing is sent". Before, its events were posted without a ping. A record
-  with a `dev.qory.run.registered` or a `delivered.log` is sent.
+- `gateway.Resend` to a server sends nothing of a record with no
+  `dev.qory.run.registered`, no `delivered.log` and no `dev.qory.run.started`, of a run
+  that never opened there. Nothing is added to its `events.jsonl`, the `Delivery` says
+  `NotOpened`, nothing sent, and the resend reports "the run never opened at the
+  server; nothing is sent". Before, its ping and events were posted, which reported a
+  run that never opened. The same holds of a record with neither mark and a
+  `dev.qory.run.started`, of a run that had no server, sent to a server: it never
+  opened there, and the resend reports "the run had no server; nothing is sent".
+  Before, its events were posted without a ping. A record with a
+  `dev.qory.run.registered` or a `delivered.log` is sent. With no server, the resend
+  completes every record as any other, without a word, and leaves one that holds no
+  event as it is, with no error.
 
 ### Wall
 

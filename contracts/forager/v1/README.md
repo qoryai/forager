@@ -1381,8 +1381,10 @@ fills spools to the same directory rather than blocking the runtime.
 
 **After Forager stops unexpectedly.** The run directory records what the server is
 still owed, without the Forager process that wrote it. `events.jsonl` is written as events
-happen. `delivered.log` beside it gets a line as each batch is accepted, the delivery id
-and the sequence of every event in it, and the one word `stopped` for a signed 410.
+happen. `delivered.log` beside it begins `registered <seq>`, the sequence of the run's
+`dev.qory.run.registered`, once the server accepts the run's registration; then it gets a
+line as each batch is accepted, the delivery id and the sequence of every event in it,
+and the one word `stopped` for a signed 410.
 `lock` is held by the session for as long as it lives, by the kernel, so it is free once
 the session is gone however it went. Sending a run again is the job's last step, whatever
 happens before it: refused while the lock is held; then what the run's wall leaves
@@ -1407,9 +1409,12 @@ one that is a whole event, its newline alone lost, gets its newline, and any oth
 cut off. Nothing else of the file is changed. The gateway writes
 `dev.qory.run.registered` only once the server has accepted the run's registration, so
 a record that holds it, or a `delivered.log`, is of a run that opened at the server.
-Nothing is sent of a record that holds neither, and nothing is added to it: it is of a
-run whose registration the server never accepted, or of a run that had no server, which
-never opened at the server it is sent to, and Forager says so on its standard error.
+Sent to a server, nothing is sent of a record that holds neither, and nothing is added
+to it: it is of a run that never opened at that server, its registration refused or the
+run having had no server, and Forager says so on its standard error, "the run never
+opened at the server; nothing is sent", or "the run had no server; nothing is sent" for a
+record that holds `dev.qory.run.started`. With no server to send to, every record is
+completed as any other, without a word, and one that holds no event is left as it is.
 The resend fetches the
 configuration document first, as a run does, posts to the URL it defines, and verifies
 every answer's signature under the pin. What is still not accepted is under
@@ -1654,8 +1659,8 @@ request whose session gives up opens no run: once its connection goes, the gatew
 the server nothing more for it, the registration among it, opens no run, and removes
 what it recorded of the run, so the same `run_id` sent again is a new run request, not
 `run_id_used` at the gateway. A registration the server accepted before then stays the
-server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds from when
-it built them, half the server's window: when the same `run_id` comes again within them,
+server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds of their
+`time`, by the wall clock, half the server's window: when the same `run_id` comes again within them,
 with every member but `time` the same, its labels and `about` among them, it sends the
 same bytes, `time` included, which a server that accepted them under the same access key
 answers the same again. After them, or when another member differs, it builds the
