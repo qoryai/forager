@@ -21,12 +21,14 @@
 // each endpoint's own.
 //
 // The run endpoint keeps every registration it accepted by its run id, with the
-// answer it gave: the same bytes under the same access key get that answer again, and
-// other bytes a signed 409 run_id_used. A run the receiver wants nothing more of is a
+// answer it gave, holding a SHA-256 of each body rather than the body: the same bytes
+// under the same access key get that answer again, and the same run id under another
+// access key, even with the same bytes, or other bytes, a signed 409 run_id_used. A run the receiver wants nothing more of is a
 // signed 410, and a new instance it does not admit a signed 409 instance_limit. The
-// [Handler.RunConfiguration] hook decides each run's run configuration, or refuses the
-// run; without it every run gets {"version":1}, no policy. A reload is answered only for
-// a run registered under the same access key, a signed 404 otherwise. A delivery it
+// [Handler.RunConfiguration] hook is handed each run's id, labels and about, and returns
+// its run configuration or refuses the run; without it every run gets {"version":1}, no
+// policy. A reload is answered only for a run the same access key registered, a signed
+// 404 otherwise. A delivery it
 // verified is deduplicated on each event's id, handed to a [Store], and answered 202
 // with the digests in force; it reads nothing of an event's data. [File] is a store that
 // appends events to one JSON lines file and remembers the ids it holds. It keeps one
@@ -179,8 +181,11 @@ type Handler struct {
 	// never.
 	Stop func(runID string) bool
 	// Admit, when set, is called for every registration but one the receiver accepted
-	// with the same bytes, to learn whether the instance may start a run; false is a
-	// signed 409 instance_limit, and the run does not start. Nil admits every instance.
+	// with the same bytes under the same access key, to learn whether the instance may
+	// start a run; false is a signed 409 instance_limit, and the run does not start. It
+	// is not called for a registration refused earlier in the order, a body the contract
+	// refuses or a time outside the window, nor for one Stop refuses. Nil admits every
+	// instance.
 	Admit func(accessKeyID, instanceID string) bool
 
 	// runs are the registrations accepted, by run id.
@@ -188,10 +193,10 @@ type Handler struct {
 	runs map[string]*registration
 }
 
-// registration is a registration the receiver accepted: its bytes, the run they name,
-// and the answer it gave.
+// registration is a registration the receiver accepted: the SHA-256 of its bytes, the
+// run they name, and the answer it gave.
 type registration struct {
-	body     []byte
+	sum      [sha256.Size]byte
 	run      Run
 	document []byte
 	digest   string
@@ -337,9 +342,10 @@ func readRegistration(body []byte) (*registrationBody, error) {
 
 // register answers one verified registration, in the run endpoint's order: a body the
 // contract refuses, 400 invalid_request; a time outside the window, the unsigned 401;
-// a run id it accepted under the same access key with the same bytes, the same answer
+// a run id it accepted with the same bytes under the same access key, the same answer
 // again; a run it wants nothing more of, 410; a new instance it does not admit, 409
-// instance_limit; a run id it accepted with other bytes, 409 run_id_used; then the
+// instance_limit; a run id it accepted under another access key, even with the same
+// bytes, or with other bytes, 409 run_id_used; then the
 // hook's refusal, or the run configuration, kept with the registration and answered
 // 200.
 func (h *Handler) register(w http.ResponseWriter, r *http.Request, v verified, body []byte) {
@@ -363,8 +369,9 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request, v verified, b
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	sum := sha256.Sum256(body)
 	prev := h.runs[run.ID]
-	if prev != nil && prev.run.AccessKeyID == run.AccessKeyID && bytes.Equal(prev.body, body) {
+	if prev != nil && prev.run.AccessKeyID == run.AccessKeyID && prev.sum == sum {
 		h.answerRun(w, v, prev.document, prev.digest)
 		return
 	}
@@ -388,7 +395,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request, v verified, b
 	if h.runs == nil {
 		h.runs = map[string]*registration{}
 	}
-	h.runs[run.ID] = &registration{body: bytes.Clone(body), run: run, document: doc, digest: digest}
+	h.runs[run.ID] = &registration{sum: sum, run: run, document: doc, digest: digest}
 	h.answerRun(w, v, doc, digest)
 }
 

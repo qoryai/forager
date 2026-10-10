@@ -13,5 +13,5 @@
   "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/warehouse\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T22:13:20Z\"}",
   "expect": 409,
   "expect_code": "run_id_used",
-  "note": "A registration of register-valid's run id with other bytes, the repository acme/warehouse, signed. Replayed after register-replayed, which the receiver accepted for that run id: a registration whose run id the server already accepted with other bytes, of another node, other labels or another body, is a signed 409 run_id_used, and the run does not start."
+  "note": "A registration of register-valid's run id with other bytes, the repository acme/warehouse, signed. Replayed after register-replayed, which the receiver accepted for that run id: a registration whose run id the server already accepted under another access key, even with the same bytes, or with other bytes, other labels or another body, is a signed 409 run_id_used, and the run does not start."
 }

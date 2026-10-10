@@ -1097,7 +1097,7 @@ one `POST` per batch to the events URL, with the headers above and:
 |---|---|
 | `Content-Type` | `application/cloudevents-batch+json` |
 | `X-Qory-Delivery` | a UUID per batch. A retry of the same batch contains the same id, and an id is never used for other events: a batch cut again, after a restart or a resend, has a new id |
-| `X-Qory-Run-Configuration` | the server's digest of the run configuration the run uses, `sha256=<hex>`, as the registration's answer or the last reload carried it |
+| `X-Qory-Run-Configuration` | the server's digest of the run configuration the run uses, `sha256=<hex>`, as the registration's answer or the last reload carried it; absent otherwise |
 
 A run's registration is one `POST` to `run.url`, with the headers above and
 `Content-Type: application/json`, and neither `X-Qory-Delivery` nor `X-Qory-Timestamp`;
@@ -1159,13 +1159,13 @@ The events endpoint's own, in order: deduplication, so a batch whose delivery id
 event ids the server already accepted gets the same `2xx` again; then `410` for an event
 of a run the server wants nothing more of.
 The run endpoint's own, for a registration, in order: a registration the server already
-accepted for that run id with the same bytes gets the same answer again; `410`, signed,
-with any code or none: the server takes no run here; `409`, signed, such as
-`instance_limit`, for a new instance id beyond its node's limit, or a `409` code of the
-server's own; then `409` `run_id_used` for a registration whose run id the server
-already accepted with other bytes: of another node, with other labels or with another
-body. For a reload, the server answers only for a run its access key's node registered,
-and anything else is `404`.
+accepted for that run id, with the same bytes under the same access key, gets the same
+answer again; `410`, signed, with any code or none: the server takes no run here;
+`409`, signed, such as `instance_limit`, for a new instance id beyond its node's limit,
+or a `409` code of the server's own; then `409` `run_id_used` for a registration whose
+run id the server already accepted under another access key, even with the same bytes,
+or with other bytes: other labels or another body. For a reload, the server answers
+only for a run the same access key registered, and anything else is `404`.
 
 **Failure.** Every authentication failure is `401` with the body
 `{"error":"unauthorized"}` and nothing more, unsigned: a missing or empty
@@ -1244,8 +1244,8 @@ during a rotation the next one, for information: Forager verifies under its pin 
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
 address; `events.types` is a non-empty list of full type names, or `*` for every type.
-`run.url` is the run endpoint, `https`, or `http` to a loopback address, with no query
-and no fragment, since a reload appends a slash and the run's id to it: a run registers
+`run.url` is the run endpoint, `https`, or `http` to a loopback address, with no query,
+no fragment and no trailing slash, since a reload appends a slash and the run's id to it: a run registers
 there, and a reload fetches a run's configuration again there (The run endpoint, below).
 A document without `run` is refused, as any document the schema refuses. A top-level member
 Forager does not recognise is ignored, which is how a new revision adds a section.
@@ -1287,7 +1287,7 @@ signed `POST <run.url>`, `Content-Type: application/json`, whose body is a
 
 A member the schema does not define is refused, `invalid_request`. The gateway builds
 the body once and sends the same bytes on every try, `time` included, so a server that
-accepted them answers the same again. The answer is a signed `200`, `application/json`,
+accepted them under the same access key answers the same again. The answer is a signed `200`, `application/json`,
 whose body is a `run-configuration.schema.json` document, with the headers
 `X-Qory-Run-Configuration: sha256=<hex>` and `ETag: "sha256=<hex>"`, the same string,
 quoted the second time. The answer always carries `X-Qory-Run-Configuration`,
@@ -1310,7 +1310,7 @@ force, Forager fetches the run's configuration again with a signed
 `GET <run.url>/<run_id>`, `run.url` followed by a slash and the run's id, with
 `X-Qory-Timestamp` as every GET. The answer is a signed `200`, `application/json`, a
 `run-configuration.schema.json` document with the same headers as the registration's
-answer. The server answers it only for a run its access key's node registered, and
+answer. The server answers it only for a run the same access key registered, and
 anything else is `404`. A reload that fails, a `404` among them, leaves the policy in
 force; a `410` to it stops the deliveries, as to a batch (Delivery, below).
 
@@ -1441,12 +1441,14 @@ and skips enrolment, verifies each request and answers in the order this section
 defines, signs every answer after verification under its own key, returns the digest
 headers, deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
 `events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the server that
-embeds it decides a run's run configuration from the run id, the labels and `about`, or
-refuses the run with a code; without one it answers every registration
+embeds it is handed the run id, the labels and `about`, and returns the run's run
+configuration, or refuses the run with a status and a code or with no code; `about` is
+for display and never selects a policy. Without a hook it answers every registration
 `{"version": 1}`, no policy. It keeps each registration it accepted by its run id: the
-same bytes get the same answer again, and other bytes a signed `409` `run_id_used`. It
-answers a reload only for a run registered under the same access key, and `404`
-otherwise. The module's own tests run Forager's client against it.
+same bytes under the same access key get the same answer again, and the same run id
+under another access key, even with the same bytes, or other bytes, a signed `409`
+`run_id_used`. It answers a reload only for a run the same access key registered, and
+`404` otherwise. The module's own tests run Forager's client against it.
 `fixtures/signed/` is what any receiver is tested against: one request per file,
 `method`, `target`, `headers`, a header sent twice being a list of its values, `body`
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
@@ -1668,7 +1670,7 @@ signed `429` `rate_limited`; it ignores `Retry-After`. Every other answer is fin
 `401`, any other coded refusal, `not_found` among them, a signed answer other than a
 `5xx` with no code, and a document Forager refuses. The gateway builds the
 registration's body once, and each try sends the same bytes, `time` included, which a
-server that accepted them answers the same again; the run's record holds
+server that accepted them under the same access key answers the same again; the run's record holds
 `dev.qory.run.registered` once. Once the tries are spent the last answer is the
 session's, as without them: its code and status passed on from `apiary`, or a `500`
 `internal`.
