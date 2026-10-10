@@ -28,7 +28,9 @@ passes. `qory` keeps them under its state directory and prints the path:
 - `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
   writes it, with the run's delivery state toward the server beside it,
   `delivered.log` and `undelivered/`: every event the session posts on the gateway's
-  link, and the gateway's own.
+  link, and the gateway's own. `delivered.log` begins `registered <seq>`, the sequence
+  of the run's `dev.qory.run.registered`, once the server accepts the run's
+  registration, then holds a line per batch the server accepted.
 - `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
   session's own sequence, which is not the stream's: every event the session posts,
   and the few it records alone (below).
@@ -56,7 +58,7 @@ A run behind a wall is recorded the same way. See [the wall](wall.md).
 
 | Type                          | When                                                         |
 | ----------------------------- | ------------------------------------------------------------ |
-| `dev.qory.ping`               | The gateway's, before the run's first, with a server only    |
+| `dev.qory.run.registered`     | Line 1 of the gateway's record, with a server; never posted  |
 | `dev.qory.run.started`        | The run is open: the runtime is about to start               |
 | `dev.qory.run.policy_applied` | Right after; again when a new policy takes effect            |
 | `dev.qory.run.log`            | One per chunk of output                                      |

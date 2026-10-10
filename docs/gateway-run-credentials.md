@@ -416,22 +416,23 @@ its `run_key` label; a run that ended is never opened again. A client has at mos
 open run per run key. A client never joins a session's run: a session's run is reached
 only by its proxy secret, and decided under that session's wall and narrowing, so a
 client of a run key whose sessions' runs are open opens or joins its own run beside
-them. The gateway reports the run itself, in this order: its ping; then, once it has
-fetched the run's policy from Qory Apiary and decided the run, its
+them. The gateway reports the run itself, in this order: it registers the run with Qory
+Apiary, whose answer is the run's run configuration, and writes its `dev.qory.run.registered`,
+never posted; then, once it has decided the run, its
 `dev.qory.run.started`, with `opened_by` `gateway`, `credential` `starter`, and the run
 credential's labels and `about.details`, and its policy; then every connection and its
-heartbeats. A run refused with a code, say Qory Apiary refuses the run's configuration
+heartbeats. A run refused with a code, say Qory Apiary refuses the run's registration
 or the run selects an image, gets the gateway's `dev.qory.run.refused`
 with that code in place of `dev.qory.run.started`; one that fails without a code gets
-no event. The gateway tries Qory Apiary's ping and run configuration up to 3 times, 1
-second and then 2 seconds apart, starting a try again only within 6 seconds of the
+no event. The gateway tries the run's registration up to 3 times, with the same bytes
+each time, 1 second and then 2 seconds apart, starting a try again only within 6 seconds of the
 login's start, after no answer, a `5xx`, signed or not, with any code or none, or a
 signed `429` `rate_limited`. Its connection gets,
 as `text/plain`:
 
 - `503 Service Unavailable`, "the gateway could not open the run; try again", for a
   failure that may pass, once the tries are spent, at once for Qory Apiary's `410` to
-  the ping or the run configuration, signed or not, with any code or none, and for a failure
+  the registration, signed or not, with any code or none, and for a failure
   with neither a code nor a status of Qory Apiary's;
 - `403 Forbidden`, "the gateway could not open the run: Qory Apiary refused it,
   \<code\>", for a code of Qory Apiary's answer, `answer_unsigned` among them;
