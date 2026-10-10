@@ -68,10 +68,9 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; on the one address 401
 // run_credential_refused for a run key the gateway refuses after the issuer's end,
 // during its hold, or whose run credential the issuer no longer holds
-// active, 503 issuer_unreachable when the issuer's introspection endpoint could not be
-// reached, and 502 issuer_answer_invalid when it gave no valid answer; 409 run_id_used
-// for a run id
-// that already names a run here; on the one address 403
+// active, 503 credential_check_unreachable when the introspection endpoint could not
+// be reached, and 502 credential_check_invalid when it gave no valid answer; 409
+// run_id_used for a run id that already names a run here; on the one address 403
 // target_differs_from_credential or differs_from_credential for labels or details
 // that are not the run credential's; the run's refusal when it does not open; else the
 // run answer.
@@ -121,9 +120,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		if err := id.checkActive(r.Context()); err != nil {
 			switch {
 			case errors.Is(err, runcredential.ErrIssuerUnreachable):
-				refuse(w, http.StatusServiceUnavailable, event.ReasonIssuerUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
+				refuse(w, http.StatusServiceUnavailable, event.ReasonCredentialCheckUnreachable, nil, accesskey.FromGateway, issuerUnreachableText)
 			case errors.Is(err, runcredential.ErrAnswerInvalid):
-				refuse(w, http.StatusBadGateway, event.ReasonIssuerAnswerInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
+				refuse(w, http.StatusBadGateway, event.ReasonCredentialCheckInvalid, nil, accesskey.FromGateway, issuerAnswerInvalidText)
 			default:
 				refuseCredential(w)
 			}
@@ -205,10 +204,10 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	g.runs[lr.id] = lr
 	g.indexSecret(lr)
 	if keyRefused() {
-		// The issuer ended a run of the run key while this one opened: it ends at once,
-		// among the runs, so Close waits for its record.
+		// The starter ended a run of the run key while this one opened: it ends at once,
+		// as the starter said, among the runs, so Close waits for its record.
 		g.mu.Unlock()
-		lr.end(endedAtIssuer)
+		lr.end(g.heldEnding(keyOf(*id)))
 		g.presented(*id)
 		refuseCredential(w)
 		return
@@ -443,7 +442,7 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 	if lr == nil {
 		if sp, spent := g.spentOf(runID); spent && sp.key == k {
 			g.presented(id)
-			gone(w, sp.code, sp.from)
+			gone(w, sp.end)
 			return nil, id
 		}
 	}
@@ -455,6 +454,8 @@ func (g *Gateway) credentialRun(w http.ResponseWriter, r *http.Request, runID st
 // endedRun answers a request whose run credential's exp has passed: the 410 of the
 // session's run of the run id, the one whose run secret the request carries, of its run
 // key, when it has ended, live or let go of, and otherwise 401 run_credential_refused.
+// A run that is ending after its starter's answer at its exit ends then, as the starter
+// said, and the request gets its 410: the answer wins over the run credential's exp.
 // Nothing more is served for it.
 func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) {
 	k := keyOf(id)
@@ -464,43 +465,87 @@ func (g *Gateway) endedRun(w http.ResponseWriter, id runIdentity, runID string) 
 	g.mu.Unlock()
 	switch {
 	case lr != nil:
-		if code, from, ended := lr.gone(); ended && lr.cred != nil && !lr.client && lr.cred.key == k {
-			gone(w, code, from)
+		if lr.cred == nil || lr.client || lr.cred.key != k {
+			break
+		}
+		if x, _ := lr.closing(); x != nil {
+			lr.endAsAnswered(x)
+		}
+		if end, ended := lr.gone(); ended {
+			gone(w, end)
 			return
 		}
 	default:
 		if sp, spent := g.spentOf(runID); spent && sp.key == k {
-			gone(w, sp.code, sp.from)
+			gone(w, sp.end)
 			return
 		}
 	}
 	refuseCredential(w)
 }
 
+// request is what a request of a run on the one address asks, as [linkRun.admit]
+// decides it.
+type request int
+
+const (
+	reloadRequest request = iota
+	batchRequest
+	outcomeRequest
+)
+
 // admit decides a request of the run on the one address, after its run is found, by
 // the run credential it carries: a run that ended is its 410, the run credential noted
 // against its run key when the gateway refuses it; a run of a run key the gateway
-// refuses after the issuer's end of another of its runs ends, run_ended_at_issuer, which
-// is the 410, the run credential noted; a run credential with a later exp keeps the run
-// going until then; and an issuer that no longer holds it active ends the run,
-// run_ended_at_issuer, as does one whose introspection endpoint could not be reached,
-// issuer_unreachable, or gave no valid answer, issuer_answer_invalid: each is the 410.
-// It reports whether the request goes on.
-func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity) bool {
-	if code, from, ended := lr.gone(); ended {
+// refuses after the starter's end of another of its runs ends as the starter said,
+// which is the 410, the run credential noted; a run credential with a later exp keeps
+// the run going until then; and a starter that no longer holds it active ends the run
+// as it says, as does an introspection endpoint that could not be reached,
+// credential_check_unreachable, or gave no valid answer, credential_check_invalid: each
+// is the 410. A run that is ending after its starter's answer at its exit takes its
+// batches and its asks of the outcome while its window is open, a run credential
+// presented then extending the hold of its run key to its exp, and ends at any other
+// request, a reload, as the starter said, which is the 410. The ask of the outcome that
+// asks the starter is not decided by the starter's answer kept: the ask itself asks it.
+// Every later ask is decided as a reload is, so a run key the starter ended since is
+// its 410. It reports whether the request goes on. From the start of the ask at the
+// exit, while it is made and for [exitWindow] after its answer, a run credential that
+// could not be checked does not end the run, whose program has finished: the request
+// goes on as if it were checked, [linkRun.sparesCheck].
+func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity, what request) bool {
+	if end, ended := lr.gone(); ended {
 		lr.g.presented(id)
-		gone(w, code, from)
+		gone(w, end)
 		return false
 	}
-	if lr.g.blocked(keyOf(id)) {
-		// The issuer ended a run of the run key: every request of a run of it is
+	if x, open := lr.closing(); x != nil {
+		if !open || what == reloadRequest {
+			lr.endAsAnswered(x)
+			lr.g.presented(id)
+			end, _ := lr.gone()
+			gone(w, end)
+			return false
+		}
+		if ref := lr.differs(id); ref != nil {
+			refuse(w, http.StatusForbidden, ref.Code, ref.Names, accesskey.FromGateway, gatewayText(ref.Code))
+			return false
+		}
+		lr.renew(id)
+		// The run key is held, or is about to be, with the starter's answer: a fresher
+		// run credential extends the hold to its exp, even when the run then ends with
+		// its own dev.qory.run.exited.
+		lr.g.endKey(keyOf(id), id.Expires, x.state, x.reason)
+		return true
+	}
+	if k := keyOf(id); lr.g.blocked(k) {
+		// The starter ended a run of the run key: every request of a run of it is
 		// refused, the run request, a reload, a batch, a client's proxy login and its
-		// join, and a live run of it is served no more. The discovery is answered, and
-		// opens nothing.
-		lr.end(endedAtIssuer)
+		// join, and a live run of it is served no more, and ends as the starter said.
+		// The discovery is answered, and opens nothing.
+		lr.end(lr.g.heldEnding(k))
 		lr.g.presented(id)
-		code, from, _ := lr.gone()
-		gone(w, code, from)
+		end, _ := lr.gone()
+		gone(w, end)
 		return false
 	}
 	if ref := lr.differs(id); ref != nil {
@@ -509,11 +554,26 @@ func (lr *linkRun) admit(w http.ResponseWriter, r *http.Request, id runIdentity)
 		return false
 	}
 	lr.renew(id)
-	if lr.stillActive(r.Context()) != nil {
-		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from)
+	if what == outcomeRequest && !lr.askedAtExit() {
+		// The ask that asks the starter itself.
+		return true
+	}
+	// A reload and a batch renew the run's quiet time once admitted; a later ask at the
+	// exit renews nothing.
+	if err := lr.checkActive(r.Context(), lr.sparesCheck(), what != outcomeRequest); err != nil {
+		if errors.As(err, new(*checkFailed)) {
+			// The run's program has finished: the request goes on as if the run
+			// credential were checked.
+			return true
+		}
+		if errors.Is(err, errAnsweredAtExit) {
+			// The starter's answer at the exit came meanwhile: its window decides.
+			return lr.admit(w, r, id, what)
+		}
+		if end, ended := lr.gone(); ended {
+			gone(w, end)
 		} else {
-			// The request went before the issuer answered.
+			// The request went before the starter answered.
 			refuseCredential(w)
 		}
 		return false
@@ -533,7 +593,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 		if lr, id = g.credentialRun(w, r, g.pathRun(r, runID)); lr == nil {
 			return
 		}
-		if !lr.admit(w, r, id) {
+		if !lr.admit(w, r, id, reloadRequest) {
 			return
 		}
 	} else {
@@ -541,8 +601,8 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 			invalid(w)
 			return
 		}
-		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from)
+		if end, ended := lr.gone(); ended {
+			gone(w, end)
 			return
 		}
 	}
@@ -559,8 +619,11 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 
 // batch answers one link batch of the run whose secret it carries: 202 when its events
 // are numbered; 410 for a run that ended at the gateway; 400 invalid_request for one
-// the link refuses, which ends the run: its record says session_lost, and the session's
-// later requests are a 410 batch_refused. The run is found before the body is read: a
+// the link refuses, which ends the run, failed: its record says batch_refused, and the
+// session's later requests are a 410 batch_refused. A run that is ending after its
+// starter's answer at its exit takes batches while its window is open, until one ends
+// it with a dev.qory.run.exited of that answer; one the link refuses then ends the run
+// as the starter said, and is its 410. The run is found before the body is read: a
 // batch without a run's secret, or with one of no run here, is 400 invalid_request on
 // the local link, and on the one address, as one whose run is not of the run
 // credential's run key, 401 run_credential_refused; neither ends a run.
@@ -577,7 +640,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		}
 		lr.batch.Lock()
 		defer lr.batch.Unlock()
-		if !lr.admit(w, r, id) {
+		if !lr.admit(w, r, id, batchRequest) {
 			return
 		}
 	} else {
@@ -587,14 +650,22 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		}
 		lr.batch.Lock()
 		defer lr.batch.Unlock()
-		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from)
+		if end, ended := lr.gone(); ended {
+			gone(w, end)
 			return
 		}
 	}
 	lr.touch()
 	refused := func(why string) {
-		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", lr.id, why))
+		if x, _ := lr.closing(); x != nil {
+			// The run is ending as its starter answered at its exit: a batch that does
+			// not end it so ends it as the starter said.
+			lr.endAsAnswered(x)
+			end, _ := lr.gone()
+			gone(w, end)
+			return
+		}
+		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: %s", lr.id, why, batchRefused.state))
 		invalid(w)
 		lr.end(batchRefused)
 	}
@@ -619,8 +690,8 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := lr.st.Accept(evs); err != nil {
-		if code, from, ended := lr.gone(); ended {
-			gone(w, code, from)
+		if end, ended := lr.gone(); ended {
+			gone(w, end)
 			return
 		}
 		refused(err.Error())
@@ -636,6 +707,97 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		// The session's run.exited or run.refused: the run's gateway side ends.
 		lr.end(ending{code: accesskey.CodeRunClosed, from: accesskey.FromGateway})
 	}
+}
+
+// outcome answers the session's ask at its runtime's exit, a GET of <run path>/<run
+// id>/outcome, decided as a reload is: a 200 whose body is a
+// link-outcome-answer.schema.json document, the outcome and the reason the run's
+// starter gave when its introspection endpoint answers that the run credential is no
+// longer active with an outcome, and {} otherwise; the 410 of a run that has ended, and
+// 401 run_credential_refused for a run id that is not of the run credential's run key.
+// The starter is asked once per run, [linkRun.askAtExit]. The local link has no starter
+// to ask: it answers 400 invalid_request.
+func (g *Gateway) outcome(s *side, w http.ResponseWriter, r *http.Request, runID string) {
+	if !s.remote {
+		invalid(w)
+		return
+	}
+	lr, id := g.credentialRun(w, r, g.pathRun(r, runID))
+	if lr == nil {
+		return
+	}
+	if !lr.admit(w, r, id, outcomeRequest) {
+		return
+	}
+	x, first := lr.askAtExit(r.Context())
+	if x == nil {
+		// The session gave up before the starter answered.
+		return
+	}
+	if first {
+		// The ask that asked the starter: the session's quiet time runs from its answer.
+		// A later ask renews nothing.
+		lr.touch()
+	}
+	if end, ended := lr.gone(); ended {
+		gone(w, end)
+		return
+	}
+	lr.mu.Lock()
+	digest := lr.reloadDigest
+	lr.mu.Unlock()
+	b, _ := json.Marshal(outcomeAnswerDoc{State: x.state, Reason: x.reason})
+	g.answerHeaders(s, w, r, digest)
+	w.Header().Set("Content-Type", server.LinkContentType)
+	w.WriteHeader(http.StatusOK)
+	w.Write(b)
+}
+
+// outcomeAnswerDoc is the answer to the ask at a runtime's exit as the gateway writes
+// it, contracts/forager/v1/link-outcome-answer.schema.json: {} without an outcome.
+type outcomeAnswerDoc struct {
+	State  string `json:"state,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// exitRule is why the link refuses a session's dev.qory.run.exited, its data, empty
+// when it accepts it. With the starter's outcome at the exit, outcome and reason, its
+// state and its reason are those; with none, the runtime's exit decides: succeeded with
+// exit_code 0 and failed with any other exit status or a signal, both with no reason, or
+// cancelled with timeout, its time limit, or with interrupted, its stop from where it
+// was started, whatever its exit status or signal. The gateway writes the event of
+// every other end itself.
+func exitRule(data map[string]any, outcome, reason string) string {
+	state, _ := data["state"].(string)
+	given, hasReason := data["reason"]
+	why, _ := given.(string)
+	if outcome != "" {
+		if state != outcome || why != reason || hasReason != (reason != "") {
+			return "a run.exited that is not the starter's outcome at its exit"
+		}
+		return ""
+	}
+	code, hasCode := data["exit_code"].(float64)
+	_, signalled := data["signal"]
+	switch {
+	case hasReason && (why == event.ReasonTimeout || why == event.ReasonInterrupted):
+		if state != event.StateCancelled {
+			return "a run.exited " + why + " that is not cancelled"
+		}
+	case hasReason:
+		return "a run.exited with a reason the gateway decides"
+	case state == event.StateSucceeded:
+		if !hasCode || code != 0 || signalled {
+			return "a run.exited succeeded whose runtime did not exit 0"
+		}
+	case state == event.StateFailed:
+		if !signalled && (!hasCode || code == 0) {
+			return "a run.exited failed whose runtime exited 0"
+		}
+	default:
+		return "a run.exited of a state the runtime's exit does not decide"
+	}
+	return ""
 }
 
 // gatewayName is a refusal's name of the form only a gateway's refusal carries.
@@ -658,6 +820,7 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 	seen, startedID, final := lr.seen, lr.startedID, lr.final
 	given := lr.given
 	lr.mu.Unlock()
+	outcome, reason, _ := lr.outcomeAnswer()
 	fresh := map[string]bool{}
 	for _, ev := range evs {
 		if ev.Subject != lr.id || ev.Source != event.Source(lr.id) {
@@ -697,8 +860,8 @@ func (lr *linkRun) check(body []byte, evs []event.Event) string {
 			}
 			startedID = ev.ID
 		case event.RunExited:
-			if reason, ok := data["reason"]; ok && reason != event.ReasonTimeout {
-				return "a run.exited with a reason the gateway decides"
+			if why := exitRule(data, outcome, reason); why != "" {
+				return why
 			}
 			final = true
 		case event.RunRefused:

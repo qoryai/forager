@@ -285,7 +285,7 @@ func TestRunClosedIsAStop(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if want := "the server answered 410; no further batch is sent for this run, which goes on"; len(notes) != 1 || notes[0] != want {
+	if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
 		t.Errorf("reports %q, want one: %q", notes, want)
 	}
 }
@@ -446,26 +446,32 @@ func TestTheLinkSinkPostsUnnumberedBatchesAndRetries(t *testing.T) {
 
 // TestTheGatewaysEndOfTheRunReachesTheCaller pins an answer on the link that ends the
 // run, a 410 or a 400 invalid_request to a batch: the sink stops and tells the caller
-// once with the end code, which the session records as its run.exited reason, and who
-// ended the run; the words for the user are the caller's, so the sink reports nothing
-// itself.
+// once with the end code, who ended the run, and the state and the reason a 410
+// carries, which the session records in its run.exited; the words for the user are the
+// caller's, so the sink reports nothing itself.
 func TestTheGatewaysEndOfTheRunReachesTheCaller(t *testing.T) {
 	for _, c := range []struct {
 		status     int
 		body, want string
 	}{
-		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway"},
-		{http.StatusGone, `{"error":"run_closed","from":"gateway"}`, "run_closed gateway"},
-		{http.StatusGone, `{"error":"session_lost","from":"gateway"}`, "session_lost gateway"},
-		{http.StatusGone, `{"error":"batch_refused","from":"gateway"}`, "batch_refused gateway"},
-		{http.StatusBadRequest, `{"error":"invalid_request"}`, "batch_refused gateway"},
+		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway  "},
+		{http.StatusGone, `{"error":"credential_expired","from":"gateway","state":"cancelled","reason":"credential_expired"}`, "credential_expired gateway cancelled credential_expired"},
+		{http.StatusGone, `{"error":"stopped","from":"gateway","state":"failed","reason":"checks_failed"}`, "stopped gateway failed checks_failed"},
+		{http.StatusGone, `{"error":"run_closed","from":"gateway"}`, "run_closed gateway  "},
+		{http.StatusGone, `{"error":"session_lost","from":"gateway"}`, "session_lost gateway  "},
+		{http.StatusGone, `{"error":"batch_refused","from":"gateway"}`, "batch_refused gateway  "},
+		{http.StatusBadRequest, `{"error":"invalid_request"}`, "batch_refused gateway  "},
 	} {
 		g := &linkGateway{answer: func(int) (int, string) { return c.status, c.body }}
 		var mu sync.Mutex
 		var codes, notes []string
 		var digests atomic.Int32
 		w := linkSink(t, g, sink.Config{
-			OnEnded:   func(code, from string) { mu.Lock(); codes = append(codes, code+" "+from); mu.Unlock() },
+			OnEnded: func(e server.RunEnd) {
+				mu.Lock()
+				codes = append(codes, e.Code+" "+e.From+" "+e.State+" "+e.Reason)
+				mu.Unlock()
+			},
 			Report:    func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() },
 			OnDigests: func(server.Digests) { digests.Add(1) },
 		})

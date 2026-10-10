@@ -10,7 +10,7 @@
   "data": {
     "state": "failed",
     "exit_code": -1,
-    "reason": "vanished",
+    "reason": "no-longer-needed",
     "duration_ms": 41900
   }
 }

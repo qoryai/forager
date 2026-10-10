@@ -182,29 +182,53 @@ type Result struct {
 	// output.log; on one machine the gateway writes the run's stream, events.jsonl,
 	// beside them.
 	Dir string
-	// ExitCode is the runtime's, or -1 when a signal killed it.
+	// ExitCode is the runtime's, or -1 when a signal killed it, whatever State says.
 	ExitCode int
 	// Signal names the signal that killed the runtime, if one did.
 	Signal string
-	// State is succeeded or failed.
-	State string
-	// TimedOut says the runtime was stopped at the spec's Timeout.
+	// State and Reason are the state and the reason of the session's
+	// dev.qory.run.exited, how the run ended: succeeded, failed or cancelled, and the
+	// reason, empty when there is none. When the runtime exits by itself, behind a
+	// separate gateway, the outcome the run's starter gave at the exit sets both, the
+	// starter's reason empty when it gave none, or gave a reserved code or one that is
+	// not a code, which is dropped alone; with none, the runtime's exit decides,
+	// succeeded on 0 and failed otherwise, with no reason, as on the local link, where the
+	// session asks nothing. At the spec's Timeout, TimedOut, they are cancelled and
+	// timeout. When the run was stopped from where it was started, Cancelled, they are
+	// cancelled and interrupted, and nothing is asked. In both, ExitCode and Signal are
+	// the runtime's, whatever they are. When the gateway closed the run, RunClosed, they
+	// are the state and the reason its 410 says, but batch_refused after a refused
+	// batch, and failed with ClosedReason for an end that carries no state, run_closed
+	// among them.
+	State  string
+	Reason string
+	// TimedOut says the runtime was stopped at the spec's Timeout: the session's stop
+	// signal reached it at the limit before its exit was observed. A runtime that exited
+	// by itself before that signal is decided by its exit, and TimedOut is false.
 	TimedOut bool
+	// Cancelled says the run's context had ended when the session observed the
+	// runtime's exit, whatever the exit status or the signal, and whoever stopped the
+	// runtime: the session at the context's end, or the runtime itself, at a Ctrl-C
+	// that reached both. In a race it is whichever the session saw first: a context
+	// that had ended when the exit was observed makes it true. A context that ends
+	// later, while the gateway is asked for the outcome or the sinks close, leaves it
+	// false, as do the time limit, which is TimedOut, a run the gateway closed before
+	// the context ended, which is RunClosed, and a signal from elsewhere while the
+	// context lasts: Cancelled is never true with TimedOut or with RunClosed. When it is
+	// true, run.exited is cancelled with interrupted.
+	Cancelled bool
 	// Undelivered is how many of the session's events the gateway did not accept.
 	Undelivered int
 	// RunClosed says the gateway closed the run, a 410 on the gateway's link, or the
 	// gateway's 400 to a batch, which ends the run there: the runtime was stopped as at
-	// its time limit, and the session's record has run.exited with ClosedReason as its
-	// reason. A server's 410 never closes a run: the gateway only stops sending it
-	// events.
+	// its time limit, and the session's record has run.exited with State and Reason. A
+	// server's 410 never closes a run: the gateway only stops sending it events.
 	RunClosed bool
-	// ClosedBy is who closed the run when RunClosed: always "gateway", the gateway
-	// itself.
-	ClosedBy string
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
-	// as the gateway answered it: run_closed, credential_expired or
-	// run_ended_at_issuer, issuer_unreachable when its issuer's introspection endpoint
-	// could not be reached, issuer_answer_invalid when it gave no valid answer,
+	// as the gateway answered it: run_closed, credential_expired or stopped,
+	// credential_check_unreachable when its run credential could not be checked because
+	// the introspection endpoint could not be reached, credential_check_invalid when it
+	// gave no valid answer,
 	// session_lost when it heard nothing from the session for three heartbeat
 	// intervals, and batch_refused when it refused a batch of the session's.
 	ClosedReason string
@@ -276,25 +300,47 @@ func CheckAbout(a *About) error { return server.CheckAbout(a) }
 // closeWait is how long the sinks get to flush after the runtime exits.
 const closeWait = 15 * time.Second
 
-// ended is how a run was closed from outside: the code and who closed it, set once.
+// ended is how a run was closed from outside, set once.
 type ended struct {
-	mu         sync.Mutex
-	code, from string
+	mu  sync.Mutex
+	end server.RunEnd
 }
 
-func (e *ended) set(code, from string) {
+func (e *ended) set(end server.RunEnd) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.code == "" {
-		e.code, e.from = code, from
+	if e.end.Code == "" {
+		e.end = end
 	}
 }
 
-func (e *ended) get() (string, string) {
+func (e *ended) get() server.RunEnd {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.code, e.from
+	return e.end
 }
+
+// recorded is the state and the reason the session records in its own
+// dev.qory.run.exited of a run the gateway closed: the state and the reason the end
+// carries, but its code as the reason after a refused batch, batch_refused; and, for
+// an end that carries no state, failed with its code as the reason.
+func recorded(e server.RunEnd) (state, reason string) {
+	switch {
+	case e.State == "":
+		return "failed", e.Code
+	case e.Code == event.ReasonBatchRefused:
+		return e.State, e.Code
+	}
+	return e.State, e.Reason
+}
+
+// outcomeWait bounds the session's wait for the outcome at the runtime's exit, as
+// [server.OutcomeTimeout] bounds the request; a test shortens it.
+var outcomeWait = server.OutcomeTimeout
+
+// exitObserved is called the moment the runtime's exit is observed, once Cancelled is
+// decided; a test sets it, and it is nil otherwise.
+var exitObserved func()
 
 // Run runs one session and returns when the runtime has exited and the sinks are
 // flushed. An error means the run did not start: the spec is refused, the gateway's
@@ -302,7 +348,11 @@ func (e *ended) get() (string, string) {
 // unknown, the wall could not be built, or the program could not be started. A refusal
 // with a code is a [*Refusal]; a failure without one at the gateway is its text as the
 // user is told it. Once the runtime runs, its exit is the result and not an error. The
-// context ending stops the runtime, and so does the run being closed from outside.
+// context ending stops the runtime, and so does the run being closed from outside; a
+// runtime that exits 0 at that stop, or at the time limit's, has exited 0, and its
+// run.exited is recorded and its Result returned like any other. A context that ends
+// once the runtime has exited cuts neither the ask for the outcome
+// nor the record short: Run returns after them, within their bounds.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
 	local, remote, err := gatewayOf(spec.Gateway)
@@ -314,10 +364,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// time limit.
 	runCtx, closeRun := context.WithCancelCause(ctx)
 	defer closeRun(nil)
+	// closing ends when the run is closed from outside and never at the caller's end,
+	// which may have ended runCtx first: once the runtime's exit is observed, the ask
+	// for the outcome and the heartbeats follow it, and the caller's end no longer.
+	closing, markClosed := context.WithCancelCause(context.WithoutCancel(ctx))
+	defer markClosed(nil)
 	var closedBy ended
-	end := func(code, from string) {
-		closedBy.set(code, from)
+	end := func(e server.RunEnd) {
+		closedBy.set(e)
 		closeRun(errRunClosed)
+		markClosed(errRunClosed)
 	}
 	if err := checkVariables(spec.Variables); err != nil {
 		return nil, err
@@ -484,8 +540,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return all.Close(ctx)
 	}
 	// The heartbeats run from the link's discovery, every interval it announces, until
-	// the final event.
-	stopBeat := heartbeat(runCtx, interval, discovered, write)
+	// the final event. They end with the run's context until the runtime's exit is
+	// observed, and from then on only when the run is closed from outside.
+	beats, endBeats := context.WithCancel(closing)
+	defer endBeats()
+	beatsFollowCaller := context.AfterFunc(ctx, endBeats)
+	defer beatsFollowCaller()
+	stopBeat := heartbeat(beats, interval, discovered, write)
 	// quit ends a run that does not start: the heartbeats stop, and the sinks are
 	// closed, within closeWait.
 	quit := func(err error) (*Result, error) {
@@ -503,9 +564,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		var r *Refusal
 		switch {
 		case errors.Is(context.Cause(runCtx), errRunClosed):
-			code, from := closedBy.get()
-			own(event.RunRefused, map[string]any{"code": code, "status": http.StatusGone})
-			err = &Refusal{Code: code, Status: http.StatusGone, From: from, Detail: closedDetail}
+			e := closedBy.get()
+			own(event.RunRefused, map[string]any{"code": e.Code, "status": http.StatusGone})
+			err = &Refusal{Code: e.Code, Status: http.StatusGone, From: e.From, Text: endedBeforeStart}
 		case errors.As(err, &r) && refusal.Decides(r.Code):
 			data := map[string]any{"code": r.Code}
 			if len(r.Names) > 0 {
@@ -806,23 +867,38 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Timeout > 0 {
 		limited, cancelLimit = context.WithTimeoutCause(runCtx, spec.Timeout, errTimeout)
 	}
+	// Whether the run was cancelled, and whether it timed out, is decided the moment the
+	// runtime's exit is observed. Cancelled: the caller's context had ended by then, and
+	// neither the limit nor the gateway's close had ended the runtime's context first;
+	// the first end is the cause. Timed out: the limit ended it first, and its stop
+	// signal reached the runtime before the exit was observed; a runtime that exited by
+	// itself before that signal, whatever its status, is decided by its exit. What ends
+	// the context later, while the gateway is asked or the sinks close, changes nothing.
+	var cancelled, timedOut bool
+	proc.exited = func() {
+		beatsFollowCaller()
+		cause := context.Cause(limited)
+		cancelled = ctx.Err() != nil && !errors.Is(cause, errTimeout) && !errors.Is(cause, errRunClosed)
+		timedOut = errors.Is(cause, errTimeout) && proc.stopped.Load()
+		if exitObserved != nil {
+			exitObserved()
+		}
+	}
 	var exit exitStatus
 	if interactive {
 		exit, err = proc.runPTY(limited)
 	} else {
 		exit, err = proc.runPipes(limited)
 	}
-	// A runtime that exited with 0 as the limit fell finished; the limit was not why.
-	timedOut := exit.code != 0 && errors.Is(context.Cause(limited), errTimeout)
 	// A run closed from outside has nothing further posted, whatever the runtime's
 	// status.
 	closed := errors.Is(context.Cause(runCtx), errRunClosed)
 	cancelLimit()
-	stopBeat()
 	closeSocket()
 	// A reload still in flight ends here: nothing of it goes after run.exited.
 	reload.stop()
 	if err != nil && !closed {
+		stopBeat()
 		closeSinks(ctx)
 		return nil, err
 	}
@@ -831,25 +907,61 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		exit = exitStatus{code: -1}
 	}
-	state := "failed"
-	if exit.code == 0 && !closed {
+	// A runtime that exited by itself, behind a separate gateway, asks the gateway once
+	// how the run's starter says the run ended, before run.exited is written: not after
+	// the gateway closed the run, not at the time limit, nor when the caller's context
+	// had ended as the exit was observed, Cancelled. On the local link there is no
+	// starter to ask, and no wait. An outcome sets the state and the reason; {}, a
+	// refusal or no answer within outcomeWait leaves them to the exit, and adds nothing
+	// to the record. The caller's context ending from the exit on cuts neither the ask
+	// nor the record short; the run being closed from outside ends the ask.
+	var outcome server.LinkOutcome
+	if remote != nil && !closed && !timedOut && !cancelled {
+		askCtx, cancelAsk := context.WithTimeout(closing, outcomeWait)
+		outcome, _ = k.Outcome(askCtx, disc.Run.URL, runID)
+		cancelAsk()
+		// The gateway may have closed the run while it was asked: the run then ends as a
+		// closed one.
+		if closed = errors.Is(context.Cause(closing), errRunClosed); closed {
+			outcome = server.LinkOutcome{}
+		}
+	}
+	// The heartbeats go on while the gateway is asked, so a short interval does not
+	// lose the session meanwhile, and stop before run.exited.
+	stopBeat()
+	state, reason := "failed", ""
+	switch {
+	case closed:
+		state, reason = recorded(closedBy.get())
+	case timedOut:
+		// The time limit stopped the runtime before it said how it went.
+		state, reason = "cancelled", event.ReasonTimeout
+	case cancelled:
+		// It was stopped from where it was started, a Ctrl-C, before it said how it went.
+		state, reason = "cancelled", event.ReasonInterrupted
+	case outcome.State != "":
+		state, reason = outcome.State, outcome.Reason
+	case exit.code == 0:
 		state = "succeeded"
 	}
 	exited := map[string]any{"state": state, "exit_code": exit.code, "duration_ms": time.Since(start).Milliseconds()}
 	if exit.signal != "" {
 		exited["signal"] = exit.signal
 	}
-	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, TimedOut: timedOut && !closed, RunClosed: closed}
+	if reason != "" {
+		exited["reason"] = reason
+	}
+	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, Reason: reason, TimedOut: timedOut && !closed, Cancelled: cancelled, RunClosed: closed}
 	switch {
 	case closed:
 		// The end of the run at the gateway is in its stream already: the session
-		// records its own run.exited, with the code it was closed with, in its record
-		// alone.
-		res.ClosedReason, res.ClosedBy = closedBy.get()
-		exited["reason"] = res.ClosedReason
+		// records its own run.exited, with the state and the reason it was closed with,
+		// in its record alone, once delivered.log says the gateway ended the run, which
+		// a reload's 410 leaves to the session to say: a resend never sends it.
+		res.ClosedReason = closedBy.get().Code
+		posts.RunEnded()
 		own(event.RunExited, exited)
 	case timedOut:
-		exited["reason"] = event.ReasonTimeout
 		spec.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
 		write(event.RunExited, exited)
 	default:
@@ -864,8 +976,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	return res, nil
 }
 
-// closedDetail is what a refusal of a run the gateway closed before it started says.
-const closedDetail = "the gateway closed the run before it started"
+// endedBeforeStart is what a refusal of a run the gateway closed before its runtime
+// started says.
+const endedBeforeStart = "the run did not start: it has ended already"
 
 // refused ends a run the gateway did not open, with fail when it records why and quit
 // when it records nothing. A 410 is the run closed before it started. wall_required is the error the session gave for it before there was a
@@ -874,12 +987,12 @@ const closedDetail = "the gateway closed the run before it started"
 // session's record alone: the refusal opened no run at the gateway. A 5xx is a failure
 // without a code at the gateway: its message, the error's text as the user is told it,
 // when it carries one, recorded nowhere. Nothing is posted on the link.
-func refused(err error, fail, quit func(error) (*Result, error), own func(string, any), end func(code, from string)) (*Result, error) {
-	var r *Refusal
-	if code, ok := server.Ended(err); ok && errors.As(err, &r) {
-		end(code, r.From)
+func refused(err error, fail, quit func(error) (*Result, error), own func(string, any), end func(server.RunEnd)) (*Result, error) {
+	if e, ok := server.Ended(err); ok {
+		end(e)
 		return fail(err)
 	}
+	var r *Refusal
 	if errors.As(err, &r) {
 		if r.Code == refusal.WallRequired {
 			return quit(&refusal.NeedsWall{Names: r.Names})

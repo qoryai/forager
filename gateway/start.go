@@ -456,7 +456,7 @@ func (g *Gateway) reserved() []string {
 // [stream.CloseWait] (or the Config's own bound), whatever ctx allows, whose values
 // alone pass on; then the link's directory is removed and the proxy stops. The
 // Delivery is what the runs came to: their undelivered events, and who closed a run
-// that ended at the gateway. Close again waits for the first.
+// that ended at the gateway, and how it ended. Close again waits for the first.
 func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	g.mu.Lock()
 	if g.closing {
@@ -483,13 +483,11 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 			errs = append(errs, lr.err)
 		}
 		g.delivery.Undelivered += lr.result.Undelivered
-		if lr.closed && !g.delivery.RunClosed {
-			g.delivery.RunClosed, g.delivery.ClosedBy, g.delivery.Reason = true, lr.endFrom, lr.endCode
-		}
+		g.closedRun(lr)
 	}
 	// A write of the refused run keys that failed is tried once more.
 	if n := g.keepOnClose(); n > 0 {
-		g.report(fmt.Sprintf("closing with %d run keys the issuer ended not written to %s: a restart would not refuse them", n, g.endedPath()))
+		g.report(fmt.Sprintf("closing with %d run keys of ended runs not written to %s: a restart would not refuse them", n, g.endedPath()))
 	}
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs...)

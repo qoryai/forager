@@ -70,7 +70,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
+	// The roots of the process are the authority of the tests' starters, read before
+	// anything verifies a certificate.
+	removeAuthority, err := trustStarters()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
+	removeAuthority()
 	os.RemoveAll(state)
 	os.Exit(code)
 }
@@ -517,7 +525,7 @@ func (b *syncBuffer) String() string {
 }
 
 // TestContextEndStopsTheRuntime pins that a cancelled context ends the session with a
-// signal, recorded as such.
+// signal, recorded as such: cancelled, interrupted.
 func TestContextEndStopsTheRuntime(t *testing.T) {
 	sp := spec(t)
 	sp.Forwarder = nil
@@ -529,7 +537,7 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ExitCode != -1 || res.Signal != "SIGTERM" || res.State != "failed" {
+	if res.ExitCode != -1 || res.Signal != "SIGTERM" || res.State != "cancelled" || res.Reason != "interrupted" {
 		t.Errorf("result %+v", res)
 	}
 }
@@ -544,11 +552,11 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "failed" {
+	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "cancelled" {
 		t.Errorf("result %+v", res)
 	}
 	exited := ofType(events(t, res), "dev.qory.run.exited")
-	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" {
+	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" || data(exited[0])["state"] != "cancelled" {
 		t.Errorf("run.exited %v", exited)
 	}
 	// A limit that was not reached is not a reason.

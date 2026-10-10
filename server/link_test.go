@@ -358,40 +358,58 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 }
 
 // TestA410OnTheLinkEndsTheRun pins the end of a run at the gateway: a 410 on any
-// request carries its code, run_closed, credential_expired, run_ended_at_issuer,
-// issuer_unreachable, issuer_answer_invalid, session_lost or batch_refused, and
-// run_closed for another code or none, and who ended it, the gateway; it hands on no
-// digests; and a batch's 410 ends the run with the code.
+// request carries its code, run_closed, credential_expired, stopped,
+// credential_check_unreachable, credential_check_invalid, session_lost or batch_refused, and
+// run_closed for another code or none, and who ended it, the gateway; and the state
+// and the reason of that end, Forager's own codes among them, when the state is one of
+// run.exited's and the reason, if any, a code, else neither, and neither for run_closed.
+// It hands on no digests; and a batch's 410 ends the run with the same end.
 func TestA410OnTheLinkEndsTheRun(t *testing.T) {
-	for body, want := range map[string][2]string{
-		`{"error":"run_closed","from":"gateway"}`:            {"run_closed", accesskey.FromGateway},
-		`{"error":"credential_expired","from":"gateway"}`:    {"credential_expired", accesskey.FromGateway},
-		`{"error":"run_ended_at_issuer","from":"gateway"}`:   {"run_ended_at_issuer", accesskey.FromGateway},
-		`{"error":"issuer_unreachable","from":"gateway"}`:    {"issuer_unreachable", accesskey.FromGateway},
-		`{"error":"issuer_answer_invalid","from":"gateway"}`: {"issuer_answer_invalid", accesskey.FromGateway},
-		`{"error":"session_lost","from":"gateway"}`:          {"session_lost", accesskey.FromGateway},
-		`{"error":"batch_refused","from":"gateway"}`:         {"batch_refused", accesskey.FromGateway},
-		`{"error":"something_else"}`:                         {"run_closed", accesskey.FromGateway},
-		``:                                                   {"run_closed", accesskey.FromGateway},
+	gw := accesskey.FromGateway
+	for body, want := range map[string]server.RunEnd{
+		`{"error":"run_closed","from":"gateway"}`:                   {Code: "run_closed", From: gw},
+		`{"error":"credential_expired","from":"gateway"}`:           {Code: "credential_expired", From: gw},
+		`{"error":"stopped","from":"gateway"}`:                      {Code: "stopped", From: gw},
+		`{"error":"credential_check_unreachable","from":"gateway"}`: {Code: "credential_check_unreachable", From: gw},
+		`{"error":"credential_check_invalid","from":"gateway"}`:     {Code: "credential_check_invalid", From: gw},
+		`{"error":"session_lost","from":"gateway"}`:                 {Code: "session_lost", From: gw},
+		`{"error":"batch_refused","from":"gateway"}`:                {Code: "batch_refused", From: gw},
+		`{"error":"something_else"}`:                                {Code: "run_closed", From: gw},
+		``:                                                          {Code: "run_closed", From: gw},
+		`{"error":"stopped","from":"gateway","state":"failed","reason":"checks_failed"}`:                    {Code: "stopped", From: gw, State: "failed", Reason: "checks_failed"},
+		`{"error":"stopped","from":"gateway","state":"succeeded"}`:                                          {Code: "stopped", From: gw, State: "succeeded"},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"stopped"}`:                       {Code: "stopped", From: gw, State: "cancelled", Reason: "stopped"},
+		`{"error":"credential_expired","from":"gateway","state":"cancelled","reason":"credential_expired"}`: {Code: "credential_expired", From: gw, State: "cancelled", Reason: "credential_expired"},
+		`{"error":"session_lost","from":"gateway","state":"failed","reason":"session_lost"}`:                {Code: "session_lost", From: gw, State: "failed", Reason: "session_lost"},
+		`{"error":"stopped","from":"gateway","state":"lost","reason":"no_longer_needed"}`:                   {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"No longer needed"}`:              {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":""}`:                              {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":1}`:                                                    {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","reason":"no_longer_needed"}`:                                  {Code: "stopped", From: gw},
+		`{"error":"run_closed","from":"gateway","state":"cancelled","reason":"no_longer_needed"}`:           {Code: "run_closed", From: gw},
+		`{"error":"something_else","state":"cancelled"}`:                                                    {Code: "run_closed", From: gw},
 	} {
 		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, http.StatusGone, body) }))
 		k, digests := newLink(t, g)
 		ctx := context.Background()
 		_, err := k.OpenRun(ctx, "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
-		if code, ok := server.Ended(err); !ok || code != want[0] || from(err) != want[1] {
-			t.Errorf("run request, %q: %v, from %q", body, err, from(err))
+		if e, ok := server.Ended(err); !ok || e != want || from(err) != want.From {
+			t.Errorf("run request, %q: %v, %+v, from %q", body, err, e, from(err))
 		}
 		_, err = k.Reload(ctx, "http://localhost/v1/run-configuration", runID)
-		if code, ok := server.Ended(err); !ok || code != want[0] || from(err) != want[1] {
-			t.Errorf("reload, %q: %v", body, err)
+		if e, ok := server.Ended(err); !ok || e != want || from(err) != want.From {
+			t.Errorf("reload, %q: %v, %+v", body, err, e)
 		}
 		_, err = k.Discover(ctx)
-		if code, ok := server.Ended(err); !ok || code != want[0] {
-			t.Errorf("discovery, %q: %v", body, err)
+		if e, ok := server.Ended(err); !ok || e != want {
+			t.Errorf("discovery, %q: %v, %+v", body, err, e)
 		}
 		d, err := k.Deliver(ctx, "http://localhost/v1/events", "d1", []byte("[]"), "")
-		if err != nil || !d.Closed() || !d.Stop() || d.Accepted() || d.End != want[0] || d.From != want[1] || d.Digests != (server.Digests{}) {
+		if err != nil || !d.Closed() || !d.Stop() || d.Accepted() || d.RunEnd() != want || d.Digests != (server.Digests{}) {
 			t.Errorf("batch, %q: %+v %v", body, d, err)
+		}
+		if body != "" && (d.Refusal == nil || d.Refusal.Status != http.StatusGone || d.Refusal.Code != want.Code) {
+			t.Errorf("batch, %q: the refusal %+v", body, d.Refusal)
 		}
 		if len(*digests) != 0 {
 			t.Errorf("%q: %d digests handed on after a 410", body, len(*digests))

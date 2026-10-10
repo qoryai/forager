@@ -1,0 +1,7 @@
+{
+  "error": "stopped",
+  "message": "the run has ended: cancelled, no outcome given",
+  "from": "gateway",
+  "state": "cancelled",
+  "reason": "stopped"
+}

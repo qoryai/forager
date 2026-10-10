@@ -1,23 +1,25 @@
-# How an issuer integrates with the Qory gateway
+# How a run's starter works with the Qory gateway
 
 A gateway that serves other machines opens a run only for a **run credential**: a signed
-statement, from an issuer the operator trusts, that names a run key and its target. This
-page is for whoever builds that issuer. It states what the gateway requires, from public
-standards, and what it does with what it receives.
+statement, from a run's starter the operator trusts, that names a run key and its
+target. The run's starter (the `iss` of its run credentials) is the service that asks
+for runs and signs their run credentials. This page is for whoever builds a starter. It
+states what the gateway requires, from public standards, and what it does with what it
+receives.
 
-A separate gateway works only with a run credential issuer: it refuses to serve other
+A separate gateway works only with a run's starter: it refuses to serve other
 machines without `gateway.run_credentials` in the operator's `forager.yaml`.
 
 ## The run key and the run credential
 
-- **The run key** is what the issuer gives run credentials for, and the `run_key` label
+- **The run key** is what the starter gives run credentials for, and the `run_key` label
   of each run they open. It is not a secret and proves nothing on its own. The gateway
   tracks run keys and does not require them to be unique; each period of activity is a
   run, of its own run id.
 - **The run credential** is a JWT ([RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html))
   signed as a JWS ([RFC 7515](https://www.rfc-editor.org/rfc/rfc7515.html)) with an
   asymmetric key, following the best practices of
-  [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html). The issuer gives each run its
+  [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725.html). The starter gives each run its
   run credential, and may refresh it for the same run key.
 
 The gateway verifies the run credential, not the run key.
@@ -58,7 +60,7 @@ another value.
 
 The examples here use `namespace` and `project` as the claims that name the target and
 `requester` as a descriptive claim. The names are the operator's choice; the gateway holds
-no issuer's format.
+no starter's format.
 
 A run credential at its simplest, decoded:
 
@@ -103,7 +105,7 @@ pinned.
 
 ## The algorithms
 
-The issuer signs with one of three algorithms
+The starter signs with one of three algorithms
 ([RFC 7518](https://www.rfc-editor.org/rfc/rfc7518.html),
 [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037.html)):
 
@@ -119,13 +121,13 @@ The issuer signs with one of three algorithms
 
 `none` is refused, and so is every HMAC algorithm: the gateway holds only public keys, so
 no run credential is ever checked as HMAC under one. The header's `alg` must be among the
-issuer's configured algorithms, and equal the algorithm of the key it selects. The
+starter's configured algorithms, and equal the algorithm of the key it selects. The
 operator's configuration accepts no other algorithm, and no RSA key of fewer than 2048
 bits.
 
 ## Publishing and rotating keys
 
-The issuer publishes its public keys, each with a key id, `kid`. The operator pins them in
+The starter publishes its public keys, each with a key id, `kid`. The operator pins them in
 the gateway's configuration, each as a file holding one PEM block of type `PUBLIC KEY`.
 
 - A run credential that carries a `kid` is verified under the pinned key of that `kid`;
@@ -133,20 +135,20 @@ the gateway's configuration, each as a file holding one PEM block of type `PUBLI
   has none.
 - A run credential without a `kid` is accepted only while exactly one key is pinned.
 - With more than one key pinned, every key has a `kid`, each its own.
-- To rotate, the issuer publishes the next key under a new `kid`, the operator pins it
-  beside the current one, the issuer signs with it, and the operator removes the old one
+- To rotate, the starter publishes the next key under a new `kid`, the operator pins it
+  beside the current one, the starter signs with it, and the operator removes the old one
   once no run credential signed under it is still live.
 
 ## The gateway's own audience
 
-The issuer mints a run credential for the gateway alone, with an audience of its own,
-such as `qory-gateway`. `audience` is required in every issuer's configuration, and `aud`
+The starter mints a run credential for the gateway alone, with an audience of its own,
+such as `qory-gateway`. `audience` is required in every starter's configuration, and `aud`
 must contain it. A run credential minted for another service never opens a run here, and
 one minted for the gateway is of no use to another service that checks its own audience.
 
 ## The lifetime
 
-A run credential is valid until `exp`. The operator can bound how long an issuer's run
+A run credential is valid until `exp`. The operator can bound how long a starter's run
 credentials may live with `max_lifetime`: `exp` minus `iat` is then at most that, and a
 run credential without `iat` is refused.
 
@@ -174,24 +176,26 @@ run key. Once the run has ended, its requests get the `410`, not only at `exp`. 
 reload or
 a batch of a run that has ended gets its `410` even with a run credential whose `exp`
 has passed, up to 5 minutes after it, so a session whose run credential expired, under
-an issuer with no leeway too, learns the run's end; such a run credential reaches
+a starter with no leeway too, learns the run's end; such a run credential reaches
 nothing else. A run id
 already in use is refused, `run_id_used`.
 
-After the issuer's end, `run_ended_at_issuer` (below), the gateway holds the run key,
+After the starter's end, `stopped` or the outcome it gave (below), the gateway holds the run key,
 refusing every request of a run of it, until the latest `exp` of the run credentials of
 the key the gateway still holds, and of any presented during the hold, plus 5 minutes,
 the longest leeway. The run credentials it still holds are those of the run key's runs
 that are live, and of those that ended whose record is not yet flushed; it keeps no
 `exp` of a run once its record is flushed. During the hold, a session's run request is
 `401` `run_credential_refused`; a reload or a batch of a session's run of the run key
-that is still live is the run's `410` `run_ended_at_issuer`, and the run ends; and a
-client's connection is `407`, and the client's run of the run key it would join ends,
-`run_ended_at_issuer`. The discovery is answered to a run credential of the run key as
+that is still live is the run's `410` `stopped`, and the run ends with the end the
+starter gave, but for the one run whose ask at its runtime's exit got the answer, which
+may still end with its own `dev.qory.run.exited` for up to 30 seconds (the contract's
+§The gateway's link, The outcome at the exit); and a client's connection is `407`, and the client's run of the run key it
+would join ends so too. The discovery is answered to a run credential of the run key as
 to any, and opens nothing. A run credential for a refused run key presented during the
 hold, its signature and claims verified, is refused and extends the hold to its own
 `exp`; a request whose run credential fails verification extends nothing. The gateway
-keeps these run keys, by issuer, in a file of its state directory (mode 0600, in a
+keeps these run keys, by starter, in a file of its state directory (mode 0600, in a
 directory only its user writes), `ended-run-keys.json`, so a restart refuses them too. A
 gateway does not start on a state directory it cannot create a file in, "the ended run
 keys: <directory> cannot be written: <error>". When a write of the file fails, the
@@ -203,7 +207,7 @@ whose write never succeeded is not refused after a restart.
 
 ## The introspection endpoint
 
-An issuer may offer an OAuth 2.0 token introspection endpoint
+A starter may offer an OAuth 2.0 token introspection endpoint
 ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662.html)), so the gateway can ask whether
 a run credential is still active.
 
@@ -240,26 +244,31 @@ The answer, RFC 7662 §2.2, means active only when all of these hold:
 - the body is at most 65536 bytes, one JSON object that names each member once;
 - its member `active` is the JSON `true`, not the string `"true"` and not `1`.
 
-`{"active": false}` ends the run (`run_ended_at_issuer`), and the gateway holds the run
-key. When every try got no answer, the gateway refuses or ends the run
-`issuer_unreachable`; any other answer, a status other than `200` or a `200` that is not
-one of the above, ends or refuses the run `issuer_answer_invalid`, after one try. Neither
-holds the run key: the next request opens a run as soon as the issuer answers active. The check
-fails closed. The gateway reads nothing else of the answer.
+`{"active": false}` ends the run, `cancelled` with the reason `stopped`, and the gateway
+holds the run key; an answer that also says how the run ended ends it so (How the run's
+starter says how it ended, below). When every try got no answer, the gateway refuses or
+ends the run `credential_check_unreachable`; any other answer, a status other than `200`
+or a `200` that is not one of the above, ends or refuses the run
+`credential_check_invalid`, after one try. Neither holds the run key: the next request
+opens a run as soon as the endpoint answers active. The check fails closed. The gateway
+reads nothing else of the answer but `qory_outcome` and `qory_reason`, below.
 
-| When the gateway asks | `issuer_unreachable` | `issuer_answer_invalid` |
+| When the gateway asks | `credential_check_unreachable` | `credential_check_invalid` |
 |---|---|---|
-| A session's run request | `503`, "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again" | `502`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
-| A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer" |
-| A session's reload or batch | the run ends; `410` `issuer_unreachable` | the run ends; `410` `issuer_answer_invalid` |
-| A client's run, asked again while it has connections | the run ends | the run ends |
+| A session's run request | `503`, "the run did not start: its run credential could not be checked; try again" | `502`, "the run did not start: its run credential could not be checked" |
+| A client's proxy login, or a connection that would join its run | `503`, "the gateway could not open the run; try again" | `403`, "the run did not start: its run credential could not be checked" |
+| A session's reload or batch | the run ends; `410` `credential_check_unreachable` | the run ends; `410` `credential_check_invalid` |
+| A client's run, asked again while it has connections, or once per heartbeat interval | the run ends | the run ends |
 
-A client secret the endpoint refuses, a `401` say, is therefore `issuer_answer_invalid`.
+A client secret the endpoint refuses, a `401` say, is therefore `credential_check_invalid`.
 Each comes only after the run credential's signature and claims verified.
 
 The gateway asks before it opens a run. For a session's run it asks again on each of
 the session's requests; for a run with no session, at most every `cache` while the run
-has connections, or had one since it last asked. It keeps each answer the endpoint
+has connections, or had one since it last asked, and once per heartbeat interval in which
+nothing asked of its run credential, so a run with no traffic learns the starter's end
+within one heartbeat interval and `cache`, and does with the answer what a connection's
+check does. It keeps each answer the endpoint
 gives, active or not, for `cache`, by the SHA-256 of the run credential, never by the
 run credential itself, so a refreshed run credential is asked about anew; it keeps at
 most 4096, and none of a failure to ask or of an answer that is not valid, which the
@@ -271,10 +280,62 @@ reports a run alive, so an ended run is noticed within one heartbeat.
 Neither the run credential nor the client secret appears in the gateway's errors or
 logs.
 
+### How the run's starter says how it ended
+
+When the starter is done with a run, its endpoint answers `active: false`, and may add two members of its own, both
+optional:
+
+```json
+{"active": false, "qory_outcome": "succeeded", "qory_reason": "all_checks_passed"}
+```
+
+- `qory_outcome`: `succeeded`, `failed` or `cancelled`, the `state` of the run's
+  `dev.qory.run.exited`.
+- `qory_reason`: a code, `^[a-z][a-z0-9_]{0,63}$`, the `reason` of the run's
+  `dev.qory.run.exited`, carried as given: `all_checks_passed`, `checks_failed` or
+  `no_longer_needed`, say. The pattern is anchored at both ends; a receiver in
+  another language anchors to the absolute end, such as `\z` (`\Z` in Python's `re`).
+
+RFC 7662 §2.2 lets an implementation add service-specific members of its own to the
+answer. These are not registered under §3.1, so the `qory_` prefix keeps them clear of
+other servers' names. One deviation from the standard is documented: §2.2 says the
+endpoint "SHOULD NOT include any additional information about an inactive token, including why the token is inactive", and §4 repeats it, which keeps the endpoint from disclosing its state
+to its asker. Here you opt in, adding the members only when you choose to; your endpoint
+authenticates the gateway as its client; and the gateway passes the members on to the
+run's own side, in the `410` the session gets and the answer to its ask at the exit, to
+Qory Apiary and to qory's output. So put in them only what you would show the run's
+side. The gateway reads the two members only when `active` is `false`:
+
+- with no `qory_outcome`, the run ends `cancelled` with the reason `stopped`, as with
+  `{"active": false}` alone;
+- with a `qory_outcome` and no `qory_reason`, the run ends with that outcome, and its
+  reason is empty;
+- a `qory_reason` that is one of Forager's reserved codes, `timeout`, `interrupted`,
+  `quiet`, `credential_expired`, `stopped`, `session_lost`, `gateway_lost`,
+  `batch_refused`, `credential_check_unreachable`, `credential_check_invalid`,
+  `run_closed`, `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`,
+  or that does not match the pattern, is dropped, and the reason is empty; the outcome
+  is kept;
+- a `qory_outcome` other than `succeeded`, `failed` and `cancelled` is ignored, and counts
+  as no outcome: the run ends `cancelled` with the reason `stopped`.
+
+Neither a bad `qory_outcome` nor a bad `qory_reason` makes the answer invalid: `active`
+decides as it always has, and only the member is ignored.
+
+The answer is about a run credential, so about its run key: the outcome and the reason
+apply to every live run of that run key when the answer arrives. The starter never
+learns the gateway's run ids; to give each run an outcome of its own, give each run its
+own run key. When a session's runtime exits by itself, the gateway asks once more, at
+most once per run and not from its cache, and the outcome the endpoint gives within
+about 6 seconds is the run's, beside the runtime's own exit status; so have the verdict
+ready when the run's program exits. That answer holds the run key and ends its other
+live runs, as any `active: false` does, while the run that asked may still end with its
+own exit for up to 30 seconds.
+
 ## The operator's configuration
 
-The operator sets the issuer, the audience, the keys and the mapping of claims to labels
-in `forager.yaml`. Its schema is
+The operator sets the starter's `issuer`, the audience, the keys and the mapping of
+claims to labels in `forager.yaml`. Its schema is
 [`run-credentials.schema.json`](../contracts/forager/v1/run-credentials.schema.json).
 
 ```yaml
@@ -323,12 +384,12 @@ before the signature verifies, it reads the header alone, and never the payload.
 order:
 
 1. **Serialisation:** the one compact form above.
-2. **Header and keys:** for each issuer, `alg` is among its algorithms and equals the
+2. **Header and keys:** for each starter, `alg` is among its algorithms and equals the
    selected key's; the key is selected by `kid`, or is the one key pinned; `typ` and
    `crit` as above.
 3. **Signature,** under each key the header selected, over the exact bytes received: the
    header and the payload as they arrived, with the dot between them.
-4. **Claims:** the issuer is the one whose key verified the signature and whose `issuer`
+4. **Claims:** the starter is the one whose key verified the signature and whose `issuer`
    equals `iss`; then `exp`, `iat`, `nbf`, `max_lifetime`, `aud` and `sub`, as above.
 5. **Scope:** `allow`, from the signed claims, never from the request.
 6. **Mapping:** the labels and `about.details`, from the signed claims.
@@ -357,7 +418,7 @@ only by its proxy secret, and decided under that session's wall and narrowing, s
 client of a run key whose sessions' runs are open opens or joins its own run beside
 them. The gateway reports the run itself, in this order: its ping; then, once it has
 fetched the run's policy from Qory Apiary and decided the run, its
-`dev.qory.run.started`, with `opened_by` `gateway`, `credential` `issuer`, and the run
+`dev.qory.run.started`, with `opened_by` `gateway`, `credential` `starter`, and the run
 credential's labels and `about.details`, and its policy; then every connection and its
 heartbeats. A run refused with a code, say Qory Apiary refuses the run's configuration
 or the run selects an image, gets the gateway's `dev.qory.run.refused`
@@ -380,21 +441,24 @@ as `text/plain`:
   \<n\>", for a signed answer of Qory Apiary's, other than a `5xx` or a `410`, with no
   code.
 
-The run ends, and the gateway writes its `dev.qory.run.exited`:
+The run ends, and the gateway writes its `dev.qory.run.exited`, with a `state` and a
+`reason`:
 
-- `quiet`, once it has had no connection for the operator's quiet time;
-- `credential_expired`, at its run credential's latest `exp` with no fresher one;
-- `run_ended_at_issuer`, when the issuer's introspection no longer holds the run
-  credential active, or the issuer ended another run of the same run key, which the
-  gateway then holds (The lifetime, above);
-- `issuer_unreachable` or `issuer_answer_invalid`, when the issuer's introspection
-  endpoint could not be reached after the gateway's tries, or gave no valid answer; the
-  gateway holds nothing.
+- `cancelled` and `quiet`, once it has had no connection for the operator's quiet time;
+- `cancelled` and `credential_expired`, at its run credential's latest `exp` with no
+  fresher one;
+- the starter's outcome and reason, or `cancelled` and `stopped` when it gave no
+  outcome, when the introspection endpoint no longer holds the run credential active, or
+  the starter ended another run of the same run key so, which the gateway then holds
+  (The lifetime, above);
+- `failed` and `credential_check_unreachable` or `credential_check_invalid`, when the run
+  credential could not be checked: the introspection endpoint could not be reached after
+  the gateway's tries, or gave no valid answer; the gateway holds nothing.
 
 When the gateway stops with the run live, the run ends without its
 `dev.qory.run.exited`, and resending its record with `qory run resend`, through
 `gateway.Resend`, completes it as `gateway_lost`. After
-the issuer's end, the gateway holds the run key (The lifetime, above); after any
+the starter's end, the gateway holds the run key (The lifetime, above); after any
 other end, the next connection opens a new run.
 
 For a host the policy holds to paths, the gateway reads inside HTTPS with a
@@ -405,7 +469,7 @@ operator installs on the clients' machines.
 
 A session reads the run credential from a file, a file descriptor, or the variable
 `QORY_RUN_CREDENTIAL_SECRET`; a flag never carries it. It sends it on every request to the
-gateway, and reads the file again before each, so an issuer that refreshes the file keeps
+gateway, and reads the file again before each, so a starter that refreshes the file keeps
 the run going. The session also sends the labels it takes from the checkout. When its
 `forge` or `repository` differs from the run credential's, the gateway refuses the run
 with `target_differs_from_credential`; when it sends any other key the mapping sets, a
@@ -416,13 +480,23 @@ the run credential's value, `labels.<key>=<value>` or `about.details.<key>=<valu
 When the session is lost, the gateway ends its run: `session_lost` once it has heard
 nothing from the session for three heartbeat intervals, or earlier `credential_expired`
 when the latest `exp` of a run credential presented for the run passes first. The
-gateway asks the issuer's introspection endpoint at the session's requests, so
-`run_ended_at_issuer` ends the run while they reach the gateway. When the gateway itself
+gateway asks the starter's introspection endpoint at the session's requests, so the
+starter's end, `stopped` or the outcome it gave, ends the run while they reach the
+gateway. When the gateway itself
 stops, resending its record with `qory run resend`, through `gateway.Resend`, completes
 the run as `gateway_lost`. While the session lives,
 the run normally ends with its runtime's own exit; the gateway can also end it, with
-`credential_expired`, `run_ended_at_issuer`, or `batch_refused` after it refused a batch
-of the session's, and the session then records that code.
+`credential_expired`, the starter's end, or `batch_refused` after it refused a batch of
+the session's, and the session then records that end. When the runtime exits by itself,
+the session asks the gateway once how the starter says the run ended, and the gateway
+asks the endpoint at most once per run, not from its cache, and answers within about 6
+seconds, the 4 seconds in which its tries start and one more try of 2 seconds, or with
+`{}`; a run on the local link is never asked, and the local link answers the ask with
+`400` `invalid_request` (the contract's §The gateway's link, The outcome at the exit). An
+answer that the run credential is no longer active leaves that run 30 seconds to end
+with its own `dev.qory.run.exited` of the answer; when they pass, the gateway ends the
+run itself as the starter said, never `session_lost`, and within them the answer wins
+over the run credential's `exp`.
 
 Behind a separate gateway the session's machine keeps, beside the session's record,
 what the gateway accepted of it, `delivered.log`, and the batches it did not,
@@ -436,7 +510,7 @@ stay in that directory, and the gateway's own resend completes the run `gateway_
 
 qory takes `QORY_RUN_CREDENTIAL_SECRET` out of the agent's environment, and the session
 leaves it out too, whatever brought it, a variable of the run's among them. Any other
-variable an issuer itself sets for the run is the operator's to deny through the node's
+variable a starter itself sets for the run is the operator's to deny through the node's
 variables policy.
 
 ## One opaque refusal
@@ -454,12 +528,12 @@ gateway, and it is never sent to Qory Apiary. Inside a wall the agent never sees
 it: the relay adds the run's own proxy secret to every connection instead, which the
 gateway issued for this run when it verified the run credential.
 
-## Testing an issuer
+## Testing a starter
 
 The contract publishes known answers under
 [`fixtures/known-answers/run-credentials/`](../contracts/forager/v1/fixtures/known-answers/run-credentials/):
 fixture keys of each algorithm derived from a published seed, two configurations of the
-fixture issuer, and run credentials signed under the keys, each with the outcome it gets
+fixture starter, and run credentials signed under the keys, each with the outcome it gets
 at a fixed time and, for a refused one, the step that refuses it: the serialisation, the
 header, the signature, the claims, the scope or the mapping. These keys are public:
 anyone can derive their private keys from the seed. Forager refuses them in a

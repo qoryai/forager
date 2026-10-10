@@ -19,25 +19,91 @@ release may change what an existing document does, and says so under Upgrading.
   empty list from none: an empty list is written as `[]`, and as a node's policy beside
   a server's it allows none of the server's tools or credentials.
 - `dev.qory.run.started` requires `opened_by` and `credential`, and
-  `dev.qory.run.exited` no longer requires `state` and `exit_code`. A receiver reads
-  `opened_by` to tell a session's run from one a gateway opened, which contains
-  neither, and `credential` to tell a run whose run credential an issuer gave,
-  `issuer`, from one on a gateway's local link, `none`.
+  `dev.qory.run.exited` no longer requires `exit_code`. A receiver reads `opened_by` to
+  tell a session's run from one a gateway opened, which contains no `exit_code`, and
+  `credential` to tell a run whose run credential the run's starter gave, `starter`,
+  from one on a gateway's local link, `none`.
+- `dev.qory.run.exited`'s `state` is required on every `dev.qory.run.exited`, a run a
+  gateway opened's too, and has `cancelled` beside `succeeded` and `failed`: the run was
+  stopped before it said how it went. A run stopped at its time limit, `timeout`, is
+  `cancelled`, and so is `session.Result.State`; so is a session's run stopped from
+  where it was started, `interrupted`, a Ctrl-C or a signal to the program that runs
+  the session, with the runtime's own `exit_code` and `signal`; such a run was recorded
+  `failed`, or not at all when the runtime exited 0 at the stop. Its `reason` is an
+  open code, `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's own codes, or the run's
+  starter's, carried as given. A receiver reads the state from `state`, and shows a
+  reason it does not know as it is.
+- `server.Ended` returns a `server.RunEnd`, the code, who ended the run, and the state
+  and the reason of that end, in place of the code alone, and `sink.Config.OnEnded`
+  takes a `server.RunEnd` in place of the code and who ended it.
 
 #### Added
 
 - `event.OpenedBySession` and `event.OpenedByGateway`, the values of `opened_by`,
-  `event.CredentialIssuer` and `event.CredentialNone`, the values of `credential`, and
-  `event.ReasonTimeout`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
-  `ReasonQuiet`, `ReasonCredentialExpired`, `ReasonRunEndedAtIssuer`,
-  `ReasonBatchRefused`, `ReasonIssuerUnreachable` and `ReasonIssuerAnswerInvalid`, the
-  reasons of `dev.qory.run.exited`; `batch_refused` is the gateway's `410` to a session
-  whose batch it refused, and the reason the session records in its own record after
-  it; `issuer_unreachable` and `issuer_answer_invalid` end a run whose issuer's
-  introspection endpoint could not be reached after the gateway's tries, or gave no
-  valid answer, and are also the codes of the gateway's `503` and `502` to a run
-  request for the same. The session's `dev.qory.run.started` contains
+  `event.CredentialStarter` and `event.CredentialNone`, the values of `credential`, and
+  `event.ReasonTimeout`, `ReasonInterrupted`, `ReasonRunClosed`, `ReasonGatewayLost`,
+  `ReasonSessionLost`, `ReasonQuiet`, `ReasonCredentialExpired`, `ReasonStopped`,
+  `ReasonBatchRefused`, `ReasonCredentialCheckUnreachable` and
+  `ReasonCredentialCheckInvalid`, Forager's own reasons of `dev.qory.run.exited`;
+  `interrupted` ends a session's run stopped from where it was started, `cancelled`;
+  `stopped` ends a run whose starter no longer holds
+  its run credential active and gave no outcome; `batch_refused` is the gateway's `410`
+  to a session whose batch it refused, the reason of the gateway's own
+  `dev.qory.run.exited`, `failed`, and the reason the session records in its own
+  record after it; `credential_check_unreachable` and `credential_check_invalid` end a
+  run whose run credential could not be checked, the introspection endpoint unreachable
+  after the gateway's tries or its answer not valid, and are also the codes of the
+  gateway's `503` and `502` to a run request for the same. The session's `dev.qory.run.started` contains
   `opened_by` `session`, and the `credential` of the gateway's run answer.
+  `event.StateSucceeded`, `StateFailed` and `StateCancelled` are the states of
+  `dev.qory.run.exited`, and `event.IsState` says whether a string is one;
+  `event.Reserved` says whether a reason is one of Forager's reserved codes, the old
+  names among them, and `event.StarterReason` whether it may be a starter's: a code of
+  the pattern of `reason` that is not reserved.
+- Contract `v1` revision 1, amended in place, lets the run's starter say how a run
+  ended, and carries it to the end of the run. The starter's introspection endpoint
+  may add `qory_outcome`, `succeeded`, `failed` or `cancelled`, and `qory_reason`, a
+  code, to an answer of `active: false`: service-specific members of its own as RFC 7662 §2.2
+  allows, not registered under §3.1 and so prefixed `qory_`, with one documented
+  deviation, the SHOULD NOT of §2.2 and §4 about saying why a credential is inactive. The outcome applies to every live run of that run key; with
+  no outcome the run ends `cancelled` with `stopped`, with no reason its reason is
+  empty, and a reason that is one of Forager's reserved codes, or no code, is dropped;
+  a `qory_outcome` other than the three is ignored and counts as no outcome, and
+  neither bad member makes the answer invalid: `active` decides as before. Forager's
+  codes are reserved: `timeout`, `interrupted`, `quiet`, `credential_expired`,
+  `stopped`, `session_lost`, `gateway_lost`, `batch_refused`, `credential_check_unreachable`,
+  `credential_check_invalid` and `run_closed`, and the old names `run_ended_at_issuer`,
+  `issuer_unreachable` and `issuer_answer_invalid`, which are never written. A `410`
+  that ends a run on the link carries the `state` and the `reason` of that end, new
+  optional members of `link-refusal.schema.json`. Behind a separate gateway, a session
+  whose runtime exits by itself asks once, `GET <run.url>/<run_id>/outcome` with what a
+  reload carries; the gateway asks the starter at most once per run and answers within
+  about 6 seconds with a `link-outcome-answer.schema.json` document, `{}` or the
+  starter's `state` and `reason`, which the session's `dev.qory.run.exited` then
+  carries beside the runtime's own `exit_code`. The gateway holds that event to the
+  answer, and with no outcome to the runtime's exit: `succeeded` with exit status 0,
+  `failed` otherwise, or `cancelled` with `timeout` or with `interrupted`, whatever the
+  exit status or the signal. An answer that the run credential
+  is no longer active holds the run key, and the run that asked may still end with its
+  own exit for up to 30 seconds; when they pass, the gateway ends it itself as the
+  starter said, never `session_lost`, and within them the answer wins over the run
+  credential's `exp`. `link-outcome-answer.schema.json` refuses a `reason` that is one
+  of Forager's reserved codes. On the local link it is never asked, and is `400`
+  `invalid_request`. The README's §The events, How a run
+  ends, gives the state of each of Forager's own endings, and §Run credentials and
+  `docs/gateway-run-credentials.md` the starter's two members. `fixtures/` has a run
+  a gateway opened that its starter ended with an outcome and a reason, a session's
+  run that ends `cancelled` with `stopped`, two session batches whose `dev.qory.run.exited`
+  is `cancelled` with `interrupted`, one with the runtime's exit status and one with its
+  signal, one whose starter
+  gave its outcome at the exit, the outcome answers, `410`s with a `state` and a `reason`, and refused ones: a
+  `dev.qory.run.exited` without `state`, with a state of no kind it names, with a
+  reason that is no code or `gateway_lost` and `cancelled`, a session's with `timeout`
+  and `succeeded`, with `interrupted` and `failed` or with the old name
+  `run_ended_at_issuer`, two marked beyond the
+  schema, which only the gateway refuses, an outcome answer with a reason and no
+  state or with a reserved reason, and refusals and outcome answers with a state of no
+  kind it names.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
@@ -128,7 +194,7 @@ release may change what an existing document does, and says so under Upgrading.
   `Field`, such as `about.subjects[0].ref`, and its `Reason`; `session.Run` checks it
   before it contacts the server, and an `About` it refuses is no run.
 - Contract `v1` revision 1, amended in place, gains the refusals of a gateway that
-  verifies a run credential, the one an issuer gives a run: `run_credential_refused`,
+  verifies a run credential, the one the run's starter gives it: `run_credential_refused`,
   one opaque answer for every failure of the run credential and for a run key that
   already opened a run at this gateway, with no names; `target_differs_from_credential`,
   a session whose label `forge` or `repository` differs from the run credential's;
@@ -143,8 +209,8 @@ release may change what an existing document does, and says so under Upgrading.
   records the refusal it received in its own record alone, and nothing reaches the
   server for it. A gateway's `410` before the runtime starts is recorded the same way,
   as `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
-  include `session_lost`, `batch_refused`, `credential_expired`, `run_ended_at_issuer`,
-  `issuer_unreachable` and `issuer_answer_invalid`, and the server's `not_found`, its
+  include `session_lost`, `batch_refused`, `credential_expired`, `stopped`,
+  `credential_check_unreachable` and `credential_check_invalid`, and the server's `not_found`, its
   signed `404` to the run configuration of a workspace with no policy,
   `accesskey.CodeNotFound`. A code without `status` is held to the schema's list; a
   code of the server's, with its `status`, is kept as the server sent it, one the list
@@ -158,8 +224,9 @@ release may change what an existing document does, and says so under Upgrading.
   `refused-differs-from-credential.json`, the `dev.qory.run.refused` a session records
   when a gateway refuses its run request, in the shape of a batch.
 - Contract `v1` revision 1, amended in place, gains `run-credentials.schema.json`: the
-  issuers of run credentials a gateway accepts, the list under `gateway.run_credentials`
-  of the operator's `forager.yaml`. Per issuer: `issuer`, an https URL; `audience`,
+  run starters a gateway accepts run credentials from, the run's starter being the `iss`
+  of its run credentials, the list under `gateway.run_credentials` of the operator's
+  `forager.yaml`. Per starter: `issuer`, an https URL; `audience`,
   required; `algorithms` among `RS256`, `ES256` and `EdDSA`, never `none` or an HMAC
   algorithm; the pinned `keys`, each with its `alg`, a `public_key_file` and a `kid`;
   `leeway`, 60 s by default; `max_lifetime`; the scope `allow`; `labels`, `forge` a
@@ -171,8 +238,8 @@ release may change what an existing document does, and says so under Upgrading.
   holds two accepted documents and `fixtures/invalid/` the refused ones.
 - The public package `runcredential` is the run credential of the contract. `Parse`
   reads the document against the schema, refusing a member it does not define;
-  `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the issuer's
-  algorithms, two keys without a `kid` or with the same one, the same issuer twice, a
+  `Issuers.Check` and `Issuer.Check` refuse a key whose `alg` is not among the starter's
+  algorithms, two keys without a `kid` or with the same one, the same `issuer` twice, a
   `details` key that holds `=`, a constant label value or a `join` with a control
   character, and a `public_key_file` that is not one PEM block of type `PUBLIC KEY`, with
   nothing but white space around it, of its key type: RSA of at least 2048 bits, P-256,
@@ -181,7 +248,7 @@ release may change what an existing document does, and says so under Upgrading.
   without a `kid` only while one key is pinned, and refuses `crit`; `Issuer.CheckClaims`
   checks `exp`, `iat`, `nbf`, the lifetime against `max_lifetime`, `iss`, `aud` and `sub`
   of a run credential whose signature is verified, at a given time, and refuses every one
-  for an issuer whose issuer or audience is empty; `Issuer.Allowed` is the scope;
+  for a starter whose `issuer` or audience is empty; `Issuer.Allowed` is the scope;
   `Issuer.Labels` makes `forge`, `repository` and `run_key`, within the label limits and
   with no control character, refusing a label claim the run credential does not carry;
   `Issuer.Details` makes the `about.details` keys whose claims it carries, leaving the
@@ -194,36 +261,36 @@ release may change what an existing document does, and says so under Upgrading.
   fixture keys of the known answers, `rs256.pem`, `es256.pem` and `eddsa.pem`, whose
   private keys anyone can derive from the published seed, naming the file and never the
   key.
-- `fixtures/known-answers/run-credentials/` holds the fixture issuer's keys, RSA 2048,
-  P-256 and Ed25519, derived from a published seed, two configurations of the issuer, and
+- `fixtures/known-answers/run-credentials/` holds the fixture starter's keys, RSA 2048,
+  P-256 and Ed25519, derived from a published seed, two configurations of the starter, and
   run credentials signed under the keys, accepted ones per algorithm and refused ones,
   each with its outcome at a fixed time and the step that refuses it. `go generate
   ./runcredential` writes them with Go's standard library, and `runcredential`'s list of
   the fixture keys it refuses, and `go test ./...` fails while they differ.
-- `docs/gateway-run-credentials.md` says how an issuer integrates with the Qory gateway:
+- `docs/gateway-run-credentials.md` says how a run's starter works with the Qory gateway:
   the claims, the algorithms, the keys and their rotation by `kid`, the gateway's own
   audience, the lifetime, introspection, the proxy login over TLS, the one opaque refusal,
   and that the run credential never appears in an event, a record or a log.
 - `runcredential.NewVerifier` and `Verifier.Verify` verify a run credential under the
-  issuers a gateway accepts, their keys read once. The serialisation is the strict JWS
+  starters a gateway accepts, their keys read once. The serialisation is the strict JWS
   compact form: at most `runcredential.MaxCredentialBytes`, 16384 bytes, exactly three
   parts of base64url without padding, white space or another byte, with no bits beyond
   a part's last byte. The header is one JSON object with each member name once, through
   `Issuer.SelectKey`. The signature is verified under each key the header selects, over
   the exact bytes received: `RS256` by RSASSA-PKCS1-v1_5 with SHA-256, `ES256` of exactly
   64 bytes with `R` and `S` each in [1, n-1], `EdDSA` by Ed25519. The payload is read only
-  after a signature verified, one JSON object with each member name once, and the issuer
-  is the one whose key verified it and whose issuer equals `iss`. Then `CheckClaims`,
-  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the issuer, the run
+  after a signature verified, one JSON object with each member name once, and the starter
+  is the one whose key verified it and whose `issuer` equals `iss`. Then `CheckClaims`,
+  `Allowed`, `Labels` and `Details`. `runcredential.Verified` holds the starter, the run
   key, `exp`, the claims, the labels and the details. Every failure is
   `runcredential.ErrRefused`, whose text holds no part of the run credential.
   `Verifier.VerifyExpired` verifies, with every step of `Verify`, a run credential
   `Verify` refuses only because its `exp` passed, less than `MaxLeeway` before.
 - `Issuer.SelectKey` refuses a `typ` other than `JWT`, compared without regard to case.
 - `Issuer.Check` refuses a `leeway` above `runcredential.MaxLeeway`, 5 minutes, and
-  `Issuer.CheckClaims` refuses every run credential under such an issuer built in Go.
+  `Issuer.CheckClaims` refuses every run credential under such a starter built in Go.
   `run-credentials.schema.json` says so.
-- `runcredential.NewIntrospector` and `Introspector.Active` ask an issuer's RFC 7662
+- `runcredential.NewIntrospector` and `Introspector.Active` ask a starter's RFC 7662
   endpoint whether a run credential is still active: a `POST` over TLS 1.2 or later of
   the form `token` and `token_type_hint=access_token`, with HTTP Basic as the configured
   client, the client id and the secret each form-encoded, the secret read once from its
@@ -238,18 +305,29 @@ release may change what an existing document does, and says so under Upgrading.
   not a valid one is tried once and wraps `runcredential.ErrAnswerInvalid`, naming its
   status, "the introspection endpoint answered status 401" say. A caller whose context
   ends gets its context's error. Each answer the endpoint gives,
-  active or not, is kept for the issuer's `cache`, or the heartbeat interval, by the
+  active or not, is kept for the starter's `cache`, or the heartbeat interval, by the
   SHA-256 of the run credential, at most `runcredential.MaxIntrospectionAnswers`, 4096,
   the one that lapses first going when it is full; a failure is kept for no one, and the
   next caller asks again. Callers for the same run credential share one request, which
   a caller that gives up does not end for the others, and late callers join the tries
-  in flight. Its errors name neither the run credential nor the secret.
+  in flight. Its errors name neither the run credential nor the secret:
+  `ErrIssuerUnreachable` reads "the introspection endpoint could not be reached", and
+  `ErrAnswerInvalid` "the introspection endpoint gave no valid answer".
+  `Introspector.Answer` returns the whole `runcredential.Answer`: `Active`, and of an
+  answer of `active: false` its `qory_outcome` and `qory_reason`, `Outcome` and `Reason`,
+  by the rules of `runcredential.StarterOutcome`: an outcome other than `succeeded`,
+  `failed` and `cancelled` is none, and a reason that is no code or one of Forager's
+  reserved codes is dropped; neither makes the answer invalid. `Introspector.AnswerNow`
+  asks past the answer kept and shares no call in flight, and keeps its answer.
 - `runcredential.OpenEnded` and `runcredential.Ended` keep the run keys a gateway
-  refuses, by issuer, in `ended-run-keys.json` of the gateway's state directory, mode
+  refuses, by starter, in `ended-run-keys.json` of the gateway's state directory, mode
   0600, written atomically, in a directory of mode 0700 that only its user writes. Each
   is kept until its run credential's `exp` plus 5 minutes, the longest leeway, and
   dropped on open and on `Ended.Add`; `Ended.Has` asks, and `Ended.Written` whether the
-  file, as last read or written, refuses a run key, which a failed write leaves out. A
+  file, as last read or written, refuses a run key, which a failed write leaves out.
+  `Ended.AddOutcome` keeps the outcome and the reason the starter gave with the run key,
+  those of its first hold, and `Ended.Outcome` returns them; a file whose entry holds an
+  outcome or a reason a starter cannot give is refused. A
   file that cannot be read, that others can read or write, or that holds no array
   `ended` is refused, so a gateway never starts having forgotten a run key it refuses,
   and so is a directory it cannot create a file in, "the ended run keys: <directory>
@@ -359,21 +437,22 @@ release may change what an existing document does, and says so under Upgrading.
   differ from what the gateway holds or the run credential decides, or a second one; an
   event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`, or a
   `dev.qory.run.refused` after its `dev.qory.run.started`; a `dev.qory.run.exited` with
-  a `reason` other than `timeout`, since the gateway writes the event of every other
-  reason itself; a `dev.qory.run.policy_applied` that is not the `applied` of an answer
+  a `reason` other than `timeout` and `interrupted`, both `cancelled`, or than the reason of the gateway's outcome answer to
+  the run, since the gateway writes the event of every other reason itself; a `dev.qory.run.policy_applied` that is not the `applied` of an answer
   of this run with the session's `harness_hosts` and `variables` added, any policy the
   gateway has put in force for the run matching, so a batch in flight during a reload
   is not refused; or a `dev.qory.run.refused` whose code is not one of
   `refusal.Decides`, or with a name `<member>=<value>`. The schema states the types,
-  `opened_by`, `timeout` as the one reason and the codes and names of
+  `opened_by`, `timeout` and `interrupted` as the ones of Forager's reasons and the codes and names of
   `dev.qory.run.refused`. A batch without the run's `run_secret`, or with one of no
   such run, is `400` `invalid_request` on the local link, and ends no run; a batch whose
   body does not arrive whole, its client gone before the end, is `400`
   `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch
-  ends its run at the gateway: the gateway writes `dev.qory.run.exited` with
-  `session_lost`, refuses the run's proxy secret and answers
+  ends its run at the gateway: the gateway writes `dev.qory.run.exited`, `failed` with
+  `batch_refused`, refuses the run's proxy secret and answers
   the session's further requests with a `410` `batch_refused`; the session stops the
-  runtime and records `dev.qory.run.exited` with `batch_refused` in its own record alone.
+  runtime and writes its own `dev.qory.run.exited`, `failed` with `batch_refused`, as the
+  gateway's, in its own record and never posted.
   `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
   answer whose digest changed; into a session's run the gateway merges its own
   `dev.qory.run.egress`, every one after a reload's switch held until the session's
@@ -384,15 +463,16 @@ release may change what an existing document does, and says so under Upgrading.
   `qory` hands the session the secret in memory, never in an environment or a file, so
   a program the agent starts does not inherit it. A session's heartbeats are its run's,
   and a session silent for 3 × the interval ends the run, `session_lost`. When the
-  gateway ends a session's run, with `session_lost`, `credential_expired`,
-  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`, it writes the run's `dev.qory.run.exited` itself, `failed` and
-  `-1`, and delivers it toward the server. It answers the session's next request and
-  every one after it with a `410`, whose code the session records as the reason of its
-  own `dev.qory.run.exited`, in its own record alone, posting nothing more: from
-  `gateway` `credential_expired`, `run_ended_at_issuer`, `issuer_unreachable`,
-  `issuer_answer_invalid`, `session_lost` after a silent
-  session, or `batch_refused` after a refused batch, which the gateway's record says as
-  `session_lost`. Every `410` on the link carries `from`, and the gateway's own `410`
+  gateway ends a session's run, with `session_lost`, `batch_refused`,
+  `credential_expired`, `stopped`, the starter's outcome,
+  `credential_check_unreachable` or `credential_check_invalid`, it writes the run's
+  `dev.qory.run.exited` itself, with the state of that end and `-1`, and delivers it
+  toward the server. It answers the session's next request and every one after it with
+  a `410`, and the session writes its own `dev.qory.run.exited`, with the state and the
+  reason that `410` gives, as the gateway's, in its own record and never posted, and
+  posts nothing more. The `410`'s code is, from `gateway`, `credential_expired`, `stopped`,
+  `credential_check_unreachable`, `credential_check_invalid`, `session_lost` after a silent
+  session, or `batch_refused` after a refused batch. Every `410` on the link carries `from`, and the gateway's own `410`
   `run_closed` to a request of a run already ended is unchanged. A server's signed
   `410`, with any code or none, stops delivery: the gateway sends no further batch for
   the run and marks its record `stopped`, and the run goes on, its record keeping every
@@ -411,7 +491,7 @@ release may change what an existing document does, and says so under Upgrading.
   C1 one among them, and
   a batch with a
   `dev.qory.run.egress`, a `dev.qory.run.started` a gateway opened, a
-  `dev.qory.run.exited` with each reason but `timeout`, and a `dev.qory.run.refused`
+  `dev.qory.run.exited` with each of Forager's reasons but `timeout` and `interrupted`, and a `dev.qory.run.refused`
   with each gateway's code, `run_closed`, a code of the server's or a name
   `<member>=<value>` among them. Package `link` has `LinkPreamble`, `LinkDirPrefix`,
   `LinkSocketName`, `LinkDirMode`, `LinkSocketMode` and `BearerScheme`.
@@ -440,8 +520,26 @@ release may change what an existing document does, and says so under Upgrading.
   `Link.ProxyAddress` names it.
 - `server.Delivery` has `Refusal`: on the link, a coded answer other than a `2xx` as the
   `*accesskey.Refusal` it is, with its code, status, names, who refused and its
-  message. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
-  and posts it without its sequence.
+  message.
+- `server.RunEnd` is how a run ended at the gateway, as the link says it: `Code`, one of
+  `server.EndCodes`, `From`, and `State` and `Reason`, the state and the reason a `410`
+  that ends a run carries, each held to `run.exited.schema.json`'s, and both empty for
+  a `410` that carries none, `run_closed`, or one the schema refuses. `server.Ended`
+  returns it from a `410` of the link, and `server.Delivery` has `State` and `Reason`
+  beside `End` and `From`, and `Delivery.RunEnd` returns all four.
+  `(*server.Link).Outcome(ctx, runURL, runID)` asks a separate
+  gateway once for the run's outcome, `GET <runURL>/<runID>/outcome` with the run
+  credential and the run's secret as a reload carries them, bounded to
+  `server.OutcomeTimeout`, 10 seconds, and returns a `server.LinkOutcome`, `State` and
+  `Reason`: the starter's outcome from a `200` that `link-outcome-answer.schema.json`
+  accepts, a reason that is one of Forager's reserved codes, or one the schema refuses,
+  dropped alone and the state kept, and `{}` for anything else, an error, no answer in
+  time, another status, a `410` among them, or an answer that is not valid, a state the
+  schema refuses among them. On the local
+  link it sends nothing and returns `{}`. On a link sink, `(*sink.Server).Resend` takes a line of the session's record
+  and posts it without its sequence. `(*sink.Server).RunEnded` records that an answer
+  the sink did not read itself, a reload's `410`, ended the run: nothing more is sent,
+  `RunClosed` reports true, and `delivered.log` says `stopped`.
 - `accesskey.Refusal` has `From`: `accesskey.FromApiary` for a code read from the
   server's signed answer and for its `401` `unauthorized` at run start,
   `accesskey.FromGateway` for one a gateway decides, made by `refusal.ByGateway`, and
@@ -532,29 +630,26 @@ release may change what an existing document does, and says so under Upgrading.
   every import path start with it.
 - Contract `v1` revision 1 is amended in place for a run a gateway opens, with no
   session and no process. `dev.qory.run.started` has `opened_by`, `session` or
-  `gateway`, required, and `credential`, required: `issuer`, an issuer gave the run its
-  run credential, for a session's run behind a separate gateway and every run a
-  gateway opened, and `none` for a run on the local link, which the gateway decides,
-  puts in its run answer, required there too, and holds a session's `run.started` to;
-  nothing else of the issuer is reported. Opened by a session it requires what it did,
+  `gateway`, required, and `credential`, required: `starter`, the run's starter gave
+  the run its run credential, for a session's run behind a separate gateway and every
+  run a gateway opened, and `none` for a run on the local link, which the gateway
+  decides, puts in its run answer, required there too, and holds a session's
+  `run.started` to; nothing else of the starter is reported. Opened by a session it requires what it did,
   and opened by a gateway it contains none of `runtime`, `runtime_version`, `command`, `args`, `dir`,
   `interactive`, `terminal`, `host`, `wall` and `image`. `forager_version` is the
   version of what opened the run, and `host` is the agent's machine's. A gateway-opened
   run's `labels`, `run_key` among them, and `about.details` come from the run
   credential's mapping. `dev.qory.run.exited`'s `reason` has `session_lost`, the
-  session was silent or the gateway refused a batch of its, `quiet`,
-  `credential_expired` and `run_ended_at_issuer`, which the gateway writes, beside
-  `timeout`, `run_closed` and `gateway_lost`, and `batch_refused`, which only the
-  session writes; when the gateway ends a session's run it writes the run's
-  `dev.qory.run.exited`, and the session records the code of the gateway's `410` in its
-  own record alone, the same reason but `batch_refused` after a refused batch. `quiet_seconds`, the quiet period the gateway applied, is present
-  with `quiet` alone. `state` and `exit_code` are optional: a session's run contains
-  both, `failed` and `-1` with `gateway_lost` and in every `dev.qory.run.exited` the
-  gateway writes for it, `session_lost` included, and a run a gateway opened neither,
-  `gateway_lost` included; the schema fixes them to `failed` and `-1` with
-  `gateway_lost` when they are present, and requires neither. The
-  contract no longer says the state is `failed` with each reason; a receiver maps each
-  reason to a state of its own.
+  session was silent, `batch_refused`, the gateway refused a batch of its, `quiet`,
+  `credential_expired` and `stopped`, which the gateway writes, beside
+  `timeout`, `interrupted`, `run_closed` and `gateway_lost`; when the gateway ends a session's run it
+  writes the run's `dev.qory.run.exited`, and the session writes its own, with the state
+  and the reason of the gateway's `410`, in its own record and never posted. `quiet_seconds`, the quiet period the gateway applied, is present
+  with `quiet` alone. `exit_code` is optional: a session's run contains it, `-1` with
+  `gateway_lost` and in every `dev.qory.run.exited` the gateway writes for it,
+  `session_lost` included, and a run a gateway opened none, `gateway_lost` included.
+  `state` is required on every `dev.qory.run.exited`, `failed` with `gateway_lost`; the
+  schema fixes `exit_code` to `-1` with `gateway_lost` when it is present.
   The README's events table, §The events and §Fixtures say so. Every `run.started` in
   the fixtures contains `opened_by` and `credential`, and the four batches under
   `fixtures/signed` are signed over their new bodies. `fixtures/run/` has a run a
@@ -588,6 +683,11 @@ release may change what an existing document does, and says so under Upgrading.
   `gateway.Config` has `Listen`, `TLS`, `RunCredentials` and `Runs`, a `RunsConfig`.
   `Start` with `Listen` empty serves the local link alone, as before, and refuses a
   `TLS` without a `Listen`.
+- `ended-run-keys.json` keeps the outcome and the reason a run's starter gave with each
+  run key it holds. A gateway from before this change refuses the file only when an
+  entry holds an outcome, and then does not start; a file without one still loads. Run
+  the newer gateway until the run keys with an outcome lapse, `exp` plus 5 minutes,
+  before going back.
 
 #### Added
 
@@ -601,7 +701,7 @@ release may change what an existing document does, and says so under Upgrading.
   where every request's `Authorization: Bearer` run credential is decided first and a
   request without one, or with one refused, is `401` `run_credential_refused` from the
   gateway, with `WWW-Authenticate: Bearer`.
-- The one address verifies run credentials under the issuers of
+- The one address verifies run credentials under the run starters of
   `gateway.Config.RunCredentials`, their keys pinned. A session's run request there is
   decided by its run credential: the run's labels and `about.details` are the run
   credential's, and the run answer carries them; a session's `forge` or `repository`
@@ -619,27 +719,26 @@ release may change what an existing document does, and says so under Upgrading.
   so no run can be probed. A batch over the limit, or one that does not decode, ends
   its run, `batch_refused`.
   The run ends at its latest `exp` with no fresher run credential,
-  `credential_expired`; when the issuer's introspection no longer holds its run
-  credential active, `run_ended_at_issuer`; and when the issuer's introspection
-  endpoint could not be reached after the tries, `issuer_unreachable`, or gave no valid
-  answer, `issuer_answer_invalid`, neither of which holds the run key: the gateway
+  `credential_expired`; when the starter's introspection endpoint no longer holds its run
+  credential active, `stopped`; and when the run credential could not be checked, the
+  introspection endpoint unreachable after the tries, `credential_check_unreachable`, or
+  its answer not valid, `credential_check_invalid`, neither of which holds the run key: the gateway
   writes its
   `dev.qory.run.exited`, and every later request gets the `410` with that code, a
   reload or a batch even with a run credential whose `exp` passed less than 5 minutes
-  before, which reaches nothing else. A run request whose issuer's endpoint could not be
-  reached is a `503` `issuer_unreachable`, with the message "the gateway could not open
-  the run: the issuer's introspection endpoint could not be reached; try again", and
-  one whose endpoint gave no valid answer a `502` `issuer_answer_invalid`, with "the
-  gateway could not open the run: the issuer's introspection endpoint gave no valid
-  answer"; neither opens or records a run. After
-  the issuer's end, the gateway refuses every request of a run of the run key until the
+  before, which reaches nothing else. A run request whose starter's endpoint could not
+  be reached is a `503` `credential_check_unreachable`, with the message "the run did
+  not start: its run credential could not be checked; try again", and one whose
+  endpoint gave no valid answer a `502` `credential_check_invalid`, with "the run did
+  not start: its run credential could not be checked"; neither opens or records a run.
+  After the starter's end, the gateway refuses every request of a run of the run key until the
   latest `exp` of the run credentials of the key the gateway still holds, and of any
   presented during the hold, plus `runcredential.MaxLeeway`, 5 minutes: those of the run
   key's live runs, and of its ended runs whose record is not yet flushed. During the
   hold, a session's run request is `401` `run_credential_refused`, a reload or a batch
   of a session's run of the run key that is still live the run's `410`
-  `run_ended_at_issuer`, which ends the run, and a client's connection `407`, which ends
-  the client's run of the run key it would join, `run_ended_at_issuer`; the discovery is
+  `stopped`, which ends the run, and a client's connection `407`, which ends
+  the client's run of the run key it would join, `stopped`; the discovery is
   answered to a run credential of the run key as to any, and opens nothing; a run
   credential for a refused run key presented during the hold, verified, is refused and
   extends the hold to its own `exp`, and one that fails verification extends nothing.
@@ -667,14 +766,21 @@ release may change what an existing document does, and says so under Upgrading.
   HTTPS with the gateway's own authority. Every later connection of the run key joins
   the run while it is open; a client has at most one open run per run key, and never
   joins a session's run, which only its proxy secret reaches. The run ends after
-  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or at
-  the issuer's word; its `dev.qory.run.exited` holds neither `state` nor `exit_code`.
+  `Runs.Quiet` with no connection, `quiet`, with `quiet_seconds`; at its `exp`; or when
+  the starter says it has ended. The gateway asks the starter at each connection. It
+  also asks about a run with no traffic, once in each heartbeat interval in which nothing
+  else asked about its run credential, so it learns of the starter's end within about
+  one heartbeat interval plus the answer's `cache`. The run's `dev.qory.run.exited` holds
+  its `state` and no `exit_code`. An idle client run is now asked too, so a starter's
+  introspection endpoint that cannot be reached while the run is idle ends it `failed`
+  with `credential_check_unreachable`, and one that gives no valid answer ends it
+  `failed` with `credential_check_invalid`; before, an idle client run was never asked.
   A run that ended is never opened again: the next connection of its run key opens a
   new run, of a new run id. A run refused with a code gets the gateway's
   `dev.qory.run.refused` with that code, right after its ping; one that fails without
   a code gets no event. Its connection gets a `503` with the text "the gateway could not
-  open the run; try again" for a failure that may pass, the issuer's endpoint
-  unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
+  open the run; try again" for a failure that may pass, the starter's introspection
+  endpoint unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
   signed `429` `rate_limited`, once the tries are spent, among it, at once for Qory
   Apiary's `410` to the ping or the run configuration, signed or not, with any code or
   none,
@@ -685,13 +791,60 @@ release may change what an existing document does, and says so under Upgrading.
   the gateway refused it, \<code\>" for one the gateway decides, "the gateway could not
   open the run: Qory Apiary refused it, status \<n\>" for a signed answer, other than a
   `5xx` or a `410`, with no code,
-  and "the gateway could not open the run: the issuer's introspection endpoint gave no
-  valid answer". A connection that would join a run whose issuer's endpoint could not
+  and "the run did not start: its run credential could not be checked". A connection that would join a run whose starter's endpoint could not
   be reached, or gave no valid answer, ends the run and gets the same `503` or `403`. A refusal's answer is written in
   full, the connection's writing side closed and what the client still sends read
   briefly before it closes, so no reset takes the answer's place.
+- Every run of the one address ends with a state and a reason. A starter that answers
+  `active: false` with `qory_outcome` and `qory_reason` ends the run with them, and
+  every live run of the run key with the same, kept with the hold in
+  `ended-run-keys.json` so a later request and a restart get the same end; with no
+  outcome the run ends `cancelled` with `stopped`. The gateway's `dev.qory.run.exited`
+  and its `410` carry that `state` and `reason`, a client's run's too, and the `410`'s
+  message reads "the run has ended: \<state\>[, \<reason words\>]", such as "the run
+  has ended: cancelled, no outcome given". A refused batch is `failed` with
+  `batch_refused` in the gateway's own record, as in the session's.
+- `GET <run path>/<run id>/outcome` on the one address answers the session's ask at
+  its runtime's exit, decided as a reload: the starter is asked once per run, past the
+  answer kept, asks in flight sharing that call and a later ask getting the answer
+  stored, within about 6 seconds; a later ask is decided as a reload, so once the
+  starter has ended the run key it is the `410`, and only the first keeps the run from
+  being lost while it is made, though a later ask still counts as the session's while
+  its run credential is being checked, as any request does; the answer is `{}`, or the
+  starter's `state` and `reason` when it answers
+  `active: false` with an outcome. From the start of the ask, while it is made and for
+  30 seconds after its answer, a run credential of that run that could not be checked
+  does not end it: its heartbeats, reloads and batches go on, and its
+  `dev.qory.run.exited` is decided against the answer; after that, before the ask and
+  for the run key's other runs it ends the run as before. A request whose run
+  credential is being checked counts as the session's, so the run is not lost while
+  the endpoint is slow. The local link answers it
+  `400` `invalid_request`. An answer of `active: false` holds the run key and ends the
+  run key's other live runs at their next request, and the run that asked may end with
+  its own `dev.qory.run.exited` of that answer, or after `{}` one its runtime's exit
+  decides, for 30 seconds: any other batch, a reload or any request after them gets the
+  `410` of the answer, and at their end the gateway ends the run itself as the starter
+  said, never `session_lost`; within them the answer wins over the run credential's
+  `exp`. While the starter is asked, the run is not lost for want of the session's
+  requests. With no outcome, the gateway holds the session's `dev.qory.run.exited` to
+  the runtime's exit: `succeeded` with exit status 0 and no reason, `failed` with any
+  other or a signal and no reason, or `cancelled` with `timeout`, or with `interrupted`
+  and any exit status or signal.
+- `gateway.Delivery` has `ClosedReason`, the code of the gateway's `410` of the first
+  run that ended at the gateway, in place of `Reason`, and `State` and `Reason`, how
+  that run ended, the state and the reason of the gateway's `dev.qory.run.exited` of
+  it; for a resend that completes the record, `failed` and `gateway_lost`.
+  `Delivery.ClosedBy` is removed: it always said `gateway`.
+- Each line the gateway reports of a run's end reads `run <id>: <what happened>; the
+  run ends: <state>[, <reason words>]`: "its session sent nothing for 1m30s; the run
+  ends: failed", "its run credential is no longer valid; the run ends: failed, checks
+  failed", "its run credential could not be checked: the introspection endpoint could
+  not be reached; the run ends: failed". Every line and message a person reads calls
+  the run's starter "the starter": the configuration's errors say so, `run_credentials:
+  the starter https://issuer.example appears twice` say, and the server's signed `410` is "the
+  server wants no more events of this run; the run goes on".
 - Once a run of the one address has ended and its record is flushed, and after the
-  issuer's end its run key is kept, the gateway holds only how a later request of the
+  starter's end its run key is kept, the gateway holds only how a later request of the
   run is answered, until a run credential of it can no longer be accepted. A gateway's own authority keeps at
   most 1024 hosts' certificates, the least recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
@@ -734,7 +887,7 @@ release may change what an existing document does, and says so under Upgrading.
   the run opened and ended `session_lost` after three heartbeat intervals. A session
   that goes while the run answer is on its way may still leave such a run.
 - A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
-  neither `state` nor `exit_code`.
+  `state` `failed` and no `exit_code`.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
 - The organization of the run's certificate authority is `Forager gateway, one run
   only`. The gateway's `403` for a link-local address or the machine's own address
@@ -881,8 +1034,12 @@ release may change what an existing document does, and says so under Upgrading.
   `ForagerVersion` and `Report`, and no `Server`, `Wall` or `RunnerVersion`: a record on
   one machine is `gateway.Resend`'s, and what a wall left is the caller's to remove,
   `(*wall.Docker).Reap`. `Resend` returns a `ResendResult` value with `Sent`,
-  `Undelivered`, `RunClosed`, `ClosedBy`, `Reason` and `NotOpened`, and no `RunID`,
-  `Closed` or `Reaped`: the session completes no record.
+  `Undelivered`, `RunClosed`, `ClosedReason`, `State`, `Reason` and `NotOpened`, and no
+  `RunID`, `Closed` or `Reaped`: the session completes no record.
+- `session.Result.ClosedBy` and `session.ResendResult.ClosedBy` are removed: with
+  Forager's gateway they always said `gateway`. `ResendResult.ClosedReason` is the code
+  of the gateway's `410`, which `ResendResult.Reason` held before, and
+  `ResendResult.Reason` is now the reason of how the run ended, as `Result.Reason` is.
 - The session's own record is `session.jsonl` and `output.log` in the run directory;
   the gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
   toward the server. Behind a separate gateway, the session's run directory on its own
@@ -953,11 +1110,18 @@ release may change what an existing document does, and says so under Upgrading.
   until the gateway accepts it or the context ends, and what it does not accept is under
   `undelivered/` again, unless the gateway ended the run; the events the session records in its own record alone are not
   sent. Every batch carries the run's `run_secret` from `run-secret`, which is removed
-  once nothing is owed. A record that owes nothing is sent nothing, with no request. A record with no
+  once nothing is owed. A record that owes nothing is sent nothing, with no request, and
+  the result is the zero `ResendResult`. A record with no
   `delivered.log`, of a run that never opened at the gateway, a run refused at its run
   request say, is `NotOpened`, left as it is and sent nothing, with no request. A run
   the gateway has ended answers with its `410`:
-  `RunClosed`, with `ClosedBy` and `Reason`, and nothing more is sent. The gateway's
+  `RunClosed`, with `ClosedReason`, and nothing more is sent. Once something was sent,
+  `State` and `Reason` say how the run ended where that is known: the state and the
+  reason the gateway's `410` says, as the session records them, else those of the
+  record's `dev.qory.run.exited`. The `dev.qory.run.exited` the session posted is sent
+  again; the one it records after the gateway ended the run is the session's alone, and
+  is never sent: `delivered.log` says `stopped` before it, whether the `410` answered a
+  batch or a reload. The gateway's
   `401` `run_credential_refused`, which an expired run credential gets at the discovery,
   and its `403` `target_differs_from_credential` and `differs_from_credential` are a
   `*session.Refusal` from `gateway`, the events left under `undelivered/`. A record its
@@ -965,11 +1129,46 @@ release may change what an existing document does, and says so under Upgrading.
   gateway's record. After a gateway restart, the session's undelivered events get the
   `401` and stay in the run directory, and the gateway's own resend completes the run
   `gateway_lost`.
-- `Result.RunClosed`, `Result.ClosedBy` and `Result.ClosedReason`: a run the gateway
-  closed, by a `410` on the gateway's link or the gateway's `400` to a batch, says who
-  closed it, `gateway`, and with what code, `run_closed`, `credential_expired`,
-  `run_ended_at_issuer`, `issuer_unreachable` or `issuer_answer_invalid`. The runtime is stopped as at its time limit, and the session's
-  record has `dev.qory.run.exited` with that code as its reason.
+- `Result.RunClosed` and `Result.ClosedReason`: a run the gateway closed, by a `410` on
+  the gateway's link or the gateway's `400` to a batch, says with what code,
+  `run_closed`, `credential_expired`, `stopped`, `credential_check_unreachable` or
+  `credential_check_invalid`. The runtime is stopped as at its time limit, and the
+  session's record has `dev.qory.run.exited` with the state and the reason the `410`
+  says, such as `cancelled` and `no_longer_needed`, and the runtime's own exit status:
+  `batch_refused` as the reason after a refused batch, and `failed` with the code as
+  the reason when the `410` carries no state, or one the schema refuses. A run the
+  gateway closed before its runtime started is a `*session.Refusal` with the code,
+  status `410` and the text `the run did not start: it has ended already`, and records
+  `dev.qory.run.refused` as before.
+- `Result.State` and `Result.Reason` say how the run ended, as the session's
+  `dev.qory.run.exited` does. Behind a separate gateway, a runtime that exits by itself
+  asks the gateway once for the outcome its starter gave, before `dev.qory.run.exited`
+  is written, and waits at most about 10 seconds: an outcome sets the state and the
+  reason, such as `failed` and `checks_failed` for a runtime that exited 0, whose
+  `exit_code` stays 0; a reserved reason, or one that is not a code, is dropped alone,
+  the state kept, and the heartbeats go on while it waits. Once the runtime has exited,
+  the caller's context ending cuts neither the ask nor the record short: the answer
+  still decides, `dev.qory.run.exited` is still written and posted, and `Run` returns
+  after them, within their bounds; the gateway closing the run still ends the ask.
+  With `{}`, an answer that is not valid, a refusal or no answer in time, the exit
+  decides, `succeeded` on 0 and `failed` otherwise, and nothing is added to the record
+  or reported. A run stopped at its time limit, by the caller's context or
+  by the gateway asks nothing, and a run on the local link never asks or waits. A run
+  whose caller's context had ended when the runtime's exit was observed, a Ctrl-C or a
+  signal to the caller, is `cancelled` with `interrupted`, in the record, on the link
+  and in the result, with the runtime's own `exit_code` and `signal`, whatever they
+  are. At the time limit the run is `cancelled` with `timeout`, `Result.TimedOut`, when
+  the session's stop signal reached the runtime before its exit was observed; a
+  runtime that exited by itself before it is decided by its exit, whatever its status.
+  A runtime that exits 0 at the session's stop, at the context's end or at the limit,
+  has exited 0: `session.Run` records its `dev.qory.run.exited` and returns its result,
+  where it returned the context's error and recorded no `dev.qory.run.exited`.
+  `Result.Cancelled`, beside `Result.TimedOut`, says the caller's context had ended
+  when the session observed the runtime's exit, whoever stopped the runtime; a context
+  that ends after the exit, while the gateway is asked or the sinks close, leaves it
+  false, as do the time limit, `Result.TimedOut`, a run the gateway closed first,
+  `Result.RunClosed`, and a signal from elsewhere: it is never true with either.
+  When it is true, `dev.qory.run.exited` is `cancelled` with `interrupted`.
 - The session fetches the run's configuration from the gateway again whenever the
   gateway's answers carry a new run-configuration digest, and records it in another
   `dev.qory.run.policy_applied`.

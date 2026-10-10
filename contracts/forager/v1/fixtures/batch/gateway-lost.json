@@ -9,6 +9,7 @@
     "sequence": "0000000005",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
     "data": {
+      "state": "failed",
       "reason": "gateway_lost",
       "duration_ms": 4900
     }

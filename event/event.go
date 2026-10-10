@@ -43,38 +43,91 @@ const (
 	OpenedByGateway = "gateway"
 )
 
-// Where a run's credential came from, the credential of dev.qory.run.started: an
-// issuer gave the run its run credential, a session's run on a gateway's one address
+// Where a run's credential came from, the credential of dev.qory.run.started: the run's
+// starter gave the run its run credential, a session's run on a gateway's one address
 // and every run a gateway opened; or none, a run on a gateway's local link. Nothing
-// else of the issuer is reported.
+// else of the starter is reported.
 const (
-	CredentialIssuer = "issuer"
-	CredentialNone   = "none"
+	CredentialStarter = "starter"
+	CredentialNone    = "none"
 )
 
-// The reasons of dev.qory.run.exited, why a run ended other than by the runtime's own
-// exit. The session writes timeout and run_closed, and in its own record the code of the
-// gateway's 410, batch_refused among them; the resend of a record writes gateway_lost;
-// the gateway writes the others.
+// Forager's own reasons of dev.qory.run.exited, why a run ended other than by the
+// runtime's own exit. A reason is an open code: one of these, or the code the run's
+// starter gave, carried as given. Forager's codes are reserved, and so are the old
+// names run_ended_at_issuer, issuer_unreachable and issuer_answer_invalid, which
+// Forager never writes. The session writes timeout, interrupted and run_closed, and in
+// its own record the code of the gateway's 410, batch_refused among them; the resend
+// of a record writes gateway_lost; the gateway writes the others.
 const (
-	ReasonTimeout           = "timeout"
+	ReasonTimeout = "timeout"
+	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
+	// the session's context, a Ctrl-C or a signal to the program that runs it, had ended
+	// when the runtime's exit was observed.
+	ReasonInterrupted       = "interrupted"
 	ReasonRunClosed         = "run_closed"
 	ReasonGatewayLost       = "gateway_lost"
 	ReasonSessionLost       = "session_lost"
 	ReasonQuiet             = "quiet"
 	ReasonCredentialExpired = "credential_expired"
-	ReasonRunEndedAtIssuer  = "run_ended_at_issuer"
-	// ReasonBatchRefused is the gateway's 410 to a session whose batch it refused, and
-	// the reason of the session's own dev.qory.run.exited after it; the gateway's record
-	// of the same end says session_lost.
+	// ReasonStopped is a run whose starter answered that its run credential is no
+	// longer active and gave no outcome, or that ended another run of the same run key.
+	ReasonStopped = "stopped"
+	// ReasonBatchRefused is a run whose session's batch the gateway refused, failed: the
+	// gateway's 410 to the session's later requests, the reason of the gateway's own
+	// dev.qory.run.exited, and of the session's in its own record after it.
 	ReasonBatchRefused = "batch_refused"
-	// ReasonIssuerUnreachable is a run whose issuer's introspection endpoint could not
-	// be reached after the gateway's tries, and ReasonIssuerAnswerInvalid one whose
-	// endpoint gave no valid answer: the gateway's 410 to the session's later requests
-	// of a live run, and the code of its refusal of a run request, a 503 and a 502.
-	ReasonIssuerUnreachable   = "issuer_unreachable"
-	ReasonIssuerAnswerInvalid = "issuer_answer_invalid"
+	// ReasonCredentialCheckUnreachable is a run whose run credential could not be
+	// checked because the introspection endpoint could not be reached after the
+	// gateway's tries, and ReasonCredentialCheckInvalid one whose endpoint gave no valid
+	// answer: the gateway's 410 to the session's later requests of a live run, and the
+	// code of its refusal of a run request, a 503 and a 502.
+	ReasonCredentialCheckUnreachable = "credential_check_unreachable"
+	ReasonCredentialCheckInvalid     = "credential_check_invalid"
 )
+
+// The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
+// it was stopped before it said how it went. They are the outcomes a run's starter may
+// give too.
+const (
+	StateSucceeded = "succeeded"
+	StateFailed    = "failed"
+	StateCancelled = "cancelled"
+)
+
+// IsState reports whether s is a state of dev.qory.run.exited.
+func IsState(s string) bool {
+	return s == StateSucceeded || s == StateFailed || s == StateCancelled
+}
+
+// reserved are the reasons of dev.qory.run.exited that are Forager's: its own codes,
+// and the three old names it never writes.
+var reserved = map[string]bool{
+	ReasonTimeout: true, ReasonInterrupted: true, ReasonQuiet: true, ReasonCredentialExpired: true, ReasonStopped: true,
+	ReasonSessionLost: true, ReasonGatewayLost: true, ReasonBatchRefused: true,
+	ReasonCredentialCheckUnreachable: true, ReasonCredentialCheckInvalid: true, ReasonRunClosed: true,
+	"run_ended_at_issuer": true, "issuer_unreachable": true, "issuer_answer_invalid": true,
+}
+
+// Reserved reports whether a reason is one of Forager's reserved codes: its own, or one
+// of the old names run_ended_at_issuer, issuer_unreachable and issuer_answer_invalid.
+func Reserved(reason string) bool { return reserved[reason] }
+
+// StarterReason reports whether a reason may be a run's starter's: a code of the
+// pattern of dev.qory.run.exited's reason, ^[a-z][a-z0-9_]{0,63}$, and none of
+// Forager's reserved codes.
+func StarterReason(reason string) bool {
+	if len(reason) == 0 || len(reason) > 64 || reason[0] < 'a' || reason[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(reason); i++ {
+		c := reason[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return !Reserved(reason)
+}
 
 // Prefix is what every type of the contract starts with; a descriptor's session types
 // carry it too.

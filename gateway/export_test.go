@@ -83,35 +83,79 @@ func PrintedCopy(g *Gateway, format string) string {
 // format.
 func PrintedSecret(g *Gateway, format string) string { return fmt.Sprintf(format, g.secret) }
 
-// introspectionFunc is a test's introspection endpoint of an issuer.
-type introspectionFunc struct {
+// starterFunc is a test's introspection endpoint of a run's starter: answer answers
+// each ask, now saying it is the ask at a runtime's exit, past the cache.
+type starterFunc struct {
 	issuer string
-	active func(issuer, credential string) bool
+	answer func(issuer, credential string, now bool) (runcredential.Answer, error)
 	cache  time.Duration
 }
 
-// Active asks active, and as runcredential's client does, a caller whose context ends
+// ask asks answer, and as runcredential's client does, a caller whose context ends
 // first gets no answer, an error, while the ask goes on.
-func (f introspectionFunc) Active(ctx context.Context, credential string, _ time.Time) (bool, error) {
-	answer := make(chan bool, 1)
-	go func() { answer <- f.active(f.issuer, credential) }()
+func (f starterFunc) ask(ctx context.Context, credential string, now bool) (runcredential.Answer, error) {
+	type result struct {
+		a   runcredential.Answer
+		err error
+	}
+	answer := make(chan result, 1)
+	go func() {
+		a, err := f.answer(f.issuer, credential, now)
+		answer <- result{a, err}
+	}()
 	select {
-	case ok := <-answer:
-		return ok, nil
+	case r := <-answer:
+		return r.a, r.err
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return runcredential.Answer{}, ctx.Err()
 	}
 }
 
-func (f introspectionFunc) Cache() time.Duration { return f.cache }
+func (f starterFunc) Answer(ctx context.Context, credential string, _ time.Time) (runcredential.Answer, error) {
+	return f.ask(ctx, credential, false)
+}
+
+func (f starterFunc) AnswerNow(ctx context.Context, credential string, _ time.Time) (runcredential.Answer, error) {
+	return f.ask(ctx, credential, true)
+}
+
+func (f starterFunc) Cache() time.Duration { return f.cache }
+
+// SetStarter makes answer answer the introspection endpoint of every issuer that has
+// one, its error as runcredential's client gives one, now saying an ask is the one at a
+// runtime's exit, in place of runcredential's client of it; cache is what it says it
+// keeps an answer for.
+func SetStarter(c *Config, answer func(issuer, credential string, now bool) (runcredential.Answer, error), cache time.Duration) {
+	c.introspector = func(i runcredential.Issuer) activeChecker {
+		return starterFunc{issuer: i.Issuer, answer: answer, cache: cache}
+	}
+}
 
 // SetIntrospector makes active answer the introspection endpoint of every issuer that
 // has one, each answer kept for cache, in place of runcredential's client of it.
 func SetIntrospector(c *Config, active func(issuer, credential string) bool, cache time.Duration) {
-	c.introspector = func(i runcredential.Issuer) activeChecker {
-		return introspectionFunc{issuer: i.Issuer, active: active, cache: cache}
-	}
+	SetStarter(c, func(issuer, credential string, _ bool) (runcredential.Answer, error) {
+		return runcredential.Answer{Active: active(issuer, credential)}, nil
+	}, cache)
 }
+
+// SetIntrospection makes answer answer the introspection endpoint of every issuer that
+// has one, its error as runcredential's client gives one, each answer kept for cache.
+func SetIntrospection(c *Config, answer func(issuer, credential string) (bool, error), cache time.Duration) {
+	SetStarter(c, func(issuer, credential string, _ bool) (runcredential.Answer, error) {
+		ok, err := answer(issuer, credential)
+		return runcredential.Answer{Active: ok}, err
+	}, cache)
+}
+
+// SetExitWindow sets how long a run whose starter answered its ask at its exit that the
+// run credential is no longer active may still end with its own exit, in place of 30
+// seconds.
+func SetExitWindow(c *Config, d time.Duration) { c.exitWindow = d }
+
+// SetWindowEndLate makes the timer of a run's window end the run d after the window
+// closes, so a test looks between the two.
+func SetWindowEndLate(c *Config, d time.Duration) { c.windowEndLate = d }
 
 // SetKeepSpent sets how long past its exp the gateway keeps what an ended run of the
 // one address left, in place of runcredential.MaxLeeway.
@@ -156,38 +200,12 @@ func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 // opens, and its window.
 func OpenTries() ([]time.Duration, time.Duration) { return openWaits, openWindow }
 
-// introspectionAnswer is a test's introspection endpoint of an issuer that answers
-// with an error too.
-type introspectionAnswer struct {
-	issuer string
-	answer func(issuer, credential string) (bool, error)
-	cache  time.Duration
+// EndWords is how a line says a run ended with the state and the reason, a quiet run's
+// quiet period in seconds.
+func EndWords(state, reason string, quietSeconds int) string {
+	return endWords(runEnd{state: state, reason: reason, quietSeconds: quietSeconds})
 }
 
-func (f introspectionAnswer) Active(ctx context.Context, credential string, _ time.Time) (bool, error) {
-	type result struct {
-		ok  bool
-		err error
-	}
-	answer := make(chan result, 1)
-	go func() {
-		ok, err := f.answer(f.issuer, credential)
-		answer <- result{ok, err}
-	}()
-	select {
-	case r := <-answer:
-		return r.ok, r.err
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-}
-
-func (f introspectionAnswer) Cache() time.Duration { return f.cache }
-
-// SetIntrospection makes answer answer the introspection endpoint of every issuer that
-// has one, its error as runcredential's client gives one, each answer kept for cache.
-func SetIntrospection(c *Config, answer func(issuer, credential string) (bool, error), cache time.Duration) {
-	c.introspector = func(i runcredential.Issuer) activeChecker {
-		return introspectionAnswer{issuer: i.Issuer, answer: answer, cache: cache}
-	}
-}
+// ExitWindow is the window of a run whose starter answered at its exit, and the spare of
+// a failed check after any answer there.
+const ExitWindow = exitWindow

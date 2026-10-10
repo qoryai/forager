@@ -94,7 +94,7 @@ func TestARunWithAServer(t *testing.T) {
 
 // stopLine is the gateway's report of a server's signed 410: the one line a stop
 // gets, whatever its code.
-const stopLine = "the server answered 410; no further batch is sent for this run, which goes on"
+const stopLine = "the server wants no more events of this run; the run goes on"
 
 // TestAServersStopEndsNoRun pins a server's signed 410 during a run, run_closed among
 // them: the gateway sends the server nothing more and reports it once, but the run goes
@@ -134,7 +134,7 @@ func TestAServersStopEndsNoRun(t *testing.T) {
 	if n := c.deliveries.Load() - sent; n != 0 {
 		t.Errorf("%d requests reached the server after its 410", n)
 	}
-	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
+	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
 		t.Errorf("reports %q", got)
 	}
 }
@@ -173,7 +173,7 @@ func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	if got := types(c.lines(t)); !slices.Equal(got, []string{event.Ping}) {
 		t.Errorf("the server holds %v", got)
 	}
-	if got := h.reportsWith("410"); len(got) != 1 || got[0] != stopLine {
+	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
 		t.Errorf("reports %q", got)
 	}
 }
@@ -532,14 +532,14 @@ func TestCloseAndResend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened || r.Stopped {
+	if r.Sent != 4 || r.Undelivered != 0 || r.Completed || r.NotOpened || r.Stopped || r.State != "" || r.Reason != "" {
 		t.Errorf("resend %+v", r)
 	}
 	r, err = gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: filepath.Join(h.dir, "runs", lost.RunID)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.Completed || r.Sent != 2 || r.Stopped {
+	if !r.Completed || r.Sent != 2 || r.Stopped || r.State != "failed" || r.Reason != "gateway_lost" {
 		t.Errorf("resend of the lost run %+v", r)
 	}
 	lines := h.record(lost.RunID)
@@ -570,7 +570,7 @@ func TestAResendAfterAServersStop(t *testing.T) {
 	c.closed.Store(true)
 	dir := filepath.Join(h.dir, "runs", a.RunID)
 	d, err := gateway.Resend(context.Background(), gateway.ResendConfig{Server: c.server(), Dir: dir})
-	if err != nil || d.RunClosed || d.ClosedBy != "" || d.Reason != "" || d.Sent != 0 || !d.Stopped {
+	if err != nil || d.RunClosed || d.ClosedReason != "" || d.Reason != "" || d.Sent != 0 || !d.Stopped {
 		t.Errorf("the resend the server answers 410: %+v, %v", d, err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "delivered.log")); err != nil || !slices.Contains(strings.Split(string(b), "\n"), "stopped") {

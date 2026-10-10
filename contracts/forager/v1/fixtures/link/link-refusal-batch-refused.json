@@ -1,5 +1,7 @@
 {
   "error": "batch_refused",
-  "message": "the gateway refused the run: batch_refused",
-  "from": "gateway"
+  "message": "the run has ended: failed, events refused",
+  "from": "gateway",
+  "state": "failed",
+  "reason": "batch_refused"
 }

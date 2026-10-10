@@ -43,11 +43,11 @@ type runIdentity struct {
 	// Expires is the credential's exp.
 	Expires time.Time
 
-	// active, when not nil, asks the issuer's introspection endpoint whether the run
-	// credential is still active, its answer kept for cache, as
-	// [runIdentity.checkActive] answers; nil for an issuer without one. It holds the run
+	// active, when not nil, asks the starter's introspection endpoint whether the run
+	// credential is still active, as [runIdentity.checkActive] answers: from the answer
+	// it keeps for cache, or now, past it; nil for an issuer without one. It holds the run
 	// credential, which it never shows.
-	active func(ctx context.Context) error
+	active func(ctx context.Context, now bool) error
 	cache  time.Duration
 }
 
@@ -99,12 +99,12 @@ func (e *openRefused) answer() string {
 	return "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(e.text)) + "\r\nConnection: close\r\n\r\n" + e.text
 }
 
-// The texts of a run the gateway could not open because its issuer's introspection
-// endpoint gave no answer, or none that is valid: the message of a session's 503 and
-// 502, and the body of a client's 403.
+// The texts of a run the gateway could not open because its run credential could not
+// be checked, the introspection endpoint giving no answer, or none that is valid: the
+// message of a session's 503 and 502, and the body of a client's 403.
 const (
-	issuerUnreachableText   = "the gateway could not open the run: the issuer's introspection endpoint could not be reached; try again"
-	issuerAnswerInvalidText = "the gateway could not open the run: the issuer's introspection endpoint gave no valid answer"
+	issuerUnreachableText   = "the run did not start: its run credential could not be checked; try again"
+	issuerAnswerInvalidText = "the run did not start: its run credential could not be checked"
 )
 
 // refuseAll is the seam of a gateway that verifies no run credential yet: it refuses
@@ -192,7 +192,7 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("the gateway's address %s is not loopback, so it needs TLS: a certificate and its key", cfg.Listen)
 	}
 	if len(cfg.RunCredentials) == 0 {
-		return nil, errors.New("the gateway's address opens runs for run credentials alone, and no issuer of run credentials is configured")
+		return nil, errors.New("the gateway's address opens runs for run credentials alone, and no run starter is configured under run_credentials")
 	}
 	if cfg.Dir == "" {
 		return nil, errors.New("the gateway's address needs the gateway's directory, where its own certificate authority is kept")

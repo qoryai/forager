@@ -37,7 +37,7 @@ type reloader struct {
 	// apply records a reload's answer and the digest the run now holds; ended ends the
 	// run on a 410; both nil until the run has started.
 	apply          func(*server.LinkReloadAnswer, string)
-	ended          func(code, from string)
+	ended          func(server.RunEnd)
 	running, dirty bool
 }
 
@@ -51,7 +51,7 @@ func newReloader(ctx context.Context, k *server.Link, runURL, runID, held string
 
 // start arms the reload with what records an answer and what ends the run, once the
 // run has started.
-func (l *reloader) start(apply func(a *server.LinkReloadAnswer, held string), ended func(code, from string)) {
+func (l *reloader) start(apply func(a *server.LinkReloadAnswer, held string), ended func(server.RunEnd)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.apply, l.ended = apply, ended
@@ -121,11 +121,11 @@ func (l *reloader) pass() {
 	l.mu.Unlock()
 	a, err := l.link.Reload(l.ctx, l.runURL, l.runID)
 	if err != nil {
-		var r *accesskey.Refusal
-		if code, ok := server.Ended(err); ok && errors.As(err, &r) {
-			ended(code, r.From)
+		if e, ok := server.Ended(err); ok {
+			ended(e)
 			return
 		}
+		var r *accesskey.Refusal
 		if errors.As(err, &r) {
 			l.mu.Lock()
 			l.tried = want

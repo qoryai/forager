@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,19 +42,17 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	}
 }
 
-// TestReasonsAndOpenersAreTheContracts pins the constants of run.exited's reason and
-// run.started's opened_by to the enums of their schemas, in the schemas' order.
+// TestReasonsAndOpenersAreTheContracts pins the constants of run.started's opened_by and
+// credential to the enums of their schema, in the schema's order, and Forager's reasons
+// of run.exited to its open code: each matches the reason's pattern and is named in its
+// description among the reserved codes, beside the three old names Forager never writes.
 func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	for _, c := range []struct {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.exited.schema.json", "reason", []string{event.ReasonTimeout, event.ReasonRunClosed,
-			event.ReasonGatewayLost, event.ReasonSessionLost, event.ReasonQuiet,
-			event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonBatchRefused,
-			event.ReasonIssuerUnreachable, event.ReasonIssuerAnswerInvalid}},
 		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
-		{"events/run.started.schema.json", "credential", []string{event.CredentialIssuer, event.CredentialNone}},
+		{"events/run.started.schema.json", "credential", []string{event.CredentialStarter, event.CredentialNone}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
@@ -61,6 +61,89 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 		member := doc.(map[string]any)["properties"].(map[string]any)[c.member].(map[string]any)
 		if got := fmt.Sprint(member["enum"]); got != fmt.Sprint(c.want) {
 			t.Errorf("%s %s: the schema's enum is %s; the constants are %v", c.schema, c.member, got, c.want)
+		}
+	}
+	doc, err := contracts.Document("events/run.exited.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)
+	if _, ok := reason["enum"]; ok {
+		t.Error("run.exited's reason holds an enum; it is an open code")
+	}
+	pattern := regexp.MustCompile(reason["pattern"].(string))
+	description := reason["description"].(string)
+	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
+		event.ReasonSessionLost, event.ReasonQuiet, event.ReasonCredentialExpired, event.ReasonStopped,
+		event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid,
+		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
+		if !pattern.MatchString(code) {
+			t.Errorf("run.exited's reason pattern refuses %s", code)
+		}
+		if !regexp.MustCompile(`\b` + code + `\b`).MatchString(description) {
+			t.Errorf("run.exited's reason description does not name %s", code)
+		}
+	}
+	state := doc.(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
+	if got, want := fmt.Sprint(state["enum"]), fmt.Sprint([]string{event.StateSucceeded, event.StateFailed, event.StateCancelled}); got != want {
+		t.Errorf("run.exited's state enum is %s; the constants are %s", got, want)
+	}
+}
+
+// TestTheReservedCodesAreTheContracts pins event.Reserved to the reserved codes the
+// schema of run.exited names in its reason's description, and those link-batch.schema.json
+// refuses beside timeout and interrupted, and event.StarterReason to the reason's pattern less them: a
+// starter's code is any other code.
+func TestTheReservedCodesAreTheContracts(t *testing.T) {
+	doc, err := contracts.Document("events/run.exited.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)
+	description := reason["description"].(string)
+	_, rest, _ := strings.Cut(description, "Forager's own codes are reserved: ")
+	listed, _, _ := strings.Cut(rest, ", which Forager never writes")
+	var want []string
+	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {
+		want = append(want, w)
+	}
+	if len(want) != 14 {
+		t.Fatalf("the description names %d reserved codes: %v", len(want), want)
+	}
+	for _, code := range want {
+		if !event.Reserved(code) || event.StarterReason(code) {
+			t.Errorf("%s is reserved, and no starter's", code)
+		}
+	}
+	pattern := regexp.MustCompile(reason["pattern"].(string))
+	for _, code := range []string{"all_checks_passed", "checks_failed", "no_longer_needed", "a", "a" + strings.Repeat("b", 63),
+		"", "A", "1a", "_a", "a-b", "a b", "a" + strings.Repeat("b", 64), "a\n", "\u00e9t\u00e9"} {
+		if got, want := event.StarterReason(code), pattern.MatchString(code) && !slices.Contains(want, code); got != want {
+			t.Errorf("StarterReason(%q) = %v, want %v", code, got, want)
+		}
+		if event.Reserved(code) {
+			t.Errorf("%q is reserved", code)
+		}
+	}
+	// A session's batch may carry timeout and interrupted, its own; the starter's outcome
+	// answer none.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}, "link-outcome-answer.schema.json": nil} {
+		doc, err := contracts.Document(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(doc)
+		m := regexp.MustCompile(`\{"not":\{"enum":\[([^\]]*)\]\}\}`).FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("%s refuses no list of reasons", name)
+		}
+		var refused []string
+		json.Unmarshal([]byte("["+string(m[1])+"]"), &refused)
+		refused = append(refused, allowed...)
+		slices.Sort(refused)
+		sorted := slices.Sorted(slices.Values(want))
+		if !slices.Equal(refused, sorted) {
+			t.Errorf("%s refuses %v beside %v; the reserved codes are %v", name, refused, allowed, sorted)
 		}
 	}
 }

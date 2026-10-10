@@ -59,7 +59,7 @@ func (c clientLogin) login(ctx context.Context, authorization string, _ *http.Re
 			return nil, nil, errUnserved
 		}
 		if lr := g.clientRuns[k]; lr != nil {
-			if _, _, ended := lr.gone(); !ended {
+			if _, ended := lr.gone(); !ended {
 				g.mu.Unlock()
 				px, track, err := lr.join(ctx, id)
 				if errors.Is(err, errRunEnded) {
@@ -163,9 +163,8 @@ func refusedText(err error) (string, bool) {
 // run credential's labels and details, and no wall but the guard of the one address,
 // its proxy reading inside HTTPS with the gateway's own authority for the credentials,
 // the tools and the path rules its policy selects. The run is its run key's client's
-// run from then on; a run key the issuer ended while the run opened ends it,
-// run_ended_at_issuer, and is [errKeyRefused]. Qory Apiary is tried again until
-// deadline.
+// run from then on; a run key the starter ended while the run opened ends it, as the
+// starter said, and is [errKeyRefused]. Qory Apiary is tried again until deadline.
 func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, error) {
 	req := &server.LinkRunRequest{Version: 1, RunID: event.NewRunID(), Wall: true}
 	g.mu.Lock()
@@ -184,7 +183,7 @@ func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, erro
 	if g.blocked(k) {
 		// Among the runs, so Close waits for its record.
 		g.mu.Unlock()
-		lr.end(endedAtIssuer)
+		lr.end(g.heldEnding(k))
 		return nil, errKeyRefused
 	}
 	g.clientRuns[k] = lr
@@ -194,7 +193,7 @@ func (g *Gateway) openClient(id runIdentity, deadline time.Time) (*linkRun, erro
 }
 
 // errKeyRefused is a run that opened for a run key the gateway refuses since: ended at
-// once, run_ended_at_issuer.
+// once, as the starter said.
 var errKeyRefused = errors.New("the gateway refuses the run key")
 
 // join is a later connection of the run's run key: the run takes it, once its run
@@ -202,16 +201,16 @@ var errKeyRefused = errors.New("the gateway refuses the run key")
 // that does not ends the run, and the connection is refused, 407, as is one whose
 // introspection endpoint gave no valid answer, with the 403 of an [*openRefused], or
 // could not be reached, with the 503 of [errNotOpened]. A run key the gateway
-// refuses after the issuer's end of another of its runs ends the run too,
-// run_ended_at_issuer, and the connection is refused, 407. A run that has ended takes
-// none, [errRunEnded].
+// refuses after the starter's end of another of its runs ends the run too, as the
+// starter said, and the connection is refused, 407. A run that has ended takes none,
+// [errRunEnded].
 func (lr *linkRun) join(ctx context.Context, id runIdentity) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
-	if lr.g.blocked(keyOf(id)) {
-		lr.end(endedAtIssuer)
+	if k := keyOf(id); lr.g.blocked(k) {
+		lr.end(lr.g.heldEnding(k))
 		lr.g.presented(id)
 		return nil, nil, runcredential.ErrRefused
 	}
-	if _, _, ended := lr.gone(); ended {
+	if _, ended := lr.gone(); ended {
 		return nil, nil, errRunEnded
 	}
 	if lr.differs(id) != nil {
@@ -274,8 +273,8 @@ func (lr *linkRun) watchQuiet() {
 		return
 	}
 	lr.mu.Unlock()
-	lr.g.report(fmt.Sprintf("run %s: it had no connection for %s; the run ends, quiet", lr.id, lr.g.runsQuiet))
-	e := ending{reason: event.ReasonQuiet, code: event.ReasonQuiet, from: accesskey.FromGateway, closed: true, quietSeconds: quietSeconds(lr.g.runsQuiet)}
+	e := ending{reason: event.ReasonQuiet, state: stateCancelled, code: event.ReasonQuiet, from: accesskey.FromGateway, closed: true, quietSeconds: quietSeconds(lr.g.runsQuiet)}
+	lr.g.report(fmt.Sprintf("run %s: it had no connection for %s; the run ends: %s", lr.id, lr.g.runsQuiet, e.state))
 	lr.end(e)
 }
 
@@ -287,10 +286,13 @@ func quietSeconds(d time.Duration) int {
 
 // keep is a run with no session while it lives: its heartbeats, the gateway's own,
 // every interval, the seconds counted from its ping, or from its run.started without a
-// server; and, for an issuer with introspection, the issuer asked again at most every
-// cache while the run has connections, or had one since it last asked.
+// server; and, for a starter with introspection, the starter asked again at most every
+// cache while the run has connections, or had one since it last asked, and once per
+// interval when nothing asked of its run credential in the last interval, so a quiet
+// run learns the starter's end of it as a connection's check would.
 func (lr *linkRun) keep() {
-	beat := time.NewTicker(time.Duration(lr.g.interval) * time.Second)
+	interval := time.Duration(lr.g.interval) * time.Second
+	beat := time.NewTicker(interval)
 	defer beat.Stop()
 	lr.mu.Lock()
 	since := lr.startedAt
@@ -305,12 +307,25 @@ func (lr *linkRun) keep() {
 		defer t.Stop()
 		ask = t.C
 	}
+	// looked is when the beat last looked whether the run credential was asked of.
+	looked := time.Now()
 	for {
 		select {
 		case <-lr.ctx.Done():
 			return
 		case <-beat.C:
 			lr.st.Emit(event.RunHeartbeat, map[string]any{"elapsed_seconds": int(time.Since(since) / time.Second), "interval_seconds": lr.g.interval})
+			lr.mu.Lock()
+			checked := lr.asked.After(looked)
+			lr.mu.Unlock()
+			if lr.ctx.Err() != nil {
+				// The run ended as the beat came.
+				return
+			}
+			if !checked && lr.stillActive(lr.ctx) != nil {
+				return
+			}
+			looked = time.Now()
 		case <-ask:
 			lr.mu.Lock()
 			busy := lr.conns > 0 || lr.lastConn.After(lr.asked)

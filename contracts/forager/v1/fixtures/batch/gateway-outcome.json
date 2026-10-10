@@ -1,0 +1,17 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-200000000012",
+    "source": "urn:qory:run:0193b2c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+    "type": "dev.qory.run.exited",
+    "subject": "0193b2c4-5d6e-7f80-9a1b-2c3d4e5f6a7b",
+    "time": "2026-10-09T10:12:00.100Z",
+    "sequence": "0000000012",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
+    "data": {
+      "state": "succeeded",
+      "reason": "all_checks_passed",
+      "duration_ms": 720000
+    }
+  }
+]

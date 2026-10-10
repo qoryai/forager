@@ -8,6 +8,7 @@
   "sequence": "0000000011",
   "dataschema": "https://qory.dev/contracts/forager/v1/events/run.exited.schema.json",
   "data": {
+    "state": "cancelled",
     "reason": "quiet",
     "duration_ms": 1804900
   }

@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -39,14 +40,25 @@ const LocalOrigin = "http://localhost"
 // LinkContentType is the content type of a run request on the link.
 const LinkContentType = "application/json"
 
-// EndCodes are the codes of a 410 on the link, the end of a run at the gateway, which
-// the session records as the reason of its dev.qory.run.exited: the gateway closed
-// the run, the run credential expired with no fresh one, its issuer
-// reports it no longer active or ended another run of its run key, its issuer's
-// introspection endpoint could not be reached or gave no valid answer, the gateway heard
+// EndCodes are the codes of a 410 on the link, the end of a run at the gateway: the
+// gateway closed the run, the run credential expired with no fresh one, its starter
+// reports it no longer active or ended another run of its run key, its run credential
+// could not be checked, the introspection endpoint unreachable or its answer not valid, the gateway heard
 // nothing from the session for too long, or it refused a batch of the session's. A 410
 // with another code, or none, is run_closed.
-var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonRunEndedAtIssuer, event.ReasonSessionLost, event.ReasonBatchRefused, event.ReasonIssuerUnreachable, event.ReasonIssuerAnswerInvalid}
+var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid}
+
+// RunEnd is how a run ended at the gateway, as the link says it: Code, one of
+// [EndCodes], a 410's code or batch_refused for the gateway's 400 to a batch; From, who
+// ended it; and, from a 410 that ends a run, State and Reason, the state and the reason
+// of the gateway's dev.qory.run.exited of it, as link-refusal.schema.json has them. State
+// is empty when the 410 carries none, as run_closed's does not, or carries a state or a
+// reason the schema refuses, and Reason is then empty too. Reason is empty when the end
+// has none, as when the run's starter gave an outcome and no reason.
+type RunEnd struct {
+	Code, From    string
+	State, Reason string
+}
 
 // CodeInvalidRequest is the gateway's 400 to a request of the link its rules refuse; to
 // a batch it ends the run.
@@ -151,7 +163,7 @@ type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
 	// Credential is where the run's credential came from, which run.started reports:
-	// issuer, an issuer gave the run its run credential; none, on the local link.
+	// starter, the run's starter gave the run its run credential; none, on the local link.
 	Credential string `json:"credential"`
 	// Policy is the policy in force for the run, as policy.schema.json defines it, and
 	// Digest the hex SHA-256 of its canonical JSON; each is present with the other, and
@@ -276,6 +288,23 @@ type LinkRefusal struct {
 	// opened it itself.
 	Message string `json:"message,omitempty"`
 }
+
+// LinkOutcome is the gateway's answer to the outcome request,
+// contracts/forager/v1/link-outcome-answer.schema.json: the outcome the run's starter
+// gave, State, succeeded, failed or cancelled, and its Reason, a code of the starter's.
+// A LinkOutcome without a State is {}: the starter gave none, and the runtime's exit
+// decides. Reason is empty when the starter gave none.
+type LinkOutcome struct {
+	State  string `json:"state,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// OutcomeTimeout bounds the outcome request, [Link.Outcome]: a little over the about 6
+// seconds in which the gateway answers it.
+const OutcomeTimeout = 10 * time.Second
+
+// outcomeTimeout is [OutcomeTimeout], which a test shortens.
+var outcomeTimeout = OutcomeTimeout
 
 // values are variables as values by name; nil for none.
 func values(vars map[string]Variable) map[string]string {
@@ -498,6 +527,50 @@ func (a *linkAnswer) end() string {
 	return accesskey.CodeRunClosed
 }
 
+// endStateSchemas are the schemas of a run.exited's state and reason, which a 410's
+// state and reason are held to.
+var endStateSchemas = sync.OnceValues(func() ([2]*jsonschema.Schema, error) {
+	var out [2]*jsonschema.Schema
+	for i, member := range []string{"state", "reason"} {
+		s, err := contracts.Compile("events/run.exited.schema.json#/properties/" + member)
+		if err != nil {
+			return out, err
+		}
+		out[i] = s
+	}
+	return out, nil
+})
+
+// runEnd is the end of the run a 410's body says: its code, [linkAnswer.end], who ended
+// it, and, but for run_closed, the body's state and reason when each is what
+// run.exited.schema.json holds it to, a reason with a state alone. Any other state or
+// reason leaves both empty: the end is one without a state.
+func (a *linkAnswer) runEnd() RunEnd {
+	e := RunEnd{Code: a.end(), From: a.from()}
+	if e.Code == event.ReasonRunClosed {
+		return e
+	}
+	var doc struct {
+		State  *string `json:"state"`
+		Reason *string `json:"reason"`
+	}
+	if jsonv2.Unmarshal(a.body, &doc) != nil || doc.State == nil {
+		return e
+	}
+	schemas, err := endStateSchemas()
+	if err != nil || schemas[0].Validate(*doc.State) != nil {
+		return e
+	}
+	if doc.Reason != nil && schemas[1].Validate(*doc.Reason) != nil {
+		return e
+	}
+	e.State = *doc.State
+	if doc.Reason != nil {
+		e.Reason = *doc.Reason
+	}
+	return e
+}
+
 // from is who refused, by the body's from: apiary when it says so, else the gateway.
 func (a *linkAnswer) from() string {
 	var doc struct {
@@ -521,7 +594,8 @@ func (a *linkAnswer) refusal(what string) error {
 	jsonv2.Unmarshal(a.body, &doc)
 	doc.Message = cleanMessage(doc.Message)
 	if a.status == http.StatusGone {
-		return &accesskey.Refusal{Code: a.end(), Status: a.status, Detail: what, From: a.from(), Text: doc.Message}
+		e := a.runEnd()
+		return &endError{Refusal: &accesskey.Refusal{Code: e.Code, Status: a.status, Detail: what, From: e.From, Text: doc.Message}, end: e}
 	}
 	if a.status >= http.StatusInternalServerError && (doc.Error == "" || doc.Error == CodeInternal) {
 		return &StatusError{What: what, Status: a.status, Message: doc.Message}
@@ -570,15 +644,29 @@ type StatusError struct {
 
 func (e *StatusError) Error() string { return fmt.Sprintf("%s: status %d", e.What, e.Status) }
 
-// Ended reports the end of the run an error of the link carries: the code of a 410,
-// one of [EndCodes], which the session records as the reason of its
-// dev.qory.run.exited.
-func Ended(err error) (string, bool) {
+// endError is a 410 of the link: the refusal it is, which errors.As finds through it,
+// and the end of the run it says.
+type endError struct {
+	*accesskey.Refusal
+	end RunEnd
+}
+
+func (e *endError) Unwrap() error { return e.Refusal }
+
+// Ended reports the end of the run an error of the link carries, a 410: its code, one
+// of [EndCodes], who ended the run, and the state and the reason of that end, which
+// the session records in its dev.qory.run.exited. A refusal with the status 410 that
+// the link did not read carries its code and From alone.
+func Ended(err error) (RunEnd, bool) {
+	var e *endError
+	if errors.As(err, &e) {
+		return e.end, true
+	}
 	var r *accesskey.Refusal
 	if errors.As(err, &r) && r.Status == http.StatusGone {
-		return r.Code, true
+		return RunEnd{Code: r.Code, From: r.From}, true
 	}
-	return "", false
+	return RunEnd{}, false
 }
 
 // hand gives the answer's digests to the caller, unless it is a 410: a run that ended
@@ -786,10 +874,72 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 	return &a, nil
 }
 
+// Outcome asks the gateway once how the run's starter says the run ended, at the
+// runtime's own exit: a GET of <runURL>/<runID>/outcome, with no query, authorised as a
+// reload is, the run credential and the run's secret, and bounded to [OutcomeTimeout]
+// besides ctx. It returns the answer's outcome when the gateway answers 200 with a
+// document link-outcome-answer.schema.json accepts. A reason that is one of Forager's
+// reserved codes, or one the schema refuses where the answer without it is valid, is
+// dropped alone, as the gateway drops it, and the state kept. Anything else is {}, with
+// the error that says why: a transport failure, no answer in time, any other status, a
+// 410 among them, or an answer that is not valid, one with a state the schema refuses
+// among them; a caller that reads the outcome reads {} as no outcome, and the error as
+// nothing more. The answer's digests are handed to nobody. On the local link there is
+// no starter to ask: it sends nothing, and returns {} at once.
+func (k *Link) Outcome(ctx context.Context, runURL, runID string) (LinkOutcome, error) {
+	if k.origin == LocalOrigin {
+		return LinkOutcome{}, errors.New("the local link has no outcome to ask for")
+	}
+	if err := k.onLink("the run URL", runURL); err != nil {
+		return LinkOutcome{}, fmt.Errorf("%s: %w", k.name, err)
+	}
+	if !runIDShape.MatchString(runID) {
+		return LinkOutcome{}, errors.New("the outcome request: the run id is not a UUID in the canonical lower-case form")
+	}
+	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/outcome"
+	ctx, cancel := context.WithTimeout(ctx, outcomeTimeout)
+	defer cancel()
+	a, err := k.send(ctx, http.MethodGet, u, nil, MaxRefusal, nil)
+	if err != nil {
+		return LinkOutcome{}, fmt.Errorf("the outcome request %s: %w", k.at(u), err)
+	}
+	if a.status != http.StatusOK {
+		return LinkOutcome{}, fmt.Errorf("the outcome request %s: status %d", k.at(u), a.status)
+	}
+	var o LinkOutcome
+	if err := readLinkDocument("link-outcome-answer.schema.json", a.body, &o); err != nil {
+		var kept LinkOutcome
+		if alone, ok := withoutReason(a.body); ok && readLinkDocument("link-outcome-answer.schema.json", alone, &kept) == nil && kept.State != "" {
+			return LinkOutcome{State: kept.State}, nil
+		}
+		return LinkOutcome{}, &DocumentError{"the outcome answer", k.at(u), err}
+	}
+	if event.Reserved(o.Reason) {
+		o.Reason = ""
+	}
+	return o, nil
+}
+
+// withoutReason is an outcome answer's object without its reason member, and whether
+// it had one to drop.
+func withoutReason(body []byte) ([]byte, bool) {
+	var members map[string]jsontext.Value
+	if jsonv2.Unmarshal(body, &members) != nil {
+		return nil, false
+	}
+	if _, ok := members["reason"]; !ok {
+		return nil, false
+	}
+	delete(members, "reason")
+	b, err := jsonv2.Marshal(members)
+	return b, err == nil
+}
+
 // Deliver posts one link batch to eventsURL, the discovery's events.url, as the
 // delivery with the given id, with the run configuration digest when it holds one, and
 // returns what the gateway answered, its Link set: a 2xx is accepted; a 410 ends the
-// run with its End, one of [EndCodes], and its From; a 400 invalid_request ends it
+// run with its End, one of [EndCodes], its From, and the State and the Reason it
+// carries, [RunEnd]; a 400 invalid_request ends it
 // too, the gateway having ended the run, with batch_refused; anything else is retried. A
 // coded answer other than a 2xx is also its Refusal. The digests of every answer but one that ends the run are in the Delivery. A transport failure or no answer within
 // Timeout is an error. The body is the session's events of the run, with their ids and
@@ -814,14 +964,16 @@ func (k *Link) Deliver(ctx context.Context, eventsURL, deliveryID string, body [
 		if a.status < 200 || a.status > 299 {
 			// The answer as the refusal it is: its code, names, who refused and its
 			// message as the user is told it.
-			if ref, ok := a.refusal("the events " + k.at(eventsURL)).(*accesskey.Refusal); ok {
+			var ref *accesskey.Refusal
+			if errors.As(a.refusal("the events "+k.at(eventsURL)), &ref) {
 				d.Refusal = ref
 			}
 		}
 	}
 	switch {
 	case a.status == http.StatusGone:
-		d.End, d.From = a.end(), a.from()
+		e := a.runEnd()
+		d.End, d.From, d.State, d.Reason = e.Code, e.From, e.State, e.Reason
 	case a.status == http.StatusBadRequest && d.Code == CodeInvalidRequest:
 		// The gateway ends a run whose batch it refuses: its later requests are a 410
 		// batch_refused, and the session records batch_refused as after one.

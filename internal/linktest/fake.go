@@ -55,6 +55,12 @@ type Fake struct {
 	onRun     func(server.LinkRunRequest) Reply
 	onReload  func(runID string) Reply
 	onBatch   func([]map[string]any) Reply
+	onOutcome func(runID string) Reply
+	outcomes  []string
+	// origin is a separate gateway's, https and its one address; empty on the local
+	// link.
+	origin    string
+	remote    *remote
 	requests  []server.LinkRunRequest
 	raw       [][]byte
 	batches   [][]map[string]any
@@ -88,7 +94,12 @@ func (f *Fake) Local() link.Local {
 }
 
 // ProxyAddr is the fake proxy's address, which the discovery names.
-func (f *Fake) ProxyAddr() string { return f.proxy.Addr().String() }
+func (f *Fake) ProxyAddr() string {
+	if f.proxy == nil {
+		return ""
+	}
+	return f.proxy.Addr().String()
+}
 
 // SetDiscoveryProxy sets the proxy address the discovery names, in place of the fake
 // proxy's own.
@@ -129,6 +140,18 @@ func (f *Fake) OnReload(h func(runID string) Reply) { f.mu.Lock(); f.onReload = 
 // OnBatch replaces the answer to a batch, a 200 by default.
 func (f *Fake) OnBatch(h func([]map[string]any) Reply) { f.mu.Lock(); f.onBatch = h; f.mu.Unlock() }
 
+// OnOutcome replaces the answer to the outcome request, a GET of
+// <run.url>/<run_id>/outcome: {} by default behind a separate gateway, and on the
+// local link the 400 invalid_request the local link answers it with.
+func (f *Fake) OnOutcome(h func(runID string) Reply) { f.mu.Lock(); f.onOutcome = h; f.mu.Unlock() }
+
+// Outcomes are the run ids of the outcome requests received.
+func (f *Fake) Outcomes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.outcomes)
+}
+
 // Requests are the run requests received, decoded.
 func (f *Fake) Requests() []server.LinkRunRequest {
 	f.mu.Lock()
@@ -166,8 +189,9 @@ func (f *Fake) Reloads() []string {
 	return slices.Clone(f.reloads)
 }
 
-// RunSecrets are the X-Qory-Run-Secret values the reloads and batches received carried,
-// in order, joined by a comma when one carried several, empty for none.
+// RunSecrets are the X-Qory-Run-Secret values the reloads, the outcome asks and the
+// batches received carried, in order, joined by a comma when one carried several, empty
+// for none.
 func (f *Fake) RunSecrets() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -235,14 +259,19 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	var reply Reply
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
-		proxy := f.ProxyAddr()
+		origin, proxy := server.LocalOrigin, f.ProxyAddr()
+		if f.origin != "" {
+			// A separate gateway lists its own origin, and names its one address as its
+			// proxy.
+			origin, proxy = f.origin, r.Host
+		}
 		if f.proxyAddr != "" {
 			proxy = f.proxyAddr
 		}
 		reply = Reply{Status: 200, Body: map[string]any{
 			"version": 1,
-			"events":  map[string]any{"url": server.LocalOrigin + EventsPath, "types": []string{"*"}, "interval_seconds": f.interval},
-			"run":     map[string]any{"url": server.LocalOrigin + RunPath},
+			"events":  map[string]any{"url": origin + EventsPath, "types": []string{"*"}, "interval_seconds": f.interval},
+			"run":     map[string]any{"url": origin + RunPath},
 			"proxy":   map[string]any{"address": proxy},
 		}}
 	case r.Method == http.MethodPost && r.URL.Path == RunPath:
@@ -255,7 +284,25 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			reply = h(req)
 			f.mu.Lock()
 		} else {
-			reply = Reply{Status: 200, Body: RunAnswer(req)}
+			a := RunAnswer(req)
+			if f.origin != "" {
+				a["credential"] = "starter"
+			}
+			reply = Reply{Status: 200, Body: a}
+		}
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, RunPath+"/") && strings.HasSuffix(r.URL.Path, "/outcome"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, RunPath+"/"), "/outcome")
+		f.outcomes = append(f.outcomes, id)
+		f.secrets = append(f.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
+		switch h := f.onOutcome; {
+		case h != nil:
+			f.mu.Unlock()
+			reply = h(id)
+			f.mu.Lock()
+		case f.origin == "":
+			reply = Reply{Status: 400, Body: Refusal(server.CodeInvalidRequest, "gateway")}
+		default:
+			reply = Reply{Status: 200, Body: map[string]any{}}
 		}
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, RunPath+"/"):
 		id := strings.TrimPrefix(r.URL.Path, RunPath+"/")

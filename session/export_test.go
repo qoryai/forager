@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"time"
 
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -23,3 +25,15 @@ func SetRunContainersExist(
 
 // DirInBinds fails a working directory that lies in none of the binds.
 var DirInBinds = dirInBinds
+
+// SetOutcomeWait sets how long a run waits for the outcome at its runtime's exit, so a
+// test sees the bound without waiting server.OutcomeTimeout; it returns a function that
+// puts the default back.
+func SetOutcomeWait(d time.Duration) func() {
+	outcomeWait = d
+	return func() { outcomeWait = server.OutcomeTimeout }
+}
+
+// SetExitObserved sets what a run calls the moment its runtime's exit is observed,
+// once Cancelled is decided; nil for nothing.
+func SetExitObserved(f func()) { exitObserved = f }

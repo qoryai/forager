@@ -258,7 +258,7 @@ func TestABatchTheLinkRefusesEndsTheRunOfItsSecret(t *testing.T) {
 			if status, r := localRequest(t, h, http.MethodPost, "/v1/events", c.body(b.RunID), []string{a.RunSecret}); status != http.StatusBadRequest || r["error"] != "invalid_request" {
 				t.Errorf("the batch: %d %v", status, r)
 			}
-			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", a.RunID, c.why)
+			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: failed", a.RunID, c.why)
 			if !h.reported(line) {
 				t.Errorf("no line %q in %q", line, h.reportsWith(a.RunID))
 			}
@@ -275,7 +275,7 @@ func TestABatchTheLinkRefusesEndsTheRunOfItsSecret(t *testing.T) {
 			if status, _, got := remoteRequest(t, s, cred, http.MethodPost, "/v1/events", c.body(b.a.RunID), []string{a.a.RunSecret}); status != http.StatusBadRequest || refusalOf([]byte(got))["error"] != "invalid_request" {
 				t.Errorf("the batch: %d %s", status, got)
 			}
-			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends, session_lost", a.a.RunID, c.why)
+			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: failed", a.a.RunID, c.why)
 			if !s.reported(line) {
 				t.Errorf("no line %q in %q", line, s.reportsWith(a.a.RunID))
 			}
@@ -455,7 +455,7 @@ func TestASpentRunIsFoundByItsRunSecretUntilItLapses(t *testing.T) {
 // TestAHeldRunKeysRunIsRefusedWithItsRunSecret pins the run secret against the hold
 // after the issuer's end of a run of the run key: a reload or a batch of a live run of
 // the key with a wrong secret gets the 401, and its run credential, presented, holds
-// the key to its exp; with the run's own secret, the run ends, run_ended_at_issuer,
+// the key to its exp; with the run's own secret, the run ends, stopped,
 // and the request gets its 410.
 func TestAHeldRunKeysRunIsRefusedWithItsRunSecret(t *testing.T) {
 	in := &introspection{}
@@ -472,7 +472,7 @@ func TestAHeldRunKeysRunIsRefusedWithItsRunSecret(t *testing.T) {
 	held := s.openSession(t, first, server.LinkRunRequest{})
 	in.end(first)
 	status, body := ended.reload(t, first, ended.a.RunID)
-	gone(t, "the issuer's end", status, body, "run_ended_at_issuer")
+	gone(t, "the issuer's end", status, body, "stopped")
 	for name, secret := range secretHeaders(held.a.RunSecret) {
 		refusedAll(t, "the held run key's live run with "+name, ofRun(t, s, later, held.a.RunID, secret))
 	}
@@ -483,7 +483,7 @@ func TestAHeldRunKeysRunIsRefusedWithItsRunSecret(t *testing.T) {
 		t.Errorf("a run request of the held run key: %d %s", status, body)
 	}
 	for name, g := range ofRun(t, s, later, held.a.RunID, []string{held.a.RunSecret}) {
-		gone(t, name+" of the live run with its secret", g.status, g.body, "run_ended_at_issuer")
+		gone(t, name+" of the live run with its secret", g.status, g.body, "stopped")
 	}
 	ahead.Store(int64(3*time.Hour + 10*time.Minute))
 	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {

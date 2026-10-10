@@ -1,18 +1,19 @@
 // Package runcredential is the run credential of the contract, contracts/forager/v1: the
-// configuration of the issuers a gateway accepts, its checks, the verifier of a run
+// configuration of the run starters a gateway accepts, its checks, the verifier of a run
 // credential, the mapping of its claims to a run's labels and about.details, the client
-// of an issuer's introspection endpoint, and the run keys a gateway refuses.
+// of a starter's introspection endpoint, and the run keys a gateway refuses.
 //
 // A run credential is a JWT (RFC 7519) signed as a JWS (RFC 7515) with an asymmetric
-// key, which an issuer gives a run. [Verifier.Verify] verifies it: the serialisation
-// is the strict compact form, the header selects a pinned key ([Issuer.SelectKey]), the
+// key, which the run's starter (the iss of its run credentials) gives a run.
+// [Verifier.Verify] verifies it: the serialisation is the strict compact form, the
+// header selects a pinned key ([Issuer.SelectKey]), the
 // signature is verified under it over the exact bytes received, and only then are the
 // claims read and checked ([Issuer.CheckClaims]), the scope checked ([Issuer.Allowed]),
 // and the labels and the details made from the claims ([Issuer.Labels],
 // [Issuer.Details]). What a session sends beside the run credential is compared with
-// them ([Compare]). An [Introspector] asks the issuer whether a run credential is still
+// them ([Compare]). An [Introspector] asks the starter whether a run credential is still
 // active (RFC 7662), failing closed, and [Ended] keeps the run keys a gateway refuses
-// after the issuer's end, so a restart refuses them too.
+// after the starter's end, so a restart refuses them too.
 //
 // The functions that read claims, beside Verify, take claims a verifier has already
 // verified, and read nothing else of the request. Every failure of a run credential is
@@ -48,10 +49,10 @@ const (
 // signed with.
 func supported(alg string) bool { return alg == RS256 || alg == ES256 || alg == EdDSA }
 
-// DefaultLeeway is the clock skew allowed in the time checks when an issuer sets none.
+// DefaultLeeway is the clock skew allowed in the time checks when a starter sets none.
 const DefaultLeeway = 60 * time.Second
 
-// MaxLeeway is the largest leeway an issuer may set: a leeway stretches every time
+// MaxLeeway is the largest leeway a starter may set: a leeway stretches every time
 // check, and one above a few minutes would keep an expired run credential alive.
 const MaxLeeway = 5 * time.Minute
 
@@ -73,22 +74,22 @@ const (
 // the document run-credentials.schema.json defines.
 type Issuers []Issuer
 
-// Issuer is one issuer of run credentials: who it is, the audience it mints them for,
-// its pinned keys, the claim checks and the mapping of its claims.
+// Issuer is one run starter, an entry of the list: who it is, the audience it mints run
+// credentials for, its pinned keys, the claim checks and the mapping of its claims.
 type Issuer struct {
 	// Issuer is the https URL the claim iss equals.
 	Issuer string `json:"issuer"`
 	// Audience is the gateway's own audience, which the claim aud contains.
 	Audience string `json:"audience"`
-	// Algorithms are the algorithms the issuer signs with.
+	// Algorithms are the algorithms the starter signs with.
 	Algorithms []string `json:"algorithms"`
-	// Keys are the issuer's pinned public keys.
+	// Keys are the starter's pinned public keys.
 	Keys []Key `json:"keys"`
 	// Leeway is the clock skew the time checks allow; nil is [DefaultLeeway].
 	Leeway *Duration `json:"leeway,omitempty"`
 	// MaxLifetime bounds exp minus iat when it is set.
 	MaxLifetime *Duration `json:"max_lifetime,omitempty"`
-	// Allow is the scope, nil when the issuer sets none.
+	// Allow is the scope, nil when the starter sets none.
 	Allow *Allow `json:"allow,omitempty"`
 	// LabelMapping is the mapping of claims to the run's labels, labels in the
 	// document.
@@ -96,13 +97,13 @@ type Issuer struct {
 	// DetailMapping is the mapping of claims to keys of about.details, by key, details
 	// in the document.
 	DetailMapping map[string]Claim `json:"details,omitempty"`
-	// Introspection is the issuer's RFC 7662 endpoint, nil when it offers none.
+	// Introspection is the starter's RFC 7662 endpoint, nil when it offers none.
 	Introspection *Introspection `json:"introspection,omitempty"`
 }
 
-// Key is one pinned public key of an issuer.
+// Key is one pinned public key of a starter.
 type Key struct {
-	// KID is the key id a run credential's kid header names, empty when the issuer pins
+	// KID is the key id a run credential's kid header names, empty when the starter pins
 	// one key without one.
 	KID string `json:"kid,omitempty"`
 	// Alg is the algorithm the key signs with, one of [RS256], [ES256] and [EdDSA].
@@ -146,7 +147,7 @@ type Claim struct {
 	Claim string `json:"claim"`
 }
 
-// Introspection is an issuer's OAuth 2.0 token introspection endpoint (RFC 7662).
+// Introspection is a starter's OAuth 2.0 token introspection endpoint (RFC 7662).
 type Introspection struct {
 	// URL is the endpoint, https.
 	URL string `json:"url"`
@@ -179,7 +180,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 // MarshalJSON writes the duration as Go writes it.
 func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Duration(d).String()) }
 
-// LeewayOrDefault is the issuer's leeway, or [DefaultLeeway] when it sets none.
+// LeewayOrDefault is the starter's leeway, or [DefaultLeeway] when it sets none.
 func (i Issuer) LeewayOrDefault() time.Duration {
 	if i.Leeway == nil {
 		return DefaultLeeway
@@ -229,33 +230,33 @@ func Parse(name string, b []byte) (Issuers, error) {
 // ReadFile reads a file by its name, as os.ReadFile does.
 type ReadFile func(name string) ([]byte, error)
 
-// Check checks every issuer as [Issuer.Check] does, and that no two have the same
-// issuer. An empty list is refused: a gateway without issuers serves no other machine.
+// Check checks every starter as [Issuer.Check] does, and that no two have the same
+// "issuer" key. An empty list is refused: a gateway without a starter serves no other machine.
 func (l Issuers) Check(read ReadFile) error { return l.check(read, false) }
 
 // check is [Issuers.Check]; fixtures accepts the published fixture keys, which the
 // known-answer tests alone do.
 func (l Issuers) check(read ReadFile, fixtures bool) error {
 	if len(l) == 0 {
-		return fmt.Errorf("run credentials: no issuer")
+		return fmt.Errorf("run_credentials: no starter")
 	}
 	seen := map[string]bool{}
 	for n, i := range l {
 		if seen[i.Issuer] {
-			return fmt.Errorf("run credentials: the issuer %s appears twice", i.Issuer)
+			return fmt.Errorf("run_credentials: the starter %s appears twice", i.Issuer)
 		}
 		seen[i.Issuer] = true
 		if err := i.check(read, fixtures); err != nil {
-			return fmt.Errorf("run credentials[%d]: %w", n, err)
+			return fmt.Errorf("run_credentials[%d]: %w", n, err)
 		}
 	}
 	return nil
 }
 
-// Check checks an issuer beyond what the schema states, and the rules the schema
+// Check checks a starter beyond what the schema states, and the rules the schema
 // states that guard the run credential, so an Issuer built in Go is held to them too:
 //
-//   - the issuer is an https URL with a host and no user, query or fragment, and the
+//   - the "issuer" key is an https URL with a host and no user, query or fragment, and the
 //     audience is not empty;
 //   - every algorithm is RS256, ES256 or EdDSA, each once;
 //   - every key's alg is among the algorithms; with more than one key every key has a
@@ -274,91 +275,94 @@ func (l Issuers) check(read ReadFile, fixtures bool) error {
 //   - the introspection endpoint is https, with a client id and a secret's file. The
 //     secret is not read here.
 //
-// The error names the issuer, the member and a file's name, never what a file holds.
+// The error names the starter, the member and a file's name, never what a file holds.
 func (i Issuer) Check(read ReadFile) error { return i.check(read, false) }
 
 // check is [Issuer.Check]; fixtures accepts the published fixture keys, which the
 // known-answer tests alone do.
 func (i Issuer) check(read ReadFile, fixtures bool) error {
+	if i.Issuer == "" {
+		return fmt.Errorf(`an entry has no "issuer" key`)
+	}
 	if err := checkHTTPS(i.Issuer); err != nil {
-		return fmt.Errorf("issuer: %w", err)
+		return fmt.Errorf(`the "issuer" key: %w`, err)
 	}
 	if i.Audience == "" {
-		return fmt.Errorf("issuer %s: no audience", i.Issuer)
+		return fmt.Errorf("the starter %s: no audience", i.Issuer)
 	}
 	if len(i.Algorithms) == 0 {
-		return fmt.Errorf("issuer %s: no algorithm", i.Issuer)
+		return fmt.Errorf("the starter %s: no algorithm", i.Issuer)
 	}
 	algs := map[string]bool{}
 	for _, a := range i.Algorithms {
 		if !supported(a) {
-			return fmt.Errorf("issuer %s: the algorithm %q is not RS256, ES256 or EdDSA", i.Issuer, a)
+			return fmt.Errorf("the starter %s: the algorithm %q is not RS256, ES256 or EdDSA", i.Issuer, a)
 		}
 		if algs[a] {
-			return fmt.Errorf("issuer %s: the algorithm %s appears twice", i.Issuer, a)
+			return fmt.Errorf("the starter %s: the algorithm %s appears twice", i.Issuer, a)
 		}
 		algs[a] = true
 	}
 	if len(i.Keys) == 0 {
-		return fmt.Errorf("issuer %s: no key", i.Issuer)
+		return fmt.Errorf("the starter %s: no key", i.Issuer)
 	}
 	kids := map[string]bool{}
 	for n, k := range i.Keys {
 		if !algs[k.Alg] {
-			return fmt.Errorf("issuer %s: keys[%d]: the alg %q is not among the issuer's algorithms", i.Issuer, n, k.Alg)
+			return fmt.Errorf("the starter %s: keys[%d]: the alg %q is not among the starter's algorithms", i.Issuer, n, k.Alg)
 		}
 		if len(i.Keys) > 1 && k.KID == "" {
-			return fmt.Errorf("issuer %s: keys[%d]: no kid, and the issuer pins more than one key", i.Issuer, n)
+			return fmt.Errorf("the starter %s: keys[%d]: no kid, and the starter pins more than one key", i.Issuer, n)
 		}
 		if k.KID != "" {
 			if kids[k.KID] {
-				return fmt.Errorf("issuer %s: keys[%d]: the kid %q appears twice", i.Issuer, n, k.KID)
+				return fmt.Errorf("the starter %s: keys[%d]: the kid %q appears twice", i.Issuer, n, k.KID)
 			}
 			kids[k.KID] = true
 		}
 		if _, err := k.publicKey(read, fixtures); err != nil {
-			return fmt.Errorf("issuer %s: keys[%d]: %w", i.Issuer, n, err)
+			return fmt.Errorf("the starter %s: keys[%d]: %w", i.Issuer, n, err)
 		}
 	}
 	if i.Leeway != nil && *i.Leeway < 0 {
-		return fmt.Errorf("issuer %s: the leeway is negative", i.Issuer)
+		return fmt.Errorf("the starter %s: the leeway is negative", i.Issuer)
 	}
 	if i.Leeway != nil && time.Duration(*i.Leeway) > MaxLeeway {
-		return fmt.Errorf("issuer %s: the leeway %s is above %s", i.Issuer, time.Duration(*i.Leeway), MaxLeeway)
+		return fmt.Errorf("the starter %s: the leeway %s is above %s", i.Issuer, time.Duration(*i.Leeway), MaxLeeway)
 	}
 	if i.MaxLifetime != nil && *i.MaxLifetime <= 0 {
-		return fmt.Errorf("issuer %s: max_lifetime is not positive", i.Issuer)
+		return fmt.Errorf("the starter %s: max_lifetime is not positive", i.Issuer)
 	}
 	if a := i.Allow; a != nil {
 		if a.Claim == "" || len(a.Values) == 0 {
-			return fmt.Errorf("issuer %s: allow names no claim or no value", i.Issuer)
+			return fmt.Errorf("the starter %s: allow names no claim or no value", i.Issuer)
 		}
 		for _, v := range a.Values {
 			if v == "" {
-				return fmt.Errorf("issuer %s: allow lists an empty value", i.Issuer)
+				return fmt.Errorf("the starter %s: allow lists an empty value", i.Issuer)
 			}
 		}
 	}
 	if err := i.LabelMapping.check(); err != nil {
-		return fmt.Errorf("issuer %s: labels: %w", i.Issuer, err)
+		return fmt.Errorf("the starter %s: labels: %w", i.Issuer, err)
 	}
 	for key, c := range i.DetailMapping {
 		if !detailsKey(key) {
-			return fmt.Errorf("issuer %s: the details key %q is not 1 to 64 bytes without a control character or =", i.Issuer, key)
+			return fmt.Errorf("the starter %s: the details key %q is not 1 to 64 bytes without a control character or =", i.Issuer, key)
 		}
 		if c.Claim == "" {
-			return fmt.Errorf("issuer %s: details.%s names no claim", i.Issuer, key)
+			return fmt.Errorf("the starter %s: details.%s names no claim", i.Issuer, key)
 		}
 	}
 	if in := i.Introspection; in != nil {
 		if err := checkHTTPS(in.URL); err != nil {
-			return fmt.Errorf("issuer %s: introspection: %w", i.Issuer, err)
+			return fmt.Errorf("the starter %s: introspection: %w", i.Issuer, err)
 		}
 		if in.ClientID == "" || in.ClientSecretFile == "" {
-			return fmt.Errorf("issuer %s: introspection: no client id or no client secret file", i.Issuer)
+			return fmt.Errorf("the starter %s: introspection: no client id or no client secret file", i.Issuer)
 		}
 		if in.Cache != nil && *in.Cache <= 0 {
-			return fmt.Errorf("issuer %s: introspection: the cache is not positive", i.Issuer)
+			return fmt.Errorf("the starter %s: introspection: the cache is not positive", i.Issuer)
 		}
 	}
 	return nil

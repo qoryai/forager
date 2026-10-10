@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/sink"
 )
@@ -25,7 +26,8 @@ type ResendConfig struct {
 // Resend completes and delivers the record of one run whose gateway is gone, as
 // today's resend does: a record still held, by an open run or by the run's session, is
 // [ErrRunning] and left as it is; a record with run.started and no run.exited gets
-// one, with the reason gateway_lost, Completed; then every event the server wants that
+// one, with the reason gateway_lost, Completed, its State and Reason failed and
+// gateway_lost; then every event the server wants that
 // no accepted batch contained is posted, in order and in the run's own batches, until
 // the server accepts it or ctx ends. A line of the record that holds no whole event, a
 // write the gateway did not finish, is skipped, and every event after it is sent. A
@@ -63,7 +65,11 @@ func Resend(ctx context.Context, cfg ResendConfig) (Delivery, error) {
 	if err != nil {
 		return Delivery{}, err
 	}
-	return Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed, NotOpened: res.NotOpened, Stopped: res.Stopped}, nil
+	d := Delivery{Undelivered: res.Undelivered, Sent: res.Sent, Completed: res.Closed, NotOpened: res.NotOpened, Stopped: res.Stopped}
+	if res.Closed {
+		d.State, d.Reason = event.StateFailed, event.ReasonGatewayLost
+	}
+	return d, nil
 }
 
 // ErrRunning says a run's record is still held: by an open run of a gateway's, or by

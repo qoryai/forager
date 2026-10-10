@@ -117,8 +117,8 @@ func TestResendWritesGatewayLost(t *testing.T) {
 }
 
 // TestResendWritesGatewayLostOfARunAGatewayOpened pins the completion of the record of
-// a run a gateway opened, with no process: gateway_lost with neither state nor
-// exit_code, valid under run.exited.schema.json.
+// a run a gateway opened, with no process: gateway_lost, failed, with no exit_code,
+// valid under run.exited.schema.json.
 func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	r, _ := s.Open(event.NewRunID())
@@ -134,7 +134,7 @@ func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
 	rec := readRecord(t, r.Dir())
 	last := rec[len(rec)-1]
 	data, _ := last.Data.(map[string]any)
-	if last.Type != event.RunExited || data["reason"] != event.ReasonGatewayLost || len(data) != 2 {
+	if last.Type != event.RunExited || data["reason"] != event.ReasonGatewayLost || data["state"] != "failed" || len(data) != 3 {
 		t.Errorf("the record ends %+v", last)
 	}
 	schema, err := contracts.Compile("events/run.exited.schema.json")
