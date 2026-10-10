@@ -36,6 +36,42 @@ release may change what an existing document does, and says so under Upgrading.
 - `server.Ended` returns a `server.RunEnd`, the code, who ended the run, and the state
   and the reason of that end, in place of the code alone, and `sink.Config.OnEnded`
   takes a `server.RunEnd` in place of the code and who ended it.
+- A run registers with the server with one signed `POST` to the discovery's `run.url`,
+  in place of the ping and the run configuration `GET` with the labels as its query.
+  The body, `run-registration.schema.json`, holds the run's id, its labels, what it is
+  about, `forager_version`, `contract_version`, `interval_seconds`, `events` and
+  `time`. The labels no longer travel in a URL, and what a run is about never selects a
+  policy. The answer is the run's run configuration, a signed `200` with
+  `X-Qory-Run-Configuration`. A reload fetches it again by the run's id, a signed
+  `GET <run.url>/<run_id>`. A `time` more than 300 seconds from the server's clock is
+  an unsigned `401`. A registration the server accepted with the same bytes under the
+  same access key gets the same answer again; one whose run id it accepted with other
+  bytes, or under another access key, is a `409` `run_id_used`.
+- Discovery's `run` is required, and `run.url` has no trailing slash, query or
+  fragment; a document without `run` is refused. A server serves the run endpoint even
+  with no policy, and answers every registration `{"version":1}`.
+- `dev.qory.ping` is gone, with `events/ping.schema.json`, and nothing is posted in its
+  place. Once the server accepts the registration, the gateway writes
+  `dev.qory.run.registered` as line 1 of its record, with `forager_version`, `events`,
+  `contract_version` and `interval_seconds`; it is the record's alone and never posted.
+  `event.RunRegistered` names it. The gateway's `delivered.log` begins
+  `registered <seq>`. Heartbeats run from the accepted registration until the final
+  event.
+- A server's `409` to the registration reads `register <run.url>: <code> (status 409)`,
+  such as `register https://apiary.example/v1/runs: instance_limit (status 409)`, in
+  place of `ping <events URL>: …`. `server.ErrNotAccepted` reads "the server did not
+  accept the run", and a signed `410` to the registration "register <run.url>: status
+  410: the server did not accept the run". `gateway.ResendNotOpened` reads "the server
+  never accepted the run's registration; nothing is sent".
+- `receiver.Handler` serves the run endpoint at `receiver.DefaultRunPath`, `/v1/runs`
+  in place of `/v1/run-configuration`: a run's registration, and its reload by id. Its
+  `RunConfiguration` hook is
+  `func(run receiver.Run) (document []byte, digest string, refusal *receiver.Refusal)`:
+  a `receiver.Run` holds the access key id, the instance id, the run id, the labels and
+  `about`, and a `*receiver.Refusal` is a signed answer of its `Status`, with its `Code`
+  or no body. Without a hook every run gets `receiver.NoPolicy`, `{"version":1}`.
+  `Admit` is asked at the registration. The handler answers a reload only for a run the
+  same access key registered, and `404` otherwise.
 
 #### Added
 
@@ -170,10 +206,10 @@ release may change what an existing document does, and says so under Upgrading.
   `409`s, with one key and with two, and the `429` with one key, and `signatures.json`
   their signatures under the fixture signing key.
 - The reference receiver accepts the public keys its configuration holds, answers in
-  the contract's order of refusals, a ping whose `interval_seconds` is outside 1 to 300
-  being `invalid_request`, and signs every answer after verification under its own key,
-  the `410` of its `Stop` among them. Its new hook `Admit` refuses an instance's ping
-  with `instance_limit`.
+  the contract's order of refusals, a registration whose `interval_seconds` is outside
+  1 to 300 being `invalid_request`, and signs every answer after verification under its
+  own key, the `410` of its `Stop` among them. Its new hook `Admit` refuses an
+  instance's registration with `instance_limit`.
 - `dev.qory.run.started` contains `about` when the caller passes one: what the run is
   about, as the caller passed it, every member optional. `kind` is the kind of run, at
   most 64 bytes; `title` the run's title, at most 256 bytes; `subjects` 1 to 16 objects
@@ -184,8 +220,8 @@ release may change what an existing document does, and says so under Upgrading.
   8192 bytes as the event contains it, compacted, with `<`, `>` and `&` written as
   `\u003c`, `\u003e` and `\u0026`, nested at most 4 levels deep, with keys of 1 to 64
   bytes, shown to every reader of the run, so it never holds a secret. No string in it
-  contains a control character. Only this event contains it; it is never sent on the
-  run configuration request and never selects a policy, and an empty `about` is left
+  contains a control character. Toward the server, only this event and the run's
+  registration contain it; it never selects a policy, and an empty `about` is left
   out. `fixtures/run/about-*.json` holds accepted and refused ones. `session.Spec.About`
   is a `session.About` of `Kind`, `Title`, `Subjects`, each a `session.Subject` of
   `Type`, `Ref`, `URL` and `Title`, and `Details`, a `json.RawMessage`; run.started
@@ -210,8 +246,8 @@ release may change what an existing document does, and says so under Upgrading.
   server for it. A gateway's `410` before the runtime starts is recorded the same way,
   as `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
   include `session_lost`, `batch_refused`, `credential_expired`, `stopped`,
-  `credential_check_unreachable` and `credential_check_invalid`, and the server's `not_found`, its
-  signed `404` to the run configuration of a workspace with no policy,
+  `credential_check_unreachable` and `credential_check_invalid`, and the server's `not_found`, a
+  signed `404` to a run's registration,
   `accesskey.CodeNotFound`. A code without `status` is held to the schema's list; a
   code of the server's, with its `status`, is kept as the server sent it, one the list
   does not hold yet included, and a receiver shows a code it does not know as it is.
@@ -394,11 +430,11 @@ release may change what an existing document does, and says so under Upgrading.
   is a `403` with the session's code of `refusal.Decides` and `from: gateway`, while the
   server's refusals pass through with their own status and `from: apiary`; a start that
   fails without a code is a `500` `internal` from `gateway` whose `message`, the
-  error's text, the session returns as its error. The gateway tries the server's ping
-  and run configuration up to 3 times, 1 second and then 2 seconds apart, starting a
-  try again only within 6 seconds of the run request: after no answer, a `5xx`, signed
-  or not, and a signed `429` `rate_limited`, the ping with its delivery id and recorded
-  once; once the tries are spent the last answer is the session's, as without them. A
+  error's text, the session returns as its error. The gateway tries the server's
+  registration up to 3 times, 1 second and then 2 seconds apart, starting a try again
+  only within 6 seconds of the run request: after no answer, a `5xx`, signed or not,
+  and a signed `429` `rate_limited`, every try with the same bytes, and recorded once;
+  once the tries are spent the last answer is the session's, as without them. A
   `404` does not fetch the configuration document again. A signed answer at run start
   with no code is a `server.AnswerError`, with its status. A refused reload leaves the policy in
   force: behind a separate gateway it is answered as a refused start is, and on the
@@ -432,7 +468,7 @@ release may change what an existing document does, and says so under Upgrading.
   `link-batch.schema.json`, events without `sequence`, which the gateway numbers. A
   session writes no event the gateway or the run credential decides: the gateway
   refuses a batch, `400` `invalid_request`, nothing of it numbered, with an event of
-  another run; a `dev.qory.ping` or a `dev.qory.run.egress`, which the gateway writes; a
+  another run; a `dev.qory.run.registered` or a `dev.qory.run.egress`, which the gateway writes; a
   `dev.qory.run.started` not opened by the session, whose `labels` or `about.details`
   differ from what the gateway holds or the run credential decides, or a second one; an
   event after the run's `dev.qory.run.exited` or `dev.qory.run.refused`, or a
@@ -476,14 +512,14 @@ release may change what an existing document does, and says so under Upgrading.
   `run_closed` to a request of a run already ended is unchanged. A server's signed
   `410`, with any code or none, stops delivery: the gateway sends no further batch for
   the run and marks its record `stopped`, and the run goes on, its record keeping every
-  event. A `410` to the ping, or to the run configuration as a run opens, signed or
-  not, is no run, and no refusal: no server's `410` crosses the link. The relay opens its
+  event. A `410` to the registration, signed or not, is no run, and no refusal: no
+  server's `410` crosses the link. The relay opens its
   connections with `QORY-RELAY` and the run's proxy secret, over TLS 1.3 with the
   link's trust between two machines, and without a wall the agent's proxy URL carries
   the secret as its password. `fixtures/link/` holds the valid documents, refusals from
   `gateway` and from `apiary` among them, most with today's text as their `message`,
   the gateway's with the `: <code>: <names>` tail, and the signed `409`
-  `instance_limit` to the ping from `apiary` with Qory Apiary's URL in it, and
+  `instance_limit` to the registration from `apiary` with the server's `run.url` in it, and
   `fixtures/invalid/link-*` the refused ones, a discovery without `proxy`, a run request that passes a value with a name or
   whose image has no `ref`, a run answer without `labels` or `applied` or whose image
   has no `ref`, a reload answer whose `applied` holds `variables`, a refusal without
@@ -604,23 +640,23 @@ release may change what an existing document does, and says so under Upgrading.
   their order, and enrolment.
 - Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
   an access key allowed stored secrets.
-- `dev.qory.ping` contains `interval_seconds`, the run's heartbeat interval, at most
-  300; with a server, `session.Spec.Heartbeat` is a whole number of seconds, so the
-  ping announces the interval the heartbeats tick at. Heartbeats run from the accepted ping until the final event, and
-  `elapsed_seconds` counts from the ping. `dev.qory.run.exited`'s `reason` has
-  `run_closed`.
+- The registration's `interval_seconds` is the run's heartbeat interval, a whole
+  number of seconds from 1 to 300, `gateway.Config.Heartbeat`, which the heartbeats
+  tick at. `elapsed_seconds` counts, on a session's run, from the session's discovery of its
+  gateway's link, and on a run a gateway opened, from the run's registration.
+  `dev.qory.run.exited`'s `reason` has `run_closed`.
 - `fixtures/server/` and `fixtures/signed/` use the fixture access key and Ed25519.
   `fixtures/signed/` has `get-configuration-no-instance-id` and `-header-twice`,
   `batch-unknown-key` in place of `batch-wrong-key`, and
   `expect_code` for a coded refusal. `fixtures/invalid/` has
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
-  `event-ping-interval-too-long` in place of `server-no-key`;
+  `event-registered-interval-too-long` in place of `server-no-key`;
   `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
-  `node_id` and `apiary_public_key`; and the pings of `fixtures/batch/ping.json` and
-  of the recorded runs contain `interval_seconds`.
+  `node_id` and `apiary_public_key`; and the `dev.qory.run.registered` of the recorded
+  runs contains `interval_seconds`.
 - The contract is at `contracts/forager/v1`, and every `$id` and `dataschema` is
-  `https://qory.dev/contracts/forager/v1/…`. `dev.qory.ping` and `dev.qory.run.started`
-  contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was
+  `https://qory.dev/contracts/forager/v1/…`. `dev.qory.run.registered` and
+  `dev.qory.run.started` contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was
   not recorded is `gateway_lost`; and the refusal code of a mount that holds Forager's
   own files is `mount_contains_forager_files`, `refusal.MountContainsForagerFiles`.
   `accesskey.UserAgent(version)` builds the `User-Agent` of every request to a server,
@@ -760,7 +796,7 @@ release may change what an existing document does, and says so under Upgrading.
   valid run credential is required as the proxy password". A connection of a run key
   with no open client's run opens one, of the gateway's own run id, decided as a
   walled run, with the credentials, the tools and the path rules its policy selects,
-  as a session's run: the gateway writes its ping, `dev.qory.run.started` with `opened_by` `gateway` and
+  as a session's run: the gateway registers it and writes its `dev.qory.run.registered`, `dev.qory.run.started` with `opened_by` `gateway` and
   the run credential's labels and `about.details`, its `dev.qory.run.policy_applied`,
   every connection's `dev.qory.run.egress`, and its heartbeats; its proxy reads inside
   HTTPS with the gateway's own authority. Every later connection of the run key joins
@@ -777,12 +813,12 @@ release may change what an existing document does, and says so under Upgrading.
   `failed` with `credential_check_invalid`; before, an idle client run was never asked.
   A run that ended is never opened again: the next connection of its run key opens a
   new run, of a new run id. A run refused with a code gets the gateway's
-  `dev.qory.run.refused` with that code, right after its ping; one that fails without
+  `dev.qory.run.refused` with that code in place of `dev.qory.run.started`; one that fails without
   a code gets no event. Its connection gets a `503` with the text "the gateway could not
   open the run; try again" for a failure that may pass, the starter's introspection
   endpoint unreachable or Qory Apiary's `5xx`, signed or not, with any code or none, or its
   signed `429` `rate_limited`, once the tries are spent, among it, at once for Qory
-  Apiary's `410` to the ping or the run configuration, signed or not, with any code or
+  Apiary's `410` to the registration, signed or not, with any code or
   none,
   and for one with neither a code nor a status of Qory
   Apiary's; and a `403` with one line for a reason that does not pass: "the gateway
@@ -868,8 +904,8 @@ release may change what an existing document does, and says so under Upgrading.
 - `gateway.Config.Runs.Quiet`, how long a run with no session lasts with no connection;
   30 minutes when zero.
 - `gateway.Delivery.NotOpened` says a resend sent nothing, and left the record as it
-  is, since the run never opened at the server: its ping was never accepted, or it had
-  no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
+  is, since the run never opened at the server: its registration was never accepted, or
+  it had no server. `gateway.ResendNotOpened` and `gateway.ResendNoServer` are the lines the
   resend reports then, which a caller that reports `NotOpened` itself may leave out,
   and `gateway.ResendTorn` the one for lines of the record that are not whole events,
   a format of their count and the record's path. `gateway.Delivery.Stopped` says the
@@ -882,8 +918,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 - A run request whose session gives up waiting for its run answer, ten seconds, opens
   no run: once its connection goes, the gateway asks Qory Apiary nothing more for it,
-  the ping and the run configuration among it, and removes what it recorded of the
-  run, so the same `run_id` sent again opens the run instead of `run_id_used`. Before,
+  its registration among it, and removes what it recorded of the run, so the same
+  `run_id` sent again opens the run instead of `run_id_used`. Within 150 seconds, with
+  every member of the registration but `time` the same, the gateway sends the server
+  the same registration bytes again, which a server that accepted them answers the
+  same; after that, or with other labels or another `about`, the server answers
+  `run_id_used`. Before,
   the run opened and ended `session_lost` after three heartbeat intervals. A session
   that goes while the run answer is on its way may still leave such a run.
 - A `gateway_lost` that `gateway.Resend` writes for a run a gateway opened holds
@@ -911,15 +951,16 @@ release may change what an existing document does, and says so under Upgrading.
   is numbered after the highest sequence of the whole events or of `delivered.log`,
   since an event whose line was not finished may have reached the server whole, and the
   file is changed only when `gateway_lost` is added.
-- `gateway.Resend` sends nothing of a record whose ping the server never accepted, one
-  that holds a ping and no `delivered.log`: the run never opened. Nothing is added to
-  its `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend
-  reports "the server never accepted the run's ping; nothing is sent". Before, its
+- `gateway.Resend` sends nothing of a record whose registration the server never
+  accepted, one with no `dev.qory.run.registered`, no `delivered.log` and no
+  `dev.qory.run.started`: the run never opened. Nothing is added to its
+  `events.jsonl`, the `Delivery` says `NotOpened`, nothing sent, and the resend reports
+  "the server never accepted the run's registration; nothing is sent". Before, its
   ping and events were posted, which reported a run that never opened. The same holds
-  of a record with no ping and no `delivered.log`, of a run that had no server, sent to
-  a server: it never opened there, and the resend reports "the run had no server;
-  nothing is sent". Before, its events were posted without a ping. A record with a
-  `delivered.log` is sent, its ping's line torn or not.
+  of a record with neither mark and a `dev.qory.run.started`, of a run that had no
+  server, sent to a server: it never opened there, and the resend reports "the run had
+  no server; nothing is sent". Before, its events were posted without a ping. A record
+  with a `dev.qory.run.registered` or a `delivered.log` is sent.
 
 ### Wall
 
@@ -1237,7 +1278,7 @@ release may change what an existing document does, and says so under Upgrading.
   environment it starts a program with. Nor does an agent, walled or not, receive
   `QORY_RUN_CREDENTIAL_SECRET`, whatever brought it.
 - `session.Spec` has `Discovered`, called once the server's signed configuration
-  document is read and before the ping, with the access key's `node_id` and whether the
+  document is read and before the registration, with the access key's `node_id` and whether the
   document lists `secrets`; an error it returns is no run.
 - A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
   Forager's files, `mount_contains_forager_files`, before it contacts the server and

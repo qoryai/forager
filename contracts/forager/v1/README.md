@@ -1654,8 +1654,12 @@ request whose session gives up opens no run: once its connection goes, the gatew
 the server nothing more for it, the registration among it, opens no run, and removes
 what it recorded of the run, so the same `run_id` sent again is a new run request, not
 `run_id_used` at the gateway. A registration the server accepted before then stays the
-server's, and the gateway's new registration of that `run_id`, built anew with another
-`time`, gets the server's `409` `run_id_used`.
+server's. The gateway keeps the bytes it built for a `run_id` for 150 seconds from when
+it built them, half the server's window: when the same `run_id` comes again within them,
+with every member but `time` the same, its labels and `about` among them, it sends the
+same bytes, `time` included, which a server that accepted them under the same access key
+answers the same again. After them, or when another member differs, it builds the
+registration anew, with another `time`, and the server answers `409` `run_id_used`.
 A session that goes in the moment between the gateway's last look and the answer's
 arrival may leave a run open, which ends `session_lost` as any run whose session sends
 nothing does.

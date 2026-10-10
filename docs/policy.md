@@ -46,8 +46,8 @@ A run has one policy. It comes from one of three places:
   - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
     in the checkout, or in a mount the container may write.
   - With a server configured, it needs `--local`.
-- **The server's run configuration.** The server's configuration may contain a `run`
-  section. Then the gateway fetches the run configuration, with the run's labels. Its
+- **The server's run configuration.** The gateway registers the run at the server's
+  run endpoint, with the run's labels, and the answer is the run configuration. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
 The node's policy is `gateway.Config.Policy`, the policy Forager is passed: for `qory`, the
