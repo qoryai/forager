@@ -1312,7 +1312,7 @@ force, Forager fetches the run's configuration again with a signed
 `run-configuration.schema.json` document with the same headers as the registration's
 answer. The server answers it only for a run the same access key registered, and
 anything else is `404`. A reload that fails, a `404` among them, leaves the policy in
-force; a `410` to it stops the deliveries, as to a batch (Delivery, below).
+force; a signed `410` to it stops the deliveries, as to a batch (Delivery, below).
 
 ```json
 {"version": 1,
