@@ -10,7 +10,14 @@ import (
 
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/runcredential"
+	"github.com/qoryai/forager/server"
 )
+
+// RegistrationAt is the bytes g sends for the registration reg at now: those it kept
+// for the run id, or new ones.
+func RegistrationAt(g *Gateway, reg server.Registration, now time.Time) ([]byte, error) {
+	return g.registrationAt(reg, now)
+}
 
 // SetQuiet makes a run whose session sends nothing for d end, in place of three
 // heartbeat intervals.
@@ -189,8 +196,8 @@ func SetKeepRetry(c *Config, d time.Duration) { c.keepRetry = d }
 // SetClock sets the time g refuses a run key by, in place of the system's.
 func SetClock(c *Config, now func() time.Time) { c.clock = now }
 
-// SetOpenTries sets the waits between the tries of Qory Apiary's ping and run
-// configuration as a run opens, and how long after the run request or the login a try
+// SetOpenTries sets the waits between the tries of the run's registration with Qory
+// Apiary as a run opens, and how long after the run request or the login a try
 // may start again, in place of openWaits and openWindow.
 func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 	c.openWaits, c.openWindow = waits, window

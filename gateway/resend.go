@@ -30,11 +30,13 @@ type ResendConfig struct {
 // gateway_lost; then every event the server wants that
 // no accepted batch contained is posted, in order and in the run's own batches, until
 // the server accepts it or ctx ends. A line of the record that holds no whole event, a
-// write the gateway did not finish, is skipped, and every event after it is sent. A
-// record whose ping the server never accepted, of a run that never opened, is left as
-// it is and sent nothing: NotOpened, Sent and Undelivered 0. So is a record with no
-// ping and no delivered.log, of a run that had no server, sent to one. A server that said stop during the
-// run is sent nothing: Stopped, Sent and Undelivered 0. A refusal of the server's, at
+// write the gateway did not finish, is skipped, and every event after it is sent. Sent
+// to a server, a record with no mark of an accepted registration, of a run that never
+// opened there, its registration refused or the run having had no server, is left as
+// it is and sent nothing: NotOpened, Sent and Undelivered 0. With no Server, nothing is
+// NotOpened, and a record that holds no event is left as it is. A server that said
+// stop during the run is sent nothing: Stopped, Sent and Undelivered 0. A refusal of
+// the server's, at
 // its discovery, is an [*accesskey.Refusal] with its From, Code and Names. A server
 // that answers a signed 410 now is sent nothing more, and its record is marked
 // stopped: Stopped, Sent what it accepted before, and Undelivered the events not sent,
@@ -85,12 +87,13 @@ const (
 	// event, a write the gateway did not finish, which are skipped: a format of their
 	// count, %d, and the record's path, %s, its events.jsonl.
 	ResendTorn = stream.ResendTorn
-	// ResendNoServer is reported when the record holds no ping and there is no
-	// delivered.log, of a run that had no server, and it is sent to one: the Delivery is
-	// NotOpened and nothing is sent.
+	// ResendNoServer is reported when neither the record, by its
+	// dev.qory.run.registered, nor delivered.log marks an accepted registration and the
+	// record holds run.started, of a run that had no server, and it is sent to one: the
+	// Delivery is NotOpened and nothing is sent.
 	ResendNoServer = stream.ResendNoServer
-	// ResendNotOpened is reported when the record holds a ping and there is no
-	// delivered.log, of a run whose ping the server never accepted: the Delivery is
-	// NotOpened and nothing is sent.
+	// ResendNotOpened is reported when neither the record nor delivered.log marks an
+	// accepted registration and the record holds no run.started, of a run that never
+	// opened, and it is sent to a server: the Delivery is NotOpened and nothing is sent.
 	ResendNotOpened = stream.ResendNotOpened
 )

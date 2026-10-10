@@ -65,8 +65,9 @@ type linkRun struct {
 	mu sync.Mutex
 	// opened says the run answer is made.
 	opened bool
-	// pingAt is when the gateway's ping for the run was numbered, zero without a server.
-	pingAt time.Time
+	// registeredAt is when the server accepted the run's registration, zero without a
+	// server: its heartbeats count from then.
+	registeredAt time.Time
 	// seen are the ids of the session's events numbered so far; startedID is its
 	// run.started's, startedAt that event's time; final says its run.exited or
 	// run.refused is numbered.
@@ -286,14 +287,15 @@ type opening struct {
 	// request, when not nil, is the context of the session's run request: once it ends,
 	// the session no longer waits for its answer, and the run does not open.
 	request context.Context
-	// deadline is the latest a try of Qory Apiary's ping or run configuration may start
+	// deadline is the latest a try of the run's registration with Qory Apiary may start
 	// again: [openWindow] after the run request came, or the client's login began.
 	deadline time.Time
 }
 
-// The tries of Qory Apiary's ping and run configuration as a run opens: up to three of
-// each, the second openWaits[0] after the first ends and the third openWaits[1] after
-// the second, and a try starts again only within openWindow of the run request's
+// The tries of the run's registration with Qory Apiary as a run opens: up to three, each
+// with the same bytes, the second openWaits[0] after the first ends and the third
+// openWaits[1] after the second, and a try starts again only within openWindow of the
+// run request's
 // arrival, or of the client's login's start. A fast answer to the last try therefore
 // arrives by about 6.5 seconds, inside the 10 seconds a session and a client wait.
 var (
@@ -313,7 +315,8 @@ func (g *Gateway) openDeadline() time.Time {
 // passing reports whether a failure to ask Qory Apiary as a run opens may pass, and is
 // asked again: no answer, a 5xx, signed or not, and a signed 429 rate_limited. A
 // refusal with any other code, a signed answer with another status and no code, a
-// signed 410 to the ping whatever its code, and a document Forager refuses are final.
+// signed 410 to the registration whatever its code, and a document Forager refuses are
+// final.
 func passing(err error) bool {
 	var document *server.DocumentError
 	var ref *accesskey.Refusal
@@ -326,7 +329,7 @@ func passing(err error) bool {
 	case errors.As(err, &uncoded):
 		return uncoded.Status >= 500
 	case errors.Is(err, server.ErrNotAccepted):
-		// A signed 410 to the ping: the server would record nothing of the run.
+		// A signed 410 to the registration: the server takes no run here.
 		return false
 	}
 	return true
@@ -355,8 +358,8 @@ func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() erro
 	}
 }
 
-// open opens a run for a request the link accepted: the ping and the run configuration
-// with a server, the policy in force, the credentials and the tools, the run's proxy
+// open opens a run for a request the link accepted: with a server, the run's
+// registration, whose answer is its run configuration, the policy in force, the credentials and the tools, the run's proxy
 // under a fresh secret, and its record. On the one address the run's labels are the run
 // credential's, and its proxy guarded whatever its wall. A run with no session gets no
 // proxy secret and no answer: its proxy reads inside HTTPS with the gateway's own
@@ -387,7 +390,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		err = codeless(err)
 		if ref := (*accesskey.Refusal)(nil); how.client && errors.As(err, &ref) && ref.Code != "" {
 			// No session tells of a run with no session that did not open: the gateway
-			// does, its dev.qory.run.refused right after the ping, with the refusal's
+			// does, its dev.qory.run.refused, with the refusal's
 			// code, as the session writes one of its own. A failure without a code is
 			// told to no one but the operator, as the session's is.
 			data := map[string]any{"code": ref.Code}
@@ -407,8 +410,8 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	ask := ctx
 	if how.request != nil {
-		// Once the session's run request goes, the server's ping and run configuration
-		// are asked no longer, and the run does not open: nothing more is written of
+		// Once the session's run request goes, the run's registration is tried no
+		// longer, and the run does not open: nothing more is written of
 		// it, and what its stream wrote goes too, so a retry of the run id opens.
 		failed := fail
 		fail = func(err error) (*linkRun, bool, error) {
@@ -434,40 +437,51 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	var fetched *run.Fetched
 	if g.client != nil {
-		ping, err := st.Ping(map[string]any{"forager_version": g.cfg.Version, "events": g.conf.Events.Types, "contract_version": server.Revision, "interval_seconds": g.interval})
+		// The registration: built once, so every try sends the same bytes, its time
+		// included, which Qory Apiary answers alike. Its answer is the run's run
+		// configuration: its policy, narrowed by the node's, or the node's own when it
+		// has none, and its variables.
+		reg := server.Registration{
+			Version: 1, RunID: req.RunID, Labels: labels, About: g.about(req, how),
+			ForagerVersion: g.cfg.Version, ContractVersion: server.Revision, IntervalSeconds: g.interval, Events: g.conf.Events.Types,
+			Time: server.RegistrationTime(time.Now()),
+		}
+		body, err := g.registration(reg)
 		if err != nil {
 			return fail(err)
 		}
+		var rc *server.RunConfiguration
+		var digest string
+		regErr := g.tries(ask, how.deadline, func() (err error) {
+			rc, digest, err = g.client.Register(ask, g.conf.Run.URL, body)
+			return err
+		})
+		// A signed 200 whose run configuration Forager refuses is a registration the
+		// server accepted: the record gets its run.registered, then the run is refused
+		// without a code, so no run.refused is written and nothing of the refusal reaches
+		// the server.
+		var refusedDocument *server.DocumentError
+		if regErr != nil && !errors.As(regErr, &refusedDocument) {
+			return fail(regErr)
+		}
 		lr.mu.Lock()
-		lr.pingAt = time.Now()
+		lr.registeredAt = time.Now()
 		lr.mu.Unlock()
-		body, _ := ping.JSON()
-		pingID := event.NewID()
-		// Each try sends the same delivery id and body, which Qory Apiary deduplicates.
-		batch := []byte("[" + string(body) + "]")
-		if err := g.tries(ask, how.deadline, func() error { return g.client.Ping(ask, g.conf.Events.URL, pingID, batch) }); err != nil {
+		// The record's first line, the registration the server accepted, never posted.
+		if _, err := st.Registered(map[string]any{"forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}); err != nil {
 			return fail(err)
 		}
-		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, labels, g.report)
+		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, req.RunID, g.report)
 		lr.posts = sink.NewServer(g.client, sink.Target{URL: g.conf.Events.URL, Types: g.conf.Events.Types}, st.Dir(), g.report, lr.live.digests)
 		lr.live.posts = lr.posts
-		if err := st.Deliver(lr.posts, pingID); err != nil {
+		if err := st.Deliver(lr.posts); err != nil {
 			lr.posts.Close(g.base)
 			return fail(err)
 		}
-		// The run configuration, when the server names one: its policy, narrowed by
-		// the node's, or the node's own when it has none, and its variables.
-		if g.conf.Run != nil {
-			var rc *server.RunConfiguration
-			var digest string
-			if err := g.tries(ask, how.deadline, func() (err error) {
-				rc, digest, err = g.client.RunConfiguration(ask, g.conf.Run.URL, labels)
-				return err
-			}); err != nil {
-				return fail(err)
-			}
-			fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
+		if regErr != nil {
+			return fail(regErr)
 		}
+		fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
 	}
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
@@ -562,6 +576,81 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	lr.answer = newSecretValue(string(lr.runAnswer(authority)))
 	lr.mu.Unlock()
 	return lr, true, nil
+}
+
+// keepRegistration is how long a registration built for a run id is kept for a retry
+// of the run id, by the wall clock from the time it holds: half the window a server
+// holds its time to, so a retry's time is still within it.
+const keepRegistration = server.Window / 2
+
+// keptRegistration is a registration built for a run id: its members, its bytes and
+// the time it holds, read back, which carries no monotonic clock reading.
+type keptRegistration struct {
+	reg  server.Registration
+	body []byte
+	at   time.Time
+}
+
+// registration is the bytes of a run's registration: those built for the run id within
+// [keepRegistration] when every member but the time is the same, the retry of a run id
+// whose session gave up as it opened, else new ones, kept.
+func (g *Gateway) registration(reg server.Registration) ([]byte, error) {
+	return g.registrationAt(reg, time.Now())
+}
+
+// registrationAt is [Gateway.registration] at now. A kept registration's age is
+// measured by the wall clock, its monotonic reading stripped, from the time it holds,
+// so a host that slept does not keep one the server would refuse as stale; a negative
+// age, a clock set back, has it expire as well.
+func (g *Gateway) registrationAt(reg server.Registration, now time.Time) ([]byte, error) {
+	g.regMu.Lock()
+	defer g.regMu.Unlock()
+	now = now.Round(0)
+	for id, k := range g.registrations {
+		if age := now.Sub(k.at); age < 0 || age > keepRegistration {
+			delete(g.registrations, id)
+		}
+	}
+	if k, ok := g.registrations[reg.RunID]; ok {
+		same := reg
+		same.Time = k.reg.Time
+		if reflect.DeepEqual(same, k.reg) {
+			return k.body, nil
+		}
+	}
+	body, err := reg.Body()
+	if err != nil {
+		return nil, err
+	}
+	if g.registrations == nil {
+		g.registrations = map[string]keptRegistration{}
+	}
+	at, err := time.Parse(time.RFC3339, reg.Time)
+	if err != nil {
+		// A time that does not read back is not kept: a retry builds its own.
+		return body, nil
+	}
+	reg.Labels = maps.Clone(reg.Labels)
+	g.registrations[reg.RunID] = keptRegistration{reg: reg, body: body, at: at}
+	return body, nil
+}
+
+// about is what the run's registration says the run is about: the session's about, as
+// its run.started reports it, or for a run with no session the about.details its run
+// credential's mapping makes, as the gateway's run.started of it reports them. It never
+// selects a policy.
+func (g *Gateway) about(req *server.LinkRunRequest, how opening) *server.About {
+	if how.client {
+		if how.id == nil || len(how.id.Details) == 0 {
+			return nil
+		}
+		d, err := json.Marshal(how.id.Details)
+		if err != nil {
+			return nil
+		}
+		return server.ReportedAbout(&server.About{Details: d})
+	}
+	return server.ReportedAbout(req.About)
 }
 
 // begin writes what a session writes of a run that opens, for a run with no session:

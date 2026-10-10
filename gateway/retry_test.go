@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -79,17 +80,20 @@ type scripted struct {
 	seen    map[string][]seenRequest
 }
 
-// seenRequest is a request the control had: when, and its delivery id.
+// seenRequest is a request the control had: when, its delivery id and its body.
 type seenRequest struct {
 	at       time.Time
 	delivery string
+	body     []byte
 }
 
 func script(c *control) *scripted {
 	s := &scripted{replies: map[string][]apiaryReply{}, seen: map[string][]seenRequest{}}
 	f := func(w http.ResponseWriter, r *http.Request) bool {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		s.mu.Lock()
-		s.seen[r.URL.Path] = append(s.seen[r.URL.Path], seenRequest{time.Now(), r.Header.Get(server.HeaderDelivery)})
+		s.seen[r.URL.Path] = append(s.seen[r.URL.Path], seenRequest{time.Now(), r.Header.Get(server.HeaderDelivery), body})
 		q := s.replies[r.URL.Path]
 		if len(q) == 0 {
 			s.mu.Unlock()
@@ -97,7 +101,6 @@ func script(c *control) *scripted {
 		}
 		s.replies[r.URL.Path] = q[1:]
 		s.mu.Unlock()
-		io.ReadAll(r.Body)
 		q[0].write(w, r)
 		return true
 	}
@@ -122,7 +125,7 @@ func (s *scripted) requests(path string) []seenRequest {
 // The paths of the control.
 const (
 	eventsPath = "/v1/events"
-	runPath    = "/v1/run-configuration"
+	runPath    = runsPath
 )
 
 // notFoundPage is Qory Apiary's page for a path it does not know, unsigned.
@@ -140,14 +143,14 @@ func gaps(seen []seenRequest) []time.Duration {
 	return out
 }
 
-// TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the ping and the run
-// configuration as a run opens: the gateway's own waits, 1 second and then 2 seconds,
-// in a window of 6 seconds; a signed 503 or 429 rate_limited, an unsigned 5xx and no
-// answer are asked again, the ping with its delivery id and recorded once, and an
-// answer on a later try opens the run; a refusal with any other code, an unsigned
-// answer other than a 5xx, a signed answer without a code and a 410, signed or not,
-// with a code or none, are asked once, the 410 a failure without a code; and the last
-// try's refusal is the session's, as before the tries.
+// TestTheTriesOfQoryApiaryAsARunOpens pins the tries of the run's registration as a
+// run opens: the gateway's own waits, 1 second and then 2 seconds, in a window of 6
+// seconds; a signed 503 or 429 rate_limited, an unsigned 5xx and no answer are asked
+// again, every try with the same bytes, its time included, and an answer on a later try
+// opens the run, whose record holds one run.registered, its first line; a refusal with
+// any other code, an unsigned answer other than a 5xx, a signed answer without a code
+// and a 410, signed or not, with a code or none, are asked once, the 410 a failure
+// without a code; and the last try's refusal is the session's, as before the tries.
 func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 	if waits, window := gateway.OpenTries(); !slices.Equal(waits, []time.Duration{time.Second, 2 * time.Second}) || window != 6*time.Second {
 		t.Fatalf("the waits %v and the window %v; want [1s 2s] and 6s", waits, window)
@@ -163,28 +166,25 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 		from    string
 		uncoded string // the end of a failure without a code's text
 	}{
-		{"a ping's 503, then its 202", eventsPath, []apiaryReply{coded(503, "unavailable")}, 2, "", 0, "", ""},
-		{"a ping's unsigned 502, no answer, then its 202", eventsPath, []apiaryReply{unsignedReply(502, "text/plain", "bad gateway"), dropped}, 3, "", 0, "", ""},
-		{"a ping's 429 rate_limited, then its 202", eventsPath, []apiaryReply{coded(429, "rate_limited")}, 2, "", 0, "", ""},
-		{"a run configuration's 503, then its 200", runPath, []apiaryReply{coded(503, "unavailable")}, 2, "", 0, "", ""},
-		{"a run configuration's 429 rate_limited twice, then its 200", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited")}, 3, "", 0, "", ""},
-		{"a ping's 429 rate_limited three times", eventsPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited"), coded(429, "rate_limited")}, 3, "rate_limited", 429, "apiary", ""},
-		{"a run configuration's 503 three times", runPath, []apiaryReply{coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable")}, 3, "unavailable", 503, "apiary", ""},
-		{"a ping's unsigned 401", eventsPath, []apiaryReply{unsignedReply(401, "application/json", `{"error":"unauthorized"}`)}, 1, "unauthorized", 401, "apiary", ""},
-		{"a ping's 409 instance_limit", eventsPath, []apiaryReply{coded(409, "instance_limit")}, 1, "instance_limit", 409, "apiary", ""},
-		{"a ping's 400 invalid_request", eventsPath, []apiaryReply{coded(400, "invalid_request")}, 1, "invalid_request", 400, "apiary", ""},
-		{"a ping's unsigned 429", eventsPath, []apiaryReply{unsignedReply(429, "application/json", `{"error":"rate_limited"}`)}, 1, "answer_unsigned", 429, "gateway", ""},
-		{"a run configuration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, 1, "not_found", 404, "apiary", ""},
-		{"a run configuration's signed 404 without a code", runPath, []apiaryReply{{status: 404, signed: true}}, 1, "", 0, "", ": status 404"},
-		{"a run configuration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, 1, "answer_unsigned", 404, "gateway", ""},
-		{"a ping's signed 410 run_closed", eventsPath, []apiaryReply{coded(410, "run_closed")}, 1, "", 0, "", ": status 410: the server did not accept the ping"},
-		{"a ping's signed 410 without a code", eventsPath, []apiaryReply{{status: 410, signed: true}}, 1, "", 0, "", ": status 410: the server did not accept the ping"},
-		{"a run configuration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, 1, "", 0, "", ": status 410"},
-		{"a run configuration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, 1, "", 0, "", ": status 410"},
-		{"a ping's unsigned 410 without a body", eventsPath, []apiaryReply{unsignedReply(410, "", "")}, 1, "", 0, "", "/v1/events: status 410"},
-		{"a ping's unsigned 410 page", eventsPath, []apiaryReply{gonePage}, 1, "", 0, "", "/v1/events: status 410"},
-		{"a run configuration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, 1, "", 0, "", ": status 410"},
-		{"a run configuration's unsigned 410 page", runPath, []apiaryReply{gonePage}, 1, "", 0, "", ": status 410"},
+		{"a registration's 503, then its 200", runPath, []apiaryReply{coded(503, "unavailable")}, 2, "", 0, "", ""},
+		{"a registration's unsigned 502, no answer, then its 200", runPath, []apiaryReply{unsignedReply(502, "text/plain", "bad gateway"), dropped}, 3, "", 0, "", ""},
+		{"a registration's 429 rate_limited, then its 200", runPath, []apiaryReply{coded(429, "rate_limited")}, 2, "", 0, "", ""},
+		{"a registration's 429 rate_limited twice, then its 200", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited")}, 3, "", 0, "", ""},
+		{"a registration's 429 rate_limited three times", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited"), coded(429, "rate_limited")}, 3, "rate_limited", 429, "apiary", ""},
+		{"a registration's 503 three times", runPath, []apiaryReply{coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable")}, 3, "unavailable", 503, "apiary", ""},
+		{"a registration's unsigned 401", runPath, []apiaryReply{unsignedReply(401, "application/json", `{"error":"unauthorized"}`)}, 1, "unauthorized", 401, "apiary", ""},
+		{"a registration's 409 instance_limit", runPath, []apiaryReply{coded(409, "instance_limit")}, 1, "instance_limit", 409, "apiary", ""},
+		{"a registration's 409 run_id_used", runPath, []apiaryReply{coded(409, "run_id_used")}, 1, "run_id_used", 409, "apiary", ""},
+		{"a registration's 409 of the server's own", runPath, []apiaryReply{coded(409, "node_paused")}, 1, "node_paused", 409, "apiary", ""},
+		{"a registration's 400 invalid_request", runPath, []apiaryReply{coded(400, "invalid_request")}, 1, "invalid_request", 400, "apiary", ""},
+		{"a registration's unsigned 429", runPath, []apiaryReply{unsignedReply(429, "application/json", `{"error":"rate_limited"}`)}, 1, "answer_unsigned", 429, "gateway", ""},
+		{"a registration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, 1, "not_found", 404, "apiary", ""},
+		{"a registration's signed 404 without a code", runPath, []apiaryReply{{status: 404, signed: true}}, 1, "", 0, "", ": status 404: the server did not accept the run"},
+		{"a registration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, 1, "answer_unsigned", 404, "gateway", ""},
+		{"a registration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, 1, "", 0, "", runPath + ": status 410: the server did not accept the run"},
+		{"a registration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, 1, "", 0, "", runPath + ": status 410: the server did not accept the run"},
+		{"a registration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, 1, "", 0, "", runPath + ": status 410"},
+		{"a registration's unsigned 410 page", runPath, []apiaryReply{gonePage}, 1, "", 0, "", runPath + ": status 410"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctl := newControl(t)
@@ -205,11 +205,9 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 					t.Errorf("try %d came %v after the one before; want at least %v", i+2, g, waits[i])
 				}
 			}
-			if c.path == eventsPath {
-				for _, r := range seen {
-					if r.delivery != seen[0].delivery {
-						t.Errorf("the ping's tries carry the delivery ids %v", seen)
-					}
+			for _, r := range seen {
+				if !bytes.Equal(r.body, seen[0].body) || len(r.body) == 0 {
+					t.Errorf("the tries carry other bytes:\n%s\n%s", seen[0].body, r.body)
 				}
 			}
 			switch {
@@ -219,14 +217,15 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 				}
 				h.post(heartbeat(a.RunID))
 				h.close()
-				pings := 0
-				for _, l := range h.record(a.RunID) {
-					if l.Type == event.Ping {
-						pings++
+				registered := 0
+				rec := h.record(a.RunID)
+				for _, l := range rec {
+					if l.Type == event.RunRegistered {
+						registered++
 					}
 				}
-				if pings != 1 {
-					t.Errorf("the record holds %d pings", pings)
+				if registered != 1 || rec[0].Type != event.RunRegistered || rec[0].Sequence != "0000000001" {
+					t.Errorf("the record %v", types(rec))
 				}
 			case c.uncoded != "":
 				var ref *accesskey.Refusal
@@ -239,7 +238,7 @@ func TestTheTriesOfQoryApiaryAsARunOpens(t *testing.T) {
 				if !errors.As(err, &ref) || ref.Code != c.code || ref.Status != c.status || ref.From != c.from {
 					t.Fatalf("the refusal %#v; want %s, %d from %s", err, c.code, c.status, c.from)
 				}
-				if c.code == "rate_limited" && err.Error() != "ping "+ctl.srv.URL+"/v1/events: rate_limited (status 429)" {
+				if c.code == "rate_limited" && err.Error() != "register "+ctl.srv.URL+runPath+": rate_limited (status 429)" {
 					t.Errorf("the session's text %q", err)
 				}
 			}
@@ -257,7 +256,7 @@ func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
 	gateway.SetOpenTries(&cfg, []time.Duration{2 * time.Second, 2 * time.Second}, 10*time.Second)
 	h := start(t, cfg)
 	s := script(ctl)
-	s.then(eventsPath, coded(503, "unavailable"))
+	s.then(runPath, coded(503, "unavailable"))
 	req := server.LinkRunRequest{RunID: event.NewRunID()}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -265,7 +264,7 @@ func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
 		_, err := h.link.OpenRun(ctx, server.LocalOrigin+"/v1/run-configuration", req)
 		done <- err
 	}()
-	eventually(t, "the first try", func() bool { return len(s.requests(eventsPath)) == 1 })
+	eventually(t, "the first try", func() bool { return len(s.requests(runPath)) == 1 })
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	if err := <-done; err == nil {
@@ -280,7 +279,7 @@ func TestTheTriesStopWhenTheSessionGoes(t *testing.T) {
 	if took := time.Since(start); took > time.Second {
 		t.Errorf("the next request took %v: the tries went on", took)
 	}
-	if n := len(s.requests(eventsPath)); n != 2 {
+	if n := len(s.requests(runPath)); n != 2 {
 		t.Errorf("Qory Apiary was asked %d times; want the first request's try and the next request's", n)
 	}
 	h.post(heartbeat(a.RunID))
@@ -300,11 +299,11 @@ func TestTheWindowOfTheTries(t *testing.T) {
 		gateway.SetOpenTries(&cfg, waits, c.window)
 		h := start(t, cfg)
 		s := script(ctl)
-		s.then(eventsPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
+		s.then(runPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
 		if _, err := h.tryOpen(server.LinkRunRequest{}); err == nil {
 			t.Fatal("the run opened")
 		}
-		if n := len(s.requests(eventsPath)); n != c.tries {
+		if n := len(s.requests(runPath)); n != c.tries {
 			t.Errorf("a window of %v: asked %d times; want %d", c.window, n, c.tries)
 		}
 	}
@@ -319,13 +318,13 @@ func TestTheWindowOfTheTries(t *testing.T) {
 	}, time.Hour)
 	s := startVerifying(t, cfg, nil, 0)
 	sc := script(ctl)
-	sc.then(eventsPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
+	sc.then(runPath, coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable"))
 	cred := credentialFor("rk-0001")
 	s.secrets = append(s.secrets, cred)
 	if status, b := s.tryOpenWith(t, cred, server.LinkRunRequest{}); status != http.StatusServiceUnavailable || refusalOf(b)["error"] != "unavailable" {
 		t.Errorf("the open: %d %s", status, b)
 	}
-	if n := len(sc.requests(eventsPath)); n != 1 {
+	if n := len(sc.requests(runPath)); n != 1 {
 		t.Errorf("asked %d times after the issuer took the window; want once", n)
 	}
 }
@@ -596,11 +595,11 @@ func TestAClientsRunWhoseIssuerGivesNoAnswer(t *testing.T) {
 // the gateway for a code it decides of the run configuration; a 403 with the status of
 // a signed answer without a code; and, once the tries are spent, the 503 that says to
 // try again for a 503 or 429 rate_limited and for an unsigned 5xx, and at once for a
-// 410 to the ping or the run configuration, signed or not, with a code or none, which
-// refuses nothing and is in the report line alone. The record holds
-// the ping and the run.refused with its code, and its status for a code from Qory
-// Apiary; a refusal without a code is in the report line alone. A 404 is asked once,
-// and the configuration document is not fetched again.
+// 410 to the registration, signed or not, with a code or none, which refuses nothing
+// and is in the report line alone. The record holds run.refused with its code, and its
+// status for a code from Qory Apiary, after run.registered when the server answered
+// the registration with a signed 200; a refusal without a code is in the report line
+// alone. A 404 is asked once, and the configuration document is not fetched again.
 func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
@@ -616,17 +615,17 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 		tries   int
 		report  string // a part of the report line
 	}{
-		{"the ping's 400 bad_request", eventsPath, []apiaryReply{coded(400, "bad_request")}, "", 403,
+		{"the registration's 400 bad_request", runPath, []apiaryReply{coded(400, "bad_request")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, bad_request", map[string]any{"code": "bad_request", "status": 400.0}, 1, "bad_request (status 400)"},
-		{"the ping's 400 unsupported_contract_version", eventsPath, []apiaryReply{coded(400, "unsupported_contract_version")}, "", 403,
+		{"the registration's 400 unsupported_contract_version", runPath, []apiaryReply{coded(400, "unsupported_contract_version")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, unsupported_contract_version", map[string]any{"code": "unsupported_contract_version", "status": 400.0}, 1, "unsupported_contract_version (status 400)"},
-		{"the ping's 400 invalid_request", eventsPath, []apiaryReply{coded(400, "invalid_request")}, "", 403,
+		{"the registration's 400 invalid_request", runPath, []apiaryReply{coded(400, "invalid_request")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, invalid_request", map[string]any{"code": "invalid_request", "status": 400.0}, 1, "invalid_request (status 400)"},
-		{"the ping's 409 instance_limit", eventsPath, []apiaryReply{coded(409, "instance_limit")}, "", 403,
+		{"the registration's 409 instance_limit", runPath, []apiaryReply{coded(409, "instance_limit")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, instance_limit", map[string]any{"code": "instance_limit", "status": 409.0}, 1, "instance_limit (status 409)"},
-		{"the ping's unsigned 401", eventsPath, []apiaryReply{unsignedReply(401, "application/json", `{"error":"unauthorized"}`)}, "", 403,
+		{"the registration's unsigned 401", runPath, []apiaryReply{unsignedReply(401, "application/json", `{"error":"unauthorized"}`)}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, unauthorized", map[string]any{"code": "unauthorized", "status": 401.0}, 1, "unauthorized (status 401)"},
-		{"the ping's unsigned 413", eventsPath, []apiaryReply{unsignedReply(413, "", "")}, "", 403,
+		{"the registration's unsigned 413", runPath, []apiaryReply{unsignedReply(413, "", "")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, answer_unsigned", map[string]any{"code": "answer_unsigned"}, 1, "answer_unsigned (status 413)"},
 		{"a run configuration the schema refuses", runPath, nil, `{"version":"one"}`, 403,
 			"the gateway could not open the run: the gateway refused it, run_configuration_invalid", map[string]any{"code": "run_configuration_invalid"}, 1, "run_configuration_invalid"},
@@ -634,40 +633,32 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 			"the gateway could not open the run: the gateway refused it, tool_unknown", map[string]any{"code": "tool_unknown", "names": []any{"example-tool"}}, 1, "tool_unknown"},
 		{"a run configuration's unknown image", runPath, nil, `{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]},"image":"example-image"}`, 403,
 			"the gateway could not open the run: the gateway refused it, image_unknown", map[string]any{"code": "image_unknown", "names": []any{"example-image"}}, 1, "image_unknown"},
-		{"a run configuration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, "", 403,
+		{"the registration's 404 not_found", runPath, []apiaryReply{coded(404, "not_found")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, not_found", map[string]any{"code": "not_found", "status": 404.0}, 1, "not_found (status 404)"},
-		{"a run configuration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, "", 403,
+		{"the registration's unsigned 404 page", runPath, []apiaryReply{notFoundPage}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, answer_unsigned", map[string]any{"code": "answer_unsigned"}, 1, "answer_unsigned (status 404)"},
-		{"a run configuration's code the contract does not list", runPath, []apiaryReply{coded(404, "example_server_code")}, "", 403,
+		{"the registration's code the contract does not list", runPath, []apiaryReply{coded(404, "example_server_code")}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, example_server_code", map[string]any{"code": "example_server_code", "status": 404.0}, 1, "example_server_code (status 404)"},
-		{"a run configuration's signed 404 without a code", runPath, []apiaryReply{{status: 404, signed: true}}, "", 403,
+		{"the registration's signed 404 without a code", runPath, []apiaryReply{{status: 404, signed: true}}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, status 404", nil, 1, ": status 404"},
-		{"a run configuration's signed 200 without its digest", runPath, []apiaryReply{{status: 200, body: allow, contentType: "application/json", signed: true}}, "", 403,
+		{"the registration's signed 200 without its digest", runPath, []apiaryReply{{status: 200, body: allow, contentType: "application/json", signed: true}}, "", 403,
 			"the gateway could not open the run: Qory Apiary refused it, status 200", nil, 1, "the answer contains no X-Qory-Run-Configuration header"},
-		{"the ping's 503 unavailable three times", eventsPath, []apiaryReply{coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable")}, "", 503,
+		{"the registration's 503 unavailable three times", runPath, []apiaryReply{coded(503, "unavailable"), coded(503, "unavailable"), coded(503, "unavailable")}, "", 503,
 			tryAgainText, map[string]any{"code": "unavailable", "status": 503.0}, 3, "unavailable (status 503)"},
-		{"the ping's unsigned 502 three times", eventsPath, []apiaryReply{unsignedReply(502, "", ""), unsignedReply(502, "", ""), unsignedReply(502, "", "")}, "", 503,
+		{"the registration's unsigned 502 three times", runPath, []apiaryReply{unsignedReply(502, "", ""), unsignedReply(502, "", ""), unsignedReply(502, "", "")}, "", 503,
 			tryAgainText, map[string]any{"code": "answer_unsigned"}, 3, "answer_unsigned (status 502)"},
-		{"a run configuration's signed 500 without a code three times", runPath, []apiaryReply{{status: 500, signed: true}, {status: 500, signed: true}, {status: 500, signed: true}}, "", 503,
+		{"the registration's signed 500 without a code three times", runPath, []apiaryReply{{status: 500, signed: true}, {status: 500, signed: true}, {status: 500, signed: true}}, "", 503,
 			tryAgainText, nil, 3, ": status 500"},
-		{"a run configuration's 429 rate_limited three times", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited"), coded(429, "rate_limited")}, "", 503,
+		{"the registration's 429 rate_limited three times", runPath, []apiaryReply{coded(429, "rate_limited"), coded(429, "rate_limited"), coded(429, "rate_limited")}, "", 503,
 			tryAgainText, map[string]any{"code": "rate_limited", "status": 429.0}, 3, "rate_limited (status 429)"},
-		{"the ping's signed 410 run_closed", eventsPath, []apiaryReply{coded(410, "run_closed")}, "", 503,
-			tryAgainText, nil, 1, ": status 410: the server did not accept the ping"},
-		{"the ping's signed 410 without a code", eventsPath, []apiaryReply{{status: 410, signed: true}}, "", 503,
-			tryAgainText, nil, 1, ": status 410: the server did not accept the ping"},
-		{"a run configuration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, "", 503,
-			tryAgainText, nil, 1, ": status 410"},
-		{"a run configuration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, "", 503,
-			tryAgainText, nil, 1, ": status 410"},
-		{"the ping's unsigned 410 without a body", eventsPath, []apiaryReply{unsignedReply(410, "", "")}, "", 503,
-			tryAgainText, nil, 1, "/v1/events: status 410"},
-		{"the ping's unsigned 410 page", eventsPath, []apiaryReply{gonePage}, "", 503,
-			tryAgainText, nil, 1, "/v1/events: status 410"},
-		{"a run configuration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, "", 503,
-			tryAgainText, nil, 1, ": status 410"},
-		{"a run configuration's unsigned 410 page", runPath, []apiaryReply{gonePage}, "", 503,
-			tryAgainText, nil, 1, ": status 410"},
+		{"the registration's signed 410 run_closed", runPath, []apiaryReply{coded(410, "run_closed")}, "", 503,
+			tryAgainText, nil, 1, runPath + ": status 410: the server did not accept the run"},
+		{"the registration's signed 410 without a code", runPath, []apiaryReply{{status: 410, signed: true}}, "", 503,
+			tryAgainText, nil, 1, runPath + ": status 410: the server did not accept the run"},
+		{"the registration's unsigned 410 without a body", runPath, []apiaryReply{unsignedReply(410, "", "")}, "", 503,
+			tryAgainText, nil, 1, runPath + ": status 410"},
+		{"the registration's unsigned 410 page", runPath, []apiaryReply{gonePage}, "", 503,
+			tryAgainText, nil, 1, runPath + ": status 410"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctl := newControl(t)
@@ -704,14 +695,17 @@ func TestAClientsRunThatQoryApiaryRefuses(t *testing.T) {
 				t.Fatalf("runs %v", ids)
 			}
 			rec := s.record(ids[0])
-			want := []string{event.Ping}
+			var want []string
+			if c.replies == nil || c.replies[0].status == http.StatusOK {
+				want = append(want, event.RunRegistered)
+			}
 			if c.refused != nil {
 				want = append(want, event.RunRefused)
 			}
 			if got := types(rec); !slices.Equal(got, want) {
 				t.Errorf("record %v; want %v", got, want)
-			} else if c.refused != nil && !equalData(rec[1].Data, c.refused) {
-				t.Errorf("run.refused %v; want %v", rec[1].Data, c.refused)
+			} else if c.refused != nil && !equalData(rec[len(rec)-1].Data, c.refused) {
+				t.Errorf("run.refused %v; want %v", rec[len(rec)-1].Data, c.refused)
 			}
 			validEvents(t, rec)
 		})
@@ -844,5 +838,55 @@ func TestTheIssuersEndHoldsTheRunKeyOfARunEndedOtherwise(t *testing.T) {
 	s.close()
 	if b, err := os.ReadFile(filepath.Join(s.dir, runcredential.EndedFile)); err != nil || !strings.Contains(string(b), "rk-0001") {
 		t.Errorf("the gateway's directory holds no refused run key: %s %v", b, err)
+	}
+}
+
+// TestARegistrationIsKeptForARetryOfItsRunID pins the bytes a retry of a run id sends:
+// within half the server's window of the time the first registration holds, by the
+// wall clock, the same registration but for its time sends the same bytes; other labels
+// or another about build new bytes; and past that half window, or before the time it
+// holds, a clock set back, the registration is built anew, its own time in it.
+func TestARegistrationIsKeptForARetryOfItsRunID(t *testing.T) {
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	reg := func(at time.Time, labels map[string]string, about *server.About) server.Registration {
+		return server.Registration{Version: 1, RunID: event.NewRunID(), Labels: labels, About: about, ForagerVersion: "test",
+			ContractVersion: server.Revision, IntervalSeconds: 30, Events: []string{"*"}, Time: server.RegistrationTime(at)}
+	}
+	labels := map[string]string{"repository": "acme/shop"}
+	for name, tc := range map[string]struct {
+		after  time.Duration
+		labels map[string]string
+		about  *server.About
+		same   bool
+	}{
+		"the same, at once":             {time.Second, labels, nil, true},
+		"the same, within half":         {server.Window/2 - time.Second, labels, nil, true},
+		"the same, past half":           {server.Window/2 + time.Second, labels, nil, false},
+		"the same, with the clock back": {-time.Second, labels, nil, false},
+		"other labels":                  {time.Second, map[string]string{"repository": "acme/other"}, nil, false},
+		"another about":                 {time.Second, labels, &server.About{Title: "Fix the build"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &gateway.Gateway{}
+			first := reg(t0, labels, nil)
+			b1, err := gateway.RegistrationAt(g, first, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at := t0.Add(tc.after)
+			retry := reg(at, tc.labels, tc.about)
+			retry.RunID = first.RunID
+			b2, err := gateway.RegistrationAt(g, retry, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := retry.Body()
+			if tc.same {
+				want = b1
+			}
+			if !bytes.Equal(b2, want) {
+				t.Errorf("sent %s, want %s", b2, want)
+			}
+		})
 	}
 }

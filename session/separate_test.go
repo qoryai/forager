@@ -540,11 +540,11 @@ func TestASeparateGatewaysCloseCarriesItsCause(t *testing.T) {
 					waitFor(t, ended)
 					return
 				}
-				// A batch of the run's the gateway refuses: a ping, which the gateway
-				// alone writes.
+				// A batch of the run's the gateway refuses: a run.registered, which the
+				// gateway alone writes.
 				body, _ := json.Marshal([]map[string]any{{
-					"specversion": "1.0", "id": event.NewID(), "source": event.Source(r.sp.RunID), "type": event.Ping, "subject": r.sp.RunID,
-					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.Ping),
+					"specversion": "1.0", "id": event.NewID(), "source": event.Source(r.sp.RunID), "type": event.RunRegistered, "subject": r.sp.RunID,
+					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.RunRegistered),
 					"data": map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30},
 				}})
 				req, _ := http.NewRequest(http.MethodPost, s.url()+"/v1/events", bytes.NewReader(body))

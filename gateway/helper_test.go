@@ -53,30 +53,35 @@ func mustGenerate() *accesskey.Key {
 }
 
 // control is a server of the contract for the tests: the reference receiver in front
-// of a store, whose configuration document names its own events endpoint and, when
-// the test gives it one, a run configuration it may change during a run.
+// of a store, whose configuration document names its own events endpoint and run
+// endpoint, and which answers a run's registration and its reload with the run
+// configuration the test gives it, which it may change during a run, or with
+// {"version":1} without one.
 type control struct {
 	srv      *httptest.Server
 	store    *receiver.File
 	received string
 	// refuse, when set, is the status every delivery gets instead of an answer,
 	// unsigned; closed answers every delivery a signed 410 run_closed, a server's 410
-	// with a code, and stop every new event a signed 410 without a code; closeOnFetch
-	// sets closed once the run configuration is fetched.
+	// with a code, and stop every registration, reload and new event a signed 410
+	// without a code; closeOnFetch sets closed once the run configuration is asked for,
+	// at the registration or again; limit answers every new registration a signed 409
+	// instance_limit.
 	refuse                            atomic.Int32
 	closed, stop, closeOnFetch, limit atomic.Bool
-	// deliveries counts every request to the events endpoint, the ping's included.
+	// deliveries counts every request to the events endpoint.
 	deliveries atomic.Int32
 	// goneAfter, when not zero, answers every request to the events endpoint past that
 	// count of deliveries a signed 410 run_closed, as closed does.
 	goneAfter atomic.Int32
-	// goneOnFetch answers every fetch of the run configuration a signed 410 run_closed.
+	// goneOnFetch answers every registration and reload a signed 410 run_closed.
 	goneOnFetch atomic.Bool
 	// drop, when set, closes every delivery's connection unanswered.
-	drop    atomic.Bool
+	drop atomic.Bool
+	// fetches counts every request to the run endpoint: registrations and reloads.
 	fetches atomic.Int32
 	// slowEvents and slowFetch, when not zero, are how long every delivery and every
-	// fetch of a run configuration wait before they are taken; one whose client goes
+	// request to the run endpoint wait before they are taken; one whose client goes
 	// first is not taken.
 	slowEvents, slowFetch atomic.Int64
 	// intercept, when set, is asked first of every request, and answers it when it
@@ -86,8 +91,14 @@ type control struct {
 	mu     sync.Mutex
 	run    []byte
 	digest string
-	labels map[string]string
+	// labels are the labels of the last run the receiver decided on, and registrations
+	// the body of every registration as it came, each try included.
+	labels        map[string]string
+	registrations [][]byte
 }
+
+// runsPath is the control's run endpoint.
+const runsPath = receiver.DefaultRunPath
 
 func newControl(t *testing.T) *control {
 	t.Helper()
@@ -108,27 +119,29 @@ func newControl(t *testing.T) *control {
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(testPin)
 			doc := `{"version":1,"node_id":"` + testNode + `","apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			if c.run != nil {
-				doc += `,"run":{"url":"` + c.srv.URL + `/v1/run-configuration"}`
-			}
-			doc += "}"
+			doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
 			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 		},
-		RunConfiguration: func(labels map[string]string) ([]byte, string, bool) {
+		RunConfiguration: func(run receiver.Run) ([]byte, string, *receiver.Refusal) {
+			if c.goneOnFetch.Load() {
+				return nil, "", &receiver.Refusal{Status: http.StatusGone, Code: "run_closed"}
+			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			c.labels = maps.Clone(labels)
-			return c.run, c.digest, c.run != nil
+			c.labels = maps.Clone(run.Labels)
+			if c.run == nil {
+				return receiver.NoPolicy, "", nil
+			}
+			return c.run, c.digest, nil
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f := c.intercept.Load(); f != nil && (*f)(w, r) {
 			return
 		}
+		isRuns := r.URL.Path == runsPath || strings.HasPrefix(r.URL.Path, runsPath+"/")
 		slow := c.slowEvents.Load()
-		if r.URL.Path == "/v1/run-configuration" {
+		if isRuns {
 			slow = c.slowFetch.Load()
 		}
 		if slow != 0 {
@@ -141,8 +154,15 @@ func newControl(t *testing.T) *control {
 				return
 			}
 		}
-		if r.URL.Path == "/v1/run-configuration" {
+		if isRuns {
 			c.fetches.Add(1)
+			if r.Method == http.MethodPost {
+				b, _ := io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(b))
+				c.mu.Lock()
+				c.registrations = append(c.registrations, b)
+				c.mu.Unlock()
+			}
 			if c.closeOnFetch.Load() {
 				c.closed.Store(true)
 			}
@@ -162,7 +182,7 @@ func newControl(t *testing.T) *control {
 			w.WriteHeader(int(code))
 			return
 		}
-		if gone || (c.closed.Load() && r.URL.Path == "/v1/events") || (c.goneOnFetch.Load() && r.URL.Path == "/v1/run-configuration") {
+		if gone || (c.closed.Load() && r.URL.Path == "/v1/events") {
 			body := []byte(`{"error":"run_closed"}`)
 			w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)

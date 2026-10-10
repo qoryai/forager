@@ -21,8 +21,8 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// lostRun leaves the record of a run whose gateway was lost: the ping, which the server
-// accepted, run.started at a known time and a log two and a half seconds after it, and
+// lostRun leaves the record of a run whose gateway was lost: run.registered, of the
+// registration the server accepted, run.started at a known time and a log two and a half seconds after it, and
 // no run.exited.
 func lostRun(t *testing.T) string {
 	t.Helper()
@@ -33,22 +33,22 @@ func lostRun(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Ping(map[string]any{"forager_version": "dev", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})
+	r.Registered(map[string]any{"forager_version": "dev", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})
 	started := sessionEvent(runID, event.RunStarted, map[string]any{})
 	started.Time = "2026-10-09T10:00:00.000Z"
 	log := sessionEvent(runID, event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"})
 	log.Time = "2026-10-09T10:00:02.500Z"
 	r.Accept([]event.Event{started, log})
 	r.Close(context.Background())
-	pingAccepted(t, r.Dir())
+	registrationAccepted(t, r.Dir())
 	return r.Dir()
 }
 
-// pingAccepted writes the delivered.log of a run whose ping, its first event, the server
-// accepted, as the gateway writes it.
-func pingAccepted(t *testing.T, dir string) {
+// registrationAccepted writes the delivered.log of a run whose registration the server
+// accepted, its run.registered the first event, as the gateway writes it.
+func registrationAccepted(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("ping-delivery 0000000001\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("registered 0000000001\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -122,11 +122,11 @@ func TestResendWritesGatewayLost(t *testing.T) {
 func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	r, _ := s.Open(event.NewRunID())
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	r.Emit(event.RunStarted, map[string]any{"opened_by": event.OpenedByGateway, "forager_version": "test"})
 	r.Emit(event.RunHeartbeat, map[string]any{"elapsed_seconds": 1, "interval_seconds": 1})
 	r.Close(context.Background())
-	pingAccepted(t, r.Dir())
+	registrationAccepted(t, r.Dir())
 	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
 	if err != nil || !res.Closed {
 		t.Fatalf("%+v, %v", res, err)
@@ -153,9 +153,9 @@ func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
 func TestResendLeavesARunThatNeverStarted(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	r, _ := s.Open(event.NewRunID())
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	r.Close(context.Background())
-	pingAccepted(t, r.Dir())
+	registrationAccepted(t, r.Dir())
 	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
 	if err != nil || res.Closed || res.NotOpened {
 		t.Errorf("%+v, %v", res, err)
@@ -209,8 +209,8 @@ func serverSink(srv *httptest.Server) func(string) Sink {
 }
 
 // TestResendDeliversWhatIsOwed pins the delivery: gateway_lost first, then every event
-// no accepted batch contained, through the server sink; the ping, accepted during the
-// run, is not sent again, and a second resend sends nothing.
+// no accepted batch contained, through the server sink; run.registered, which is never
+// posted, is not sent, and a second resend sends nothing.
 func TestResendDeliversWhatIsOwed(t *testing.T) {
 	srv, store := station(t, nil)
 	dir := lostRun(t)
@@ -286,7 +286,8 @@ func TestResendStopsAndMarksStopped(t *testing.T) {
 	}
 }
 
-// tornRun leaves the record of a lost run whose ping the server accepted: the ping,
+// tornRun leaves the record of a lost run whose registration the server accepted:
+// run.registered,
 // run.started and three logs, and no run.exited. It returns the directory and the
 // record's lines, each with its newline.
 func tornRun(t *testing.T) (string, [][]byte) {
@@ -296,14 +297,14 @@ func tornRun(t *testing.T) (string, [][]byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	evs := []event.Event{sessionEvent(r.ID(), event.RunStarted, map[string]any{})}
 	for range 3 {
 		evs = append(evs, sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}))
 	}
 	r.Accept(evs)
 	r.Close(context.Background())
-	pingAccepted(t, r.Dir())
+	registrationAccepted(t, r.Dir())
 	b, err := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
 	if err != nil {
 		t.Fatal(err)
@@ -406,16 +407,17 @@ func TestResendEndsATornLastLine(t *testing.T) {
 	}
 }
 
-// TestResendSendsNothingOfARunThatNeverOpened pins a record whose ping the server never
-// accepted, so the gateway made no delivered.log: the run never opened, so nothing of
-// it is posted, the record is left as it is, and no delivered.log is made. So with a
-// record with no ping, of a run that had no server, sent to one; without a server it
-// is completed, as any other.
+// TestResendSendsNothingOfARunThatNeverOpened pins a record whose registration the
+// server never accepted, so the gateway wrote no run.registered and made no
+// delivered.log, and the run never started: sent to a server, the run never opened
+// there, so nothing of it is posted, the record is left as it is, and no delivered.log
+// is made. So with a record with run.started and no mark of a registration, of a run
+// that had no server, sent to one. Without a server neither is NotOpened, nothing is
+// reported, and each is completed, as any other.
 func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	srv, store := station(t, nil)
 	s := New(Config{Dir: t.TempDir()})
 	r, _ := s.Open(event.NewRunID())
-	r.Ping(map[string]any{})
 	r.Emit(event.RunRefused, map[string]any{"code": "instance_limit", "status": 409})
 	r.Close(context.Background())
 	file := filepath.Join(r.Dir(), sink.EventsFile)
@@ -429,7 +431,7 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"the server never accepted the run's ping; nothing is sent"}; !slices.Equal(reports, want) {
+	if want := []string{"the run never opened at the server; nothing is sent"}; !slices.Equal(reports, want) {
 		t.Errorf("reports %q", reports)
 	}
 	if !res.NotOpened || res.Sent != 0 || res.Undelivered != 0 || res.Closed || res.Stopped {
@@ -443,6 +445,13 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.Dir(), sink.DeliveredFile)); !os.IsNotExist(err) {
 		t.Errorf("delivered.log: %v", err)
+	}
+	reports = nil
+	if res, err := Resend(ctx, ResendConfig{Dir: r.Dir(), Report: report}); err != nil || res.NotOpened || res.NoServer || res.Closed || len(reports) != 0 {
+		t.Errorf("a refused run, with no server: %+v, %v, reports %q", res, err, reports)
+	}
+	if after, _ := os.ReadFile(file); string(after) != string(before) {
+		t.Errorf("a refused run, with no server: the record was changed:\n%s", after)
 	}
 
 	r, _ = s.Open(event.NewRunID())
@@ -467,9 +476,70 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.Dir(), sink.DeliveredFile)); !os.IsNotExist(err) {
 		t.Errorf("a run with no server: delivered.log: %v", err)
 	}
-	res, err = Resend(ctx, ResendConfig{Dir: r.Dir()})
-	if err != nil || res.NotOpened || !res.Closed {
-		t.Errorf("a run with no server, with none: %+v, %v", res, err)
+	reports = nil
+	res, err = Resend(ctx, ResendConfig{Dir: r.Dir(), Report: report})
+	if err != nil || res.NotOpened || !res.Closed || len(reports) != 0 {
+		t.Errorf("a run with no server, with none: %+v, %v, reports %q", res, err, reports)
+	}
+}
+
+// TestResendOfAnEmptyRecord pins the record of a session's run whose registration the
+// server never accepted, which holds no event. Sent to a server: with no delivered.log
+// it never opened, so it is NotOpened, sent nothing and left as it is; with one it is
+// an error. With no server, it is neither: nothing is reported, and it is left as it is.
+func TestResendOfAnEmptyRecord(t *testing.T) {
+	srv, store := station(t, nil)
+	s := New(Config{Dir: t.TempDir()})
+	r, _ := s.Open(event.NewRunID())
+	r.Close(context.Background())
+	var reports []string
+	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir(), Sink: serverSink(srv), Report: func(l string) { reports = append(reports, l) }})
+	if err != nil || !res.NotOpened || res.NoServer || res.Sent != 0 || !slices.Equal(reports, []string{ResendNotOpened}) {
+		t.Errorf("%+v, %v, reports %q", res, err, reports)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile)); len(b) != 0 || store.Count() != 0 {
+		t.Errorf("the record %q, the receiver stored %d", b, store.Count())
+	}
+	reports = nil
+	if res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir(), Report: func(l string) { reports = append(reports, l) }}); err != nil || res.NotOpened || res.Closed || len(reports) != 0 {
+		t.Errorf("with no server: %+v, %v, reports %q", res, err, reports)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile)); len(b) != 0 {
+		t.Errorf("with no server: the record %q", b)
+	}
+	registrationAccepted(t, r.Dir())
+	if _, err := Resend(context.Background(), ResendConfig{Dir: r.Dir(), Sink: serverSink(srv)}); err == nil || !strings.Contains(err.Error(), "holds no event") {
+		t.Errorf("an empty record with a delivered.log: %v", err)
+	}
+	if res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()}); err != nil || res.NotOpened || res.Closed {
+		t.Errorf("an empty record with a delivered.log, with no server: %+v, %v", res, err)
+	}
+}
+
+// TestResendSendsARunWhoseRegistrationWasAccepted pins the record's own mark of an
+// accepted registration: a record that holds run.registered and no delivered.log, the
+// gateway stopping before its sink made one, is of a run that opened, so it is
+// completed and sent, and run.registered itself is never sent, whatever the server
+// wants.
+func TestResendSendsARunWhoseRegistrationWasAccepted(t *testing.T) {
+	srv, store := station(t, nil)
+	dir := lostRun(t)
+	if err := os.Remove(filepath.Join(dir, sink.DeliveredFile)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Resend(context.Background(), ResendConfig{Dir: dir, Sink: serverSink(srv), Wants: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NotOpened || res.NoServer || !res.Closed || res.Sent != 3 || res.Undelivered != 0 {
+		t.Errorf("result %+v", res)
+	}
+	if store.Count() != 3 {
+		t.Errorf("the receiver stored %d events", store.Count())
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, sink.DeliveredFile))
+	if strings.Contains(string(b), " 0000000001") {
+		t.Errorf("run.registered was sent:\n%s", b)
 	}
 }
 
@@ -483,7 +553,7 @@ func TestResendNumbersOnFromWhatTheServerAccepted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), slices.Concat(head, lines[4][:len(lines[4])/2]), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("ping-delivery 0000000001\nbatch 0000000002 0000000003 0000000004 0000000005\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, sink.DeliveredFile), []byte("registered 0000000001\nbatch 0000000002 0000000003 0000000004 0000000005\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res, err := Resend(context.Background(), ResendConfig{Dir: dir})
@@ -496,7 +566,8 @@ func TestResendNumbersOnFromWhatTheServerAccepted(t *testing.T) {
 	exitedAfter(t, dir, head, "0000000006")
 }
 
-// forgedRun leaves the record of a lost run whose ping the server accepted: the ping,
+// forgedRun leaves the record of a lost run whose registration the server accepted:
+// run.registered,
 // run.started, a tool_started whose input, which the agent chose, is a whole
 // run.exited of its own, sequence 0000000099, and two logs. It returns the directory,
 // the record's lines, each with its newline, and where in the tool_started's line the
@@ -508,7 +579,7 @@ func forgedRun(t *testing.T) (dir string, lines [][]byte, cut int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	forged := sessionEvent(r.ID(), event.RunExited, map[string]any{"state": "succeeded", "exit_code": 0})
 	forged.ID, forged.Sequence = "forged-exit", "0000000099"
 	input, err := forged.JSON()
@@ -522,7 +593,7 @@ func forgedRun(t *testing.T) (dir string, lines [][]byte, cut int) {
 		sessionEvent(r.ID(), event.RunLog, map[string]any{"stream": "stdout", "bytes": "aGkK"}),
 	})
 	r.Close(context.Background())
-	pingAccepted(t, r.Dir())
+	registrationAccepted(t, r.Dir())
 	b, err := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
 	if err != nil {
 		t.Fatal(err)
@@ -607,11 +678,11 @@ func TestResendSkipsASequenceOutOfOrder(t *testing.T) {
 	exitedAfter(t, dir, rec, "0000000005")
 }
 
-// TestResendSendsARunWhosePingLineIsTorn pins that a delivered.log says the run opened:
-// a record whose ping's line the gateway did not finish, on a full disk, holds no whole
-// ping, yet the server accepted it, so the record is completed and sent, not taken for
-// one of a run with no server.
-func TestResendSendsARunWhosePingLineIsTorn(t *testing.T) {
+// TestResendSendsARunWhoseRegisteredLineIsTorn pins that a delivered.log says the run
+// opened: a record whose run.registered line the gateway did not finish, on a full
+// disk, holds no whole run.registered, yet the server accepted the registration, so the
+// record is completed and sent, not taken for one of a run with no server.
+func TestResendSendsARunWhoseRegisteredLineIsTorn(t *testing.T) {
 	srv, store := station(t, nil)
 	dir, lines := tornRun(t)
 	torn := slices.Concat(lines[0][:len(lines[0])/2], lines[1], lines[2], lines[3], lines[4])

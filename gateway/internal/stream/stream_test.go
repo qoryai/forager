@@ -21,7 +21,7 @@ import (
 type fakeSink struct {
 	mu          sync.Mutex
 	events      []*event.Event
-	accepted    []string
+	registered  []string
 	closed      bool
 	deadline    time.Duration
 	undelivered int
@@ -35,10 +35,10 @@ func (f *fakeSink) Write(ev *event.Event) error {
 	return nil
 }
 
-func (f *fakeSink) Accepted(id, seq string) {
+func (f *fakeSink) Registered(seq string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.accepted = append(f.accepted, id+" "+seq)
+	f.registered = append(f.registered, seq)
 }
 
 func (f *fakeSink) Resend(context.Context, []byte, string) bool { return true }
@@ -128,11 +128,12 @@ func contiguous(t *testing.T, runID string, evs []event.Event) {
 	}
 }
 
-// TestTheRunIsOneStreamFromThePing pins the numbering: the ping first, then the
-// session's events and the gateway's own, one contiguous sequence; the record, the
-// stream of events and the server each see that order; the server gets everything but
-// the ping, which it accepted on its own, and the sink records the ping's delivery.
-func TestTheRunIsOneStreamFromThePing(t *testing.T) {
+// TestTheRunIsOneStreamFromTheRegistration pins the numbering: the run's
+// dev.qory.run.registered first, then the session's events and the gateway's own, one
+// contiguous sequence; the record, the stream of events and the server each see that
+// order; the server gets everything but run.registered, which is never posted, and the
+// sink marks the registration with its sequence.
+func TestTheRunIsOneStreamFromTheRegistration(t *testing.T) {
 	var out syncBuffer
 	s := New(Config{Dir: t.TempDir(), Events: &out})
 	runID := event.NewRunID()
@@ -140,16 +141,16 @@ func TestTheRunIsOneStreamFromThePing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ping, err := r.Ping(map[string]any{"forager_version": "dev", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})
-	if err != nil || ping.Sequence != "0000000001" {
-		t.Fatalf("ping %+v, %v", ping, err)
+	reg, err := r.Registered(map[string]any{"forager_version": "dev", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30})
+	if err != nil || reg.Sequence != "0000000001" || reg.Type != event.RunRegistered {
+		t.Fatalf("run.registered %+v, %v", reg, err)
 	}
 	srv := &fakeSink{}
-	if err := r.Deliver(srv, "delivery-1"); err != nil {
+	if err := r.Deliver(srv); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Ping(nil); err == nil {
-		t.Error("a second ping was numbered")
+	if _, err := r.Registered(nil); err == nil {
+		t.Error("a second run.registered was numbered")
 	}
 	n, err := r.Accept([]event.Event{
 		sessionEvent(runID, event.RunStarted, map[string]any{"opened_by": "session"}),
@@ -173,7 +174,7 @@ func TestTheRunIsOneStreamFromThePing(t *testing.T) {
 	}
 	rec := readRecord(t, r.Dir())
 	contiguous(t, runID, rec)
-	if got := strings.Join(types(rec), " "); got != "ping run.started run.policy_applied run.log run.egress run.exited" {
+	if got := strings.Join(types(rec), " "); got != "run.registered run.started run.policy_applied run.log run.egress run.exited" {
 		t.Errorf("the record: %s", got)
 	}
 	b, _ := os.ReadFile(filepath.Join(r.Dir(), sink.EventsFile))
@@ -183,17 +184,17 @@ func TestTheRunIsOneStreamFromThePing(t *testing.T) {
 	if len(srv.events) != 5 || srv.events[0].Type != event.RunStarted || srv.events[0].Sequence != "0000000002" {
 		t.Errorf("the server got %d events", len(srv.events))
 	}
-	if len(srv.accepted) != 1 || srv.accepted[0] != "delivery-1 0000000001" || !srv.closed {
-		t.Errorf("the sink: accepted %v, closed %v", srv.accepted, srv.closed)
+	if len(srv.registered) != 1 || srv.registered[0] != "0000000001" || !srv.closed {
+		t.Errorf("the sink: registered %v, closed %v", srv.registered, srv.closed)
 	}
 	if r.Dir() != filepath.Join(s.cfg.Dir, "runs", runID) {
 		t.Errorf("the record directory %s", r.Dir())
 	}
 }
 
-// TestARunWithNoServerHasNoPing pins the files-only run: run.started is the first
-// event.
-func TestARunWithNoServerHasNoPing(t *testing.T) {
+// TestARunWithNoServerHasNoRegistration pins the files-only run: run.started is the
+// first event.
+func TestARunWithNoServerHasNoRegistration(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	runID := event.NewRunID()
 	r, err := s.Open(runID)
@@ -239,8 +240,9 @@ func TestARepeatedIDIsNumberedOnce(t *testing.T) {
 	}
 }
 
-// TestABatchOfOthersIsRefusedWhole pins the checks: an event of another run, a ping,
-// an event without an id; nothing of such a batch is numbered.
+// TestABatchOfOthersIsRefusedWhole pins the checks: an event of another run, a
+// dev.qory.run.registered, which the gateway writes, an event without an id; nothing of
+// such a batch is numbered.
 func TestABatchOfOthersIsRefusedWhole(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	runID := event.NewRunID()
@@ -250,9 +252,9 @@ func TestABatchOfOthersIsRefusedWhole(t *testing.T) {
 	noID := sessionEvent(runID, event.RunLog, map[string]any{})
 	noID.ID = ""
 	for name, bad := range map[string]event.Event{
-		"other run": sessionEvent(event.NewRunID(), event.RunLog, map[string]any{}),
-		"ping":      sessionEvent(runID, event.Ping, map[string]any{}),
-		"no id":     noID,
+		"other run":  sessionEvent(event.NewRunID(), event.RunLog, map[string]any{}),
+		"registered": sessionEvent(runID, event.RunRegistered, map[string]any{}),
+		"no id":      noID,
 	} {
 		if n, err := r.Accept([]event.Event{good, bad}); err == nil || n != 0 {
 			t.Errorf("%s: accepted %d, %v", name, n, err)
@@ -270,7 +272,7 @@ func TestEgressWaitsForRunStarted(t *testing.T) {
 	s := New(Config{Dir: t.TempDir()})
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	r.Emit(event.RunEgress, map[string]any{"host": "one.example"})
 	r.Accept([]event.Event{sessionEvent(runID, event.RunHeartbeat, map[string]any{})})
 	r.Emit(event.RunEgress, map[string]any{"host": "two.example"})
@@ -283,7 +285,7 @@ func TestEgressWaitsForRunStarted(t *testing.T) {
 	r.Close(context.Background())
 	rec := readRecord(t, r.Dir())
 	contiguous(t, runID, rec)
-	if got := strings.Join(types(rec), " "); got != "ping run.heartbeat run.started run.policy_applied run.egress run.egress run.log run.egress" {
+	if got := strings.Join(types(rec), " "); got != "run.registered run.heartbeat run.started run.policy_applied run.egress run.egress run.log run.egress" {
 		t.Errorf("the record: %s", got)
 	}
 	var hosts []string
@@ -447,13 +449,13 @@ func TestEgressOfARunThatNeverStartedIsRecorded(t *testing.T) {
 	s := New(Config{Dir: t.TempDir(), Report: func(l string) { reports = append(reports, l) }})
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
-	r.Ping(map[string]any{})
+	r.Registered(map[string]any{})
 	r.Emit(event.RunEgress, map[string]any{"host": "one.example"})
 	r.Emit(event.RunEgress, map[string]any{"host": "two.example"})
 	r.Close(context.Background())
 	rec := readRecord(t, r.Dir())
 	contiguous(t, runID, rec)
-	if got := hostsAndTypes(rec); got != "ping run.egress:one.example run.egress:two.example" {
+	if got := hostsAndTypes(rec); got != "run.registered run.egress:one.example run.egress:two.example" {
 		t.Errorf("the record: %s", got)
 	}
 	runID = event.NewRunID()
@@ -505,8 +507,8 @@ func TestCloseFlushesWithinTheWaitAndReleases(t *testing.T) {
 	runID := event.NewRunID()
 	r, _ := s.Open(runID)
 	srv := &fakeSink{undelivered: 3, stopped: true}
-	r.Ping(map[string]any{})
-	r.Deliver(srv, "d")
+	r.Registered(map[string]any{})
+	r.Deliver(srv)
 	if s.Run(runID) != r {
 		t.Error("the open run is not found")
 	}
@@ -594,8 +596,8 @@ func TestConcurrentRunsAreIsolated(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Ping(map[string]any{})
-		r.Deliver(&fakeSink{}, "d")
+		r.Registered(map[string]any{})
+		r.Deliver(&fakeSink{})
 		r.Accept([]event.Event{sessionEvent(runID, event.RunStarted, map[string]any{})})
 		all = append(all, r)
 	}
@@ -631,8 +633,8 @@ func TestConcurrentRunsAreIsolated(t *testing.T) {
 }
 
 // TestTheRecordIsTodays pins the record format: the recorded runs of the contract's
-// fixtures, fed through the stream as the gateway would, the ping and the egress its
-// own and the rest from the session's link batches, give events.jsonl byte for byte.
+// fixtures, fed through the stream as the gateway would, dev.qory.run.registered and
+// the egress its own and the rest from the session's link batches, give events.jsonl byte for byte.
 func TestTheRecordIsTodays(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "contracts", "forager", "v1", "fixtures", "run")
 	dirs, err := os.ReadDir(root)
@@ -676,8 +678,8 @@ func TestTheRecordIsTodays(t *testing.T) {
 				}
 				next.id, next.time = head.ID, head.Time
 				switch head.Type {
-				case event.Ping:
-					if _, err := r.Ping(head.Data); err != nil {
+				case event.RunRegistered:
+					if _, err := r.Registered(head.Data); err != nil {
 						t.Fatal(err)
 					}
 				case event.RunEgress:

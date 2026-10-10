@@ -36,9 +36,10 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("%s did not happen", what)
 }
 
-// TestARunWithAServer pins the server's path: the discovery at Start, the ping as the
-// run's first event, the run configuration fetched by the run's labels, its policy in
-// the answer, and the run's stream delivered.
+// TestARunWithAServer pins the server's path: the discovery at Start, the run's
+// registration with its labels and the interval, its run configuration's policy in the
+// answer, dev.qory.run.registered as the record's first event, never posted, and the
+// run's stream delivered.
 func TestARunWithAServer(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
@@ -53,7 +54,14 @@ func TestARunWithAServer(t *testing.T) {
 	asked := maps.Clone(c.labels)
 	c.mu.Unlock()
 	if !maps.Equal(asked, labels) {
-		t.Errorf("the run configuration was asked for %v", asked)
+		t.Errorf("the run registered with %v", asked)
+	}
+	c.mu.Lock()
+	regs := slices.Clone(c.registrations)
+	c.mu.Unlock()
+	var reg map[string]any
+	if len(regs) != 1 || json.Unmarshal(regs[0], &reg) != nil || reg["run_id"] != a.RunID || reg["forager_version"] != "1.2.3" || reg["interval_seconds"] != 30.0 || reg["about"] != nil {
+		t.Errorf("the registrations %q", regs)
 	}
 	var pol struct {
 		Egress struct {
@@ -67,7 +75,7 @@ func TestARunWithAServer(t *testing.T) {
 	}
 	var members map[string]any
 	json.Unmarshal(a.Applied, &members)
-	if members["source"] != "fetched" || members["run_configuration"] != c.digest || members["url"] != c.srv.URL+"/v1/run-configuration" {
+	if members["source"] != "fetched" || members["run_configuration"] != c.digest || members["url"] != c.srv.URL+runsPath {
 		t.Errorf("applied %s", a.Applied)
 	}
 	runID := a.RunID
@@ -76,15 +84,15 @@ func TestARunWithAServer(t *testing.T) {
 	if d := h.close(); d != (gateway.Delivery{}) {
 		t.Errorf("delivery %+v", d)
 	}
-	want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunExited}
+	want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunExited}
 	lines := h.record(runID)
 	if !slices.Equal(types(lines), want) {
 		t.Fatalf("record %v", types(lines))
 	}
-	if p := lines[0].Data; p["forager_version"] != "1.2.3" || p["interval_seconds"] != 30.0 {
-		t.Errorf("ping %v", p)
+	if p := lines[0].Data; p["forager_version"] != "1.2.3" || p["interval_seconds"] != 30.0 || p["contract_version"] != 1.0 || len(p) != 4 {
+		t.Errorf("run.registered %v", p)
 	}
-	if got := types(c.lines(t)); !slices.Equal(got, want) {
+	if got := types(c.lines(t)); !slices.Equal(got, want[1:]) {
 		t.Errorf("the server holds %v", got)
 	}
 	if _, err := os.Stat(filepath.Join(h.dir, "runs", runID, "delivered.log")); err != nil {
@@ -124,7 +132,7 @@ func TestAServersStopEndsNoRun(t *testing.T) {
 		t.Errorf("delivery %+v", d)
 	}
 	lines := h.record(runID)
-	want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunHeartbeat, event.RunHeartbeat, event.RunHeartbeat, event.RunExited}
+	want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunHeartbeat, event.RunHeartbeat, event.RunHeartbeat, event.RunExited}
 	if !slices.Equal(types(lines), want) {
 		t.Fatalf("record %v", types(lines))
 	}
@@ -140,9 +148,8 @@ func TestAServersStopEndsNoRun(t *testing.T) {
 }
 
 // TestAServersStopAsTheRunOpensOpensIt pins a server that answers 410 from the moment
-// the gateway fetched the run configuration, after it accepted the ping: the run opens
-// with its run answer, the server saw the ping, and the run goes on with no further
-// batch sent.
+// it accepted the run's registration: the run opens with its run answer, the server is
+// sent nothing, and the run goes on with no further batch sent.
 func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
@@ -166,11 +173,11 @@ func TestAServersStopAsTheRunOpensOpensIt(t *testing.T) {
 	if d := h.close(); d != (gateway.Delivery{}) {
 		t.Errorf("delivery %+v", d)
 	}
-	want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunHeartbeat, event.RunExited}
+	want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunHeartbeat, event.RunExited}
 	if got := types(h.record(runID)); !slices.Equal(got, want) {
 		t.Errorf("record %v", got)
 	}
-	if got := types(c.lines(t)); !slices.Equal(got, []string{event.Ping}) {
+	if got := types(c.lines(t)); len(got) != 0 {
 		t.Errorf("the server holds %v", got)
 	}
 	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
@@ -184,65 +191,117 @@ func stopped(h *harness, runID string) bool {
 	return slices.Contains(strings.Split(string(b), "\n"), "stopped")
 }
 
-// TestASigned410ToThePingIsNoRun pins a server's signed 410 to the ping, with
-// run_closed or without a code: the server would record nothing of the run, so it does
-// not open. The gateway answers 500 internal, the ping not accepted, and records no
-// run.refused.
-func TestASigned410ToThePingIsNoRun(t *testing.T) {
+// TestASigned410ToTheRegistrationIsNoRun pins a server's signed 410 to the run's
+// registration, with run_closed or without a code: the server takes no run here, so it
+// does not open. The gateway answers 500 internal, from the gateway, the registration
+// not accepted, and its record holds nothing: no run.registered, no run.refused.
+func TestASigned410ToTheRegistrationIsNoRun(t *testing.T) {
 	for _, code := range []string{"run_closed", ""} {
 		c := newControl(t)
 		h := start(t, gateway.Config{Server: c.server()})
 		if code == "" {
 			c.stop.Store(true)
 		} else {
-			c.closed.Store(true)
+			c.goneOnFetch.Store(true)
 		}
 		runID := event.NewRunID()
-		want := "ping " + c.srv.URL + "/v1/events: status 410: the server did not accept the ping"
+		want := "register " + c.srv.URL + runsPath + ": status 410: the server did not accept the run"
 		status, got := h.refusalOf("/v1/run-configuration", openBody(runID))
 		if status != http.StatusInternalServerError || got["error"] != "internal" || got["message"] != want || got["from"] != "gateway" {
-			t.Errorf("410 %q to the ping: %d %v, want 500 internal: %q", code, status, got, want)
+			t.Errorf("410 %q to the registration: %d %v, want 500 internal: %q", code, status, got, want)
 		}
 		var se *server.StatusError
-		if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &se) || se.Status != http.StatusInternalServerError || se.Message != want {
-			t.Errorf("410 %q to the ping: the session's error %v", code, err)
+		var r *accesskey.Refusal
+		if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &se) || errors.As(err, &r) || se.Status != http.StatusInternalServerError || se.Message != want {
+			t.Errorf("410 %q to the registration: the session's error %v", code, err)
 		}
 		h.close()
-		if got := types(h.record(runID)); slices.Contains(got, event.RunRefused) || slices.Contains(got, event.RunStarted) {
-			t.Errorf("410 %q to the ping: record %v", code, got)
+		if got := types(h.record(runID)); len(got) != 0 {
+			t.Errorf("410 %q to the registration: record %v", code, got)
+		}
+		if got := c.lines(t); len(got) != 0 {
+			t.Errorf("410 %q to the registration: the server holds %v", code, types(got))
 		}
 	}
 }
 
-// TestASigned410ToTheRunConfigurationIsNoRun pins a server's signed 410 with a code,
-// run_closed, to the run configuration a run's opening fetches: no run opens, and the
-// 410 is no refusal. The session's run gets the gateway's 500 internal, from the
-// gateway, with the text of a code-less 410 to that fetch; a run with no session gets
-// the 503 of a failure without a code. Neither record holds a run.refused.
-func TestASigned410ToTheRunConfigurationIsNoRun(t *testing.T) {
+// TestASigned410ToTheReloadStopsTheDeliveries pins a server's signed 410 to the reload
+// of a run's run configuration by its id, which an answer's changed digest asks for: as
+// a signed 410 to a delivery, the gateway sends the server nothing more and reports it
+// once, the policy in force stays, and the run goes on to the session's own end.
+func TestASigned410ToTheReloadStopsTheDeliveries(t *testing.T) {
 	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
-	c.goneOnFetch.Store(true)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
 	h := start(t, gateway.Config{Server: c.server()})
-	want := "run configuration " + c.srv.URL + "/v1/run-configuration: status 410"
-	runID := event.NewRunID()
-	status, got := h.refusalOf("/v1/run-configuration", openBody(runID))
-	if status != http.StatusInternalServerError || got["error"] != "internal" || got["message"] != want || got["from"] != "gateway" {
-		t.Errorf("the 410 to the run configuration: %d %v, want 500 internal: %q", status, got, want)
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	sc := script(c)
+	sc.then(runsPath+"/"+runID, coded(http.StatusGone, "run_closed"))
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["other.example"]}}`, 'b')
+	h.post(started(runID, nil), applied(runID, a.Applied))
+	eventually(t, "the reload's 410", func() bool { return stopped(h, runID) })
+	if n := len(sc.requests(runsPath + "/" + runID)); n != 1 {
+		t.Errorf("the run configuration was fetched again %d times", n)
 	}
-	var se *server.StatusError
-	var r *accesskey.Refusal
-	if _, err := h.tryOpen(server.LinkRunRequest{}); !errors.As(err, &se) || errors.As(err, &r) || se.Status != http.StatusInternalServerError || se.Message != want {
-		t.Errorf("the session's error %v", err)
+	sent := c.deliveries.Load()
+	if d := h.post(exited(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("the run.exited after the reload's 410: %+v", d)
 	}
-	h.close()
-	if got := types(h.record(runID)); !slices.Equal(got, []string{event.Ping}) {
+	if d := h.close(); d != (gateway.Delivery{}) {
+		t.Errorf("delivery %+v", d)
+	}
+	if n := c.deliveries.Load() - sent; n != 0 {
+		t.Errorf("%d requests reached the server after its 410", n)
+	}
+	if got := h.reportsWith("wants no more events"); len(got) != 1 || got[0] != stopLine {
+		t.Errorf("reports %q", got)
+	}
+	if got := h.reportsWith("the reload failed"); len(got) != 0 {
+		t.Errorf("reports %q", got)
+	}
+	want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunExited}
+	if got := types(h.record(runID)); !slices.Equal(got, want) {
 		t.Errorf("record %v", got)
 	}
-	for _, l := range c.lines(t) {
-		if l.Type == event.RunRefused {
-			t.Errorf("the server was sent %v", l)
-		}
+}
+
+// TestA404ToTheReloadKeepsThePolicy pins a server's signed 404 to the reload of a
+// run's run configuration by its id, which a server answers a run it does not know
+// under the access key: the reload fails, the user is told as of any failed reload,
+// the policy in force stays, its digest too, and the deliveries go on.
+func TestA404ToTheReloadKeepsThePolicy(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{})
+	runID := a.RunID
+	sc := script(c)
+	sc.then(runsPath+"/"+runID, apiaryReply{status: http.StatusNotFound, signed: true})
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["other.example"]}}`, 'b')
+	h.post(started(runID, nil), applied(runID, a.Applied))
+	eventually(t, "the failed reload's report", func() bool { return h.reported("the reload failed: ") })
+	if got := h.reportsWith("the reload failed"); len(got) != 1 || !strings.Contains(got[0], runsPath+"/"+runID) || !strings.Contains(got[0], "404") {
+		t.Errorf("reports %q", got)
+	}
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct{ Egress struct{ Allow []string } }
+	json.Unmarshal(r.Policy, &pol)
+	if r.Digest != a.Digest || !slices.Equal(pol.Egress.Allow, []string{"api.example"}) {
+		t.Errorf("after a 404 to the reload: %s, digest %s, want %s", r.Policy, r.Digest, a.Digest)
+	}
+	if stopped(h, runID) {
+		t.Error("a 404 to the reload stopped the deliveries")
+	}
+	sent := c.deliveries.Load()
+	if d := h.post(exited(runID)); d.Status != http.StatusAccepted || d.End != "" {
+		t.Errorf("the run.exited after the 404: %+v", d)
+	}
+	h.close()
+	if c.deliveries.Load() == sent {
+		t.Error("nothing reached the server after the 404")
 	}
 }
 
@@ -259,8 +318,8 @@ func TestRefusalsAtTheStartPassOn(t *testing.T) {
 	if !errors.As(err, &r) || r.Code != "instance_limit" || r.From != "apiary" || r.Status != http.StatusConflict {
 		t.Errorf("the server's refusal: %v", err)
 	}
-	// Its message is the text today's session returned, the server's URL in it.
-	if status, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); status != http.StatusConflict || got["message"] != "ping "+c.srv.URL+"/v1/events: instance_limit (status 409)" {
+	// Its message names the server's run endpoint.
+	if status, got := h.refusalOf("/v1/run-configuration", openBody(event.NewRunID())); status != http.StatusConflict || got["message"] != "register "+c.srv.URL+runsPath+": instance_limit (status 409)" {
 		t.Errorf("instance_limit: %d %v", status, got)
 	}
 	c.limit.Store(false)
@@ -478,7 +537,7 @@ func TestANewConnectionAfterAReloadFollowsItsPolicyApplied(t *testing.T) {
 	}
 	// The connection before the reload kept its place, before the reload's log.
 	before := slices.IndexFunc(lines, func(l recorded) bool { return l.Type == event.RunEgress && l.Data["decision"] == "allowed" })
-	if want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunLog}; before != 3 || !slices.Equal(types(lines[:5]), want) {
+	if want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunEgress, event.RunLog}; before != 3 || !slices.Equal(types(lines[:5]), want) {
 		t.Errorf("before the reload %v", types(lines))
 	}
 }
@@ -517,7 +576,7 @@ func TestCloseAndResend(t *testing.T) {
 	if took := time.Since(begun); took > 3*time.Second {
 		t.Errorf("Close took %v", took)
 	}
-	if got := types(h.record(lost.RunID)); !slices.Equal(got, []string{event.Ping, event.RunStarted}) {
+	if got := types(h.record(lost.RunID)); !slices.Equal(got, []string{event.RunRegistered, event.RunStarted}) {
 		t.Errorf("the live run's record at Close %v", got)
 	}
 	if _, err := relay(h.g.Addr(), lost.ProxySecret).Get("http://a.example/"); err == nil {
@@ -620,7 +679,7 @@ func TestAResendTheServerStopsMidway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owed := len(h.record(a.RunID)) - 1 // all but the ping, which the server accepted
+	owed := len(h.record(a.RunID)) - 1 // all but the run.registered, which is never posted
 	c.refuse.Store(0)
 	c.goneAfter.Store(c.deliveries.Load() + 1)
 	stored := c.store.Count()
@@ -671,7 +730,7 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.SplitAfter(string(b), "\n")
-	if want := []string{event.Ping, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunLog}; !slices.Equal(types(h.record(a.RunID)), want) {
+	if want := []string{event.RunRegistered, event.RunStarted, event.PolicyApplied, event.RunLog, event.RunLog}; !slices.Equal(types(h.record(a.RunID)), want) {
 		t.Fatalf("the record %v", types(h.record(a.RunID)))
 	}
 	// The first log's write did not finish, and the second's went on in its line.
@@ -694,7 +753,7 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 	for _, l := range c.lines(t) {
 		got = append(got, l.Type+" "+l.Sequence)
 	}
-	want := []string{event.Ping + " 0000000001", event.RunStarted + " 0000000002", event.PolicyApplied + " 0000000003", event.RunLog + " 0000000005", event.RunExited + " 0000000006"}
+	want := []string{event.RunStarted + " 0000000002", event.PolicyApplied + " 0000000003", event.RunLog + " 0000000005", event.RunExited + " 0000000006"}
 	if !slices.Equal(got, want) {
 		t.Errorf("the server has %v, want %v", got, want)
 	}
@@ -705,16 +764,16 @@ func TestResendReadsOnPastATornLine(t *testing.T) {
 }
 
 // TestResendSendsNothingOfARunThatNeverOpened pins a resend of the record of a run whose
-// ping the server refused, and of a run that had no server: neither opened at the
-// server, so nothing of it is posted, the record is left as it is, and the delivery
-// says the run never opened.
+// registration the server refused, which holds no event, and of a run that had no
+// server: neither opened at the server, so nothing of it is posted, the record is left
+// as it is, and the delivery says the run never opened.
 func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	c := newControl(t)
 	h := start(t, gateway.Config{Server: c.server()})
 	c.limit.Store(true)
 	id := event.NewRunID()
 	if _, err := h.tryOpen(server.LinkRunRequest{RunID: id}); err == nil {
-		t.Fatal("the server accepted the ping")
+		t.Fatal("the server accepted the registration")
 	}
 	c.limit.Store(false)
 	dir := filepath.Join(h.dir, "runs", id)
@@ -722,7 +781,7 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := types(h.record(id)); !slices.Equal(got, []string{event.Ping}) {
+	if got := types(h.record(id)); len(got) != 0 {
 		t.Fatalf("the record %v", got)
 	}
 	stored := c.store.Count()
@@ -732,7 +791,7 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"the server never accepted the run's ping; nothing is sent"}; !slices.Equal(reports, want) {
+	if want := []string{"the run never opened at the server; nothing is sent"}; !slices.Equal(reports, want) {
 		t.Errorf("reports %q", reports)
 	}
 	if r != (gateway.Delivery{NotOpened: true}) {
@@ -745,8 +804,8 @@ func TestResendSendsNothingOfARunThatNeverOpened(t *testing.T) {
 		t.Errorf("the record was changed:\n%s", after)
 	}
 
-	// A run of a gateway with no server: no ping, so it never opened at the server it
-	// is sent to.
+	// A run of a gateway with no server: no run.registered and a run.started, so it
+	// never opened at the server it is sent to.
 	local := start(t, gateway.Config{})
 	a := local.open(server.LinkRunRequest{})
 	local.post(started(a.RunID, nil), applied(a.RunID, a.Applied))
