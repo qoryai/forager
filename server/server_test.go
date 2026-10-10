@@ -198,8 +198,9 @@ func TestTheClientSignsTheFixturesRequests(t *testing.T) {
 
 // verified is a server of the test's own that checks what every request contains,
 // verifies its signature under the access key, and answers as told, signing each
-// answer under its own key: the configuration document, the run configuration, and
-// the events endpoint with digests on its answer.
+// answer under its own key: the configuration document, the run endpoint, a run's
+// registration and its run configuration by the run's id, and the events endpoint with
+// digests on its answer.
 type verified struct {
 	t      *testing.T
 	srv    *httptest.Server
@@ -211,6 +212,10 @@ type verified struct {
 	status int
 	code   string
 	sign   string
+	// runStatus and runCode are what a registration is answered, a run configuration
+	// for a 200; runStatus 0 is 200.
+	runStatus int
+	runCode   string
 	// seen is the last request's target and headers.
 	seen   *http.Request
 	body   []byte
@@ -259,10 +264,25 @@ func newVerified(t *testing.T) *verified {
 		case r.URL.Path == server.WellKnown:
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set("Content-Type", "application/json")
-			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/run-configuration"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
-		case r.URL.Path == "/v1/run-configuration":
+			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
+		case r.URL.Path == "/v1/runs" && r.Method == http.MethodPost:
+			if r.Header.Get("Content-Type") != server.RegistrationContentType || r.Header.Get(server.HeaderDelivery) != "" || r.Header.Get(server.HeaderTimestamp) != "" {
+				t.Errorf("registration headers %v", r.Header)
+			}
+			if v.runStatus != 0 && v.runStatus != 200 {
+				body := ""
+				if v.runCode != "" {
+					body = `{"error":"` + v.runCode + `"}`
+				}
+				reply(v.runStatus, body)
+				return
+			}
 			w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("0", 64))
 			w.Header().Set("ETag", `"sha256=`+strings.Repeat("0", 64)+`"`)
+			reply(200, v.runDoc)
+		case r.URL.Path == "/v1/runs/"+runID && r.Method == http.MethodGet:
+			w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("1", 64))
+			w.Header().Set("ETag", `"sha256=`+strings.Repeat("1", 64)+`"`)
 			reply(200, v.runDoc)
 		case r.URL.Path == "/v1/events" && r.Method == http.MethodPost:
 			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) == "" {
@@ -289,7 +309,9 @@ func (v *verified) client() *server.Client {
 
 // TestDiscoverReadsTheConfigurationAndItsDigest pins discovery: the well-known path,
 // the document decoded with a section Forager does not know ignored, the node id,
-// the digest from the header, and no run on a status that is not 200.
+// the run endpoint, the digest from the header, the filter, which never wants
+// dev.qory.run.registered, and no run on a status that is not 200 or on a document
+// without the run endpoint.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -297,16 +319,28 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/run-configuration" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
+	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/runs" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
 		t.Errorf("discovered %+v, digest %s", conf, digest)
 	}
-	if !conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.ping") {
-		t.Error("the filter refused an event of a configuration with *")
+	if !conf.Wants("dev.qory.run.log") || conf.Wants("dev.qory.run.registered") {
+		t.Error("the filter of a configuration with * is wrong")
 	}
-	conf.Events.Types = []string{"dev.qory.run.started"}
-	if conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.run.started") || !conf.Wants("dev.qory.ping") {
+	conf.Events.Types = []string{"dev.qory.run.started", "dev.qory.run.registered"}
+	if conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.run.started") || conf.Wants("dev.qory.run.registered") {
 		t.Error("the filter of a listed configuration is wrong")
 	}
+	inner := v.srv.Config.Handler
+	v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]},"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+		w.Header().Set(server.HeaderConfiguration, "sha256=c0")
+		w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
+		w.Write(doc)
+	})
+	var de *server.DocumentError
+	if _, _, err := c.Discover(context.Background()); !errors.As(err, &de) || de.URL != v.srv.URL+server.WellKnown {
+		t.Errorf("a configuration without the run endpoint: %v", err)
+	}
+	v.srv.Config.Handler = inner
 	c.Config.URL = v.srv.URL + "/elsewhere"
 	if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 404") || !strings.Contains(err.Error(), "/elsewhere"+server.WellKnown) {
 		t.Errorf("discovery of a URL that does not answer: %v", err)
@@ -334,11 +368,11 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 		if _, _, err := c.Discover(context.Background()); code(err) != accesskey.CodeAnswerUnsigned {
 			t.Errorf("%s: discovery: %v", sign, err)
 		}
-		if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil); code(err) != accesskey.CodeAnswerUnsigned {
+		if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); code(err) != accesskey.CodeAnswerUnsigned {
 			t.Errorf("%s: run configuration: %v", sign, err)
 		}
-		if err := c.Ping(context.Background(), v.srv.URL+"/v1/events", "d1", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned {
-			t.Errorf("%s: ping: %v", sign, err)
+		if _, _, err := c.Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: registration: %v", sign, err)
 		}
 		d, err := c.Deliver(context.Background(), v.srv.URL+"/v1/events", "d2", []byte("[]"), "")
 		if err != nil || d.Signed || d.Accepted() || d.Digests != (server.Digests{}) || d.Status != 202 {
@@ -348,33 +382,46 @@ func TestEveryAnswerIsVerifiedUnderThePin(t *testing.T) {
 }
 
 // TestRefusalsAreCoded pins the codes a run start reads: an unsigned 401 is
-// unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409
-// instance_limit to the ping is instance_limit, and a signed 410 to a delivery, with
-// run_closed or without a code, stops the deliveries and closes no run. A 401 that carries a signature is unauthorized all the same. A signed code and
-// an unauthorized are From apiary; an answer_unsigned is From none.
+// unauthorized, a signed 429 rate_limited at discovery is rate_limited, a signed 409 to
+// the registration is its code, instance_limit, run_id_used or a code of the server's
+// own, and a signed 410 to a delivery, with run_closed or without a code, stops the
+// deliveries and closes no run. A 401 that carries a signature is unauthorized all the
+// same. A signed code and an unauthorized are From apiary; an answer_unsigned is From
+// none.
 func TestRefusalsAreCoded(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
-	events := v.srv.URL + "/v1/events"
-	v.status, v.code = 409, "instance_limit"
-	if err := c.Ping(context.Background(), events, "d1", []byte("[]")); code(err) != accesskey.CodeInstanceLimit || !strings.Contains(err.Error(), events) || from(err) != accesskey.FromApiary {
-		t.Errorf("ping: %v", err)
-	}
-	v.status, v.code = 401, "unauthorized"
-	for _, sign := range []string{"none", ""} {
-		v.sign = sign
-		if err := c.Ping(context.Background(), events, "d2", []byte("[]")); code(err) != accesskey.CodeUnauthorized || from(err) != accesskey.FromApiary {
-			t.Errorf("ping on 401 signed %q: %v", sign, err)
+	events, runs := v.srv.URL+"/v1/events", v.srv.URL+"/v1/runs"
+	body := registration(t)
+	for _, c409 := range []string{"instance_limit", "run_id_used", "node_paused"} {
+		v.runStatus, v.runCode = 409, c409
+		_, _, err := c.Register(context.Background(), runs, body)
+		if code(err) != c409 || from(err) != accesskey.FromApiary || errors.Is(err, server.ErrNotAccepted) {
+			t.Errorf("registration on a signed 409 %s: %v", c409, err)
+		}
+		if want := "register " + runs + ": " + c409 + " (status 409)"; err == nil || err.Error() != want {
+			t.Errorf("registration on a signed 409 %s: %v, want %q", c409, err, want)
 		}
 	}
-	v.status, v.code, v.sign = 409, "instance_limit", "none"
-	if err := c.Ping(context.Background(), events, "d2u", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned || from(err) != "" {
-		t.Errorf("ping on an unsigned 409: %v, from %q", err, from(err))
+	v.runStatus, v.runCode = 401, "unauthorized"
+	for _, sign := range []string{"none", ""} {
+		v.sign = sign
+		if _, _, err := c.Register(context.Background(), runs, body); code(err) != accesskey.CodeUnauthorized || from(err) != accesskey.FromApiary {
+			t.Errorf("registration on 401 signed %q: %v", sign, err)
+		}
+	}
+	v.runStatus, v.runCode, v.sign = 409, "instance_limit", "none"
+	if _, _, err := c.Register(context.Background(), runs, body); code(err) != accesskey.CodeAnswerUnsigned || from(err) != "" {
+		t.Errorf("registration on an unsigned 409: %v, from %q", err, from(err))
+	}
+	v.runStatus, v.runCode = 410, ""
+	if _, _, err := c.Register(context.Background(), runs, body); code(err) != accesskey.CodeAnswerUnsigned || errors.Is(err, server.ErrNotAccepted) {
+		t.Errorf("registration on an unsigned 410: %v", err)
 	}
 	v.sign = ""
-	v.status, v.code = 500, ""
-	if err := c.Ping(context.Background(), events, "d3", []byte("[]")); !errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), events) {
-		t.Errorf("ping on a signed 500: %v", err)
+	v.runStatus, v.runCode = 500, ""
+	if _, _, err := c.Register(context.Background(), runs, body); !errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), runs) {
+		t.Errorf("registration on a signed 500: %v", err)
 	}
 	v.status, v.code = 410, "run_closed"
 	d, err := c.Deliver(context.Background(), events, "d4", []byte("[]"), "")
@@ -412,84 +459,159 @@ func TestRefusalsAreCoded(t *testing.T) {
 	}
 }
 
-// TestASigned410ToThePingIsNoRun pins a signed 410 to the ping, with run_closed or
-// without a code: the server would record nothing of the run, so the ping is not
-// accepted, ErrNotAccepted with no code, whatever the 410's code was.
-func TestASigned410ToThePingIsNoRun(t *testing.T) {
+// TestASigned410ToTheRegistrationIsNoRun pins a signed 410 to the registration, with
+// run_closed or without a code: the server takes no run here, so the registration is
+// not accepted, ErrNotAccepted with no code, whatever the 410's code was.
+func TestASigned410ToTheRegistrationIsNoRun(t *testing.T) {
 	for _, c := range []string{"run_closed", ""} {
 		v := newVerified(t)
-		events := v.srv.URL + "/v1/events"
-		v.status, v.code = 410, c
-		err := v.client().Ping(context.Background(), events, "d1", []byte("[]"))
+		runs := v.srv.URL + "/v1/runs"
+		v.runStatus, v.runCode = 410, c
+		_, _, err := v.client().Register(context.Background(), runs, registration(t))
 		var r *accesskey.Refusal
-		if want := "ping " + events + ": status 410: the server did not accept the ping"; !errors.Is(err, server.ErrNotAccepted) || errors.As(err, &r) || err.Error() != want {
-			t.Errorf("410 %q to the ping: %v, want %q", c, err, want)
+		if want := "register " + runs + ": status 410: the server did not accept the run"; !errors.Is(err, server.ErrNotAccepted) || errors.As(err, &r) || err.Error() != want {
+			t.Errorf("410 %q to the registration: %v, want %q", c, err, want)
 		}
 	}
 }
 
-// TestRunConfigurationSignsTheQueryItSends pins the run configuration fetch: every
-// label of the run is one query parameter, sorted by key and encoded, an empty value
-// included, added to the run URL's own query, and the target signed is the target
-// sent; the document is decoded with its raw policy and the digest read.
-func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
-	v := newVerified(t)
-	c := v.client()
-	run := v.srv.URL + "/v1/run-configuration"
-	rc, digest, err := c.RunConfiguration(context.Background(), run, map[string]string{"repository": "acme/shop", "issue": "77", "forge": "github.com"})
+// registration is the body of a test's registration.
+func registration(t *testing.T) []byte {
+	t.Helper()
+	b, err := server.Registration{Version: 1, RunID: runID, Labels: map[string]string{"forge": "github.com", "repository": "acme/shop"}, About: &server.About{Title: "Fix the cart"},
+		ForagerVersion: "v0.0.0-test", ContractVersion: server.Revision, IntervalSeconds: 30, Events: []string{"*"}, Time: server.RegistrationTime(time.Date(2026, 10, 10, 12, 0, 0, 999, time.FixedZone("x", 3600)))}.Body()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256="+strings.Repeat("0", 64) || rc.Version != 1 || !strings.Contains(string(rc.SecurityPolicy), `"api.example"`) {
-		t.Errorf("run configuration %+v, digest %s", rc, digest)
+	return b
+}
+
+// TestARegistrationIsItsBody pins the registration's bytes: its members in order, its
+// time in UTC with whole seconds, no labels left out, and no event types an empty list;
+// labels CheckLabels refuses build no body, with its error.
+func TestARegistrationIsItsBody(t *testing.T) {
+	want := `{"version":1,"run_id":"` + runID + `","labels":{"forge":"github.com","repository":"acme/shop"},"about":{"title":"Fix the cart"},"forager_version":"v0.0.0-test","contract_version":` + strconv.Itoa(server.Revision) + `,"interval_seconds":30,"events":["*"],"time":"2026-10-10T11:00:00Z"}`
+	if got := string(registration(t)); got != want {
+		t.Errorf("the body\n%s\nwant\n%s", got, want)
 	}
-	// The targets of the signed fixtures, a run of three labels and a run of two, then
-	// the edges.
-	for _, tc := range []struct {
-		run    string
-		labels map[string]string
-		want   string
-	}{
-		{run, map[string]string{"repository": "acme/shop", "issue": "77", "forge": "github.com"}, signedFixture(t, "get-run-configuration-labels-valid").Target},
-		{run, map[string]string{"forge": "github.com", "repository": "acme/shop"}, signedFixture(t, "get-run-configuration-valid").Target},
-		{run, map[string]string{"run_key": "queue/1 2", "note": "", "k.v-x_y": "\u00fc&="}, "/v1/run-configuration?k.v-x_y=%C3%BC%26%3D&note=&run_key=queue%2F1+2"},
-		{run + "?tenant=a&issue=0", map[string]string{"issue": "77"}, "/v1/run-configuration?issue=77&tenant=a"},
-		{run, map[string]string{}, "/v1/run-configuration"},
-		{run, nil, "/v1/run-configuration"},
-	} {
-		if _, _, err := c.RunConfiguration(context.Background(), tc.run, tc.labels); err != nil {
-			t.Fatal(err)
-		}
-		if got := v.seen.URL.RequestURI(); got != tc.want {
-			t.Errorf("labels %v: target %s, want %s", tc.labels, got, tc.want)
-		}
+	b, err := server.Registration{Version: 1, RunID: runID, Labels: map[string]string{}, ForagerVersion: "dev", ContractVersion: 1, IntervalSeconds: 1, Time: "2026-10-10T12:00:00Z"}.Body()
+	if want := `{"version":1,"run_id":"` + runID + `","forager_version":"dev","contract_version":1,"interval_seconds":1,"events":[],"time":"2026-10-10T12:00:00Z"}`; err != nil || string(b) != want {
+		t.Errorf("a registration with no labels and no about: %s, %v", b, err)
 	}
-	v.runDoc = `{"version":1}`
-	if rc, _, err := c.RunConfiguration(context.Background(), run, nil); err != nil || rc.SecurityPolicy != nil || rc.Variables != nil {
-		t.Errorf("a run configuration without a policy: %+v %v", rc, err)
-	}
-	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/missing", nil); err == nil || !strings.Contains(err.Error(), "status 404") {
-		t.Errorf("a run URL that does not answer: %v", err)
+	if _, err := (server.Registration{Version: 1, RunID: runID, Labels: map[string]string{"Forge": "x"}}).Body(); err == nil || err.Error() != server.CheckLabels(map[string]string{"Forge": "x"}).Error() {
+		t.Errorf("labels CheckLabels refuses: %v", err)
 	}
 }
 
-// TestLabelsBoundTheQuery pins the bound the contract states: the longest labels a run
-// may carry, sixteen keys of 64 bytes and values of 256 bytes that all need encoding,
-// make a query of 13,343 bytes, and one more label or byte is refused.
-func TestLabelsBoundTheQuery(t *testing.T) {
+// TestRegisterPostsTheBodyAndReadsTheRunConfiguration pins the registration: one signed
+// POST of the body as given, application/json, with no delivery id and no timestamp,
+// the same bytes every time it is sent, and its answer read as the run configuration
+// with its digest: a document over the 64 KiB a refusal may hold is read when it is a
+// signed 200, and {"version":1} is a run configuration without a policy. A digest
+// header missing or misshapen, and a document the schema refuses, are a DocumentError.
+func TestRegisterPostsTheBodyAndReadsTheRunConfiguration(t *testing.T) {
 	v := newVerified(t)
+	c := v.client()
+	runs := v.srv.URL + "/v1/runs"
+	body := registration(t)
+	var sent [][]byte
+	for range 2 {
+		rc, digest, err := c.Register(context.Background(), runs, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest != "sha256="+strings.Repeat("0", 64) || rc.Version != 1 || !strings.Contains(string(rc.SecurityPolicy), `"api.example"`) {
+			t.Errorf("run configuration %+v, digest %s", rc, digest)
+		}
+		if v.seen.Method != http.MethodPost || v.seen.URL.RequestURI() != "/v1/runs" {
+			t.Errorf("%s %s", v.seen.Method, v.seen.URL.RequestURI())
+		}
+		sent = append(sent, v.body)
+	}
+	if string(sent[0]) != string(body) || string(sent[1]) != string(body) {
+		t.Errorf("the bytes sent differ from the body:\n%s\n%s", sent[0], sent[1])
+	}
+	v.runDoc = `{"version":1,"variables":{"A":{"value":"` + strings.Repeat("a", 4096) + `"},"B":{"value":"` + strings.Repeat("b", 4096) + `"}` + strings.Repeat(` `, server.MaxRefusal) + `}}`
+	if rc, _, err := c.Register(context.Background(), runs, body); err != nil || len(rc.Values()["B"]) != 4096 {
+		t.Errorf("a signed 200 over %d bytes: %v", server.MaxRefusal, err)
+	}
+	v.runDoc = `{"version":1}`
+	if rc, digest, err := c.Register(context.Background(), runs, body); err != nil || rc.SecurityPolicy != nil || rc.Variables != nil || digest == "" {
+		t.Errorf("a run configuration without a policy: %+v %v", rc, err)
+	}
+	v.runDoc = `{"version":2}`
+	var de *server.DocumentError
+	if _, _, err := c.Register(context.Background(), runs, body); !errors.As(err, &de) || de.URL != runs {
+		t.Errorf("a document the schema refuses: %v", err)
+	}
+	if _, _, err := c.Register(context.Background(), v.srv.URL+"/v1/missing", body); err == nil || !strings.Contains(err.Error(), "status 404") || !strings.Contains(err.Error(), "register "+v.srv.URL+"/v1/missing") {
+		t.Errorf("a run URL that does not answer: %v", err)
+	}
+	inner := v.srv.Config.Handler
+	for name, header := range map[string]string{"no digest": "", "a misshapen digest": "sha256=0"} {
+		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			doc := []byte(`{"version":1}`)
+			if header != "" {
+				w.Header().Set(server.HeaderRunConfiguration, header)
+			}
+			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, RunConfiguration: header}))
+			_ = b
+			w.Write(doc)
+		})
+		if _, _, err := c.Register(context.Background(), runs, body); !errors.As(err, &de) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	v.srv.Config.Handler = inner
+	v.srv.Close()
+	if _, _, err := c.Register(context.Background(), runs, body); err == nil || !strings.Contains(err.Error(), "register "+runs) {
+		t.Errorf("a registration with a server that is down: %v", err)
+	}
+}
+
+// TestRunConfigurationFetchesByTheRunsID pins the reload: a signed GET of the run
+// endpoint followed by the run's id, with its timestamp, read as the run configuration
+// with its digest; a signed 410 is ErrNotAccepted, and a 404 an error naming it.
+func TestRunConfigurationFetchesByTheRunsID(t *testing.T) {
+	v := newVerified(t)
+	c := v.client()
+	for _, runs := range []string{v.srv.URL + "/v1/runs", v.srv.URL + "/v1/runs/"} {
+		rc, digest, err := c.RunConfiguration(context.Background(), runs, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest != "sha256="+strings.Repeat("1", 64) || rc.Version != 1 || rc.SecurityPolicy == nil {
+			t.Errorf("run configuration %+v, digest %s", rc, digest)
+		}
+		if v.seen.Method != http.MethodGet || v.seen.URL.RequestURI() != "/v1/runs/"+runID || v.seen.Header.Get(server.HeaderTimestamp) == "" {
+			t.Errorf("%s %s, headers %v", v.seen.Method, v.seen.URL.RequestURI(), v.seen.Header)
+		}
+	}
+	other := "1b5c1c2e-3f4a-4b6c-8d7e-9f0a1b2c3d4e"
+	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", other); err == nil || errors.Is(err, server.ErrNotAccepted) || !strings.Contains(err.Error(), "status 404") || !strings.Contains(err.Error(), "/v1/runs/"+other) {
+		t.Errorf("a run the server does not know: %v", err)
+	}
+	inner := v.srv.Config.Handler
+	v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 410, RequestSignature: r.Header.Get(server.HeaderSignature)}))
+		w.WriteHeader(410)
+	})
+	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); !errors.Is(err, server.ErrNotAccepted) {
+		t.Errorf("a signed 410: %v", err)
+	}
+	v.srv.Config.Handler = inner
+}
+
+// TestLabelsAreChecked pins the labels a run may carry: sixteen keys of 64 bytes and
+// values of 256 bytes pass, and one more label or byte is refused.
+func TestLabelsAreChecked(t *testing.T) {
 	labels := map[string]string{}
 	for i := range server.MaxLabels {
 		labels[fmt.Sprintf("%02d", i)+strings.Repeat("k", 62)] = strings.Repeat("\u00e9", 128)
 	}
 	if err := server.CheckLabels(labels); err != nil {
 		t.Fatal(err)
-	}
-	if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", labels); err != nil {
-		t.Fatal(err)
-	}
-	if n := len(v.seen.URL.RawQuery); n != 13343 {
-		t.Errorf("the longest query is %d bytes, the contract says 13343", n)
 	}
 	for name, change := range map[string]func(map[string]string){
 		"a seventeenth label": func(l map[string]string) { l["x"] = "" },
@@ -509,7 +631,7 @@ func TestLabelsBoundTheQuery(t *testing.T) {
 // TestDeliveryCarriesTheHeadersAndReadsTheDigests pins one POST: content type, user
 // agent, access key id, instance, revision, delivery id, a signature the server
 // verifies over the target and the body, the run configuration digest when the run
-// holds one, the answer's digests, and the ping's fail-closed rule.
+// holds one, and the answer's digests.
 func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -521,15 +643,11 @@ func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 	if v.seen.Header.Get(server.HeaderRunConfiguration) != "sha256=r0" || v.seen.Header.Get(server.HeaderTimestamp) != "" {
 		t.Errorf("POST headers %v", v.seen.Header)
 	}
-	if err := c.Ping(context.Background(), events, "d2", []byte("[]")); err != nil {
+	if _, err := c.Deliver(context.Background(), events, "d2", []byte("[]"), ""); err != nil {
 		t.Error(err)
 	}
 	if _, ok := v.seen.Header[server.HeaderRunConfiguration]; ok {
-		t.Error("the ping sent a run configuration digest with none held")
-	}
-	v.srv.Close()
-	if err := c.Ping(context.Background(), events, "d4", []byte("[]")); err == nil {
-		t.Error("ping on a closed server succeeded")
+		t.Error("a delivery sent a run configuration digest with none held")
 	}
 }
 
@@ -554,15 +672,15 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 		if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: discovery through a redirect: %v", name, err)
 		}
-		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/run-configuration", nil); err == nil || !strings.Contains(err.Error(), "status 302") {
+		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/runs", runID); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: a run configuration through a redirect: %v", name, err)
 		}
 		d, err := c.Deliver(context.Background(), origin.URL+"/v1/events", "d1", []byte("[]"), "")
 		if err != nil || d.Status != http.StatusFound || d.Accepted() {
 			t.Errorf("%s: a delivery through a redirect: %+v %v", name, d, err)
 		}
-		if err := c.Ping(context.Background(), origin.URL+"/v1/events", "d2", []byte("[]")); code(err) != accesskey.CodeAnswerUnsigned {
-			t.Errorf("%s: a ping through a redirect: %v", name, err)
+		if _, _, err := c.Register(context.Background(), origin.URL+"/v1/runs", []byte("{}")); code(err) != accesskey.CodeAnswerUnsigned {
+			t.Errorf("%s: a registration through a redirect: %v", name, err)
 		}
 	}
 	if n := elsewhere.Load(); n != 0 {

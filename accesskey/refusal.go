@@ -28,8 +28,8 @@ const (
 	// CodeRateLimited is the server's signed 429 at enrolment, per code: too many
 	// attempts with one code.
 	CodeRateLimited = "rate_limited"
-	// CodeInstanceLimit is the server's signed 409 to a ping from a new instance beyond
-	// its node's limit.
+	// CodeInstanceLimit is the server's signed 409 to a run's registration from a new
+	// instance beyond its node's limit.
 	CodeInstanceLimit = "instance_limit"
 	// CodeRunClosed is the gateway's 410 to a request of a run already ended at the
 	// gateway. A server's 410 never ends a run.

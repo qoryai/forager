@@ -9,6 +9,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/server"
 )
 
 // value is what every refused document below holds as a variable's value, so a test
@@ -21,9 +22,9 @@ const value = "a-value-no-error-quotes"
 func TestRunConfigurationReadsTheVariables(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
-	run := v.srv.URL + "/v1/run-configuration"
+	runs := v.srv.URL + "/v1/runs"
 	v.runDoc = `{"version":1,"variables":{"NODE_ENV":{"value":"test"},"APP_REGION":{"value":"eu-west-1","later":true},"EMPTY":{"value":""}},"later":{"x":1}}`
-	rc, _, err := c.RunConfiguration(context.Background(), run, nil)
+	rc, _, err := c.RunConfiguration(context.Background(), runs, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func TestRunConfigurationReadsTheVariables(t *testing.T) {
 		t.Errorf("read %+v", rc)
 	}
 	v.runDoc = `{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"}},"variables":{"A":{"value":"` + strings.Repeat("é", 2048) + `"}}}`
-	if rc, _, err = c.RunConfiguration(context.Background(), run, nil); err != nil || rc.SecurityPolicy == nil || len(rc.Variables["A"].Value) != 4096 {
+	if rc, _, err = c.RunConfiguration(context.Background(), runs, runID); err != nil || rc.SecurityPolicy == nil || len(rc.Variables["A"].Value) != 4096 {
 		t.Errorf("a value of 4096 bytes: %v", err)
 	}
 }
@@ -67,7 +68,7 @@ func TestRunConfigurationRefusalsQuoteNoValue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newVerified(t)
 			v.runDoc = tc.doc
-			_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil)
+			_, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
 			var r *accesskey.Refusal
 			if !errors.As(err, &r) || r.Code != refusal.RunConfigurationInvalid {
 				t.Fatalf("refused with %v", err)
@@ -95,18 +96,27 @@ func TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies(t *testing.T) {
 		for _, sign := range []string{"none", "other", "elsewhere"} {
 			v := newVerified(t)
 			v.runDoc, v.sign = doc, sign
-			rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil)
-			if rc != nil || code(err) != accesskey.CodeAnswerUnsigned {
-				t.Errorf("%s, %s: read %+v, %v; want answer_unsigned", sign, doc, rc, err)
-			}
-			if err != nil && strings.Contains(err.Error(), value) {
-				t.Errorf("%s: the error quotes the value: %v", sign, err)
+			for what, read := range map[string]func() (*server.RunConfiguration, string, error){
+				"registration": func() (*server.RunConfiguration, string, error) {
+					return v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t))
+				},
+				"reload": func() (*server.RunConfiguration, string, error) {
+					return v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+				},
+			} {
+				rc, _, err := read()
+				if rc != nil || code(err) != accesskey.CodeAnswerUnsigned {
+					t.Errorf("%s, %s, %s: read %+v, %v; want answer_unsigned", what, sign, doc, rc, err)
+				}
+				if err != nil && strings.Contains(err.Error(), value) {
+					t.Errorf("%s, %s: the error quotes the value: %v", what, sign, err)
+				}
 			}
 		}
 	}
 	v := newVerified(t)
 	v.runDoc = `{"version":1,"variables":{"NODE_ENV":{"value":"` + value + `"}}}`
-	if rc, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", nil); err != nil || rc.Values()["NODE_ENV"] != value {
+	if rc, _, err := v.client().Register(context.Background(), v.srv.URL+"/v1/runs", registration(t)); err != nil || rc.Values()["NODE_ENV"] != value {
 		t.Errorf("a signed answer: %+v, %v", rc, err)
 	}
 }
