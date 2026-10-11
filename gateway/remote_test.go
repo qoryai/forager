@@ -934,7 +934,9 @@ func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
 
 // TestTheServersRunKeyExpiredIsKept pins the server's run_key_expired refusal of an
 // attach within the skew: two run requests with a run key 10 s past its attach_by send
-// one attach, and both get the server's refusal, the same answer.
+// one attach, and both get the server's refusal, the same answer. Once the gateway
+// holds a record of the run, the kept refusal is not given: the run request is the 409
+// run_attached of a run the gateway has a record of.
 func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "run_key_expired"})
@@ -950,6 +952,22 @@ func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
 	if !bytes.Equal(first.body, second.body) {
 		t.Errorf("the second refusal %s; want the first's, %s", second.body, first.body)
 	}
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+
+	// A record of the run, marked answered, which the gateway keeps.
+	dir := filepath.Join(r.cfg.Dir, "runs", runID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(`{"type":"`+event.RunRegistered+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "answered"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, "a run request of a run with a record", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
 	if n := len(r.c.attached()); n != 1 {
 		t.Errorf("%d attaches; want 1", n)
 	}
