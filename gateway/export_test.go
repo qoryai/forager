@@ -109,6 +109,7 @@ func HoldEnded(g *Gateway, runID string) (undo func()) {
 // The one address's bounds.
 const (
 	MaxSourceConns = maxSourceConns
+	MaxBlockConns  = maxBlockConns
 	RefusedBody    = refusedBody
 	RefusedWait    = refusedWait
 	EdgeReadWait   = edgeReadWait
@@ -117,3 +118,11 @@ const (
 	RelayWriteWait = relayWriteWait
 	RelayMaxHeader = relayMaxHeader
 )
+
+// PendingConns counts the connections g's one address holds whose run key it has not
+// admitted.
+func PendingConns(g *Gateway) int {
+	g.svc.conns.mu.Lock()
+	defer g.svc.conns.mu.Unlock()
+	return g.svc.conns.total
+}

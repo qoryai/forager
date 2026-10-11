@@ -86,12 +86,14 @@ const maxFirstLine = 8 << 10
 // open between requests: the session's client keeps one as long.
 const serviceIdle = 90 * time.Second
 
-// The one address's bounds on connections: how many it holds at once, and how many of
-// one source, an IPv4 address or an IPv6 /64 ([sourceOf]). A connection past either is
-// closed as it is accepted, unanswered.
+// The one address's bounds on the connections it holds whose run key it has not
+// admitted: in all, of one source, an IPv4 address or an IPv6 /64, and of one IPv6 /48
+// ([sourceOf]). A connection past any is closed as it is accepted, unanswered. One
+// whose run key is admitted counts against none of them.
 const (
 	maxConns       = 4096
 	maxSourceConns = 64
+	maxBlockConns  = 256
 )
 
 // The link's bounds on the one address: how long a request may take to arrive whole,
@@ -137,7 +139,7 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 		return nil, err
 	}
 	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
-		conns: newConnLimit(maxConns, maxSourceConns)}
+		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
 	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
 	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
 	// without one keeps a connection open.
@@ -145,7 +147,7 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
-				return context.WithValue(ctx, bindingKey{}, b.ekm)
+				return context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit)
 			}
 			return ctx
 		}}
@@ -160,8 +162,8 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 func (s *service) addr() string { return s.ln.Addr().String() }
 
 // accept routes every connection in its own goroutine, so a peer that sends nothing
-// holds up no one else. A connection past [maxConns], or past [maxSourceConns] of its
-// source, is closed at once.
+// holds up no one else. A connection past [maxConns], [maxSourceConns] of its source or
+// [maxBlockConns] of its /48 whose run keys are not admitted is closed at once.
 func (s *service) accept() {
 	defer s.wg.Done()
 	var backoff time.Duration
@@ -226,7 +228,11 @@ func (s *service) route(raw net.Conn) {
 	}
 	if string(line) == link.BindLine {
 		r.Discard(len(line))
-		handed = s.bind(tc, r)
+		admit := func() {}
+		if h, ok := raw.(*heldConn); ok {
+			admit = h.admit
+		}
+		handed = s.bind(tc, r, admit)
 		return
 	}
 	tc.SetDeadline(time.Time{})
@@ -237,8 +243,10 @@ func (s *service) route(raw net.Conn) {
 // writes its [link.BoundWord] line, signed under its access key over the connection's
 // exporter value, then reads the connection's next line within the same deadline. The
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
-// other line is the link's HTTP/1.1. It reports whether c was handed on.
-func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
+// other line is the link's HTTP/1.1. admit lets go of c's count among the connections
+// whose run keys are not admitted, once its run key is. It reports whether c was
+// handed on.
+func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
 		return false
@@ -262,10 +270,10 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, value)
+		return s.g.relayRun(c, r, value, admit)
 	}
 	c.SetDeadline(time.Time{})
-	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm})
+	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit})
 }
 
 // relayRunKey is the run key of a line of the relay's preamble, its newline included,
@@ -312,16 +320,21 @@ type linkConn struct {
 
 func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-// boundConn is a bound connection of the link: what its binding read, and its exporter
-// value, which signs every answer on it.
+// boundConn is a bound connection of the link: what its binding read, its exporter
+// value, which signs every answer on it, and what lets go of its count once a run key
+// is admitted on it.
 type boundConn struct {
 	linkConn
-	ekm []byte
+	ekm   []byte
+	admit func()
 }
 
 // bindingKey is the key of a bound connection's exporter value in its requests'
 // contexts.
 type bindingKey struct{}
+
+// admitKey is the key of a bound connection's admit in its requests' contexts.
+type admitKey struct{}
 
 // b64token is the value of an Authorization of the Bearer scheme, RFC 6750 §2.1.
 var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
@@ -343,9 +356,9 @@ func bearer(values []string) (string, bool) {
 // edgeHandler is the link on the one address: every request's run key, its bearer
 // value, decided first ([Gateway.admitRunKey]), a refusal answered with its code and
 // Connection: close, once its body is read within [refusedBody] and [refusedWait], and
-// the connection closed unanswered when it is not; then the link's handler, with the
-// run key in the request's context and no Authorization left on it. Every answer is
-// signed under the gateway's access key ([signedWriter]).
+// the connection closed unanswered when it is not; then, the connection admitted, the
+// link's handler, with the run key in the request's context and no Authorization left
+// on it. Every answer is signed under the gateway's access key ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +386,9 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 			sw.header.Set("Connection", "close")
 			refuse(sw, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
+		}
+		if admit, ok := r.Context().Value(admitKey{}).(func()); ok {
+			admit()
 		}
 		r = r.WithContext(context.WithValue(r.Context(), runKeyKey{}, presented{raw: value, key: k}))
 		r.Header = r.Header.Clone()
@@ -543,13 +559,28 @@ func (s *service) close(ctx context.Context) error {
 	return err
 }
 
-// sourceOf is the source a connection counts against: its IPv4 address, or the /64 of
-// its IPv6 address, an IPv4 address mapped into IPv6 counted as IPv4.
-func sourceOf(addr net.Addr) string {
-	if a, ok := addr.(*net.TCPAddr); ok {
-		return sourceKey(a.AddrPort().Addr())
+// connSource is what a connection counts against: its source, an IPv4 address or an
+// IPv6 /64, and for IPv6 its /48.
+type connSource struct {
+	key, block string
+}
+
+// sourceOf is what a connection from addr counts against: its IPv4 address, or the /64
+// and the /48 of its IPv6 address, an IPv4 address mapped into IPv6 counted as IPv4.
+func sourceOf(addr net.Addr) connSource {
+	var a netip.Addr
+	if t, ok := addr.(*net.TCPAddr); ok {
+		a = t.AddrPort().Addr()
+	} else if ap, err := netip.ParseAddrPort(addr.String()); err == nil {
+		a = ap.Addr()
+	} else {
+		return connSource{key: addr.String()}
 	}
-	return addressSource(addr.String())
+	a = a.Unmap().WithZone("")
+	if a.Is4() {
+		return connSource{key: a.String()}
+	}
+	return connSource{key: sourceKey(a), block: netip.PrefixFrom(a, 48).Masked().String()}
 }
 
 // addressSource is the source of addr, host:port, as [sourceOf] counts it.
@@ -570,47 +601,60 @@ func sourceKey(a netip.Addr) string {
 	return netip.PrefixFrom(a, 64).Masked().String()
 }
 
-// connLimit counts the connections the one address holds, in all and by source.
+// connLimit counts the connections the one address holds whose run key it has not
+// admitted: in all, by source and by IPv6 /48.
 type connLimit struct {
-	mu         sync.Mutex
-	most, each int
-	total      int
-	by         map[string]int
+	mu                sync.Mutex
+	most, each, block int
+	total             int
+	by, blocks        map[string]int
 }
 
-func newConnLimit(most, each int) *connLimit {
-	return &connLimit{most: most, each: each, by: map[string]int{}}
+func newConnLimit(most, each, block int) *connLimit {
+	return &connLimit{most: most, each: each, block: block, by: map[string]int{}, blocks: map[string]int{}}
 }
 
-// take counts one more connection of source, and reports whether it is within the
-// bounds; one that is not is not counted.
-func (l *connLimit) take(source string) bool {
+// take counts one more connection of s, and reports whether it is within the bounds;
+// one that is not is not counted.
+func (l *connLimit) take(s connSource) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.total >= l.most || l.by[source] >= l.each {
+	if l.total >= l.most || l.by[s.key] >= l.each || s.block != "" && l.blocks[s.block] >= l.block {
 		return false
 	}
 	l.total++
-	l.by[source]++
+	l.by[s.key]++
+	if s.block != "" {
+		l.blocks[s.block]++
+	}
 	return true
 }
 
-// give lets go of a connection of source that take counted.
-func (l *connLimit) give(source string) {
+// give lets go of a connection of s that take counted.
+func (l *connLimit) give(s connSource) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.total--
-	if l.by[source]--; l.by[source] <= 0 {
-		delete(l.by, source)
+	if l.by[s.key]--; l.by[s.key] <= 0 {
+		delete(l.by, s.key)
+	}
+	if s.block != "" {
+		if l.blocks[s.block]--; l.blocks[s.block] <= 0 {
+			delete(l.blocks, s.block)
+		}
 	}
 }
 
-// heldConn is a connection the one address counts until it is closed.
+// heldConn is a connection the one address counts until its run key is admitted or it
+// is closed, whichever comes first.
 type heldConn struct {
 	net.Conn
 	once    sync.Once
 	release func()
 }
+
+// admit lets go of the connection's count, once: its run key is admitted.
+func (c *heldConn) admit() { c.once.Do(c.release) }
 
 // Close closes the connection and lets go of its count, once.
 func (c *heldConn) Close() error {

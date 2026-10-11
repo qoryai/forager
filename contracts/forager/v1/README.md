@@ -1843,9 +1843,11 @@ connection by its first bytes after the TLS handshake: a connection that opens w
 `QORY-BIND` is an edge's, the session's or its forwarder's, and any other is the relay's
 (The relay of the server's endpoints, below). The gateway answers the binding under its
 access key, reads the edge's next line within the ten seconds of a preamble, each line
-at most 8 KiB, and closes a connection that sends neither in time unanswered. It holds
-at most 4096 connections at once, and at most 64 of one source, an IPv4 address or an
-IPv6 /64; one more is closed as it is accepted, unanswered. On a bound connection a
+at most 8 KiB, and closes a connection that sends neither in time unanswered. Until a
+connection's run key is admitted, on its first request of the link or in its relay
+preamble, it counts against three bounds: at most 4096 such connections at once, 64 of
+one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48; one more is closed
+as it is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
 request of the link arrives whole, its body included, within 60 seconds, and its
 request line and fields within 16 KiB, the 4 KiB net/http allows past that aside: a
 longer head is net/http's own `431`, unsigned. The run

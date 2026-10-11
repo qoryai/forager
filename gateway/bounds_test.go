@@ -162,8 +162,8 @@ func TestTheLinksBoundsOnTheOneAddress(t *testing.T) {
 }
 
 // TestTheOneAddressBoundsTheConnectionsOfASource pins the 64 connections of one source
-// the one address holds at once: the next is closed at once, unanswered, and a source
-// below its bound again is served again.
+// the one address holds at once before their run keys are admitted: the next is closed
+// at once, unanswered, and a source below its bound again is served again.
 func TestTheOneAddressBoundsTheConnectionsOfASource(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	var conns []net.Conn
@@ -409,4 +409,110 @@ func TestBearer(t *testing.T) {
 			t.Errorf("%q: %q %v", c.values, value, ok)
 		}
 	}
+}
+
+// TestAnAdmittedConnectionLeavesTheBounds pins the bounds on connections to those whose
+// run key the one address has not admitted: more than 64 proxy connections of a live
+// run from one source all work beside an admitted connection of the link; with them
+// open, 64 connections not admitted are held and the next is closed; a request refused
+// for its run key admits nothing; and once every connection is closed, by either side,
+// none is counted.
+func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
+	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	t.Cleanup(o.Close)
+	r := startRemote(t, nil, gateway.Config{Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}})
+	key := runKeyFor(t, event.NewRunID(), nil)
+	e := r.open(t, key, server.LinkRunRequest{})
+	var open []net.Conn
+	defer func() {
+		for _, c := range open {
+			c.Close()
+		}
+	}()
+	pending := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for gateway.PendingConns(r.g) != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d connections counted; want %d", gateway.PendingConns(r.g), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	target := o.Listener.Addr().String()
+	for i := range gateway.MaxSourceConns + 16 {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("proxy connection %d: %v", i+1, err)
+		}
+		open = append(open, b)
+		io.WriteString(b, link.RelayPreamble+" "+key+"\n")
+		req, _ := http.NewRequest(http.MethodConnect, "http://"+target, nil)
+		req.Host = target
+		req.Write(b.c)
+		resp, err := http.ReadResponse(b.r, req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("proxy connection %d: %v %v", i+1, resp, err)
+		}
+	}
+	edge, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	open = append(open, edge)
+	if a := edge.do(t, e.key, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Fatalf("the link: %d %s", a.status, a.body)
+	}
+	pending(0)
+	for range gateway.MaxSourceConns {
+		c, err := net.Dial("tcp", r.g.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		open = append(open, c)
+	}
+	pending(gateway.MaxSourceConns)
+	over, err := net.Dial("tcp", r.g.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	over.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := over.Read(make([]byte, 1)); err == nil {
+		t.Error("a connection past the bound sent something")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Errorf("connection %d not admitted is held beside admitted ones", gateway.MaxSourceConns+1)
+	}
+	over.Close()
+	for _, c := range open {
+		c.Close()
+	}
+	open = nil
+	pending(0)
+	// Refused on the gateway's side: a binding with no next line, a proxy connection with
+	// no run key, a refused request.
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(b, link.RelayPreamble+" qrk_not.a-run-key\n")
+	closedAfter(t, "a proxy connection with no run key", b.r, b.c)
+	b.Close()
+	b, err = r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.do(t, "", http.MethodGet, "/qory-link/configuration", nil)
+	closedAfter(t, "a refused request", b.r, b.c)
+	b.Close()
+	pending(0)
+	// A request refused for its run key admits nothing while its body is read.
+	b, err = r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer nonsense\r\nContent-Length: 100\r\n\r\n0123456789")
+	time.Sleep(300 * time.Millisecond)
+	pending(1)
+	b.Close()
+	pending(0)
 }

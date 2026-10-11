@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ import (
 
 // TestTheSourceOfAnAddress pins the source a connection counts against: an IPv4
 // address alone, an IPv4 address mapped into IPv6 as that address, and an IPv6 address's
-// /64, whatever its zone.
+// /64, whatever its zone, with its /48 beside it.
 func TestTheSourceOfAnAddress(t *testing.T) {
 	for _, c := range []struct{ a, b string }{
 		{"192.0.2.1:1", "192.0.2.1:2"},
@@ -25,58 +26,93 @@ func TestTheSourceOfAnAddress(t *testing.T) {
 		{"[2001:db8::1]:1", "[2001:db8::ffff:ffff:ffff:ffff]:2"},
 		{"[fe80::1%en0]:1", "[fe80::2%en1]:2"},
 	} {
-		if addressSource(c.a) != addressSource(c.b) {
-			t.Errorf("%s and %s are %s and %s", c.a, c.b, addressSource(c.a), addressSource(c.b))
+		if addressSource(c.a) != addressSource(c.b) || src(c.a) != src(c.b) {
+			t.Errorf("%s and %s are %v and %v", c.a, c.b, src(c.a), src(c.b))
 		}
 	}
 	for _, c := range []struct{ a, b string }{
 		{"192.0.2.1:1", "192.0.2.2:1"},
 		{"[2001:db8::1]:1", "[2001:db8:0:1::1]:1"},
 	} {
-		if addressSource(c.a) == addressSource(c.b) {
-			t.Errorf("%s and %s are both %s", c.a, c.b, addressSource(c.a))
+		if addressSource(c.a) == addressSource(c.b) || src(c.a).key == src(c.b).key {
+			t.Errorf("%s and %s are both %v", c.a, c.b, src(c.a))
 		}
 	}
-	tcp := &net.TCPAddr{IP: net.ParseIP("2001:db8::7"), Port: 9}
-	if sourceOf(tcp) != addressSource("[2001:db8::1]:1") {
-		t.Errorf("a TCP address of 2001:db8::/64 is %s", sourceOf(tcp))
+	if a, b := src("[2001:db8::1]:1"), src("[2001:db8:0:ffff::1]:1"); a.block != b.block || a.block != "2001:db8::/48" {
+		t.Errorf("two /64s of 2001:db8::/48 are of %q and %q", a.block, b.block)
+	}
+	if a, b := src("[2001:db8::1]:1"), src("[2001:db8:1::1]:1"); a.block == b.block {
+		t.Errorf("two /48s are both %q", a.block)
+	}
+	if b := src("192.0.2.1:1").block; b != "" {
+		t.Errorf("an IPv4 address is of the block %q", b)
+	}
+	if got := sourceOf(&net.TCPAddr{IP: net.ParseIP("2001:db8::7"), Port: 9}); got != src("[2001:db8::1]:1") {
+		t.Errorf("a TCP address of 2001:db8::/64 is %v", got)
 	}
 }
 
+// src is what a connection from addr, host:port, counts against.
+func src(addr string) connSource {
+	return sourceOf(&net.TCPAddr{IP: net.IP(netip.MustParseAddrPort(addr).Addr().AsSlice()), Port: 1, Zone: netip.MustParseAddrPort(addr).Addr().Zone()})
+}
+
 // TestTheConnectionLimit pins the connections the one address counts: at most each of
-// one source, at most most in all, and one let go of is one more taken.
+// one source, at most block of one IPv6 /48, at most most in all, and one let go of is
+// one more taken.
 func TestTheConnectionLimit(t *testing.T) {
-	l := newConnLimit(5, 2)
-	a, b := addressSource("[2001:db8::1]:1"), addressSource("[2001:db8::2]:1")
+	l := newConnLimit(7, 2, 3)
+	a, b := src("[2001:db8::1]:1"), src("[2001:db8::2]:1")
 	if !l.take(a) || !l.take(a) {
 		t.Fatal("the first two of a source are not taken")
 	}
 	if l.take(b) {
 		t.Error("a third connection of one /64 is taken")
 	}
+	if !l.take(src("[2001:db8:0:1::1]:1")) {
+		t.Error("a third connection of one /48 is not taken")
+	}
+	if l.take(src("[2001:db8:0:2::1]:1")) {
+		t.Error("a fourth connection of one /48 is taken")
+	}
+	if !l.take(src("[2001:db8:1::1]:1")) {
+		t.Error("a connection of another /48 is not taken")
+	}
 	for i := range 3 {
-		if !l.take(addressSource(fmt.Sprintf("192.0.2.%d:1", i+1))) {
-			t.Fatalf("connection %d in all is not taken", i+3)
+		if !l.take(src(fmt.Sprintf("192.0.2.%d:1", i+1))) {
+			t.Fatalf("connection %d in all is not taken", i+5)
 		}
 	}
-	if l.take(addressSource("192.0.2.9:1")) {
-		t.Error("a sixth connection in all is taken")
+	if l.take(src("192.0.2.9:1")) {
+		t.Error("an eighth connection in all is taken")
 	}
 	l.give(a)
-	if !l.take(addressSource("192.0.2.9:1")) {
+	if !l.take(src("192.0.2.9:1")) {
 		t.Error("a connection let go of is not one more taken")
 	}
 	if l.take(a) {
 		t.Error("a connection past the bound in all is taken")
 	}
-	if len(l.by) != 5 || l.total != 5 {
-		t.Errorf("counted %d in all, by %v", l.total, l.by)
+	if l.total != 7 || len(l.by) != 7 || l.blocks["2001:db8::/48"] != 2 || l.blocks["2001:db8:1::/48"] != 1 {
+		t.Errorf("counted %d in all, by %v, by /48 %v", l.total, l.by, l.blocks)
 	}
-	c := &heldConn{Conn: nopConn{}, release: func() { l.give(a) }}
-	c.Close()
-	c.Close()
-	if l.total != 4 {
-		t.Errorf("a connection closed twice let go of %d", 5-l.total)
+	// Admitted, closed, or both in either order, a connection is let go of once.
+	for _, steps := range [][]string{{"admit"}, {"close"}, {"admit", "close"}, {"close", "admit"}, {"close", "close", "admit", "admit"}} {
+		l := newConnLimit(1, 1, 1)
+		if !l.take(a) {
+			t.Fatal("a first connection is not taken")
+		}
+		c := &heldConn{Conn: nopConn{}, release: func() { l.give(a) }}
+		for _, s := range steps {
+			if s == "admit" {
+				c.admit()
+			} else {
+				c.Close()
+			}
+		}
+		if l.total != 0 || len(l.by) != 0 || len(l.blocks) != 0 {
+			t.Errorf("%v: %d counted, by %v, by /48 %v", steps, l.total, l.by, l.blocks)
+		}
 	}
 }
 
