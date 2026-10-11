@@ -170,8 +170,8 @@ func (r *EnrolmentRequest) VerifyProof() bool {
 }
 
 // EnrolmentAnswer is the server's 201 to an enrolment: the access key's id, the id of
-// its node or node pool with its kind, its stored-secrets flag and the server's keys.
-// The key is active from the 201 on.
+// its node, node pool or gateway with its kind, node, pool or gateway, its
+// stored-secrets flag and the server's keys. The key is active from the 201 on.
 type EnrolmentAnswer struct {
 	Version       int    `json:"version"`
 	AccessKeyID   string `json:"access_key_id"`
@@ -273,7 +273,7 @@ func (a *EnrolmentAnswer) check() error {
 	if err := CheckNodeID(a.NodeID); err != nil {
 		return err
 	}
-	if want := map[string]string{"node": "nd_", "pool": "np_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
+	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
 		return fmt.Errorf("node_kind %q does not match the node id %s", a.NodeKind, a.NodeID)
 	}
 	if n := len(a.ApiaryPublicKey); n < 1 || n > 2 {
@@ -291,12 +291,41 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 	if err := checkOrigin(serverURL); err != nil {
 		return nil, err
 	}
+	return r.post(ctx, hc, serverURL, serverURL, userAgent)
+}
+
+// PostVia sends the request to the server's enrolment endpoint through the gateway at
+// viaURL, the server document's via, and returns its verified answer as [Post] does:
+// the request goes to viaURL's origin with the target /.well-known/qory-enrolment, and
+// the gateway relays it to the server and passes the answer back byte for byte, so the
+// answer verifies under the server's key as without the gateway. serverURL is the
+// server's origin, which errors name; viaURL is the gateway's https origin. hc is the
+// client, and is required: it carries the gateway's trust, so the caller builds it
+// with the transport of the server package's Via.Transport, which uses no proxy of the
+// environment, TLS 1.3 alone and the via's ca_file and pin. A nil hc is an error, and
+// nothing is sent. The copy of hc used follows no redirect and keeps no cookie.
+func (r *EnrolmentRequest) PostVia(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (*EnrolmentAnswer, error) {
+	if hc == nil {
+		return nil, errors.New("an enrolment through a gateway needs a client with the gateway's trust, built from the server package's Via.Transport")
+	}
+	if err := checkOrigin(serverURL); err != nil {
+		return nil, err
+	}
+	if err := checkOrigin(viaURL); err != nil || !strings.HasPrefix(viaURL, "https://") {
+		return nil, fmt.Errorf("the via URL %s is not an https origin, scheme and host only", shown(viaURL))
+	}
+	return r.post(ctx, hc, serverURL, viaURL, userAgent)
+}
+
+// post sends the request to the enrolment endpoint under sendTo, the server's origin
+// or a gateway's, and verifies the answer; errors name the endpoint under serverURL.
+func (r *EnrolmentRequest) post(ctx context.Context, hc *http.Client, serverURL, sendTo, userAgent string) (*EnrolmentAnswer, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
 	}
 	u := strings.TrimSuffix(serverURL, "/") + EnrolmentPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(sendTo, "/")+EnrolmentPath, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -333,8 +362,11 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 // checkOrigin refuses a server URL that is not an origin, https or http to a loopback
 // address, as the server document's url is.
 func checkOrigin(s string) error {
-	if ContainsSecret(s) {
+	if containsAccessKeySecret(s) {
 		return errors.New("the server URL contains an access key secret")
+	}
+	if containsRunKey(s) {
+		return errors.New("the server URL contains a run key")
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {

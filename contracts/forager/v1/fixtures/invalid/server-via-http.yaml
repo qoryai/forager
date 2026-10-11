@@ -1,0 +1,8 @@
+# via.url is https alone: a relayed registration's answer carries the run key.
+version: 1
+url: https://qory.example
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
+via:
+  url: http://127.0.0.1:8443

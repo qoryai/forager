@@ -9,6 +9,9 @@
     "sequence": "0000000001",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
     "data": {
+      "workspace": "ws_f1xt0re000000000",
+      "node_id": "nd_f1xt0re000000000",
+      "instance_id": "i_gYKDhIWGh4iJiouMjY6PkA",
       "forager_version": "0.4.0",
       "events": [
         "*"
@@ -28,7 +31,6 @@
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
     "data": {
       "opened_by": "session",
-      "credential": "none",
       "runtime": "claude",
       "runtime_version": "2.1.273",
       "command": "claude",

@@ -3,13 +3,17 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qoryai/forager/e2e"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -19,14 +23,17 @@ func TestMain(m *testing.M) {
 }
 
 // TestDockerConforms runs the suite against the Docker adapter and whatever engine the
-// docker command reaches. QORY_WALL_COMMAND names another command, podman say, and
-// QORY_WALL_IMAGE another image with a shell.
+// docker command reaches, and then the adapter's own checks of its relay.
+// QORY_WALL_COMMAND names another command, podman say, and QORY_WALL_IMAGE another image
+// with a shell.
 func TestDockerConforms(t *testing.T) {
 	image := os.Getenv("QORY_WALL_IMAGE")
 	if image == "" {
 		image = "public.ecr.aws/docker/library/busybox:stable"
 	}
 	conform(t, image, "", false)
+	t.Run("the relay runs no health check", relayRunsNoHealthCheck)
+	t.Run("the relay listens on the inside network alone", relayListensInsideAlone)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -145,4 +152,145 @@ func conform(t *testing.T, image, rt string, docker bool) {
 			return left, nil
 		},
 	})
+}
+
+// busybox is the image the relay's own tests start from.
+const busybox = "public.ecr.aws/docker/library/busybox:stable"
+
+// relaySecret is the run's proxy secret in the relay's own tests.
+const relaySecret = "walltest-relay-secret"
+
+// relayRun is a run of the Docker adapter's, prepared and wrapped: its relay listens and
+// forwards to proxy, a listener of the test's in the gateway's place, and agent is the
+// launch that starts the agent's container.
+type relayRun struct {
+	// relay is the relay's container and outside its ordinary network.
+	relay, outside string
+	proxy          net.Listener
+	agent          wall.Launch
+}
+
+// relayEngine is the command the relay's own tests run, QORY_WALL_COMMAND or docker, and
+// the helper; it skips when the command reaches no engine or there is no helper.
+func relayEngine(t *testing.T) (command, helper string) {
+	t.Helper()
+	command = os.Getenv("QORY_WALL_COMMAND")
+	if command == "" {
+		command = "docker"
+	}
+	if out, err := exec.Command(command, "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
+		e2e.Skip(t, command+" reaches no engine: "+strings.TrimSpace(string(out)))
+	}
+	return command, e2e.Helper(t)
+}
+
+// startRelay prepares an enclosure of the command's for a run of its own in the image
+// and wraps the agent's command, sh with args, which starts the relay. Everything is
+// removed when the test ends.
+func startRelay(t *testing.T, command, helper, image string, args ...string) relayRun {
+	t.Helper()
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs}
+	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ctx := context.Background()
+	e, err := w.Prepare(ctx, wall.Request{RunID: runID, Image: image})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Close(ctx) })
+	proxy, err := net.Listen("tcp", e.ProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { proxy.Close() })
+	dir := t.TempDir()
+	agent, err := e.Wrap(ctx, wall.Launch{Command: "sh", Args: args, Dir: dir, Mounts: []wall.Mount{{Path: dir}},
+		Proxy: proxy.Addr().String(), ProxyToken: relaySecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relayRun{relay: "qory-" + runID + "-relay", outside: "qory-" + runID + "-out", proxy: proxy, agent: agent}
+}
+
+// relayRunsNoHealthCheck starts the relay from an image with a health check and requires
+// that the engine runs none in the relay's container, where it would run beside the
+// run's proxy secret, with the relay's way out.
+func relayRunsNoHealthCheck(t *testing.T) {
+	command, helper := relayEngine(t)
+	tag := fmt.Sprintf("qory-walltest-health:%d", os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", tag, "-")
+	build.Stdin = strings.NewReader("FROM " + busybox + "\nHEALTHCHECK --interval=1s CMD true\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image with a health check: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rmi", "--force", tag).Run() })
+	r := startRelay(t, command, helper, tag)
+	out, err := exec.Command(command, "inspect", "--format", "{{json .State.Health}}", r.relay).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "null" {
+		t.Errorf("the relay runs the image's health check: %s", got)
+	}
+}
+
+// relayListensInsideAlone dials the relay's port on its address on the ordinary network
+// from a container on the engine's default network and from one on the host's, and
+// requires that neither connects, and then that the agent still reaches the relay by its
+// name inside, its traffic arriving with the preamble.
+func relayListensInsideAlone(t *testing.T) {
+	command, helper := relayEngine(t)
+	r := startRelay(t, command, helper, busybox, "-c", "printf hello | nc qory-proxy 3128")
+	out, err := exec.Command(command, "inspect", "--format",
+		fmt.Sprintf("{{(index .NetworkSettings.Networks %q).IPAddress}}", r.outside), r.relay).CombinedOutput()
+	ip := strings.TrimSpace(string(out))
+	if err != nil || net.ParseIP(ip) == nil {
+		t.Fatalf("the relay's address on its ordinary network: %v: %s", err, out)
+	}
+	for _, network := range []string{"bridge", "host"} {
+		dial := fmt.Sprintf("if nc -z -w 3 %s 3128; then echo connected; else echo refused; fi", ip)
+		out, err := exec.Command(command, "run", "--rm", "--network", network, busybox, "sh", "-c", dial).CombinedOutput()
+		if err != nil {
+			t.Fatalf("the dial from the %s network: %v: %s", network, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != "refused" {
+			t.Errorf("a container on the %s network dialled the relay at %s:3128: %s", network, ip, got)
+		}
+	}
+
+	want := link.RelayLine(relaySecret) + "hello"
+	got := make(chan string, 1)
+	go func() {
+		c, err := r.proxy.Accept()
+		if err != nil {
+			got <- err.Error()
+			return
+		}
+		defer c.Close()
+		c.SetReadDeadline(time.Now().Add(time.Minute))
+		b := make([]byte, len(want))
+		n, _ := io.ReadFull(c, b)
+		got <- string(b[:n])
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	agent := exec.CommandContext(ctx, r.agent.Command, r.agent.Args...)
+	agent.Env, agent.Dir = r.agent.Env, r.agent.Dir
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// A failure stops the agent rather than wait for it.
+	defer func() {
+		if t.Failed() {
+			cancel()
+		}
+		agent.Wait()
+	}()
+	select {
+	case s := <-got:
+		if s != want {
+			t.Errorf("the proxy read %q from the agent's connection, want %q", s, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("the agent's connection never reached the proxy")
+	}
 }

@@ -16,7 +16,7 @@ func TestDeciders(t *testing.T) {
 		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable,
 	}
-	gateway := []string{RunCredentialRefused, TargetDiffersFromCredential, DiffersFromCredential, RunIDUsed}
+	gateway := []string{RunIDUsed}
 	for _, code := range forager {
 		if !Decides(code) || GatewayDecides(code) {
 			t.Errorf("%s: Decides %v, GatewayDecides %v; want true, false", code, Decides(code), GatewayDecides(code))
@@ -29,6 +29,11 @@ func TestDeciders(t *testing.T) {
 	}
 	if Decides("run_closed") || GatewayDecides("run_closed") {
 		t.Error("run_closed is the gateway's 410 to a run already ended, no refusal of a run; want neither to decide it")
+	}
+	for _, code := range []string{"run_credential_refused", "target_differs_from_credential", "differs_from_credential"} {
+		if Decides(code) || GatewayDecides(code) {
+			t.Errorf("%s is a reserved old code no one decides any more", code)
+		}
 	}
 }
 

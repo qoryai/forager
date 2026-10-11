@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,17 +18,16 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// linkListener hands the link's HTTP server the connections that opened with the link's
-// preamble: those to the socket whose peer is this process's user, and those made in
-// memory by a session in this process, [linkListener.dial]. Any other is closed
-// unanswered, and nothing is logged of it.
+// linkListener hands the link's HTTP server the connections of a session: those to
+// the socket whose peer is this process's user, and those made in memory by a session
+// in this process, [linkListener.dial]. Any other is closed unanswered before anything
+// is read of it, and nothing is logged of it.
 type linkListener struct {
-	ln     net.Listener
-	secret secretValue
-	uid    int
-	conns  chan net.Conn
-	done   chan struct{}
-	once   sync.Once
+	ln    net.Listener
+	uid   int
+	conns chan net.Conn
+	done  chan struct{}
+	once  sync.Once
 
 	mu      sync.Mutex
 	pending map[net.Conn]struct{}
@@ -38,8 +36,8 @@ type linkListener struct {
 
 // newLinkListener serves the connections of uid's processes on ln, and those made in
 // memory; a nil ln is no socket, and the connections made in memory alone.
-func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
-	l := &linkListener{ln: ln, secret: newSecretValue(secret), uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
+func newLinkListener(ln net.Listener, uid int) *linkListener {
+	l := &linkListener{ln: ln, uid: uid, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[net.Conn]struct{}{}}
 	if ln != nil {
 		l.wg.Add(1)
 		go l.accept()
@@ -47,8 +45,8 @@ func newLinkListener(ln net.Listener, secret string, uid int) *linkListener {
 	return l
 }
 
-// accept checks every connection in its own goroutine, so a peer that sends nothing
-// holds up no one else.
+// accept checks every connection in its own goroutine, so a peer that is slow to be
+// checked holds up no one else.
 func (l *linkListener) accept() {
 	defer l.wg.Done()
 	var backoff time.Duration
@@ -79,9 +77,9 @@ func (l *linkListener) accept() {
 }
 
 // dial opens a connection to the link in this process's memory, one end of a
-// [net.Pipe]: the session's client writes the preamble on it and speaks HTTP/1.1, as
-// over the socket, and the other end is checked and served as a socket's connection is,
-// its peer this process. It is the in-memory way of [link.Local.InMemory].
+// [net.Pipe]: the session's client speaks HTTP/1.1 on it, as over the socket, and the
+// other end is served as a socket's connection is, its peer this process. It is the
+// in-memory way of [link.Local.InMemory].
 func (l *linkListener) dial(context.Context) (net.Conn, error) {
 	client, served := net.Pipe()
 	l.mu.Lock()
@@ -101,10 +99,10 @@ func (l *linkListener) dial(context.Context) (net.Conn, error) {
 }
 
 // check hands c on when its peer is this user, or this process for one made in memory,
-// and it opens with the preamble within [link.PreambleWait], and closes it otherwise.
+// and closes it otherwise.
 func (l *linkListener) check(c net.Conn, inMemory bool) {
 	defer l.wg.Done()
-	ok, r := l.opens(c, inMemory)
+	ok := l.opens(c, inMemory)
 	l.mu.Lock()
 	delete(l.pending, c)
 	l.mu.Unlock()
@@ -113,32 +111,24 @@ func (l *linkListener) check(c net.Conn, inMemory bool) {
 		return
 	}
 	select {
-	case l.conns <- &linkConn{Conn: c, r: r}:
+	case l.conns <- c:
 	case <-l.done:
 		c.Close()
 	}
 }
 
 // opens reports whether c is a session's: its peer this process's user, by the uid the
-// kernel recorded, or this process itself for a connection made in memory; and its
-// first bytes the preamble with the link secret.
-func (l *linkListener) opens(c net.Conn, inMemory bool) (bool, *bufio.Reader) {
-	if !inMemory {
-		uc, ok := c.(*net.UnixConn)
-		if !ok {
-			return false, nil
-		}
-		if uid, err := peerUID(uc); err != nil || uid != l.uid {
-			return false, nil
-		}
+// kernel recorded, or this process itself for a connection made in memory.
+func (l *linkListener) opens(c net.Conn, inMemory bool) bool {
+	if inMemory {
+		return true
 	}
-	c.SetReadDeadline(time.Now().Add(link.PreambleWait))
-	defer c.SetReadDeadline(time.Time{})
-	r := bufio.NewReader(c)
-	if ok, err := link.ReadLinkPreamble(r, l.secret.reveal()); !ok || err != nil {
-		return false, nil
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return false
 	}
-	return true, r
+	uid, err := peerUID(uc)
+	return err == nil && uid == l.uid
 }
 
 // Accept is the next session's connection.
@@ -186,15 +176,6 @@ func (memoryAddr) Network() string { return "memory" }
 // String names the link in memory.
 func (memoryAddr) String() string { return "the gateway's local link in memory" }
 
-// linkConn reads through the reader the preamble was read with, which may hold the
-// first bytes of HTTP.
-type linkConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
-
 // quietLog is the link server's error log: nothing, since what a peer sends is no
 // reason to write anything.
 func quietLog() *log.Logger { return log.New(io.Discard, "", 0) }
@@ -204,44 +185,33 @@ func quietLog() *log.Logger { return log.New(io.Discard, "", 0) }
 const maxBatch = 2 << 20
 
 // handler routes the requests of the contract that reach the gateway by s: its local
-// link, or its one address.
+// link, on the paths of its discovery there, or its one address, on the paths under
+// [link.RemotePathPrefix].
 func (g *Gateway) handler(s *side) http.Handler {
+	discovery, runs, events := server.WellKnown, runPath, eventsPath
+	if s.remote {
+		discovery, runs, events = link.RemoteDiscoveryPath, remoteRunPath, remoteEventsPath
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.Header.Get(server.HeaderContractVersion); v != "" && v != strconv.Itoa(server.Revision) {
 			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway, gatewayText("unsupported_contract_version"))
 			return
 		}
 		switch {
-		case r.URL.Path == server.WellKnown && r.Method == http.MethodGet:
+		case r.URL.Path == discovery && r.Method == http.MethodGet:
 			g.discover(s, w, r)
-		case r.URL.Path == runPath && r.Method == http.MethodPost:
+		case r.URL.Path == runs && r.Method == http.MethodPost:
 			g.openRun(s, w, r)
-		case outcomePath(r.URL.Path) != "" && r.Method == http.MethodGet:
-			g.outcome(s, w, r, outcomePath(r.URL.Path))
-		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
-			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
-		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
+		case strings.HasPrefix(r.URL.Path, runs+"/") && r.Method == http.MethodGet:
+			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runs+"/"))
+		case r.URL.Path == events && r.Method == http.MethodPost:
 			g.batch(s, w, r)
-		case r.URL.Path == server.WellKnown || r.URL.Path == runPath || r.URL.Path == eventsPath || strings.HasPrefix(r.URL.Path, runPath+"/"):
+		case r.URL.Path == discovery || r.URL.Path == runs || r.URL.Path == events || strings.HasPrefix(r.URL.Path, runs+"/"):
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-}
-
-// outcomePath is the run id of the path of an ask at a runtime's exit, <run path>/<run
-// id>/outcome, a run id with no slash; empty for any other path.
-func outcomePath(path string) string {
-	rest, ok := strings.CutPrefix(path, runPath+"/")
-	if !ok {
-		return ""
-	}
-	runID, ok := strings.CutSuffix(rest, "/outcome")
-	if !ok || runID == "" || strings.Contains(runID, "/") {
-		return ""
-	}
-	return runID
 }
 
 // discover answers the link's discovery: 400 invalid_request on the one address to a

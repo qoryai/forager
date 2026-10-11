@@ -4,84 +4,51 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/qoryai/forager/link"
 )
 
-// secret is a link secret of the tests, no real one.
-const secret = "c2VjcmV0LW9mLXRoZS10ZXN0cw"
-
-// TestLocalNeverPrintsItsSecret pins that a Local, by value or by pointer, shows its
-// Secret under no verb, flag, method or slog handler, and still shows its other
-// members.
-func TestLocalNeverPrintsItsSecret(t *testing.T) {
+// TestALocalPrintsItsMembers pins that a Local, by value or by pointer, prints its
+// members under every verb, method and slog handler, and never its way in memory.
+func TestALocalPrintsItsMembers(t *testing.T) {
 	l := link.Local{
 		Socket:   "/tmp/qory-link-1/sock",
-		Secret:   secret,
 		Proxy:    "127.0.0.1:41000",
 		Files:    []link.File{{Path: "/home/user/.config/qory", What: "the gateway's directory"}, {Path: "/tmp/qory-tool-*", What: "where the tools' sockets are made"}},
 		Reserved: []string{"QORY_RUN_SOCKET"},
 	}
-	var outs []string
-	for _, v := range []any{l, &l} {
-		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%10v", "%-+v"} {
-			outs = append(outs, fmt.Sprintf(format, v))
-		}
-		outs = append(outs, fmt.Sprint(v), fmt.Sprintln(v))
-	}
-	outs = append(outs, l.String(), l.GoString())
-	for _, v := range []any{l, &l, map[string]any{"local": l}} {
-		for _, marshal := range []func(any) ([]byte, error){json.Marshal, func(v any) ([]byte, error) { return jsonv2.Marshal(v) }} {
-			b, err := marshal(v)
-			if err != nil {
-				t.Fatal(err)
-			}
-			outs = append(outs, string(b))
-		}
-	}
-	for _, h := range []func(io.Writer) slog.Handler{
-		func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) },
-		func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) },
-	} {
-		var b bytes.Buffer
-		slog.New(h(&b)).Info("link", "local", l)
-		outs = append(outs, b.String())
-	}
-	hexed := hex.EncodeToString([]byte(secret))
-	for _, out := range outs {
-		if strings.Contains(out, secret) || strings.Contains(strings.ToLower(out), hexed) {
-			t.Errorf("the secret is printed: %s", out)
-		}
-	}
-	if got := fmt.Sprintf("%+v", l); !strings.Contains(got, "Socket:/tmp/qory-link-1/sock") || !strings.Contains(got, "Secret:[redacted]") || !strings.Contains(got, "Proxy:127.0.0.1:41000") {
+	if got := fmt.Sprintf("%+v", l); !strings.Contains(got, "Socket:/tmp/qory-link-1/sock") || !strings.Contains(got, "Proxy:127.0.0.1:41000") || strings.Contains(got, "Secret") {
 		t.Errorf("%%+v: %s", got)
 	}
-	if got, want := fmt.Sprintf("%#v", l), `link.Local{Socket:"/tmp/qory-link-1/sock", Secret:"[redacted]", Proxy:"127.0.0.1:41000", Files:[]link.File{link.File{Path:"/home/user/.config/qory", What:"the gateway's directory", Kept:false}, link.File{Path:"/tmp/qory-tool-*", What:"where the tools' sockets are made", Kept:false}}, Reserved:[]string{"QORY_RUN_SOCKET"}}`; got != want {
+	if got, want := fmt.Sprintf("%#v", &l), `link.Local{Socket:"/tmp/qory-link-1/sock", Proxy:"127.0.0.1:41000", Files:[]link.File{link.File{Path:"/home/user/.config/qory", What:"the gateway's directory", Kept:false}, link.File{Path:"/tmp/qory-tool-*", What:"where the tools' sockets are made", Kept:false}}, Reserved:[]string{"QORY_RUN_SOCKET"}}`; got != want {
 		t.Errorf("%%#v:\n got %s\nwant %s", got, want)
 	}
-	if b, _ := json.Marshal(l); !strings.Contains(string(b), `"Secret":"[redacted]"`) || !strings.Contains(string(b), `"Socket":"/tmp/qory-link-1/sock"`) {
-		t.Errorf("JSON: %s", b)
+	for _, marshal := range []func(any) ([]byte, error){json.Marshal, func(v any) ([]byte, error) { return jsonv2.Marshal(v) }} {
+		if b, _ := marshal(l); !strings.Contains(string(b), `"Socket":"/tmp/qory-link-1/sock"`) {
+			t.Errorf("JSON: %s", b)
+		}
 	}
-	if got := fmt.Sprintf("%+v", link.Local{}); strings.Contains(got, "redacted") {
-		t.Errorf("an empty secret is shown as redacted: %s", got)
+	var b bytes.Buffer
+	slog.New(slog.NewJSONHandler(&b, nil)).Info("link", "local", l)
+	if !strings.Contains(b.String(), `"socket":"/tmp/qory-link-1/sock"`) {
+		t.Errorf("slog: %s", b.String())
 	}
 }
 
 // TestALocalInMemory pins the way in memory: DialContext takes it, copies keep it, and
 // it changes nothing of how a Local prints; without it DialContext dials the socket.
 func TestALocalInMemory(t *testing.T) {
-	plain := link.Local{Socket: "/nonexistent/qory-link-x/sock", Secret: secret}
+	plain := link.Local{Socket: "/nonexistent/qory-link-x/sock"}
 	if plain.IsInMemory() {
 		t.Error("a Local without a way in memory has one")
 	}
@@ -117,100 +84,83 @@ func must(b []byte, err error) []byte {
 	return b
 }
 
-// TestLinkPreamble pins the local link's preamble: written in one write, read in
-// exactly its length, and true only for the word, the secret and the newline.
-func TestLinkPreamble(t *testing.T) {
-	var b bytes.Buffer
-	if err := link.WriteLinkPreamble(&b, secret); err != nil || b.String() != "QORY-LINK "+secret+"\n" {
-		t.Fatalf("written %q, %v", b.String(), err)
+// TestTheRelayPreamble pins the line the wall's relay writes and the proxy reads: read
+// in exactly its length, and true only for the word, the secret and the newline.
+func TestTheRelayPreamble(t *testing.T) {
+	const secret = "c2VjcmV0LW9mLXRoZS10ZXN0cw"
+	if got := link.RelayLine("the-runs-secret"); got != "QORY-RELAY the-runs-secret\n" {
+		t.Errorf("relay preamble %q", got)
 	}
 	read := func(in string) (bool, error, string) {
 		r := bufio.NewReader(strings.NewReader(in))
-		ok, err := link.ReadLinkPreamble(r, secret)
+		ok, err := link.ReadRelayPreamble(r, secret)
 		rest, _ := io.ReadAll(r)
 		return ok, err, string(rest)
 	}
-	if ok, err, rest := read("QORY-LINK " + secret + "\nGET / HTTP/1.1\r\n"); !ok || err != nil || rest != "GET / HTTP/1.1\r\n" {
+	if ok, err, rest := read("QORY-RELAY " + secret + "\nCONNECT a:443 HTTP/1.1\r\n"); !ok || err != nil || rest != "CONNECT a:443 HTTP/1.1\r\n" {
 		t.Errorf("the right secret: %v %v, then %q", ok, err, rest)
 	}
 	for name, in := range map[string]string{
-		"a wrong secret":     "QORY-LINK " + strings.Repeat("x", len(secret)) + "\nGET / HTTP/1.1\r\n",
-		"a shorter secret":   "QORY-LINK secret\nGET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
-		"a wrong prefix":     "QORY-RELAY " + secret + "\nGET / HTTP/1.1\r\n",
-		"no prefix":          secret + "\nGET / HTTP/1.1\r\n\r\n\r\n\r\n",
-		"an overlong line":   "QORY-LINK " + secret + secret + "\n",
-		"a line without \\n": "QORY-LINK " + secret + "GET / HTTP/1.1\r\n",
-		"a carriage return":  "QORY-LINK " + secret + "\r\n",
-		"HTTP without one":   "GET / HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\n\r\n",
-		"a lower-case word":  "qory-link " + secret + "\n",
-		"two spaces":         "QORY-LINK  " + secret[1:] + "\n",
+		"a wrong secret":    "QORY-RELAY " + strings.Repeat("x", len(secret)) + "\nCONNECT a:443 HTTP/1.1\r\n",
+		"the old link word": "QORY-LINK  " + secret + "\nGET / HTTP/1.1\r\n",
+		"no prefix":         secret + "\nGET / HTTP/1.1\r\n\r\n\r\n\r\n",
+		"a carriage return": "QORY-RELAY " + secret + "\r\n",
 	} {
-		ok, err, rest := read(in)
-		if ok || err != nil {
+		if ok, err, _ := read(in); ok || err != nil {
 			t.Errorf("%s: %v %v", name, ok, err)
 		}
-		if want := len("QORY-LINK " + secret + "\n"); len(in)-len(rest) != want {
-			t.Errorf("%s: read %d bytes, want exactly %d", name, len(in)-len(rest), want)
-		}
 	}
-	for name, in := range map[string]string{
-		"nothing":            "",
-		"a missing newline":  "QORY-LINK " + secret,
-		"a part of the word": "QORY-",
-	} {
-		if ok, err, _ := read(in); ok || !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-			t.Errorf("%s: %v %v, want an end of the connection", name, ok, err)
+	for _, s := range []string{"", "a b", "a\nb", strings.Repeat("a", link.MaxSecret+1)} {
+		if err := link.CheckSecret(s); err == nil {
+			t.Errorf("%q is a preamble's secret", s)
 		}
 	}
 }
 
-// TestLinkPreambleSlowWriter pins that a preamble written a byte at a time is read
-// whole, and nothing after it.
-func TestLinkPreambleSlowWriter(t *testing.T) {
-	pr, pw := io.Pipe()
-	go func() {
-		for _, c := range []byte("QORY-LINK " + secret + "\nGET") {
-			pw.Write([]byte{c})
-			time.Sleep(time.Millisecond)
-		}
-		pw.Close()
-	}()
-	r := bufio.NewReader(pr)
-	if ok, err := link.ReadLinkPreamble(r, secret); !ok || err != nil {
-		t.Fatalf("a slow writer: %v %v", ok, err)
+// TestTheBindingsBytes pins the wire of the binding to a separate gateway: the lines
+// each end writes, the message the gateway signs, and the third line of its answers'
+// signature.
+func TestTheBindingsBytes(t *testing.T) {
+	ekm := bytes.Repeat([]byte{0xab}, link.BindingSize)
+	if link.BindLine != "QORY-BIND\n" || link.BoundLine("fp", "sig") != "QORY-BOUND fp sig\n" {
+		t.Errorf("the lines %q %q", link.BindLine, link.BoundLine("fp", "sig"))
 	}
-	if rest, _ := io.ReadAll(r); string(rest) != "GET" {
-		t.Errorf("after the preamble: %q", rest)
+	if link.BindingLabel != "EXPERIMENTAL-qory-link-binding" || link.RemoteDiscoveryPath != "/qory-link/configuration" {
+		t.Errorf("the label %q, the discovery %q", link.BindingLabel, link.RemoteDiscoveryPath)
 	}
-}
-
-// TestPreambleSecretShape pins that no preamble carries an empty secret, one with a
-// space, a control character or a newline, or one longer than MaxSecret, on either
-// side.
-func TestPreambleSecretShape(t *testing.T) {
-	for _, s := range []string{"", "a b", "a\nb", "a\tb", "a\x7fb", "é", strings.Repeat("a", link.MaxSecret+1)} {
-		var b bytes.Buffer
-		if err := link.WriteLinkPreamble(&b, s); err == nil || b.Len() != 0 {
-			t.Errorf("written with %q: %q %v", s, b.String(), err)
-		}
-		if ok, err := link.ReadLinkPreamble(bufio.NewReader(strings.NewReader("QORY-LINK "+s+"\n")), s); ok || err == nil {
-			t.Errorf("read with %q: %v %v", s, ok, err)
-		}
+	if got, want := string(link.BindingMessage(ekm, "fp")), "qory-link-binding-ed25519-v1\n"+strings.Repeat("ab", 32)+"\nfp"; got != want {
+		t.Errorf("the binding's message %q, want %q", got, want)
 	}
-	long := strings.Repeat("a", link.MaxSecret)
-	var b bytes.Buffer
-	if err := link.WriteLinkPreamble(&b, long); err != nil {
-		t.Fatal(err)
+	sum := sha256.Sum256([]byte(strings.Repeat("ab", 32) + "\nPOST\n/qory-link/v1/events?a=1\n[]"))
+	if got := link.AnswerRequest(ekm, "POST", "/qory-link/v1/events?a=1", []byte("[]")); got != hex.EncodeToString(sum[:]) {
+		t.Errorf("the answer's request line %s", got)
 	}
-	if ok, err := link.ReadLinkPreamble(bufio.NewReader(&b), long); !ok || err != nil {
-		t.Errorf("the longest secret: %v %v", ok, err)
+	sum = sha256.Sum256([]byte(strings.Repeat("ab", 32) + "\nGET\n/qory-link/configuration\n"))
+	if got := link.AnswerRequest(ekm, "GET", "/qory-link/configuration", nil); got != hex.EncodeToString(sum[:]) {
+		t.Errorf("a GET's request line %s", got)
 	}
 }
 
-// TestRelayPreambleIsUnchanged pins the line the wall's relay writes and the proxy
-// reads.
-func TestRelayPreambleIsUnchanged(t *testing.T) {
-	if got := link.Preamble(link.RelayPreamble, "the-runs-token"); got != "QORY-RELAY the-runs-token\n" {
-		t.Errorf("relay preamble %q", got)
+// TestAnswerRequestHash pins the streaming form of AnswerRequest: the body written to
+// it in pieces of any size gives the same line, the SHA-256 of the same bytes, for an
+// empty body, a small one and one of 2 MiB.
+func TestAnswerRequestHash(t *testing.T) {
+	ekm := bytes.Repeat([]byte{0xab}, link.BindingSize)
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = byte(i*7 + i>>9)
+	}
+	for _, body := range [][]byte{nil, []byte("[]"), big} {
+		h := link.AnswerRequestHash(ekm, "POST", "/qory-link/events")
+		for rest, k := body, 1; len(rest) > 0; k = k*3 + 1 {
+			n := min(k, len(rest))
+			h.Write(rest[:n])
+			rest = rest[n:]
+		}
+		sum := sha256.Sum256(append([]byte(strings.Repeat("ab", 32)+"\nPOST\n/qory-link/events\n"), body...))
+		got := hex.EncodeToString(h.Sum(nil))
+		if want := link.AnswerRequest(ekm, "POST", "/qory-link/events", body); got != want || got != hex.EncodeToString(sum[:]) {
+			t.Errorf("a body of %d bytes: %s; AnswerRequest %s, the digest %x", len(body), got, want, sum)
+		}
 	}
 }

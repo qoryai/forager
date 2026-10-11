@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-attach-answer.schema.json",
+  "title": "Run attach answer",
+  "description": "The body of the server's signed 200, application/json, to a run's attach: the run's run configuration document, run-configuration.schema.json, as a direct registration's answer carries it, with the headers X-Qory-Run-Configuration and ETag, and two members more from the starter's registration, labels and about, information alone, each absent when the registration had none. The same gateway node attaching the same live run again, under any of its active keys, gets this answer again. A reload's answer stays a plain run configuration. A member Forager does not recognise is ignored.",
+  "allOf": [{"$ref": "run-configuration.schema.json"}],
+  "properties": {
+    "labels": {
+      "description": "The run's labels, as the starter's registration gave them; information alone, and never a policy's selector at the gateway. Absent means none.",
+      "$ref": "events/run.started.schema.json#/properties/labels"
+    },
+    "about": {
+      "description": "What the run is about, as the starter's registration gave it; for display alone. Absent means none.",
+      "$ref": "events/run.started.schema.json#/properties/about"
+    }
+  }
+}

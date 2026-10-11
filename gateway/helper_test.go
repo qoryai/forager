@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,9 +32,10 @@ import (
 )
 
 const (
-	testKey      = "ak_f1xt0re000000000"
-	testInstance = "i_test"
-	testNode     = "nd_f1xt0re000000000"
+	testKey       = "ak_f1xt0re000000000"
+	testInstance  = "i_test"
+	testNode      = "nd_f1xt0re000000000"
+	testWorkspace = "ws_f1xt0re000000000"
 )
 
 // The keys of the tests: the access key the gateway signs with, and the control's own
@@ -87,10 +89,26 @@ type control struct {
 	// intercept, when set, is asked first of every request, and answers it when it
 	// returns true.
 	intercept atomic.Pointer[func(http.ResponseWriter, *http.Request) bool]
+	// end, when set, is the end member of every 2xx to a delivery, the outcome the run's
+	// starter gave, signed with the answer.
+	end atomic.Pointer[server.ServerEnd]
+	// attachRefusal, when set, answers every attach a signed refusal with its status
+	// and code.
+	attachRefusal atomic.Pointer[receiver.Refusal]
 
-	mu     sync.Mutex
-	run    []byte
-	digest string
+	mu sync.Mutex
+	// node and workspaces are what the configuration document lists: the test node and
+	// workspace unless asGateway made them a gateway key's.
+	node       string
+	workspaces []string
+	// attaches are the body of every attach as it came, each try included, and
+	// attachLabels and attachAbout what an attach's answer gives back of the starter's
+	// registration.
+	attaches     [][]byte
+	attachLabels map[string]string
+	attachAbout  json.RawMessage
+	run          []byte
+	digest       string
 	// labels are the labels of the last run the receiver decided on, and registrations
 	// the body of every registration as it came, each try included.
 	labels        map[string]string
@@ -107,21 +125,16 @@ func newControl(t *testing.T) *control {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &control{store: store, received: received}
+	c := &control{store: store, received: received, node: testNode, workspaces: []string{testWorkspace}}
 	h := &receiver.Handler{
 		Keys: func(k string) (receiver.AccessKey, bool) {
 			return receiver.AccessKey{PublicKey: testAccessKey.PublicKey()}, k == testKey
 		},
-		Signer: testSigner,
-		Store:  store,
-		Stop:   func(string) bool { return c.stop.Load() },
-		Admit:  func(string, string) bool { return !c.limit.Load() },
-		Configuration: func() ([]byte, string) {
-			pin, _ := json.Marshal(testPin)
-			doc := `{"version":1,"node_id":"` + testNode + `","apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
-			doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
-			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
-		},
+		Signer:        testSigner,
+		Store:         store,
+		Stop:          func(string) bool { return c.stop.Load() },
+		Admit:         func(string, string) bool { return !c.limit.Load() },
+		Configuration: c.configuration,
 		RunConfiguration: func(run receiver.Run) ([]byte, string, *receiver.Refusal) {
 			if c.goneOnFetch.Load() {
 				return nil, "", &receiver.Refusal{Status: http.StatusGone, Code: "run_closed"}
@@ -167,6 +180,10 @@ func newControl(t *testing.T) *control {
 				c.closed.Store(true)
 			}
 		}
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, runsPath+"/") && strings.HasSuffix(r.URL.Path, "/attach") {
+			c.attach(w, r)
+			return
+		}
 		if c.drop.Load() && r.URL.Path == "/v1/events" {
 			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 				conn.Close()
@@ -189,11 +206,110 @@ func newControl(t *testing.T) *control {
 			w.Write(body)
 			return
 		}
+		if e := c.end.Load(); e != nil && r.URL.Path == "/v1/events" {
+			c.withEnd(w, r, h, *e)
+			return
+		}
 		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(c.srv.Close)
 	t.Cleanup(func() { store.Close() })
 	return c
+}
+
+// configuration is the control's configuration document and its digest.
+func (c *control) configuration() ([]byte, string) {
+	c.mu.Lock()
+	node, workspaces := c.node, c.workspaces
+	c.mu.Unlock()
+	pin, _ := json.Marshal(testPin)
+	ws, _ := json.Marshal(workspaces)
+	doc := `{"version":1,"node_id":"` + node + `","workspaces":` + string(ws) + `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+	doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
+	return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
+}
+
+// testGateway is the node id of the tests' gateway key.
+const testGateway = "ng_f1xt0re000000000"
+
+// asGateway makes the control's configuration document a gateway key's, testGateway,
+// serving the workspaces.
+func (c *control) asGateway(workspaces ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.node, c.workspaces = testGateway, workspaces
+}
+
+// attach answers an attach of the tests' access key, as Qory Apiary does: the run
+// configuration the control serves, with the labels and about it gives back, its
+// digest and the configuration's; or attachRefusal, signed. The run key is not read.
+func (c *control) attach(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	c.mu.Lock()
+	c.attaches = append(c.attaches, b)
+	doc, digest := c.run, c.digest
+	labels, about := c.attachLabels, c.attachAbout
+	c.mu.Unlock()
+	if doc == nil {
+		doc, digest = receiver.NoPolicy, "sha256="+strings.Repeat("0", 64)
+	}
+	_, conf := c.configuration()
+	sig := r.Header.Get(server.HeaderSignature)
+	if r.Header.Get(server.HeaderAccessKeyID) != testKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if ref := c.attachRefusal.Load(); ref != nil {
+		body := []byte(`{"error":"` + ref.Code + `"}`)
+		w.Header().Set(server.HeaderConfiguration, conf)
+		w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: ref.Status, RequestSignature: sig, Body: body, Configuration: conf}))
+		w.WriteHeader(ref.Status)
+		w.Write(body)
+		return
+	}
+	var m map[string]json.RawMessage
+	json.Unmarshal(doc, &m)
+	if labels != nil {
+		m["labels"], _ = json.Marshal(labels)
+	}
+	if about != nil {
+		m["about"] = about
+	}
+	body, _ := json.Marshal(m)
+	w.Header().Set(server.HeaderConfiguration, conf)
+	w.Header().Set(server.HeaderRunConfiguration, digest)
+	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
+	w.Write(body)
+}
+
+// attached are the bodies of the attaches the control was sent.
+func (c *control) attached() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.attaches)
+}
+
+// withEnd answers a delivery as the receiver does, and a 2xx with the end member e,
+// signed again over its body.
+func (c *control) withEnd(w http.ResponseWriter, r *http.Request, h http.Handler, e server.ServerEnd) {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code/100 != 2 {
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
+		return
+	}
+	end := map[string]string{"state": e.State}
+	if e.Reason != "" {
+		end["reason"] = e.Reason
+	}
+	body, _ := json.Marshal(map[string]any{"end": end})
+	maps.Copy(w.Header(), rec.Header())
+	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: rec.Code, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body,
+		Configuration: rec.Header().Get(server.HeaderConfiguration), RunConfiguration: rec.Header().Get(server.HeaderRunConfiguration)}))
+	w.WriteHeader(rec.Code)
+	w.Write(body)
 }
 
 // serve makes the control serve a run configuration with the policy, under a digest
@@ -264,10 +380,9 @@ type harness struct {
 	reports []string
 	secrets []string
 	digests []server.Digests
-	// runSecrets are the run secrets of the runs opened, by run id, and links the link of
-	// each run opened on the local link, which carries its secret, as a session's does.
-	runSecrets map[string]string
-	links      map[string]*server.Link
+	// links are the link of each run opened on the local link, by run id, which names
+	// its run on every batch, as a session's does.
+	links map[string]*server.Link
 }
 
 // start starts a gateway with cfg, its Dir a fresh one unless cfg names one, and a
@@ -292,8 +407,7 @@ func start(t *testing.T, cfg gateway.Config) *harness {
 		t.Fatal(err)
 	}
 	h.g = g
-	h.secrets = append(h.secrets, g.LocalLink().Secret)
-	h.runSecrets, h.links = map[string]string{}, map[string]*server.Link{}
+	h.links = map[string]*server.Link{}
 	l := h.newLink()
 	h.link = l
 	t.Cleanup(func() {
@@ -333,24 +447,22 @@ func (h *harness) newLink() *server.Link {
 	return l
 }
 
-// keep notes the secrets of a run answer: none may reach a report, and the run's
-// secret is what the harness's requests of the run carry.
+// keep notes the proxy secret of a run answer: it may not reach a report.
 func (h *harness) keep(a *server.LinkRunAnswer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.secrets = append(h.secrets, a.ProxySecret, a.RunSecret)
-	h.runSecrets[a.RunID] = a.RunSecret
+	h.secrets = append(h.secrets, a.ProxySecret)
 }
 
-// runSecretOf is the run secret of a run the harness opened, empty for another.
-func (h *harness) runSecretOf(runID string) string {
+// opened reports whether the harness opened the run on the local link.
+func (h *harness) opened(runID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.runSecrets[runID]
+	return h.links[runID] != nil
 }
 
-// linkOf is the link of a run the harness opened on the local link, which carries its
-// run secret; the harness's own, which carries none, for another.
+// linkOf is the link of a run the harness opened on the local link, which names the
+// run on its batches; the harness's own, which names none, for another.
 func (h *harness) linkOf(runID string) *server.Link {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -454,20 +566,9 @@ func ev(runID, typ string, data map[string]any) map[string]any {
 	}
 }
 
-// started is the session's run.started of a run on the local link with the labels,
-// its credential none.
+// started is the session's run.started of a run with the labels.
 func started(runID string, labels map[string]string) map[string]any {
-	return startedWith(runID, labels, event.CredentialNone)
-}
-
-// issuerStarted is the session's run.started of a run on the one address with the
-// labels, its credential an issuer's.
-func issuerStarted(runID string, labels map[string]string) map[string]any {
-	return startedWith(runID, labels, event.CredentialStarter)
-}
-
-func startedWith(runID string, labels map[string]string, credential string) map[string]any {
-	data := map[string]any{"opened_by": "session", "credential": credential, "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
+	data := map[string]any{"opened_by": "session", "forager_version": "test", "runtime": "bare", "command": "true", "args": []string{}, "dir": "/work", "interactive": false}
 	if len(labels) > 0 {
 		data["labels"] = labels
 	}
@@ -502,20 +603,12 @@ func exited(runID string) map[string]any {
 func raw(t *testing.T, l link.Local) *http.Client {
 	t.Helper()
 	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		c, err := (&net.Dialer{}).DialContext(ctx, "unix", l.Socket)
-		if err != nil {
-			return nil, err
-		}
-		if err := link.WriteLinkPreamble(c, l.Secret); err != nil {
-			c.Close()
-			return nil, err
-		}
-		return c, nil
+		return (&net.Dialer{}).DialContext(ctx, "unix", l.Socket)
 	}}}
 }
 
 // refusalOf posts body to path on the link and returns the status and the members of
-// the refusal it answers. A batch carries the run secret of the run its first event
+// the refusal it answers. A batch carries X-Qory-Run-Id, the run its first event
 // names, when the harness opened it.
 func (h *harness) refusalOf(path, body string) (int, map[string]any) {
 	h.t.Helper()
@@ -523,8 +616,8 @@ func (h *harness) refusalOf(path, body string) (int, map[string]any) {
 	var header http.Header
 	if path == "/v1/events" {
 		contentType = server.ContentType
-		if rs := h.runSecretOf(subjectOf([]byte(body))); rs != "" {
-			header = http.Header{server.HeaderRunSecret: {rs}}
+		if id := subjectOf([]byte(body)); h.opened(id) {
+			header = http.Header{server.HeaderRunID: {id}}
 		}
 	}
 	status, got := rawPostWith(h.t, raw(h.t, h.g.LocalLink()), path, contentType, body, header)
@@ -606,7 +699,7 @@ func relay(addr, secret string) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			if _, err := io.WriteString(c, link.Preamble(link.RelayPreamble, secret)); err != nil {
+			if _, err := io.WriteString(c, link.RelayLine(secret)); err != nil {
 				c.Close()
 				return nil, err
 			}

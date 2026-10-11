@@ -8,6 +8,9 @@
     "time": "2026-09-16T12:00:00.000Z",
     "dataschema": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
     "data": {
+      "workspace": "ws_f1xt0re000000000",
+      "node_id": "nd_f1xt0re000000000",
+      "instance_id": "i_gYKDhIWGh4iJiouMjY6PkA",
       "forager_version": "0.4.0",
       "events": [
         "*"

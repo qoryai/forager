@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-request.schema.json",
   "title": "Link run request",
-  "description": "The body of the session's POST to the run URL of its gateway's link, application/json, which opens a run: the run id the session chose, the run's labels, what the run is about, the names of the variables the run passes a value for, the session's images, and behind a separate gateway the session's narrowing of the policy. A member this schema does not define is refused, invalid_request: a member the gateway does not read could be a narrowing it would drop.",
+  "description": "The body of the session's POST to the run URL of its gateway's link, application/json, which opens a run: the run id the session chose, on the local link the run's labels and what the run is about, the names of the variables the run passes a value for, the session's images, and behind a separate gateway the session's narrowing of the policy. Behind a separate gateway the run id is the run key's, any other run_key_invalid, and labels or about are refused, invalid_request: the run's labels and about are the starter's registration's. A member this schema does not define is refused, invalid_request: a member the gateway does not read could be a narrowing it would drop.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "run_id", "wall"],
@@ -21,11 +21,11 @@
       "type": "boolean"
     },
     "labels": {
-      "description": "The run's labels, as dev.qory.run.started contains them. On the local link they are the run's. Behind a separate gateway the run's labels come from the run credential alone: forge and repository must equal the credential's, else target_differs_from_credential; another label the mapping sets must equal the credential's, else differs_from_credential; a label the mapping does not set is ignored. Each such refusal names every member that differs as <member>=<the run credential's value>, such as labels.repository=example-namespace/project.",
+      "description": "The run's labels, as dev.qory.run.started contains them: the run's. On the local link alone.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "about": {
-      "description": "What the run is about, as dev.qory.run.started contains it. It selects no policy. Behind a separate gateway a key of details the mapping sets must equal the credential's, else differs_from_credential.",
+      "description": "What the run is about, as dev.qory.run.started contains it. It selects no policy. On the local link alone.",
       "$ref": "events/run.started.schema.json#/properties/about"
     },
     "passes": {

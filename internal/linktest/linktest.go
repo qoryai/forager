@@ -1,11 +1,10 @@
-// Package linktest is a gateway's local link for tests: a Unix socket in a private
-// temporary directory that reads the link's preamble on every connection, closes one
-// that opens otherwise unanswered, and serves HTTP/1.1 on the rest, as the gateway
-// does.
+// Package linktest is a gateway's link for tests: a local link, a Unix socket in a
+// private temporary directory that serves HTTP/1.1 on every connection, as the gateway
+// does; and a fake separate gateway over TLS 1.3 that binds every connection to a key a
+// run key names and signs its answers, [StartRemoteFake].
 package linktest
 
 import (
-	"bufio"
 	"net"
 	"net/http"
 	"os"
@@ -19,15 +18,14 @@ import (
 
 // Gateway is a fake gateway's local link.
 type Gateway struct {
-	// Socket is the link's socket and Secret the link secret it reads.
-	Socket, Secret string
-	// Accepted counts the connections that opened with the preamble, Rejected those
-	// closed unanswered.
-	Accepted, Rejected atomic.Int32
+	// Socket is the link's socket.
+	Socket string
+	// Accepted counts the connections the link served.
+	Accepted atomic.Int32
 }
 
 // Local is the link as a session receives it.
-func (g *Gateway) Local() link.Local { return link.Local{Socket: g.Socket, Secret: g.Secret} }
+func (g *Gateway) Local() link.Local { return link.Local{Socket: g.Socket} }
 
 // SocketPath returns the path of a socket in a fresh private directory short enough
 // for a Unix socket's address on every system, removed when the test ends.
@@ -44,10 +42,10 @@ func SocketPath(t testing.TB) string {
 	return filepath.Join(dir, link.LinkSocketName)
 }
 
-// Start serves h on a fresh local link with the secret, until the test ends.
-func Start(t testing.TB, secret string, h http.Handler) *Gateway {
+// Start serves h on a fresh local link, until the test ends.
+func Start(t testing.TB, h http.Handler) *Gateway {
 	t.Helper()
-	g := &Gateway{Socket: SocketPath(t), Secret: secret}
+	g := &Gateway{Socket: SocketPath(t)}
 	ln, err := net.Listen("unix", g.Socket)
 	if err != nil {
 		t.Fatal(err)
@@ -55,68 +53,23 @@ func Start(t testing.TB, secret string, h http.Handler) *Gateway {
 	if err := os.Chmod(g.Socket, link.LinkSocketMode); err != nil {
 		t.Fatal(err)
 	}
-	pl := &listener{Listener: ln, g: g, conns: make(chan net.Conn), done: make(chan struct{})}
-	go pl.accept()
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
-	go srv.Serve(pl)
+	go srv.Serve(&counting{Listener: ln, g: g})
 	t.Cleanup(func() { srv.Close(); ln.Close() })
 	return g
 }
 
-// listener hands the server the connections that opened with the preamble.
-type listener struct {
+// counting counts the connections it hands the server.
+type counting struct {
 	net.Listener
-	g     *Gateway
-	conns chan net.Conn
-	done  chan struct{}
+	g *Gateway
 }
 
-func (l *listener) accept() {
-	defer close(l.done)
-	for {
-		c, err := l.Listener.Accept()
-		if err != nil {
-			return
-		}
-		go l.check(c)
+// Accept is the next connection, counted.
+func (l *counting) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.g.Accepted.Add(1)
 	}
+	return c, err
 }
-
-// check reads the preamble within [link.PreambleWait] and hands the connection on, or
-// closes it unanswered.
-func (l *listener) check(c net.Conn) {
-	c.SetReadDeadline(time.Now().Add(link.PreambleWait))
-	r := bufio.NewReader(c)
-	ok, err := link.ReadLinkPreamble(r, l.g.Secret)
-	if !ok || err != nil {
-		l.g.Rejected.Add(1)
-		c.Close()
-		return
-	}
-	c.SetReadDeadline(time.Time{})
-	l.g.Accepted.Add(1)
-	select {
-	case l.conns <- &conn{Conn: c, r: r}:
-	case <-l.done:
-		c.Close()
-	}
-}
-
-// Accept is the next connection whose preamble held.
-func (l *listener) Accept() (net.Conn, error) {
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-}
-
-// conn reads through the reader the preamble was read with, which may hold the first
-// bytes of HTTP.
-type conn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c *conn) Read(b []byte) (int, error) { return c.r.Read(b) }

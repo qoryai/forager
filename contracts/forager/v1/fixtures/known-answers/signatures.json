@@ -32,16 +32,22 @@
       "body": "fixtures/enrolment/request-two-fingerprints.json",
       "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
       "length": 162
+    },
+    {
+      "note": "The proof of an enrolment request with a gateway's code, under the fixture gateway key; the proof is the body's.",
+      "body": "fixtures/enrolment/request-gateway.json",
+      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "iC0Oo7KGTnpYfz5pjOpEWZmDEuZV4F-l6LURnYuqyM0", "gateway-01", "1700000000"],
+      "length": 141
     }
   ],
   "answers": [
     {
-      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, with its run endpoint, in a workspace with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
+      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, with its run endpoint, of the one workspace it lists, with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
       "body": "fixtures/known-answers/discovery.json",
-      "body_length": 253,
-      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", "sha256=bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", ""],
+      "body_length": 290,
+      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "21f6add77ac99f1c6b2dc809248d12afdb16cf852547b0fe8873191bac2d0517", "sha256=21f6add77ac99f1c6b2dc809248d12afdb16cf852547b0fe8873191bac2d0517", ""],
       "length": 251,
-      "signature": "pABYqjJR87W7mF8ofjwV_BAbkpLZXukQBW9HsuHinJ1aA8YXGrGacr0jnpB3PTKt16DUgwOSGC9oO487AF8lAA"
+      "signature": "bnG9MvDyG-EDbwP8bLCok0827-GbNkqD-8DPzVX4gCPOSndLhgknc7S6BIdZhGYlafju5Bmfo4R37UGQnHOECQ"
     },
     {
       "note": "404 to the GET of discovery above, with an empty body and no digest, signed under the fixture signing key.",
@@ -106,6 +112,14 @@
       "lines": ["qory-answer-ed25519-v1", "200", "6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ", "6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5", "", "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"],
       "length": 251,
       "signature": "dH803Liu9KVYDlxZ12OQDx8JyZh4JRXRoKJY8yzNgO9wLRQSYm6zZbOvSjL2o9TT5wOubS7MF0Z6JZrjsmLxDg"
+    },
+    {
+      "note": "201 to the enrolment request with a gateway's code, signed under the fixture signing key; line 3 is that request's proof, and the answer names the fixture gateway key's id and a gateway's node.",
+      "body": "fixtures/enrolment/answer-gateway.json",
+      "body_length": 227,
+      "lines": ["qory-enrol-answer-ed25519-v1", "201", "j5qq5IDmJ2MAGFLT4lPFESkwWuBN12ysQSgZUXd1mkpDYMPaDcac3_uUxHZJSNaALH8LQagZys58_ylcVW2fDA", "86a221f5e867582c973fd57827caf604fe8cd1e7cdfd982fae8f06fb6c3d7c75", "", ""],
+      "length": 186,
+      "signature": "IGWC8c_sdsAUOohWEaf8zaBN5j0Kpo2Z8kO29qlESO8MynfcwY-C-HlYslzEZG_CjOp5JFX1b6kFdnasoe0yAA"
     }
   ]
 }

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-key.schema.json",
+  "title": "Run key payload",
+  "description": "The payload of a run key, the exact JSON bytes Qory Apiary signed. A run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding, at most 2048 characters with no white space; the signature is 64 bytes of Ed25519 under Qory Apiary's server key over qory-run-key-ed25519-v1, a line feed and the payload bytes. Qory Apiary answers a run's registration with one when the registering node's or node pool's choice resolves to a gateway. A gateway and Qory Apiary verify the signature under the pinned server key whose fingerprint signer names, then read the payload against this schema; a runner pins no server key, reads the payload against this schema alone, and takes run_id, gateway_url and gateway_public_key from it, which grants nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "signer", "run_id", "workspace", "node_id", "gateway", "gateway_url", "gateway_public_key", "instance_id", "issued", "attach_by"],
+  "properties": {
+    "version": {
+      "description": "The payload's version.",
+      "const": 1
+    },
+    "signer": {
+      "description": "The fingerprint of the server key that signed the run key, as an enrolment code names keys: base64url without padding of the first 16 bytes of SHA-256 over the raw public key, 22 characters. A server key can rotate inside a live run.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{21}[AQgw]$"
+    },
+    "run_id": {
+      "description": "The run's id: a UUID in the canonical lower-case form.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "workspace": {
+      "description": "The run's workspace, from the registering node's or node pool's record.",
+      "type": "string",
+      "pattern": "^ws_[0-9a-hjkmnp-tv-z]{16}$"
+    },
+    "node_id": {
+      "description": "The node, nd_, or node pool, np_, that registered the run. Any of its active keys may give the run's outcome.",
+      "type": "string",
+      "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
+    },
+    "gateway": {
+      "description": "The gateway the node's choice resolved to at this registration, ng_: the one gateway the run attaches at.",
+      "type": "string",
+      "pattern": "^ng_[0-9a-hjkmnp-tv-z]{16}$"
+    },
+    "gateway_url": {
+      "description": "Where the edge reaches the gateway: https, a host and an optional port, and nothing after them. The only address the run key is ever sent to.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#@\\s]+$"
+    },
+    "gateway_public_key": {
+      "description": "The gateway's live Ed25519 keys, current then next.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["alg", "public_key"],
+        "properties": {
+          "alg": {"const": "ed25519"},
+          "public_key": {
+            "description": "A raw 32-byte Ed25519 public key, base64url without padding.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+          }
+        }
+      }
+    },
+    "instance_id": {
+      "description": "The registration's signed instance id, X-Qory-Instance-Id of the registration.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "issued": {
+      "description": "When Qory Apiary made the run key, RFC 3339 in UTC with whole seconds. A runner never checks it.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "attach_by": {
+      "description": "The end of the attach window, RFC 3339 in UTC with whole seconds: the window the registration's attach_seconds asked for, bounded by the server. A runner never checks it.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

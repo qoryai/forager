@@ -270,7 +270,7 @@ func newVerified(t *testing.T) *verified {
 		case r.URL.Path == server.WellKnown:
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set("Content-Type", "application/json")
-			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
+			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
 		case r.URL.Path == "/v1/runs" && r.Method == http.MethodPost:
 			if r.Header.Get("Content-Type") != server.RegistrationContentType || r.Header.Get(server.HeaderDelivery) != "" || r.Header.Get(server.HeaderTimestamp) != "" {
 				t.Errorf("registration headers %v", r.Header)
@@ -317,8 +317,8 @@ func (v *verified) client() *server.Client {
 // the document decoded with a section Forager does not know ignored, the node id,
 // the run endpoint, the digest from the header, the filter, which never wants
 // dev.qory.run.registered, and no run on a status that is not 200 or on a document
-// without the run endpoint or whose run endpoint has a trailing slash, a query or a
-// fragment.
+// without workspaces, without the run endpoint or whose run endpoint has a trailing
+// slash, a query or a fragment.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -326,7 +326,7 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/runs" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
+	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || len(conf.Workspaces) != 1 || conf.Workspaces[0] != "ws_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/runs" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
 		t.Errorf("discovered %+v, digest %s", conf, digest)
 	}
 	if !conf.Wants("dev.qory.run.log") || conf.Wants("dev.qory.run.registered") {
@@ -337,10 +337,12 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		t.Error("the filter of a listed configuration is wrong")
 	}
 	inner := v.srv.Config.Handler
-	for name, run := range map[string]string{"without the run endpoint": "", "with a trailing slash": `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`,
-		"with a query": `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, "with a fragment": `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`} {
+	workspaces, run := `"workspaces":["ws_f1xt0re000000000"],`, `,"run":{"url":"`+v.srv.URL+`/v1/runs"}`
+	for name, d := range map[string]struct{ workspaces, run string }{"without workspaces": {"", run},
+		"without the run endpoint": {workspaces, ""}, "with a trailing slash": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`},
+		"with a query": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`}, "with a fragment": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000",` + d.workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + d.run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
 			w.Write(doc)
@@ -793,6 +795,25 @@ func TestAServerDocumentWithASecretQuotesNothing(t *testing.T) {
 	}
 	if _, err := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + secret + `":"x"}]`)); !errors.Is(err, accesskey.ErrSecretInDocument) {
 		t.Errorf("a pin's member name: %v", err)
+	}
+}
+
+// TestAServerDocumentWithARunKeyQuotesNothing pins that a run key pasted into the
+// server document, into its url, a pin's public key or via's url, plain or escaped, is
+// refused with ErrRunKeyInDocument's fixed message, which does not contain it.
+func TestAServerDocumentWithARunKeyQuotesNothing(t *testing.T) {
+	const rk = "qrk_eyJ2ZXJzaW9uIjoxfQ.yUWE4vdQuSfML2OcqdMfci8yz-SsJLox2axjdUcV2kA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"the url":      `{"version":1,"url":"https://qory.example/?k=` + rk + `","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `}`,
+		"a public key": `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[{"alg":"ed25519","public_key":"` + rk + `"}]}`,
+		"via's url":    `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `,"via":{"url":"https://gateway.example/` + rk + `"}}`,
+		"escaped":      `{"version":1,"url":"https://qory.example","access_key_id":"\u0071` + rk[1:] + `","apiary_public_key":` + pin + `}`,
+	} {
+		_, err := server.Read("server.json", []byte(doc))
+		if !errors.Is(err, accesskey.ErrRunKeyInDocument) || strings.Contains(err.Error(), rk[4:20]) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

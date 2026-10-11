@@ -2,14 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.registered.schema.json",
   "title": "dev.qory.run.registered",
-  "description": "The server accepted the run's registration. The gateway writes it in its own record once the registration is accepted, as the record's first event, sequence 1, with the values the registration announced. It is in the record alone and never posted: the server has its values from the registration. A run with no server has none.",
+  "description": "The server accepted the run's registration. The gateway writes it in its own record once the registration is accepted, as the record's first event, sequence 1, with the workspace and the node discovery listed, the instance id the registration was signed with, and the values the registration announced. Behind a separate gateway it writes it once the server accepted the run's attach: the workspace, the node and the instance id of the run key, which name the starter's registration, the values the attach announced, and the labels and about the attach's answer gives back of that registration. It is in the record alone and never posted: the server has its values from the access key and the registration. A run with no server has none.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["forager_version", "events", "contract_version", "interval_seconds"],
+  "required": ["workspace", "node_id", "instance_id", "forager_version", "events", "contract_version", "interval_seconds"],
   "properties": {
+    "workspace": {"description": "The run's workspace: the id of the one workspace discovery's workspaces lists, or behind a separate gateway the run key's, ws_ followed by 16 lower-case Crockford base32 characters. It is Qory Apiary's workspace, not the directory a run works in.", "type": "string", "pattern": "^ws_[0-9a-hjkmnp-tv-z]{16}$"},
+    "node_id": {"description": "The node that registered the run, nd_, or node pool, np_, followed by 16 lower-case Crockford base32 characters: discovery's node_id, or behind a separate gateway the run key's.", "type": "string", "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"},
+    "instance_id": {"description": "The registration's instance id, signed into it, exactly as its X-Qory-Instance-Id header carried it; behind a separate gateway the run key's, the starter's registration's.", "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
     "forager_version": {"description": "The registration's forager_version: the Forager module version, as Go stamps it.", "type": "string", "minLength": 1},
     "events": {"description": "The registration's events: the event types the server receives, as its configuration lists them.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "contract_version": {"description": "The registration's contract_version: the revision of this contract Forager implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1},
-    "interval_seconds": {"description": "The registration's interval_seconds: the heartbeat interval the run uses, in seconds.", "type": "integer", "minimum": 1, "maximum": 300}
+    "interval_seconds": {"description": "The registration's interval_seconds: the heartbeat interval the run uses, in seconds.", "type": "integer", "minimum": 1, "maximum": 300},
+    "labels": {"description": "Behind a separate gateway, the labels of the starter's registration, as the attach's answer gives them back; information alone. Absent when the registration had none, and on a direct node's record, where dev.qory.run.started carries the run's labels.", "$ref": "run.started.schema.json#/properties/labels"},
+    "about": {"description": "Behind a separate gateway, what the run is about, as the starter's registration gave it and the attach's answer gives it back; for display alone. Absent when the registration had none, and on a direct node's record, where dev.qory.run.started carries it.", "$ref": "run.started.schema.json#/properties/about"}
   }
 }

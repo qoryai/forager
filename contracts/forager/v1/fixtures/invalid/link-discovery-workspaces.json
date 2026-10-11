@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "events": {
+    "url": "http://localhost/v1/events",
+    "types": [
+      "*"
+    ],
+    "interval_seconds": 30
+  },
+  "run": {
+    "url": "http://localhost/v1/run-configuration"
+  },
+  "proxy": {
+    "address": "127.0.0.1:41000"
+  },
+  "workspaces": [
+    "ws_f1xt0re000000000"
+  ]
+}

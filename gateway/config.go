@@ -6,7 +6,6 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/run"
-	"github.com/qoryai/forager/runcredential"
 )
 
 // Config is what a gateway is given: the server it is the node toward, the machine's
@@ -42,7 +41,7 @@ type Config struct {
 	// output this way.
 	Events io.Writer
 	// Report receives one line per thing the gateway reports to its user; nil means
-	// Stderr. It never receives the link secret, a proxy secret, an access key or an
+	// Stderr. It never receives a proxy secret, an access key, a run key or an
 	// image reference.
 	Report func(string)
 	// Heartbeat is the interval the link's discovery announces, and each run's
@@ -51,69 +50,47 @@ type Config struct {
 	// sends nothing for three.
 	Heartbeat time.Duration
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
-	// system's choosing: the contract for the sessions of other machines, and the proxy
-	// for their agents and for clients with no session, routed connection by connection.
-	// Empty means the local link alone. Any address but loopback needs TLS; the local
-	// link is served beside it either way, as without it.
+	// system's choosing: the link for the sessions of other machines, the proxy for
+	// their agents, and the relay of their starters' and keyed machines' requests to the
+	// Server, routed connection by connection. It needs TLS, and a Server whose access
+	// key is a gateway's, ng_: the gateway verifies each run key under the Server's pin,
+	// attaches each run there and relays to its origin. A gateway with an address serves
+	// no local link, in memory or on a socket, and runs no sessions of its own machine.
+	// Empty means the local link alone.
 	Listen string
-	// TLS is the certificate and key Listen serves, TLS 1.3 alone; nil serves Listen
-	// without TLS, which a loopback address alone may.
+	// TLS is the certificate and key Listen serves, TLS 1.3 alone, whose exporter binds
+	// every connection of the link there; Listen needs it.
 	TLS *TLS
-	// RunCredentials are the run starters whose run credentials open a run on Listen,
-	// gateway.run_credentials of the operator's forager.yaml; required with Listen.
-	// Start checks them as runcredential.Issuers.Check does, reading each key's file
-	// and each introspection client's secret. The gateway tracks run keys and does not
-	// require them to be unique; each period of activity is a run. The run keys it
-	// refuses after the starter's end are kept in Dir, so a restart refuses them too.
-	RunCredentials runcredential.Issuers
-	// Runs is how the gateway keeps the runs of clients with no session.
-	Runs RunsConfig
 	// NoLinkSocket makes no link socket and no link directory: the gateway's local link
 	// is served in memory alone, to a session in this process, the way
 	// [Gateway.LocalLink] hands out, and no other process can reach it. qory run sets it.
-	// False makes the socket, for a session in another process too. With Listen it
-	// serves the one address as without it, for the sessions and clients of other
-	// machines, beside a local link in memory alone and no socket.
+	// False makes the socket, for a session in another process too. A gateway with
+	// Listen serves no local link either way.
 	NoLinkSocket bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's
 	// flush. Tests set them.
 	quiet, closeWait time.Duration
-	// keepSpent, when not zero, replaces runcredential.MaxLeeway as how long past its
-	// exp the gateway keeps what an ended run of the one address left. Tests set it.
-	keepSpent time.Duration
-	// keepRetry, when not zero, replaces keepRetry as how often the gateway writes the
-	// refused run keys again while a write of them has failed. Tests set it.
-	keepRetry time.Duration
-	// clock, when not nil, is the time the gateway refuses a run key by, in place of
-	// the system's. Tests set it.
-	clock func() time.Time
-	// opened, when not nil, is called once a run on the one address opened, before the
-	// gateway looks again whether it refuses the run's run key. Tests set it.
+	// opened, when not nil, is called once a run on the one address opened. Tests set
+	// it.
 	opened func()
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
-	// runAuth and proxyLogin, when not nil, decide the run credentials Listen is given,
-	// in place of the verifier of RunCredentials and the runs of clients with no
-	// session: tests set them.
-	runAuth    runAuth
-	proxyLogin proxyLogin
-	// introspector, when not nil, is the introspection endpoint of an issuer that has
-	// one, in place of runcredential's client of it: tests set it.
-	introspector func(runcredential.Issuer) activeChecker
+	// now, when not nil, is the clock the one address judges a run key's attach window
+	// by, in place of time.Now. Tests set it.
+	now func() time.Time
+	// relayWait, when not zero, replaces relayWait, how long the relay waits for the
+	// server. Tests set it.
+	relayWait time.Duration
+	// relayInFlight, when not zero, replaces relayInFlight, the most requests the relay
+	// has with the server at once. Tests set it.
+	relayInFlight int
 	// openWaits and openWindow, when set, replace openWaits and openWindow, the tries
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration
 	openWindow time.Duration
-	// exitWindow, when set, replaces exitWindow, how long a run whose starter answered
-	// its ask at its exit that the run credential is no longer active may still end
-	// with its own exit. Tests set it.
-	exitWindow time.Duration
-	// windowEndLate is how long after the window closes its timer ends the run, none
-	// but in the tests that look between the two.
-	windowEndLate time.Duration
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in
@@ -124,16 +101,6 @@ type TLS struct {
 	// KeyFile is the certificate's private key.
 	KeyFile string
 }
-
-// RunsConfig is how the gateway keeps the runs of clients with no session.
-type RunsConfig struct {
-	// Quiet is how long such a run lasts with no connection before it ends, quiet:
-	// gateway.runs.quiet of the operator's forager.yaml; zero means 30 minutes.
-	Quiet time.Duration
-}
-
-// defaultRunsQuiet is [RunsConfig.Quiet] when the config sets none.
-const defaultRunsQuiet = 30 * time.Minute
 
 // Server is the server document, contracts/forager/v1/server.schema.json, as the caller
 // passes it to Forager, with what signs and names every request: the server whose
@@ -204,21 +171,17 @@ type Delivery struct {
 	// RunClosed says a run ended at the gateway before its session ended it, the first
 	// that did for Close, since a server's 410 ends no run; ClosedReason is the code of
 	// the gateway's 410 its session's later requests get: session_lost when it heard
-	// nothing from the session for 3 heartbeat intervals, batch_refused when it refused a
-	// batch, and behind a separate gateway credential_expired,
-	// credential_check_unreachable, credential_check_invalid, stopped when the run's
-	// starter ended it, and quiet when a client's run had no connection for the quiet
-	// time.
+	// nothing from the session for 3 heartbeat intervals, batch_refused when it refused
+	// a batch, and stopped when the server's end member carried the outcome the run's
+	// starter gave.
 	RunClosed    bool
 	ClosedReason string
 	// State and Reason are how the run ended, where the gateway knows it: the state and
 	// the reason of the dev.qory.run.exited the gateway wrote of it, Reason empty when
 	// that has none. For Close, of the run RunClosed is of: failed with session_lost,
-	// failed with batch_refused, cancelled with credential_expired, failed with
-	// credential_check_unreachable or credential_check_invalid, and, ended by its
-	// starter, the outcome and the reason the starter gave, or cancelled with stopped
-	// when it gave no outcome, and cancelled with quiet for a client's run. For a
-	// resend, failed with gateway_lost, with Completed. Empty otherwise.
+	// failed with batch_refused, or, after stopped, the state and the reason of the end
+	// member, the reason stopped for a cancelled end that has none. For a resend, failed
+	// with gateway_lost, with Completed. Empty otherwise.
 	State  string
 	Reason string
 	// Sent is how many events a resend delivered now, and Completed says a resend
