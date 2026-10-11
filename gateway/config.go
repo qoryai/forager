@@ -127,8 +127,10 @@ type Server struct {
 	// which the caller reads. It is never logged.
 	AccessKey *accesskey.Key `json:"-"`
 	// InstanceID is this instance's id, sent in X-Qory-Instance-Id and signed into every
-	// request; it matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$. InstanceName is its display
-	// name, sent in X-Qory-Instance-Name, unsigned; empty sends none.
+	// request; it matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$; a separate gateway's caller
+	// keeps it across restarts; with another id, a restarted gateway's attach again is
+	// `run_attached`. InstanceName is its display name, sent in X-Qory-Instance-Name,
+	// unsigned; empty sends none.
 	InstanceID   string `json:"-"`
 	InstanceName string `json:"-"`
 }
