@@ -94,7 +94,9 @@ type ResendResult struct {
 // 400 run_key_invalid, or 409 wrong_gateway, workspace_not_served, run_key_expired or
 // run_attached, at the discovery or at a batch, is a [*Refusal] with its code, its
 // status, the gateway's text and From gateway, and nothing more is sent: what was not
-// accepted is under undelivered/.
+// accepted is under undelivered/. A 401 unauthorized, which the gateway does not send,
+// stops it the same way. A batch of a run the gateway no longer holds is its 410, the
+// run's end while the gateway keeps it and run_closed after, which closes the resend.
 func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if spec.ForagerVersion == "" {
 		spec.ForagerVersion = "dev"
@@ -211,11 +213,14 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 // which sending again cannot change. Any other refusal is sent again, as the session
 // sends it.
 var resendStops = map[string]int{
-	"run_key_invalid":      http.StatusBadRequest,
-	"wrong_gateway":        http.StatusConflict,
-	"workspace_not_served": http.StatusConflict,
-	"run_key_expired":      http.StatusConflict,
-	"run_attached":         http.StatusConflict,
+	// The gateway sends no 401; one stops the resend all the same, so it never sends
+	// again into a refusal it cannot change.
+	accesskey.CodeUnauthorized: http.StatusUnauthorized,
+	"run_key_invalid":          http.StatusBadRequest,
+	"wrong_gateway":            http.StatusConflict,
+	"workspace_not_served":     http.StatusConflict,
+	"run_key_expired":          http.StatusConflict,
+	"run_attached":             http.StatusConflict,
 }
 
 // refusing is the link's deliveries during a resend, which stop at a refusal of

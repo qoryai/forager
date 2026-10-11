@@ -278,9 +278,9 @@ func noRunKey(t *testing.T, dir, runKey string) {
 
 // TestAResendNeedsTheRunKey pins the run key of a resend that owes: without one the
 // resend says so, and with one it cannot read, or one of another run, it says that,
-// each before any request; and each refusal of the run key the gateway passes on stops
-// the resend with that refusal, the gateway's text, what was not accepted under
-// undelivered/.
+// each before any request; and each refusal of the run key the gateway passes on, and a
+// 401 unauthorized, stops the resend with that refusal, the gateway's text, what was not
+// accepted under undelivered/.
 func TestAResendNeedsTheRunKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -308,7 +308,7 @@ func TestAResendNeedsTheRunKey(t *testing.T) {
 	for _, c := range []struct {
 		status int
 		code   string
-	}{{400, "run_key_invalid"}, {409, "wrong_gateway"}, {409, "workspace_not_served"}, {409, "run_key_expired"}, {409, "run_attached"}} {
+	}{{400, "run_key_invalid"}, {409, "wrong_gateway"}, {409, "workspace_not_served"}, {409, "run_key_expired"}, {409, "run_attached"}, {401, "unauthorized"}} {
 		text := "the gateway refused the run: " + c.code
 		g.OnBatch(func([]map[string]any) linktest.Reply {
 			return linktest.Reply{Status: c.status, Body: map[string]any{"error": c.code, "from": "gateway", "message": text}}

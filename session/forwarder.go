@@ -186,7 +186,7 @@ func (f *forwarder) serve(c net.Conn) {
 	var src io.Reader = c
 	if f.way.password != "" {
 		// Nothing reaches the proxy from a connection that is not the run's agent.
-		c.SetReadDeadline(time.Now().Add(link.PreambleWait))
+		c.SetReadDeadline(time.Now().Add(proxyHeadWait))
 		head, rest, ok := readProxyLogin(c, f.way.password)
 		if !ok {
 			return
@@ -227,6 +227,10 @@ func (f *forwarder) serve(c net.Conn) {
 	<-done
 	<-done
 }
+
+// proxyHeadWait is how long a connection to an unwalled forwarder behind a separate
+// gateway has to send its first request's head, as long as a preamble has.
+var proxyHeadWait = link.PreambleWait
 
 // maxProxyHead is the longest line of the first request's head the forwarder reads,
 // and maxProxyLines the most lines.

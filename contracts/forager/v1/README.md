@@ -2321,10 +2321,13 @@ key: " and the part that is wrong, and with the run key of another run, "resend 
 QORY_RUN_KEY names the run <run id>, not this one". The record is never completed: the
 gateway writes the end of a run whose session was lost. The gateway's `410`, after
 `session_lost` or any other end, closes the resend, and the events stay in the
-directory. A refusal of the run key the gateway passes on, `400` `run_key_invalid`, or
-`409` `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`,
-stops it with that refusal, its code, status and message the gateway's, and what was
-not accepted is under `undelivered/` again; any other refusal of a batch is sent again.
+directory: a batch of a run the gateway no longer holds is that `410`, the run's end
+while the gateway keeps it and `run_closed` after (Events, above). A refusal of the run
+key the gateway passes on, `400` `run_key_invalid`, or `409` `wrong_gateway`,
+`workspace_not_served`, `run_key_expired` or `run_attached`, stops it with that refusal,
+its code, status and message the gateway's, and what was not accepted is under
+`undelivered/` again; so does a `401` `unauthorized`, which the gateway does not send,
+so a resend never sends again into one. Any other refusal of a batch is sent again.
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used` on
 the local link, and behind a separate gateway the gateway answers `run_attached`, unless
