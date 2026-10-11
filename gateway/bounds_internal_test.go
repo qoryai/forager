@@ -182,6 +182,43 @@ func TestTheConnectionLimit(t *testing.T) {
 			t.Errorf("%v: %d counted, by %v, by /48 %v, %d waiting", steps, l.total, l.by, l.blocks, l.waiting.Len())
 		}
 	}
+	// The narrowest full group, not all, gives the connection closed: "o", the oldest of
+	// all, stays while a full /64, then a full /48, closes its own oldest; a /64 whose
+	// connections are all vouched for closes nothing; and with both a source and all
+	// full, the source's oldest goes.
+	l = newConnLimit(6, 2, 3)
+	o := take("o", "192.0.2.1:1")
+	p1, p2 := take("p1", "[2001:db8::1]:1"), take("p2", "[2001:db8::2]:1")
+	if o == nil || p1 == nil || p2 == nil {
+		t.Fatal("the first connections are not taken")
+	}
+	p3 := take("p3", "[2001:db8::3]:1")
+	if p3 == nil {
+		t.Fatal("a third connection of one /64 is not taken")
+	}
+	wantClosed("a third connection of one /64, the oldest of all of another source", "p1")
+	l.vouch(p2)
+	l.vouch(p3)
+	if take("p4", "[2001:db8::4]:1") != nil {
+		t.Error("a connection of a /64 whose connections are all vouched for is taken")
+	}
+	wantClosed("a connection of a /64 whose connections are all vouched for, beside others waiting")
+	if take("q1", "[2001:db8:0:1::1]:1") == nil || take("q2", "[2001:db8:0:2::1]:1") == nil {
+		t.Fatal("a third or a fourth connection of one /48 is not taken")
+	}
+	wantClosed("a fourth connection of one /48, the oldest of all of another source", "q1")
+	if take("s1", "192.0.2.4:1") == nil || take("s2", "192.0.2.4:2") == nil {
+		t.Fatal("two connections of an IPv4 address are not taken")
+	}
+	wantClosed("six connections in all")
+	if l.total != 6 || l.by["192.0.2.4"] != 2 {
+		t.Fatalf("counted %d in all, by %v", l.total, l.by)
+	}
+	if take("s3", "192.0.2.4:3") == nil {
+		t.Fatal("a third connection of an IPv4 address, all full, is not taken")
+	}
+	wantClosed("a third connection of an IPv4 address, all full", "s1")
+
 	// A held connection closed for a newer one is closed, and closing it again lets go of
 	// nothing more.
 	l = newConnLimit(1, 1, 1)
@@ -228,7 +265,7 @@ func (c *closedConn) Close() error {
 // a minute in bursts of 80 beside it, none for IPv4; at most 256 sources of one /48
 // followed, a new one past that letting go of the one of that /48 idle longest; a full
 // map letting go of the source idle longest for a new one; and buckets let go of when
-// they are full again, by prune alone, a /48's with its last source.
+// they are full again, by prune, a /48's with its last source.
 func TestTheRelaysBuckets(t *testing.T) {
 	buckets := func() *relay {
 		return &relay{g: &Gateway{conf: &server.Configuration{Run: &server.Endpoint{URL: "https://apiary.example/v1/runs"}}},

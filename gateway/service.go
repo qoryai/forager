@@ -548,7 +548,8 @@ func (s *signedWriter) Flush() { s.flush(false) }
 
 // flush signs and writes the answer held, once, and reports whether it did: with whole,
 // it writes nothing when the request's body was not read whole
-// ([capturedBody.answerRequest]). An answer already written is reported written.
+// ([capturedBody.answerRequest]). Either way the answer is done: a later call writes
+// nothing and reports true.
 func (s *signedWriter) flush(whole bool) bool {
 	if s.done {
 		return true
@@ -709,9 +710,10 @@ func (l *connLimit) hold(c net.Conn, s connSource) *heldConn {
 }
 
 // take counts one more connection, cs, and reports whether it did. Past a bound, it
-// first closes the oldest connection no run key has vouched for of cs's source when
-// that is full, else of its /48 when that is full, else of all, and lets go of its
-// count; when that group has none, cs is not counted.
+// lets go of the count of the oldest connection no run key has vouched for of cs's
+// source when that is full, else of its /48 when that is full, else of all, counts cs,
+// and closes that connection once it has let go of its lock; when that group has none,
+// cs is not counted.
 func (l *connLimit) take(cs *connSlot) bool {
 	l.mu.Lock()
 	s := cs.s
