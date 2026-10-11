@@ -119,7 +119,6 @@ func TestTheWordsOfARunsEnd(t *testing.T) {
 		want          string
 	}{
 		{"cancelled", "timeout", "cancelled, time limit reached"},
-		{"cancelled", "stopped", "cancelled, no outcome given"},
 		{"failed", "session_lost", "failed, stopped responding"},
 		{"failed", "gateway_lost", "failed, end not recorded"},
 		{"failed", "batch_refused", "failed, events refused"},

@@ -27,8 +27,9 @@ import (
 )
 
 // The runs of these tests open on the gateway's one address, each request's bearer
-// value decided by the tests' verifier, the seam of service_test.go: the gateway itself
-// has no verifier of its own yet.
+// value decided by the tests' verifier, set with SetRunAuth in service_test.go: without
+// it the gateway answers every request of the contract there with the 401
+// unauthorized.
 
 // exampleLabels are the labels of the example runs.
 func exampleLabels() map[string]string {

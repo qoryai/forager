@@ -41,9 +41,9 @@ const LocalOrigin = "http://localhost"
 const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway: the
-// gateway closed the run, the run's starter ended it, the gateway heard nothing from the
-// session for too long, or it refused a batch of the session's. A 410 with another
-// code, or none, is run_closed.
+// gateway closed the run, stopped, the gateway heard nothing from the session for too
+// long, or it refused a batch of the session's. A 410 with another code, or none, is
+// run_closed.
 var EndCodes = []string{event.ReasonRunClosed, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused}
 
 // RunEnd is how a run ended at the gateway, as the link says it: Code, one of
@@ -52,7 +52,7 @@ var EndCodes = []string{event.ReasonRunClosed, event.ReasonStopped, event.Reason
 // of the gateway's dev.qory.run.exited of it, as link-refusal.schema.json has them. State
 // is empty when the 410 carries none, as run_closed's does not, or carries a state or a
 // reason the schema refuses, and Reason is then empty too. Reason is empty when the end
-// has none, as when the run's starter gave an outcome and no reason.
+// has none.
 type RunEnd struct {
 	Code, From    string
 	State, Reason string

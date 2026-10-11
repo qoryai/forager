@@ -59,7 +59,8 @@ const (
 	ReasonRunClosed   = "run_closed"
 	ReasonGatewayLost = "gateway_lost"
 	ReasonSessionLost = "session_lost"
-	// ReasonStopped is a run its starter ended without giving an outcome, cancelled.
+	// ReasonStopped is the code of a gateway's 410 on the link, which the session reads
+	// and records.
 	ReasonStopped = "stopped"
 	// ReasonBatchRefused is a run whose session's batch the gateway refused, failed: the
 	// gateway's 410 to the session's later requests, the reason of the gateway's own

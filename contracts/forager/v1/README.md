@@ -804,8 +804,7 @@ Forager session around a runtime opened the run, and the event contains `runtime
 **How a run ends.** Every `dev.qory.run.exited` contains `state`, how the run ended:
 `succeeded`, the run ended well; `failed`, it ended badly; `cancelled`, it was stopped
 before it said how it went. A session's runtime that exits by itself is `succeeded` on
-exit status 0 and `failed` otherwise, a signal included. A run its starter ends with an
-outcome has that outcome.
+exit status 0 and `failed` otherwise, a signal included.
 
 `reason` says why the run ended, when it ended other than by the runtime's own exit, or
 gives the reason the run's starter gave. It is an open code: a lower-case letter, then
@@ -821,20 +820,18 @@ Forager never writes, kept so that records written before still validate: `quiet
 is the starter's, carried as given, and a receiver shows a code it does not know as it
 is. A starter's reason that equals a reserved code is dropped, and the run has no
 reason, its outcome kept. The session writes `timeout` and `interrupted`, the resend of
-a record writes `gateway_lost` (§The server), and the gateway writes the others, on a
-session's run on its link. The state of each of Forager's own endings:
+a record writes `gateway_lost` (§The server), and the gateway writes `session_lost` and
+`batch_refused`, on a session's run on its link. The state of each of Forager's own endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
-| the run's starter ended the run with an outcome | that outcome | the starter's reason, or none |
-| the run's starter ended the run with no outcome | `cancelled` | `stopped` |
 | the run's time limit was reached, and the session stopped the runtime | `cancelled` | `timeout` |
 | the run was stopped from where it was started (a Ctrl-C) before the session observed the runtime's exit; `exit_code` and `signal` are the runtime's | `cancelled` | `interrupted` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch of the session's (§The gateway's link) | `failed` | `batch_refused` |
 
-`stopped` is written only when the starter gave no outcome. On a session's run the session records, in its own record
+On a session's run the session records, in its own record
 alone, how the gateway's `410` says the run ended: its `state` and `reason`; a `410`
 without a `state`, `run_closed`
 among them, the gateway's `410` to a run that had already ended there, is recorded as
@@ -1465,7 +1462,7 @@ the protocol is the same on both.
 | Where | one machine; `qory` starts the session and the gateway | the gateway `session.gateway.url` names, on a machine of its own |
 | Transport | a Unix socket, `sock`, in a private directory of the gateway's, `qory-link-*` in the system's temporary directory, mode `0700`, the socket mode `0600`; the directory is one of Forager's files (§The wall) | TLS 1.3 alone, on the gateway's one address |
 | The session knows the gateway | the socket's peer is the session's own user, by its uid | the certificate chain, for the host name of `session.gateway.url`, and the pin when one is set |
-| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch | nothing yet: the gateway answers every request on its one address `401` `unauthorized` (below) |
+| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch | nothing: the gateway answers every request of the link on its one address `401` `unauthorized` (below) |
 | The run's labels | the session's | the session's |
 | `narrowing` | refused | accepted |
 
@@ -1506,12 +1503,10 @@ which this computes from the certificate:
 openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
 ```
 
-Nothing verifies a request on the gateway's one address yet. The session sends no
-`Authorization`, and the gateway answers every request of the link there, the
-discovery included, with a `401` from `gateway`, the code `unauthorized`,
+The gateway answers every request of the link on its one address, the discovery
+included, with a `401` from `gateway`, the code `unauthorized`,
 `WWW-Authenticate: Bearer` and the message "the gateway refused the run: unauthorized".
-So no run opens behind a separate gateway yet; what this section says of a separate
-gateway's runs is how the gateway serves a run on its one address once one opens there.
+The session sends no `Authorization` there.
 Every URL the link's discovery lists has the origin of `session.gateway.url`, and the
 session refuses a discovery that lists another.
 
@@ -1842,7 +1837,7 @@ record again, through `gateway.Resend`, the resend writes `dev.qory.run.exited` 
 `reason: gateway_lost`.
 
 **The end of a run at the gateway.** When the gateway ends a session's run, with
-`session_lost`, `batch_refused`, `stopped` or the starter's outcome, it writes the run's
+`session_lost` or `batch_refused`, it writes the run's
 `dev.qory.run.exited` itself, with the state and the reason of that ending (§The events,
 How a run ends) and `exit_code: -1`, as with `session_lost`: it holds no exit status of
 the runtime's. It numbers that event into the run's stream and delivers it toward the
@@ -1851,13 +1846,13 @@ a `410`. Every `410` on the link is a `link-refusal.schema.json` document, its `
 what ended the run, and its `message` the text the session gives the user; a `410` that
 ends a run carries the `state` and the `reason` of the gateway's `dev.qory.run.exited`
 of it, the reason absent when that event has none:
-`{"error": "<code>", "message": "…", "from": "gateway", "state": "cancelled", "reason": "stopped"}`.
+`{"error": "<code>", "message": "…", "from": "gateway", "state": "failed", "reason": "session_lost"}`.
 `from` is `gateway` on every `410`, since only the gateway ends a run there, and the
 code says why:
 
 | Code | From | Cause |
 |---|---|---|
-| `stopped` | `gateway` | the run's starter ended the run; `state` and `reason` are the starter's outcome and reason, or `cancelled` and `stopped` when it gave no outcome |
+| `stopped` | `gateway` | the session reads it and records the `410`'s `state` and `reason`, or `failed` and `stopped` when it carries no `state` |
 | `session_lost` | `gateway` | the session was silent for 3 × the heartbeat interval (Heartbeats and liveness, above); `failed` and `session_lost` |
 | `batch_refused` | `gateway` | the gateway refused a batch of the session's (Events, above); `failed` and `batch_refused` |
 | `run_closed` | `gateway` | the run had already ended otherwise: after the session's own final event, or when the gateway stops; no `state` |
@@ -1874,8 +1869,8 @@ the gateway with `session_lost` once the gateway has heard nothing from the sess
 itself stops, `qory run resend` sending the run's record again, through
 `gateway.Resend`, writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
 While the session lives, the run normally ends with its runtime's own exit; the gateway
-can also end it, with `stopped`, or `batch_refused` after it refused a batch of the
-session's, and the session records that end (The end of a run at the gateway, above).
+can also end it, with `batch_refused` after it refused a batch of the session's, and
+the session records that end (The end of a run at the gateway, above).
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
 unless its session gave up before the run opened (above). A

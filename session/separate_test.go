@@ -30,9 +30,8 @@ import (
 
 // The runs of this file are a real session.Run behind a separate gateway: a real
 // gateway, gateway.Start, serving its one address on loopback over TLS, and the
-// session's RemoteGateway pointed at it. The gateway has no verifier of a request's
-// bearer value on its one address yet: it refuses every request of its contract there,
-// the 401 unauthorized, so no run opens behind it.
+// session's RemoteGateway pointed at it. The gateway answers every request of the
+// contract on its one address with the 401 unauthorized.
 
 // separate is a gateway serving its one address over TLS, and how a session trusts it.
 type separate struct {
@@ -240,9 +239,10 @@ func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
 		t.Errorf("the gateway opened %v", runs)
 	}
 	gw := s.remote()
+	want := "session.RemoteGateway{" + s.url() + " ca_file=" + s.caFile + " certificate_sha256=" + s.pin + "}"
 	for _, out := range []string{fmt.Sprint(gw), fmt.Sprintf("%#v", gw), fmt.Sprintf("%+v", &gw), gw.String()} {
-		if !strings.Contains(out, s.url()) || !strings.Contains(out, s.pin) || strings.Contains(out, "0x") {
-			t.Errorf("printed as %s", out)
+		if out != want {
+			t.Errorf("printed as %s, want %s", out, want)
 		}
 	}
 	// A URL the session refuses prints by its origin alone, nothing after it or before

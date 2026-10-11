@@ -154,7 +154,6 @@ const stateFailed = event.StateFailed
 // other reason is the run's starter's, read with spaces for its underscores.
 var reasonWords = map[string]string{
 	event.ReasonTimeout:      "time limit reached",
-	event.ReasonStopped:      "no outcome given",
 	event.ReasonSessionLost:  "stopped responding",
 	event.ReasonGatewayLost:  "end not recorded",
 	event.ReasonBatchRefused: "events refused",

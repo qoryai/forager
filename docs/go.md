@@ -117,9 +117,9 @@ local link. Its `gateway.Config` sets it:
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
 
-Nothing verifies a request of the contract on the one address yet: the gateway answers
-every one, the discovery included, with a `401` `unauthorized` from `gateway`, "the
-gateway refused the run: unauthorized", so no run opens there.
+The gateway answers every request of the contract on the one address, the discovery
+included, with a `401` `unauthorized` from `gateway`, "the gateway refused the run:
+unauthorized".
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
@@ -341,9 +341,9 @@ A program that needs code of its own implements the interface.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
-  gateway's `410`, unchanged: `run_closed`, `stopped` when the run's starter ended it,
-  `session_lost` when it heard nothing from the session for 3 heartbeat intervals, and `batch_refused` when it refused a
-  batch of the session's. The runtime was stopped as at its time limit. A server's
+  gateway's `410`, unchanged: `run_closed`, `stopped`, `session_lost` when it heard
+  nothing from the session for 3 heartbeat intervals, and `batch_refused` when it
+  refused a batch of the session's. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
 
