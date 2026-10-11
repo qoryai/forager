@@ -1775,9 +1775,9 @@ and the session sends every request over the link.
 The socket's peer uid is the whole of the local link's trust. A process of the same
 user that reaches the socket is served as a session is: knowing a local run's id, it can
 post a batch into that run, fetch the run's configuration again, or end the run: with a
-batch that carries its `dev.qory.run.exited`, or with any batch of that run whose body
-arrives whole and the link refuses, which ends the run `failed` with `batch_refused`
-(Events, below).
+batch that carries its `dev.qory.run.exited`, or with any batch of that run the link
+refuses with `400` `invalid_request` once its body has arrived whole, which ends the
+run `failed` with `batch_refused` (Events, below).
 
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
@@ -1958,8 +1958,9 @@ them itself. Its limits, each answered by the relay itself with no body, in this
 | Status | When |
 |---|---|
 | `429` | more than 60 requests a minute from one source, in bursts of at most 20; or a source new to the relay while it follows 65,536 |
-| `404` | a path other than the four, a path with an escaped byte (`%2F` and the like), or a query on a `POST` |
-| `405` | one of the four paths with another method |
+| `404` | a path other than the four |
+| `405` | one of the four paths, its escapes decoded, with another method |
+| `404` | one of the four paths with its method, but a path with an escaped byte (`%2F` and the like) or a query on a `POST` |
 | `413` | a request's body over 16 KiB for the enrolment, 64 KiB for a registration or 4 KiB for an outcome |
 | `503` | 64 requests with the server already |
 | `502` | the server not reached, or its answer over 1 MiB |

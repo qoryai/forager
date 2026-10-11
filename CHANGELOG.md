@@ -914,9 +914,10 @@ release may change what an existing document does, and says so under Upgrading.
   attach above all, and answers none of them itself. Its limits, each answered by the
   relay itself with no body, in this order: `429` past 60 requests a minute from one
   source, in bursts of at most 20, or from a source new to the relay while it follows
-  65,536; `404` a path other than the four, a path with an escaped byte, or a query on a
-  `POST`; `405` one of the four paths with another method; `413` a body over 16 KiB for
-  the enrolment, 64 KiB for a registration or 4 KiB for an outcome; `503` 64 requests
+  65,536; `404` a path other than the four; `405` one of the four paths, its escapes
+  decoded, with another method; `404` one of the four with its method, but a path with
+  an escaped byte or a query on a `POST`; `413` a body over 16 KiB for the enrolment,
+  64 KiB for a registration or 4 KiB for an outcome; `503` 64 requests
   with the server already; `502` the server not reached, or its answer over 1 MiB; and
   `504` no answer from the server within 10 seconds. A source is the connection's own
   IPv4 address or IPv6 /64, never a field the request carries, and the relay lets go of
