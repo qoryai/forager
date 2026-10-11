@@ -2199,7 +2199,9 @@ separate gateway the run of the run key it carries. On the local link a batch wi
 `invalid_request`, which ends no run, so no run can be probed. Behind a separate gateway
 a batch of a run the gateway does not hold is a `410`, of the run's end while the
 gateway keeps it, 15 minutes after its record is flushed, and `run_closed` after, or for
-a run that never opened there.
+a run that never opened there. Once the run key's `attach_by` has passed, a batch of a
+run the gateway holds nothing of, its record included, is `409` `run_key_expired`
+instead (The run key on the one address, above).
 A batch whose body does not arrive whole, its client gone before the end, is `400`
 `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
 not decode among them, ends its run at the gateway: the
@@ -2399,7 +2401,9 @@ runs as the session's user and can, so without a wall enforcement is cooperative
 the code and the `from` of its end at the gateway (above) when it ended there, else
 `run_closed` from `gateway`; behind a separate gateway the gateway keeps the end of a
 run it let go of for 15 minutes after its record is flushed, and a run it does not hold
-is `run_closed` after; on the local link an unknown `run_id` is `400`
+is `run_closed` after, unless the run key's `attach_by` has passed and the gateway holds
+nothing of the run, its record included, which is `409` `run_key_expired` (The run key on
+the one address, above); on the local link an unknown `run_id` is `400`
 `invalid_request`. Toward the server
 the reload names the run the same way, a signed `GET <run.url>/<run_id>` (§The server,
 The run endpoint).

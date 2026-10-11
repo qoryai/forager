@@ -168,15 +168,17 @@ type Delivery struct {
 	// RunClosed says a run ended at the gateway before its session ended it, the first
 	// that did for Close, since a server's 410 ends no run; ClosedReason is the code of
 	// the gateway's 410 its session's later requests get: session_lost when it heard
-	// nothing from the session for 3 heartbeat intervals, and batch_refused when it
-	// refused a batch.
+	// nothing from the session for 3 heartbeat intervals, batch_refused when it refused
+	// a batch, and stopped when the server's end member carried the outcome the run's
+	// starter gave.
 	RunClosed    bool
 	ClosedReason string
 	// State and Reason are how the run ended, where the gateway knows it: the state and
 	// the reason of the dev.qory.run.exited the gateway wrote of it, Reason empty when
-	// that has none. For Close, of the run RunClosed is of: failed with session_lost, or
-	// failed with batch_refused. For a resend, failed with gateway_lost, with Completed.
-	// Empty otherwise.
+	// that has none. For Close, of the run RunClosed is of: failed with session_lost,
+	// failed with batch_refused, or, after stopped, the state and the reason of the end
+	// member, the reason stopped for a cancelled end that has none. For a resend, failed
+	// with gateway_lost, with Completed. Empty otherwise.
 	State  string
 	Reason string
 	// Sent is how many events a resend delivered now, and Completed says a resend
