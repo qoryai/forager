@@ -500,16 +500,20 @@ func TestPostOutcome(t *testing.T) {
 }
 
 // TestTheEndMember pins ReadEnd and the end of a delivery: a signed 2xx whose body
-// carries end gives its state and reason; a reason that is no code, is not a string,
-// or is one of Forager's reserved codes is dropped and the state kept; an empty body,
-// one without end, one that is not JSON and an end with an unknown state are no end;
-// and an answer that is not a signed 2xx carries none, whatever its body.
+// carries end gives its state and reason; a reason that is one of Forager's reserved
+// codes is dropped and the state kept; a body batch-answer.schema.json refuses, a
+// reason that is no code or not a string and a member beside state and reason among
+// them, an empty body, one without end, one that is not JSON and an end with an unknown
+// state are no end; and an answer that is not a signed 2xx carries none, whatever its
+// body.
 func TestTheEndMember(t *testing.T) {
 	for body, want := range map[string]*server.ServerEnd{
 		`{"end":{"state":"succeeded","reason":"all_checks_passed"}}`: {State: "succeeded", Reason: "all_checks_passed"},
 		`{"end":{"state":"cancelled"}}`:                              {State: "cancelled"},
-		`{"end":{"state":"failed","reason":"Not A Code"}}`:           {State: "failed"},
-		`{"end":{"state":"failed","reason":7}}`:                      {State: "failed"},
+		`{"end":{"state":"failed","reason":"Not A Code"}}`:           nil,
+		`{"end":{"state":"failed","reason":"Checks Failed"}}`:        nil,
+		`{"end":{"state":"failed","reason":7}}`:                      nil,
+		`{"end":{"state":"succeeded","extra":1}}`:                    nil,
 		`{"end":{"state":"failed","reason":"stopped"}}`:              {State: "failed"},
 		`{"end":{"state":"failed"},"later":{"x":1}}`:                 {State: "failed"},
 		``:                                   nil,

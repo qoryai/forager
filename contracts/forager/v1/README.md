@@ -1608,9 +1608,11 @@ one without `end`, means no end. Once the server has recorded the run's starter'
 `dev.qory.run.exited` arrives; the answer to the batch that carries
 `dev.qory.run.exited` holds no `end`. A signed `410` still stops the run's events, and
 carries no `end`. Forager's client reads `end` only from a signed `2xx`, as
-`Delivery.ServerEnd` (`server.ReadEnd`): an `end` whose `state` is none of the three is no
-end, and a `reason` that is not a code, or is one of Forager's reserved codes, is dropped
-and the state kept.
+`Delivery.ServerEnd` (`server.ReadEnd`), and reads the body against
+`batch-answer.schema.json` first: a body the schema refuses, an `end` whose `state` is
+none of the three or whose `reason` is not a code among them, is no end. The server drops
+a reason that is not a code at the outcome, so a valid `end` carries a code or none. A
+`reason` that is one of Forager's reserved codes is dropped, and the state kept.
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 

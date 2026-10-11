@@ -17,7 +17,7 @@
           "enum": ["succeeded", "failed", "cancelled"]
         },
         "reason": {
-          "description": "The starter's reason, a code; absent when the outcome has none. Forager drops one that is no code or is one of its reserved codes, and keeps the state.",
+          "description": "The starter's reason, a code, absent when the outcome has none: the server drops a reason that is no code at the outcome, so an end never carries one. A body whose reason is no code is refused, and Forager reads no end from it. Forager drops a reason that is one of its reserved codes, and keeps the state.",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]{0,63}$"
         }
