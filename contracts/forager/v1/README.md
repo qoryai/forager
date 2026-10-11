@@ -988,8 +988,10 @@ when `ca_file` is set, against the authorities of that file, which replace them;
 SubjectPublicKeyInfo in standard base64 with padding, 44 characters ending in `=`, and
 with it only a certificate with that public key is accepted, its chain still checked.
 The trust is never relaxed there, since a relayed registration's answer carries the run
-key. `server.Via` holds the setting, its `Transport` the trust, and
-`accesskey.EnrolmentRequest.PostVia` sends an enrolment through it.
+key. The gateway a request is relayed through sees that run key, so `via` names a
+gateway trusted at least as much as the run's own gateway. `server.Via` holds the
+setting, its `Transport` the trust, and `accesskey.EnrolmentRequest.PostVia` sends an
+enrolment through it.
 
 **The access key.** The access key authenticates Forager to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
@@ -1565,8 +1567,15 @@ key's discovery, and whose `X-Qory-Run-Configuration` is the digest of
 a reload of the run answers it; and the outcome,
 `outcome.json`, signed under the fixture access key, and its `200`,
 `outcome-answer.json`; each request's six lines and each answer's, with their
-signatures. `go generate ./runkey` writes them, and the module's tests fail while they
-differ.
+signatures. It holds too, for a fixed exporter value in place of the one a connection
+derives, the 32 bytes counting up from 129: the binding, the three lines the gateway
+signs under the fixture gateway key, the signature and the `QORY-BOUND` line; and one
+answer of the gateway on its link, a `202` with no body to a batch,
+`fixtures/link/link-batch.json`, posted to `/qory-link/events`, with the four lines
+whose SHA-256 is its third line, its six lines under `qory-link-answer-ed25519-v1` and
+its signature under the fixture gateway key. `go generate ./runkey` writes them, and the
+module's tests fail while they differ, or while the session's side and the gateway's
+make other bytes of them.
 
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
 events of one run, in sequence order, never empty. Forager cuts a batch at one
@@ -1763,13 +1772,19 @@ secret of the link. The directory, mode `0700`, and the socket, mode `0600`, kee
 other user out. Every URL the link's discovery lists is `http://localhost` and a path,
 and the session sends every request over the link.
 
+The socket's peer uid is the whole of the local link's trust. A process of the same
+user that reaches the socket is served as a session is: knowing a local run's id, it can
+post a batch into that run, fetch the run's configuration again, or end the run with a
+batch that carries its `dev.qory.run.exited`.
+
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
 the socket's path, where another process of the same user could listen in the
 gateway's place and pass the uid check. Each connection in memory carries the same
 bytes as one over the socket, HTTP/1.1 from its first byte; its peer is the process
-itself. The socket serves a session in another process; a gateway started without one,
-as `qory run` starts it, serves its link in memory alone.
+itself. The socket serves a session in another process. `gateway.Start` with
+`NoLinkSocket`, as `qory run` starts the gateway, serves no socket: the link in memory
+alone, which no other process reaches.
 
 **A separate gateway.** The session is given the run's run key, the one Qory Apiary
 answered the run's registration with (§The server, The run key), and reads it as a
@@ -1788,7 +1803,7 @@ serves the operator's certificate and key, `gateway.tls.certificate` and
 **The binding.** Every connection to the gateway's one address, the link's and the
 proxy's, opens with the binding, before anything else. The session writes `QORY-BIND`
 and a newline. Each side derives the connection's exporter value: the TLS exporter
-(RFC 8446 §7.5) with the label `EXPORTER-qory-link-binding`, an empty context and 32
+(RFC 8446 §7.5) with the label `EXPERIMENTAL-qory-link-binding`, an empty context and 32
 bytes. The gateway answers `QORY-BOUND`, a space, the fingerprint of one of its keys
 (§The server, The access key), a space, its Ed25519 signature under that key in
 base64url without padding, and a newline, the line at most 256 bytes. The signature
@@ -1866,7 +1881,7 @@ this order, from `gateway`:
 | # | Status | Code | When |
 |---|---|---|---|
 | 1 | `400` | `run_key_invalid` | no single `Authorization` of the Bearer scheme, or a value that is not a run key that verifies under the server's pin |
-| 2 | `409` | `run_key_expired` | past its `attach_by`, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded |
+| 2 | `409` | `run_key_expired` | past its `attach_by` plus a skew of 300 seconds, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded; within the skew the request goes on as before `attach_by`, and the server decides the attach |
 | 3 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
 | 4 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
 
@@ -1884,7 +1899,10 @@ of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `40
 server, and its message is the line the server's refusal of the attach gives:
 `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
 that passes names the request's run: a run request for another `run_id`, or a reload of
-another, is `run_key_invalid`.
+another, is `run_key_invalid`. The gateway verifies the run key under its pin on every
+request of the run and on every proxy connection, not only the first, so once a server
+key is out of the gateway's pin, a run whose run key that key signed gets `400`
+`run_key_invalid` on its next request, and its proxy connections are closed unanswered.
 
 **Attach.** Behind a separate gateway the gateway opens a run by attaching it at the
 server (§The server, Through a gateway), not by registering it: on the run request it
@@ -2227,7 +2245,10 @@ separate gateway the run of the run key it carries. On the local link a batch wi
 `invalid_request`, which ends no run, so no run can be probed. Behind a separate gateway
 a batch of a run the gateway does not hold is a `410`, of the run's end while the
 gateway keeps it, 15 minutes after its record is flushed, and `run_closed` after, or for
-a run that never opened there.
+a run that never opened there. Once the run key's `attach_by` plus a skew of 300
+seconds has passed, by the gateway's clock, a batch of a run the gateway holds nothing
+of, its record included, is `409` `run_key_expired` instead (The run key on the one
+address, above).
 A batch whose body does not arrive whole, its client gone before the end, is `400`
 `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
 not decode among them, ends its run at the gateway: the
@@ -2363,7 +2384,11 @@ QORY_RUN_KEY names the run <run id>, not this one". The record is never complete
 gateway writes the end of a run whose session was lost. The gateway's `410`, after
 `session_lost` or any other end, closes the resend, and the events stay in the
 directory: a batch of a run the gateway no longer holds is that `410`, the run's end
-while the gateway keeps it and `run_closed` after (Events, above). A refusal of the run
+while the gateway keeps it and `run_closed` after (Events, above), as long as the
+gateway still has the run's record. Once the run key's `attach_by` plus a skew of 300
+seconds has passed, by the gateway's clock, a batch of a run the gateway holds nothing
+of, its record included, is `409` `run_key_expired` instead (The run key on the one
+address, above), which stops the resend as every refusal of the run key does. A refusal of the run
 key the gateway passes on, `400` `run_key_invalid`, or `409` `wrong_gateway`,
 `workspace_not_served`, `run_key_expired` or `run_attached`, stops it with that refusal,
 its code, status and message the gateway's, and what was not accepted is under
@@ -2423,7 +2448,9 @@ runs as the session's user and can, so without a wall enforcement is cooperative
 the code and the `from` of its end at the gateway (above) when it ended there, else
 `run_closed` from `gateway`; behind a separate gateway the gateway keeps the end of a
 run it let go of for 15 minutes after its record is flushed, and a run it does not hold
-is `run_closed` after; on the local link an unknown `run_id` is `400`
+is `run_closed` after, unless the run key's `attach_by` plus a skew of 300 seconds has
+passed, by the gateway's clock, and the gateway holds nothing of the run, its record
+included, which is `409` `run_key_expired` (The run key on the one address, above); on the local link an unknown `run_id` is `400`
 `invalid_request`. Toward the server
 the reload names the run the same way, a signed `GET <run.url>/<run_id>` (§The server,
 The run endpoint).
@@ -2939,7 +2966,7 @@ the option experimental.
 | `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels, `proxy_secret` and `run_secret`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, and a gateway's request under the fixture gateway key, the answer, the answer to the gateway's request, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key |
-| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json` (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 After a change to the body of a `POST`, a batch's or a registration's, Forager's module

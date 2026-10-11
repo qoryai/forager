@@ -61,7 +61,10 @@ func (v Via) Transport() (*http.Transport, error) {
 // transport is base, cloned, or Go's default transport when base is nil, with Via's
 // trust in place of its TLS, no proxy, the environment's or base's, so the request
 // reaches the gateway itself, and no connection kept idle, since a [Client] makes one
-// for each request. A base that is not an *http.Transport cannot carry the trust.
+// for each request. Base's own TLS dialing goes too: net/http uses DialTLSContext or
+// DialTLS in place of TLSClientConfig, so either would skip the chain check and the
+// pin. Base's DialContext stays, since TLS is made over its connection with Via's
+// trust. A base that is not an *http.Transport cannot carry the trust.
 func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 	u, err := v.origin()
 	if err != nil {
@@ -81,6 +84,7 @@ func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 		return nil, errors.New("via needs the client's transport to be an *http.Transport, which carries its trust")
 	}
 	t.TLSClientConfig = cfg
+	t.DialTLSContext, t.DialTLS = nil, nil
 	t.Proxy = nil
 	t.DisableKeepAlives = true
 	t.ForceAttemptHTTP2 = false

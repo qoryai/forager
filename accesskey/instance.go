@@ -30,7 +30,7 @@ func NewInstanceID() (string, error) {
 
 // CheckInstanceID refuses an instance id outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$,
 // which the server answers with a signed 400 bad_request, and one that contains an
-// access key secret, since the id travels in clear.
+// access key secret or a run key, since the id travels in clear.
 func CheckInstanceID(id string) error {
 	if !nameShape.MatchString(id) || ContainsSecret(id) {
 		return fmt.Errorf("the instance id %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(id))
@@ -77,13 +77,17 @@ const (
 	EnvPin    = "QORY_APIARY_PUBLIC_KEY"
 )
 
+// EnvRunKey is the variable a runner passes a run's run key in. Like the access key's
+// variables it is Forager's alone: no program Forager starts on the machine receives it.
+const EnvRunKey = "QORY_RUN_KEY"
+
 // WithoutVariables returns an environment, NAME=value entries, without [EnvSecret],
-// [EnvID] and [EnvPin]: the environment a program Forager starts receives.
+// [EnvID], [EnvPin] and [EnvRunKey]: the environment a program Forager starts receives.
 func WithoutVariables(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if name != EnvSecret && name != EnvID && name != EnvPin {
+		if name != EnvSecret && name != EnvID && name != EnvPin && name != EnvRunKey {
 			out = append(out, kv)
 		}
 	}

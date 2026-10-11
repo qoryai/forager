@@ -75,8 +75,8 @@ func Decides(code string) bool {
 
 // RunIDUsed is the link's run request whose run_id already names a run at this
 // gateway: the session chooses the run id, and the gateway takes only an unused one. It
-// is also the server's signed 409 to a run's registration whose run id it accepted with
-// other bytes or under another access key. It has no names. A run_id that is not a
+// is also the server's signed 409 to a run's registration whose run id it accepted from
+// another node, even with the same bytes, or with other bytes. It has no names. A run_id that is not a
 // canonical lower-case UUID is invalid_request.
 const RunIDUsed = "run_id_used"
 

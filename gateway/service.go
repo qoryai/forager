@@ -256,9 +256,7 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit func()) bool {
 	if err != nil {
 		return false
 	}
-	key := s.g.cfg.Server.AccessKey
-	fp := key.Fingerprint()
-	if _, err := io.WriteString(c, link.BoundLine(fp, base64.RawURLEncoding.EncodeToString(key.Sign(link.BindingMessage(ekm, fp))))); err != nil {
+	if _, err := io.WriteString(c, boundLine(s.g.cfg.Server.AccessKey, ekm)); err != nil {
 		return false
 	}
 	line, ok := peekThrough(r, maxFirstLine, lineEnd)
@@ -284,6 +282,14 @@ func relayRunKey(line []byte) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"), true
+}
+
+// boundLine is the gateway's answer to [link.BindWord] on the connection whose
+// exporter value is ekm: [link.BoundLine] of key's fingerprint and key's signature over
+// [link.BindingMessage].
+func boundLine(key *accesskey.Key, ekm []byte) string {
+	fp := key.Fingerprint()
+	return link.BoundLine(fp, base64.RawURLEncoding.EncodeToString(key.Sign(link.BindingMessage(ekm, fp))))
 }
 
 // lineEnd is the end of the first line in b, its newline included, or -1.

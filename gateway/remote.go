@@ -27,7 +27,8 @@ const (
 // The codes of the attach's refusals the gateway decides itself, before it asks: a run
 // key that does not verify, or names another run than the request; one of another
 // gateway; one of a workspace the gateway does not serve; one past its attach window
-// that never attached here; and a run the gateway already holds.
+// and the skew of server.Window that never attached here; and a run the gateway
+// already holds.
 const (
 	codeRunKeyInvalid      = "run_key_invalid"
 	codeWrongGateway       = "wrong_gateway"
@@ -93,11 +94,13 @@ func (g *Gateway) attachRefused(code string, status int, runID string) *accesske
 // admitRunKey decides the bearer value of a request on the one address, in order: no
 // value, or one that is no run key that verifies under the server's pin, is
 // run_key_invalid, 400; then, in the server's order of the attach, a run key past its
-// attach_by of a run the gateway holds nothing of, never attached here, is
-// run_key_expired, 409; one that names another gateway than the one discovery lists of
-// the access key is wrong_gateway, 409; one of a workspace discovery does not list is
-// workspace_not_served, 409. ok says the request carried one bearer value in its
-// syntax.
+// attach_by plus the skew of [server.Window], 300 s, by the gateway's clock, of a run
+// the gateway holds nothing of, never attached here, is run_key_expired, 409; one that
+// names another gateway than the one discovery lists of the access key is
+// wrong_gateway, 409; one of a workspace discovery does not list is
+// workspace_not_served, 409. A run key past its attach_by within the skew goes on as
+// one before it, and the server decides its attach. ok says the request carried one
+// bearer value in its syntax.
 func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Refusal) {
 	if !ok {
 		return runkey.Key{}, runKeyInvalid()
@@ -108,7 +111,7 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	}
 	conf, _ := g.config()
 	switch {
-	case g.now().After(k.AttachBy) && !g.knows(k.RunID):
+	case g.now().After(k.AttachBy.Add(server.Window)) && !g.knows(k.RunID):
 		return k, g.attachRefused(codeRunKeyExpired, http.StatusConflict, k.RunID)
 	case k.Gateway != conf.NodeID:
 		return k, g.attachRefused(codeWrongGateway, http.StatusConflict, k.RunID)

@@ -2,7 +2,9 @@
 // of contracts/forager/v1/fixtures/known-answers that through-gateway.json lists: one
 // run key, one registration through a gateway and its answer carrying the run key, one
 // attach and its answer, and one outcome and its answer, each request signed under its
-// fixture access key and each answer under the fixture signing key of the server.
+// fixture access key and each answer under the fixture signing key of the server; and,
+// for a fixed exporter value, one binding of a connection to the gateway and one answer
+// of the gateway on its link, each signed under the fixture gateway key.
 //
 // Everything is derived from the published fixture seeds of keys.json, and Ed25519
 // signs deterministically, so the files are the same on every run. go generate
@@ -22,6 +24,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
 )
@@ -70,6 +73,11 @@ func key(first int) *accesskey.Key {
 	}
 	return k
 }
+
+// BindingEKM is the fixed exporter value of the binding's and the link answer's known
+// answers, the 32 bytes counting up from 129, in place of the value a TLS connection
+// derives.
+func BindingEKM() []byte { return counting(129) }
 
 // AccessKey is the fixture access key, the seed being bytes 1 to 32.
 func AccessKey() *accesskey.Key { return key(1) }
@@ -128,13 +136,57 @@ type Answer struct {
 	Signature  string   `json:"signature"`
 }
 
+// Binding is the binding's known answer: the exporter value in lower-case hex, the
+// exporter's label, the fixture gateway key's fingerprint, the three lines the gateway
+// signs, its signature under that key and the line it answers QORY-BIND with, its
+// newline included.
+type Binding struct {
+	Note        string   `json:"note"`
+	EKM         string   `json:"ekm"`
+	Label       string   `json:"label"`
+	Fingerprint string   `json:"fingerprint"`
+	Lines       []string `json:"lines"`
+	Length      int      `json:"length"`
+	Signature   string   `json:"signature"`
+	BoundLine   string   `json:"bound_line"`
+}
+
+// LinkAnswer is the known answer of a separate gateway's answer on its link: the
+// exporter value in lower-case hex, the request's method, its target as sent and the
+// file of its body; the four lines whose SHA-256 is the answer's third line, the last
+// the raw body; the answer's status and body length, its six lines and its signature
+// under the fixture gateway key.
+type LinkAnswer struct {
+	Note        string   `json:"note"`
+	EKM         string   `json:"ekm"`
+	Method      string   `json:"method"`
+	RequestURI  string   `json:"request_uri"`
+	RequestBody string   `json:"request_body"`
+	Request     []string `json:"request"`
+	Status      int      `json:"status"`
+	BodyLength  int      `json:"body_length"`
+	Lines       []string `json:"lines"`
+	Length      int      `json:"length"`
+	Signature   string   `json:"signature"`
+}
+
 // Vectors is through-gateway.json.
 type Vectors struct {
-	Note     string       `json:"note"`
-	RunKey   RunKeyVector `json:"run_key"`
-	Requests []Request    `json:"requests"`
-	Answers  []Answer     `json:"answers"`
+	Note       string       `json:"note"`
+	RunKey     RunKeyVector `json:"run_key"`
+	Requests   []Request    `json:"requests"`
+	Answers    []Answer     `json:"answers"`
+	Binding    Binding      `json:"binding"`
+	LinkAnswer LinkAnswer   `json:"link_answer"`
 }
+
+// LinkBatch is the file of the link answer's request body, a batch of the run, and
+// LinkDiscovery the discovery of the gateway's one address whose digest the answer
+// carries; both are fixtures of the link, under contracts/forager/v1.
+const (
+	LinkBatch     = "fixtures/link/link-batch.json"
+	LinkDiscovery = "fixtures/link/link-discovery-separate.json"
+)
 
 // Dir is where the files go, under contracts/forager/v1.
 const Dir = "fixtures/known-answers"
@@ -173,7 +225,7 @@ func Files() (map[string][]byte, error) {
 	files["run-key-payload.json"] = payload
 	sig := rk[strings.LastIndexByte(rk, '.')+1:]
 	v := Vectors{
-		Note: "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, and an outcome and its answer. go generate ./runkey writes them from the fixture keys of keys.json.",
+		Note: "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
 		RunKey: RunKeyVector{
 			Note:          "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
 			Payload:       Dir + "/run-key-payload.json",
@@ -279,6 +331,53 @@ func Files() (map[string][]byte, error) {
 	}
 	answer("200 to the outcome above, signed under the fixture signing key: {\"version\": 1}, with the X-Qory-Configuration of the fixture discovery and no run-configuration digest.",
 		"outcome-answer.json", accesskey.Answer{Status: 200, RequestSignature: outSig, Body: []byte(`{"version":1}`), Configuration: configuration})
+
+	// The binding, for the fixed exporter value: what the gateway signs and the line it
+	// answers QORY-BIND with.
+	ekm := BindingEKM()
+	fp := gateway.Fingerprint()
+	bm := link.BindingMessage(ekm, fp)
+	bsig := base64.RawURLEncoding.EncodeToString(gateway.Sign(bm))
+	v.Binding = Binding{
+		Note:        "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",
+		EKM:         hex.EncodeToString(ekm),
+		Label:       link.BindingLabel,
+		Fingerprint: fp,
+		Lines:       strings.Split(string(bm), "\n"),
+		Length:      len(bm),
+		Signature:   bsig,
+		BoundLine:   link.BoundLine(fp, bsig),
+	}
+
+	// An answer of the gateway on its link, on that connection: a 202 to a batch of the
+	// run, with no body.
+	batch, err := fs.ReadFile(contracts.FS, LinkBatch)
+	if err != nil {
+		return nil, err
+	}
+	linkDiscovery, err := fs.ReadFile(contracts.FS, LinkDiscovery)
+	if err != nil {
+		return nil, err
+	}
+	const target = "/qory-link/events"
+	la := accesskey.Answer{
+		Link: true, Status: 202, RequestSignature: link.AnswerRequest(ekm, "POST", target, batch),
+		Configuration: "sha256=" + hexSHA256(bytes.TrimSpace(linkDiscovery)), RunConfiguration: "sha256=" + hexSHA256(rc),
+	}
+	lm := la.Message()
+	v.LinkAnswer = LinkAnswer{
+		Note:        "202 to a batch of the run on the gateway's link, on the connection of the binding above, signed under the fixture gateway key with the domain line qory-link-answer-ed25519-v1: the third line is the lower-case hex SHA-256 of request, the exporter value in lower-case hex, the method, the request target as sent and the raw body of request_body, joined by line feeds; the answer has no body; X-Qory-Configuration is sha256= and the hex SHA-256 of link-discovery-separate.json, a discovery of the gateway's one address, and X-Qory-Run-Configuration sha256= and the hex SHA-256 of attach-run-configuration.json, the run's reload answer.",
+		EKM:         hex.EncodeToString(ekm),
+		Method:      "POST",
+		RequestURI:  target,
+		RequestBody: LinkBatch,
+		Request:     []string{hex.EncodeToString(ekm), "POST", target, string(batch)},
+		Status:      la.Status,
+		BodyLength:  len(la.Body),
+		Lines:       strings.Split(string(lm), "\n"),
+		Length:      len(lm),
+		Signature:   gateway.SignAnswer(la),
+	}
 
 	doc, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

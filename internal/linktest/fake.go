@@ -285,7 +285,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case f.remote != nil && !f.remote.bearer(r.Header.Values("Authorization")):
-		reply = Reply{Status: 401, Body: map[string]any{"error": "unauthorized", "from": "gateway", "message": "the gateway refused the run: unauthorized"}}
+		// As the real gateway refuses a bearer value that is no run key it accepts.
+		reply = Reply{Status: 400, Body: map[string]any{"error": "run_key_invalid", "from": "gateway", "message": "the gateway refused the run: run_key_invalid"}}
 	case r.Method == http.MethodGet && r.URL.Path == discovery:
 		origin, proxy := server.LocalOrigin, f.ProxyAddr()
 		if f.origin != "" {

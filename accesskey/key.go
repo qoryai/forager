@@ -21,6 +21,10 @@ import (
 // SecretPrefix starts every access key secret, so secret scanners recognise one.
 const SecretPrefix = "qak_"
 
+// runKeyPrefix starts every run key, runkey.Prefix, which this package cannot import
+// since package runkey imports it.
+const runKeyPrefix = "qrk_"
+
 // SeedSize is the size of an access key's seed, the whole of its secret.
 const SeedSize = ed25519.SeedSize
 
@@ -251,45 +255,75 @@ func (p PublicKey) Fixture() bool {
 }
 
 // shown is a value as an error quotes it: quoted, or, when it contains what starts an
-// access key secret, a secret pasted where another value belongs say, a phrase in its
-// place, so an error never contains a secret.
+// access key secret or a run key, a secret pasted where another value belongs say, a
+// phrase in its place, so an error never contains a secret.
 func shown(v string) string {
-	if ContainsSecret(v) {
+	switch {
+	case containsAccessKeySecret(v):
 		return "(a value that contains an access key secret)"
+	case containsRunKey(v):
+		return "(a value that contains a run key)"
 	}
 	return strconv.Quote(v)
 }
 
 // ContainsSecret reports whether a value contains what starts an access key secret,
-// qak_ in any case. A reader of a document a secret does not belong in, such as the
-// server document or a pin, refuses one that contains it with a fixed message, before
-// a schema or a JSON decoder can quote the value in its error.
-func ContainsSecret(v string) bool { return strings.Contains(strings.ToLower(v), SecretPrefix) }
+// qak_, or a run key, qrk_, in any case. A reader of a document a secret does not
+// belong in, such as the server document or a pin, refuses one that contains it with a
+// fixed message, before a schema or a JSON decoder can quote the value in its error.
+func ContainsSecret(v string) bool { return containsAccessKeySecret(v) || containsRunKey(v) }
+
+// containsAccessKeySecret reports whether a value contains qak_ in any case.
+func containsAccessKeySecret(v string) bool {
+	return strings.Contains(strings.ToLower(v), SecretPrefix)
+}
+
+// containsRunKey reports whether a value contains qrk_ in any case.
+func containsRunKey(v string) bool { return strings.Contains(strings.ToLower(v), runKeyPrefix) }
 
 // DocumentContainsSecret reports whether a decoded document, as JSON or YAML decodes
-// to any, contains an access key secret in any string or member name. A reader checks
-// it after decoding as well as the raw bytes before, since an escape, \u0071 in JSON
-// or \x71 or a folded line in YAML, hides the secret from the bytes and not from the
-// decoded value a schema error quotes.
-func DocumentContainsSecret(doc any) bool {
+// to any, contains an access key secret or a run key in any string or member name. A
+// reader checks it after decoding as well as the raw bytes before, since an escape,
+// \u0071 in JSON or \x71 or a folded line in YAML, hides the secret from the bytes and
+// not from the decoded value a schema error quotes.
+func DocumentContainsSecret(doc any) bool { return documentHas(doc, ContainsSecret) }
+
+// SecretInDocument is the error of a value or a decoded document that contains a
+// secret, as [DocumentContainsSecret] reports one: [ErrSecretInDocument] for an access
+// key secret, [ErrRunKeyInDocument] for a run key and no access key secret, and nil for
+// neither. A string is checked as it is, so a reader passes it the raw bytes before
+// decoding and the decoded document after.
+func SecretInDocument(doc any) error {
+	switch {
+	case documentHas(doc, containsAccessKeySecret):
+		return ErrSecretInDocument
+	case documentHas(doc, containsRunKey):
+		return ErrRunKeyInDocument
+	}
+	return nil
+}
+
+// documentHas reports whether has holds for any string or member name of a decoded
+// document.
+func documentHas(doc any, has func(string) bool) bool {
 	switch v := doc.(type) {
 	case string:
-		return ContainsSecret(v)
+		return has(v)
 	case map[string]any:
 		for k, e := range v {
-			if ContainsSecret(k) || DocumentContainsSecret(e) {
+			if has(k) || documentHas(e, has) {
 				return true
 			}
 		}
 	case map[any]any:
 		for k, e := range v {
-			if DocumentContainsSecret(k) || DocumentContainsSecret(e) {
+			if documentHas(k, has) || documentHas(e, has) {
 				return true
 			}
 		}
 	case []any:
 		for _, e := range v {
-			if DocumentContainsSecret(e) {
+			if documentHas(e, has) {
 				return true
 			}
 		}
@@ -344,8 +378,8 @@ var nameShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // CheckName refuses a name outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$: an access key's
 // name at enrolment, and an instance's display name, X-Qory-Instance-Name. A name that
-// contains an access key secret fits the pattern and is refused too, since the name
-// travels in clear.
+// contains an access key secret or a run key fits the pattern and is refused too, since
+// the name travels in clear.
 func CheckName(name string) error {
 	if !nameShape.MatchString(name) || ContainsSecret(name) {
 		return fmt.Errorf("the name %s is not 1 to 64 of A-Z, a-z, 0-9, dot, underscore and dash, starting with a letter or digit", shown(name))

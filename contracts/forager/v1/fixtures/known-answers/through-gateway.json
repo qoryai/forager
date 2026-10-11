@@ -1,5 +1,5 @@
 {
-  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, and an outcome and its answer. go generate ./runkey writes them from the fixture keys of keys.json.",
+  "note": "The known answers of a run through a gateway: the run key, a registration through a gateway and its answer, an attach and its answer, an outcome and its answer, a binding of a connection to the gateway, and an answer of the gateway on its link. go generate ./runkey writes them from the fixture keys of keys.json.",
   "run_key": {
     "note": "The run key of run-key-payload.json, signed under the fixture signing key of the server: the signed message is the domain line, a line feed, then the payload bytes; the run key is qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding.",
     "payload": "fixtures/known-answers/run-key-payload.json",
@@ -105,5 +105,44 @@
       "length": 251,
       "signature": "WkxQ9RxDH-xSH8dQGKlDFfKs3qzKItRrRs-HamCdcezMMJRFWHRda0WT6f1l9lZnxiX-y3a2Pb8p3FDnF-IdBg"
     }
-  ]
+  ],
+  "binding": {
+    "note": "The binding of a connection to the gateway, for the fixed exporter value ekm, the 32 bytes counting up from 129, in place of the one a connection derives with the label: the gateway signs the three lines under the fixture gateway key, and answers QORY-BIND with bound_line, QORY-BOUND, a space, the fingerprint, a space, the signature in base64url without padding, and a newline.",
+    "ekm": "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
+    "label": "EXPERIMENTAL-qory-link-binding",
+    "fingerprint": "tMtLk8QCfOPUVfKaF1guwg",
+    "lines": [
+      "qory-link-binding-ed25519-v1",
+      "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
+      "tMtLk8QCfOPUVfKaF1guwg"
+    ],
+    "length": 116,
+    "signature": "Q44gOZUnAJVwPd7zEJ_1nKhJRohvIkUEYX7z9VLjv7C_BwtojmNH0-t90dg6ejXNOzYVj4YqBsiIsUYsOSqXAw",
+    "bound_line": "QORY-BOUND tMtLk8QCfOPUVfKaF1guwg Q44gOZUnAJVwPd7zEJ_1nKhJRohvIkUEYX7z9VLjv7C_BwtojmNH0-t90dg6ejXNOzYVj4YqBsiIsUYsOSqXAw\n"
+  },
+  "link_answer": {
+    "note": "202 to a batch of the run on the gateway's link, on the connection of the binding above, signed under the fixture gateway key with the domain line qory-link-answer-ed25519-v1: the third line is the lower-case hex SHA-256 of request, the exporter value in lower-case hex, the method, the request target as sent and the raw body of request_body, joined by line feeds; the answer has no body; X-Qory-Configuration is sha256= and the hex SHA-256 of link-discovery-separate.json, a discovery of the gateway's one address, and X-Qory-Run-Configuration sha256= and the hex SHA-256 of attach-run-configuration.json, the run's reload answer.",
+    "ekm": "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
+    "method": "POST",
+    "request_uri": "/qory-link/events",
+    "request_body": "fixtures/link/link-batch.json",
+    "request": [
+      "8182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0",
+      "POST",
+      "/qory-link/events",
+      "[\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000100\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:00.120Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.started.schema.json\",\n    \"data\": {\n      \"opened_by\": \"session\",\n      \"runtime\": \"claude\",\n      \"command\": \"claude\",\n      \"args\": [],\n      \"dir\": \"/home/dev/app\",\n      \"interactive\": true,\n      \"terminal\": {\n        \"cols\": 120,\n        \"rows\": 40\n      },\n      \"forager_version\": \"0.6.0\",\n      \"host\": \"dev-laptop\",\n      \"labels\": {\n        \"forge\": \"example-forge\",\n        \"repository\": \"example-namespace/project\",\n        \"run_key\": \"rk-0001\"\n      }\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000101\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.session.started\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.400Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/session.started.schema.json\",\n    \"data\": {\n      \"session_id\": \"0f3a9c2e-7b1d-4c6e-9a2f-5d8e1b4c7a90\",\n      \"source\": \"startup\",\n      \"model\": \"claude-sonnet-5\",\n      \"cwd\": \"/home/dev/app\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000102\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.log\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:01.450Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.log.schema.json\",\n    \"data\": {\n      \"stream\": \"terminal\",\n      \"bytes\": \"G1s/MTA0OWgbW0ggQ2xhdWRlIENvZGUgdjIuMS4yNzMNCg==\"\n    }\n  },\n  {\n    \"specversion\": \"1.0\",\n    \"id\": \"7e1c0000-0000-7000-8000-000000000103\",\n    \"source\": \"urn:qory:run:0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"type\": \"dev.qory.run.heartbeat\",\n    \"subject\": \"0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d\",\n    \"time\": \"2026-09-16T12:00:30.000Z\",\n    \"dataschema\": \"https://qory.dev/contracts/forager/v1/events/run.heartbeat.schema.json\",\n    \"data\": {\n      \"elapsed_seconds\": 30,\n      \"interval_seconds\": 30\n    }\n  }\n]\n"
+    ],
+    "status": 202,
+    "body_length": 0,
+    "lines": [
+      "qory-link-answer-ed25519-v1",
+      "202",
+      "a8f9f9946d607b5f4b0b1d67fb832f0cb7e5192144797e350ea7d26416369d11",
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256=ec7e9c2a09c42d096bc41da9c74a3f8ac6e81da7cf63991d191465945f81bf62",
+      "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"
+    ],
+    "length": 305,
+    "signature": "iTYtBRVcA6XEw8oniswddtsNkjInY1sXUT-iZurpmL9V5f0r0hSFRzNHAqM_8uIpBroyX7LjSgx5HRiM6_OCBw"
+  }
 }

@@ -24,7 +24,7 @@ const (
 	BoundWord = "QORY-BOUND"
 	// BindingLabel is the label of the TLS exporter both ends derive the connection's
 	// binding value with, under an empty context.
-	BindingLabel = "EXPORTER-qory-link-binding"
+	BindingLabel = "EXPERIMENTAL-qory-link-binding"
 	// BindingSize is how many bytes of the exporter they derive.
 	BindingSize = 32
 	// BindingDomain is the first line of the message the gateway signs to prove it holds

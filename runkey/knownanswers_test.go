@@ -3,6 +3,7 @@ package runkey_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/runkey/internal/knownanswers"
 )
@@ -171,5 +173,77 @@ func TestTheRequestAndAnswerKnownAnswers(t *testing.T) {
 		if err := json.Unmarshal(read(t, f), &doc); err != nil || doc.RunKey != v.RunKey.RunKey {
 			t.Errorf("%s does not carry the run key of the vector", f)
 		}
+	}
+}
+
+// TestTheBindingKnownAnswer pins the binding of through-gateway.json: for its fixed
+// exporter value, link.BindingMessage of the fixture gateway key's fingerprint is its
+// three lines, the fixture gateway key signs them to its signature, which verifies, and
+// link.BoundLine is its bound line, under the exporter label link.BindingLabel.
+func TestTheBindingKnownAnswer(t *testing.T) {
+	b := vectors(t).Binding
+	ekm, err := hex.DecodeString(b.EKM)
+	if err != nil || !bytes.Equal(ekm, knownanswers.BindingEKM()) || len(ekm) != link.BindingSize {
+		t.Fatalf("ekm %s is not the fixed exporter value", b.EKM)
+	}
+	g := knownanswers.GatewayKey()
+	if b.Label != link.BindingLabel || b.Fingerprint != g.Fingerprint() {
+		t.Errorf("label %s, fingerprint %s; want %s, the fixture gateway key's %s", b.Label, b.Fingerprint, link.BindingLabel, g.Fingerprint())
+	}
+	m := link.BindingMessage(ekm, b.Fingerprint)
+	if len(b.Lines) != 3 || b.Lines[0] != link.BindingDomain || string(m) != strings.Join(b.Lines, "\n") || len(m) != b.Length {
+		t.Errorf("link.BindingMessage is %q; want the vector's lines %q", m, b.Lines)
+	}
+	if got := base64.RawURLEncoding.EncodeToString(g.Sign(m)); got != b.Signature {
+		t.Errorf("the fixture gateway key signs %s; want %s", got, b.Signature)
+	}
+	sig, err := base64.RawURLEncoding.Strict().DecodeString(b.Signature)
+	if err != nil || !g.PublicKey().Verify(m, sig) {
+		t.Error("the signature does not verify under the fixture gateway key")
+	}
+	if got := link.BoundLine(b.Fingerprint, b.Signature); got != b.BoundLine || got != link.BoundWord+" "+b.Fingerprint+" "+b.Signature+"\n" {
+		t.Errorf("link.BoundLine is %q; want %q", got, b.BoundLine)
+	}
+}
+
+// TestTheLinkAnswerKnownAnswer pins the link answer of through-gateway.json: its four
+// request lines are the exporter value, the method, the target and its body file,
+// link.AnswerRequest is their SHA-256 and the answer's third line, the answer's message
+// with Link set is its six lines under the link answer's domain line, the fixture
+// gateway key signs them to its signature, and VerifyAnswer accepts it, as a key and in
+// a pin.
+func TestTheLinkAnswerKnownAnswer(t *testing.T) {
+	la := vectors(t).LinkAnswer
+	ekm, err := hex.DecodeString(la.EKM)
+	if err != nil || !bytes.Equal(ekm, knownanswers.BindingEKM()) {
+		t.Fatalf("ekm %s is not the fixed exporter value", la.EKM)
+	}
+	body := read(t, la.RequestBody)
+	if len(la.Request) != 4 || la.Request[0] != la.EKM || la.Request[1] != la.Method || la.Request[2] != la.RequestURI || la.Request[3] != string(body) {
+		t.Fatalf("the request lines are not the exporter value, the method, the target and the body file")
+	}
+	sum := sha256.Sum256([]byte(strings.Join(la.Request, "\n")))
+	hash := link.AnswerRequest(ekm, la.Method, la.RequestURI, body)
+	if hash != hex.EncodeToString(sum[:]) {
+		t.Errorf("link.AnswerRequest is %s; want the SHA-256 of the request lines, %s", hash, hex.EncodeToString(sum[:]))
+	}
+	empty := sha256.Sum256(nil)
+	if len(la.Lines) != 6 || la.Lines[0] != accesskey.LinkAnswerDomain || la.Lines[1] != "202" || la.Status != 202 ||
+		la.Lines[2] != hash || la.Lines[3] != hex.EncodeToString(empty[:]) || la.BodyLength != 0 {
+		t.Fatalf("lines %q are not a 202 with no body bound to the request", la.Lines)
+	}
+	a := accesskey.Answer{Link: true, Status: la.Status, RequestSignature: hash, Configuration: la.Lines[4], RunConfiguration: la.Lines[5]}
+	if m := a.Message(); string(m) != strings.Join(la.Lines, "\n") || len(m) != la.Length {
+		t.Errorf("the answer's message %q is not its lines", m)
+	}
+	g := knownanswers.GatewayKey()
+	if got := g.SignAnswer(a); got != la.Signature {
+		t.Errorf("the fixture gateway key signs %s; want %s", got, la.Signature)
+	}
+	if !g.PublicKey().VerifyAnswer(a, la.Signature) || !pinOf(g).VerifyAnswer(a, la.Signature) {
+		t.Error("the signature does not verify under the fixture gateway key")
+	}
+	if a.Link = false; g.PublicKey().VerifyAnswer(a, la.Signature) {
+		t.Error("the signature verifies as an answer of the server")
 	}
 }
