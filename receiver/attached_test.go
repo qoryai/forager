@@ -281,3 +281,62 @@ func TestAnotherInstanceSendsOnceTheHeartbeatsGoQuiet(t *testing.T) {
 		t.Errorf("a reload from another instance 91 seconds after the attach: %d, want 404", rec.Code)
 	}
 }
+
+// TestOnlyTheAttachingInstanceRevivesALostRun pins who makes a run through a gateway
+// live again once its heartbeats went quiet: another instance's fresh heartbeat is
+// accepted, 202, and leaves the run not live, so that instance's next batch is 202 too;
+// the attaching instance's resend of that heartbeat is deduplicated and leaves it so;
+// the attaching instance's own fresh heartbeat makes it live again, and another
+// instance's next batch is then 409 wrong_gateway. Once the run's dev.qory.run.exited is
+// accepted, from either instance, no heartbeat makes it live again.
+func TestOnlyTheAttachingInstanceRevivesALostRun(t *testing.T) {
+	for name, exitFrom := range map[string]string{"the exit from the attaching instance": inst, "the exit from another instance": otherInst} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			rk := b.runKey(runID)
+			if rec := b.attach(gwID, inst, runID, rk); rec.Code != http.StatusOK {
+				t.Fatalf("the attach: %d %s", rec.Code, rec.Body.String())
+			}
+			e := event.NewEmitter(runID, nil)
+			send := func(name, id, instance string, batch []byte, status int, code string) {
+				t.Helper()
+				want := ""
+				if code != "" {
+					want = `{"error":"` + code + `"}`
+				}
+				if rec := b.serve(id, instance, http.MethodPost, DefaultEventsPath, batch); rec.Code != status || rec.Body.String() != want {
+					t.Errorf("%s: %d %s, want %d %s", name, rec.Code, rec.Body.String(), status, want)
+				}
+			}
+			live := func(name string, want bool) {
+				t.Helper()
+				if got := b.h.runs[runID].live(b.now); got != want {
+					t.Errorf("%s: live %v, want %v", name, got, want)
+				}
+			}
+
+			b.now = b.now.Add(91 * time.Second)
+			live("91 seconds after the attach", false)
+			beat := b.events(e, event.RunHeartbeat)
+			send("another instance's fresh heartbeat after the loss", gwID, otherInst, beat, http.StatusAccepted, "")
+			live("after another instance's heartbeat", false)
+			send("another instance's next batch", gwID2, otherInst, b.events(e, event.RunHeartbeat), http.StatusAccepted, "")
+			live("after another instance's next heartbeat", false)
+			send("the attaching instance's resend of another instance's heartbeat", gwID, inst, beat, http.StatusAccepted, "")
+			live("after the attaching instance's resend", false)
+			send("another instance's batch after the resend", gwID, otherInst, b.events(e, event.RunStarted), http.StatusAccepted, "")
+
+			send("the attaching instance's fresh heartbeat", gwID2, inst, b.events(e, event.RunHeartbeat), http.StatusAccepted, "")
+			live("after the attaching instance's heartbeat", true)
+			send("another instance's next batch once the run is live again", gwID, otherInst, b.events(e, event.RunHeartbeat),
+				http.StatusConflict, "wrong_gateway")
+			live("after another instance's refused batch", true)
+
+			b.now = b.now.Add(91 * time.Second)
+			send("the batch with run.exited after the next loss", gwID, exitFrom, b.events(e, event.RunExited), http.StatusAccepted, "")
+			send("the attaching instance's fresh heartbeat after the exit", gwID, inst, b.events(e, event.RunHeartbeat), http.StatusAccepted, "")
+			live("after the exit and the attaching instance's heartbeat", false)
+			send("another instance's batch after the exit", gwID2, otherInst, b.events(e, event.RunHeartbeat), http.StatusAccepted, "")
+		})
+	}
+}
