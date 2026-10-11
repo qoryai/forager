@@ -127,6 +127,10 @@ func (a RegistrationAnswer) LogValue() slog.Value {
 	)
 }
 
+// MarshalJSON is a as encoding/json writes a struct, with its RunKey redacted, for a
+// log or a dump that writes it so. Reading one back is as encoding/json reads a struct.
+func (a RegistrationAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
+
 // RegisterThroughGateway posts a run's registration through a gateway, body, the bytes
 // of a [GatewayRegistration], to the run endpoint runURL, and returns the server's
 // answer. The answer is a signed 200 with a run-registration-answer.schema.json
@@ -244,7 +248,10 @@ func (a Attach) Body() ([]byte, error) {
 	if a.ForagerVersion == "" {
 		return nil, errors.New("the attach: forager_version is empty")
 	}
-	return json.Marshal(a)
+	// wireAttach is an Attach without its methods, which encoding/json writes with its
+	// run key.
+	type wireAttach Attach
+	return json.Marshal(wireAttach(a))
 }
 
 // shownAttach is an Attach without its methods, which fmt prints the way it prints any
@@ -288,6 +295,11 @@ func (a Attach) LogValue() slog.Value {
 		slog.String("time", a.Time),
 	)
 }
+
+// MarshalJSON is a as encoding/json writes a struct, with its RunKey redacted, for a
+// log or a dump that writes it so; [Attach.Body] is the attach's bytes. Reading one
+// back is as encoding/json reads a struct.
+func (a Attach) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // AttachAnswer is the server's signed 200 to an attach, run-attach-answer.schema.json:
 // the run's run configuration, as a direct registration's answer carries it, and the

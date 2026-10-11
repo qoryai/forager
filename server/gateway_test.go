@@ -769,6 +769,41 @@ func TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach(t *testing.T) {
 	}
 }
 
+// TestTheRunKeyIsNeverWrittenAsJSON pins that a registration answer and an attach
+// write their run key redacted under encoding/json, nested in a value log/slog's
+// JSONHandler logs as well, and that the attach's body is the wire form, with it.
+func TestTheRunKeyIsNeverWrittenAsJSON(t *testing.T) {
+	rk := runKeyOf(t, gatewayRunID)
+	a := server.RegistrationAnswer{Version: 1, RunID: gatewayRunID, RunKey: rk}
+	at := server.Attach{Version: 1, RunKey: rk, IntervalSeconds: 30, Events: []string{"*"}, ForagerVersion: "v0.7.0-dev", ContractVersion: 1, Time: "2026-10-11T12:00:05Z"}
+	var out bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&out, nil))
+	log.Info("nested", "both", struct {
+		A server.RegistrationAnswer
+		B *server.Attach
+	}{a, &at})
+	if strings.Contains(out.String(), "qrk_") || !strings.Contains(out.String(), "[redacted]") {
+		t.Errorf("the nested log: %s", out.String())
+	}
+	b, err := json.Marshal(a)
+	if err != nil || string(b) != `{"version":1,"run_id":"`+gatewayRunID+`","run_key":"[redacted]"}` {
+		t.Errorf("json.Marshal of the answer: %s, %v", b, err)
+	}
+	b, err = json.Marshal(at)
+	if err != nil || strings.Contains(string(b), "qrk_") || !strings.Contains(string(b), `"run_key":"[redacted]"`) {
+		t.Errorf("json.Marshal of the attach: %s, %v", b, err)
+	}
+	b, err = at.Body()
+	want := `{"version":1,"run_key":"` + rk + `","interval_seconds":30,"events":["*"],"forager_version":"v0.7.0-dev","contract_version":1,"time":"2026-10-11T12:00:05Z"}`
+	if err != nil || string(b) != want {
+		t.Errorf("the attach's body %s, %v; want %s", b, err, want)
+	}
+	var back server.RegistrationAnswer
+	if err := json.Unmarshal([]byte(`{"version":1,"run_id":"`+gatewayRunID+`","run_key":"`+rk+`"}`), &back); err != nil || back.RunKey != rk {
+		t.Errorf("the answer read back: %v", err)
+	}
+}
+
 // TestViaIsChecked pins what via refuses before anything is sent: a URL that is not an
 // https origin, a ca_file that cannot be read, and a pin not in its form; and that the
 // server document reads via, the fixture with it and the invalid fixtures refused.
