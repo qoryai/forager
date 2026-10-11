@@ -2335,7 +2335,11 @@ QORY_RUN_KEY names the run <run id>, not this one". The record is never complete
 gateway writes the end of a run whose session was lost. The gateway's `410`, after
 `session_lost` or any other end, closes the resend, and the events stay in the
 directory: a batch of a run the gateway no longer holds is that `410`, the run's end
-while the gateway keeps it and `run_closed` after (Events, above). A refusal of the run
+while the gateway keeps it and `run_closed` after (Events, above), as long as the
+gateway still has the run's record. Once the run key's `attach_by` has passed, a batch
+of a run the gateway holds nothing of, its record included, is `409` `run_key_expired`
+instead (The run key on the one address, above), which stops the resend as every
+refusal of the run key does. A refusal of the run
 key the gateway passes on, `400` `run_key_invalid`, or `409` `wrong_gateway`,
 `workspace_not_served`, `run_key_expired` or `run_attached`, stops it with that refusal,
 its code, status and message the gateway's, and what was not accepted is under
