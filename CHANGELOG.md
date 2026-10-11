@@ -1454,6 +1454,8 @@ release may change what an existing document does, and says so under Upgrading.
   status: `apiary_public_key_missing` for a server without a pin, before any request;
   `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
   `instance_limit` when the node's live instances are at its limit.
+- `session.Spec.SocketGrace` sets how long the run socket keeps accepting after the
+  runtime exits; zero keeps 200 ms. It is for tests.
 
 #### Changed
 

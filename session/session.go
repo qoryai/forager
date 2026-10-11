@@ -175,6 +175,10 @@ type Spec struct {
 	Limits wall.Limits
 	// Report receives one line per thing the session reports to its user; nil means Stderr.
 	Report func(string)
+	// SocketGrace is how long the run socket keeps accepting after the runtime exits,
+	// so a hook on its last event is still read; zero means 200 ms. For tests:
+	// production leaves it zero.
+	SocketGrace time.Duration
 }
 
 // Result is what a run came to: what the session knows of it. What reached the server
@@ -733,7 +737,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	defer fwd.Close()
 
-	sock, err := socket.Listen()
+	sock, err := socket.Listen(spec.SocketGrace)
 	if err != nil {
 		return fail(err)
 	}

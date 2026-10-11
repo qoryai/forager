@@ -18,7 +18,7 @@ import (
 // together: what a hook command reads on stdin arrives as one record of the hooks
 // source, unchanged inside.
 func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
-	l, err := socket.Listen()
+	l, err := socket.Listen(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 // refused by name, so a transport can be added without an old forwarder opening a file
 // called tcp:relay:1.
 func TestTheVariableIsAnAddress(t *testing.T) {
-	l, err := socket.Listen()
+	l, err := socket.Listen(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,12 +103,47 @@ func TestTheVariableIsAnAddress(t *testing.T) {
 // TestDirsMatchesWhatListenMakes pins that the pattern of the runs' private directories
 // matches the one Listen makes.
 func TestDirsMatchesWhatListenMakes(t *testing.T) {
-	l, err := socket.Listen()
+	l, err := socket.Listen(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 	if ok, _ := filepath.Match(socket.Dirs(), filepath.Dir(l.Path())); !ok {
 		t.Errorf("%s does not match %s", filepath.Dir(l.Path()), socket.Dirs())
+	}
+}
+
+// drain opens a listener with grace, serves it, and returns how long Close took.
+func drain(t *testing.T, grace time.Duration) time.Duration {
+	t.Helper()
+	l, err := socket.Listen(grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go l.Serve(func(descriptor.Record) {}, nil)
+	start := time.Now()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return time.Since(start)
+}
+
+// TestZeroGraceDrainsFor200ms pins the default drain on the real bound: a listener
+// given no grace keeps accepting for 200 ms when it closes, the time a hook on the
+// runtime's last event has to connect.
+func TestZeroGraceDrainsFor200ms(t *testing.T) {
+	if socket.Grace != 200*time.Millisecond {
+		t.Errorf("the default grace is %s", socket.Grace)
+	}
+	if d := drain(t, 0); d < 200*time.Millisecond || d > 3*time.Second {
+		t.Errorf("a zero grace drained for %s, not 200 ms", d)
+	}
+}
+
+// TestAShortGraceClosesSooner pins that a grace given to Listen replaces the default:
+// a listener given 10 ms closes well before 200 ms.
+func TestAShortGraceClosesSooner(t *testing.T) {
+	if d := drain(t, 10*time.Millisecond); d < 10*time.Millisecond || d >= socket.Grace {
+		t.Errorf("a 10 ms grace drained for %s", d)
 	}
 }

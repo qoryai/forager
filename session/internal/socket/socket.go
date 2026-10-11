@@ -35,6 +35,8 @@ type Listener struct {
 	path string
 	ln   *net.UnixListener
 	done chan struct{}
+	// grace is how long Close keeps accepting.
+	grace time.Duration
 }
 
 // dirPrefix begins the name of the private directory a run's socket is in.
@@ -45,8 +47,12 @@ const dirPrefix = "qory-run-"
 func Dirs() string { return filepath.Join(os.TempDir(), dirPrefix+"*") }
 
 // Listen creates a private directory under the system's temporary directory, mode
-// 0700, and listens on a socket in it. Close removes both.
-func Listen() (*Listener, error) {
+// 0700, and listens on a socket in it. Close removes both. grace is how long Close
+// keeps accepting; zero means [Grace].
+func Listen(grace time.Duration) (*Listener, error) {
+	if grace <= 0 {
+		grace = Grace
+	}
 	dir, err := os.MkdirTemp("", dirPrefix)
 	if err != nil {
 		return nil, err
@@ -57,7 +63,7 @@ func Listen() (*Listener, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{})}, nil
+	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{}), grace: grace}, nil
 }
 
 // Path is the socket's path, the value of [link.EnvRunSocket].
@@ -111,19 +117,19 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 	}
 }
 
-// Grace is how long Close keeps accepting, so a client that connected just before the
-// runtime exited, a hook on the runtime's last event say, is still read.
+// Grace is how long Close keeps accepting by default, so a client that connected just
+// before the runtime exited, a hook on the runtime's last event say, is still read.
 const Grace = 200 * time.Millisecond
 
 // Close drains the socket, then removes it and its directory: it keeps accepting for
-// Grace, waits for Serve to return, and closes. Records read during the drain still
+// the grace Listen was given, waits for Serve to return, and closes. Records read during the drain still
 // reach handle, which is why a caller closes the socket before it writes the run's
 // last event.
 func (l *Listener) Close() error {
-	l.ln.SetDeadline(time.Now().Add(Grace))
+	l.ln.SetDeadline(time.Now().Add(l.grace))
 	select {
 	case <-l.done:
-	case <-time.After(Grace + Patience):
+	case <-time.After(l.grace + Patience):
 	}
 	err := l.ln.Close()
 	if rmErr := os.RemoveAll(l.dir); err == nil {
