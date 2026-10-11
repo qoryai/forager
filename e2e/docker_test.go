@@ -164,7 +164,7 @@ const relaySecret = "walltest-relay-secret"
 // forwards to proxy, a listener of the test's in the gateway's place, and agent is the
 // launch that starts the agent's container.
 type relayRun struct {
-	// relay is the relay's container, outside its ordinary network.
+	// relay is the relay's container and outside its ordinary network.
 	relay, outside string
 	proxy          net.Listener
 	agent          wall.Launch
