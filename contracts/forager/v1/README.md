@@ -862,9 +862,11 @@ the source of the policy it narrows, `config` or `fetched`, with that policy's `
 present when the run has both a fetched policy and a policy the command passes, contains
 its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785 serialisation of
 that `policy.schema.json` document, and its `paths`, when it has any, so the record
-shows both sides of every path rule. `variables` lists the run's variables by name,
-never a value: each with the source whose value the run applies and the values that
-lost, with their sources and why (§Variables, the record of the variables).
+shows the path rules of the server's policy and of the node's; path rules a caller adds
+with `gateway.Policy.Under` show only through `terminated`. `variables` lists the run's
+variables by name, never a value: each with the source whose value the run applies and
+the values that lost, with their sources and why (§Variables, the record of the
+variables).
 `dev.qory.run.egress` records what becomes of the connection in `outcome`: `connected`,
 the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, not dialled,
 because the policy or the wall's guard denied it, or closed by a reload. An event that
