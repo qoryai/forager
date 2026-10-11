@@ -1192,7 +1192,8 @@ of a run the server wants nothing more of.
 The run endpoint's own, for a registration, in order: the same bytes under any active key
 of the node or node pool that registered the run get the stored answer again, the same
 run key included, so a key replaced while the run waits keeps working; `410`, signed,
-with any code or none: the server takes no run here; `409` `node_is_direct` or
+with any code or none: the server takes no run here; `409` `gateway_key`, signed, for a
+gateway's own key, which registers no run; `409` `node_is_direct` or
 `node_uses_gateway`, signed, for a body whose shape does not match the node's resolved
 choice (Through a gateway, below); `409` `no_default_gateway`, the node's choice is the
 default and no default resolves for its workspace; `409` `gateway_not_serving`, the
@@ -1202,8 +1203,7 @@ the resolved gateway has no active access key, so no run could attach at it; `40
 for a registration whose run id the server already accepted from another node, even
 with the same bytes, or with other bytes: other labels or another body; then a `409`
 code of the server's own. The four codes of the resolution come before the limit, so a
-run that can go nowhere never takes a slot. A gateway's own key registers no run: a
-signed `409` `gateway_key`. For a reload, the server answers only for a run its node
+run that can go nowhere never takes a slot. For a reload, the server answers only for a run its node
 registered, under any of the node's active keys, or, for a run behind a gateway, for the
 gateway node that attached it, and anything else is `404`, so a run id cannot be
 probed.
@@ -1549,8 +1549,9 @@ kept, before or after `dev.qory.run.exited`; the exit code, the signal and Forag
 reason stay on record beside it. Each run gets one outcome: the same one repeated is
 accepted, and a different one is refused. The refusals, after the shared order: the
 organisation of the signing key, as every key's; the same bytes under any active key of
-the registering node get the stored answer; `404` for a run its node did not register, or
-whose record is gone; and a different second outcome is a signed `409` `outcome_given`.
+the registering node get the stored answer; a signed `404` `not_found` for a run its node
+did not register, or whose record is gone; and a different second outcome is a signed
+`409` `outcome_given`.
 The answer is a signed `200` with `{"version": 1}`, `run-outcome-answer.schema.json`.
 Forager's client posts it with `Client.PostOutcome` and a `server.Outcome`: an empty
 `State` sends neither `state` nor `reason`, so the zero outcome is `cancelled` with
