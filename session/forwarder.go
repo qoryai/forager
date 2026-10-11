@@ -26,14 +26,15 @@ const dialWait = 10 * time.Second
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
 // relay's preamble and the run's proxy secret first; behind a wall the wall's relay
 // writes the preamble itself, and the forwarder passes on what arrives as it is.
+// Without a wall, on one machine as behind a separate gateway, the first request of
+// every connection must carry the password of the agent's proxy URL, a secret the
+// session made for this run's forwarder alone, which the forwarder takes off.
 //
 // Behind a separate gateway it reaches the gateway's one address over TLS, each
 // connection bound to a key the run key names and opened with the relay's preamble and
 // the run key, which the link's proxy dial writes: behind a wall, every connection must
 // first open with the relay's preamble and the hop secret the session gave the wall's
-// relay, which the forwarder takes off; without a wall, its first request must carry
-// the password of the agent's proxy URL, a secret the session made for this run's
-// forwarder alone, which the forwarder takes off.
+// relay, which the forwarder takes off.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -72,12 +73,14 @@ type forwarding struct {
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
 // proxy address on this machine. A non-empty secret is written in the relay's preamble
-// at the start of every connection.
-func listenForwarder(addr, target, secret string) (*forwarder, error) {
+// at the start of every connection, and a non-empty password is what the first request
+// of every accepted connection must carry.
+func listenForwarder(addr, target, secret, password string) (*forwarder, error) {
 	var d net.Dialer
 	return listenForwarding(addr, forwarding{
-		dial:   func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
-		secret: secret,
+		dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
+		secret:   secret,
+		password: password,
 	})
 }
 
@@ -117,14 +120,14 @@ func (f *forwarder) Env() []string {
 	return link.ProxyEnv(u.String())
 }
 
-// proxyUser is the user name of an unwalled agent's proxy URL behind a separate
-// gateway, which the forwarder ignores.
+// proxyUser is the user name of an unwalled agent's proxy URL, which the forwarder
+// ignores.
 const proxyUser = "qory"
 
-// newForwarderSecret makes a secret of this run's forwarder alone behind a separate
-// gateway: 32 bytes from crypto/rand, base64url without padding. Behind a wall it is the
+// newForwarderSecret makes a secret of this run's forwarder alone: 32 bytes from
+// crypto/rand, base64url without padding. Behind a wall and a separate gateway it is the
 // hop secret the wall's relay opens every connection with, so the run key is in no file
-// of the wall's; without one it is the password of the agent's proxy URL, so no other
+// of the wall's; without a wall it is the password of the agent's proxy URL, so no other
 // process of the machine reaches the gateway through the forwarder.
 func newForwarderSecret() (string, error) {
 	var b [32]byte
@@ -228,8 +231,8 @@ func (f *forwarder) serve(c net.Conn) {
 	<-done
 }
 
-// proxyHeadWait is how long a connection to an unwalled forwarder behind a separate
-// gateway has to send its first request's head, as long as a preamble has.
+// proxyHeadWait is how long a connection to an unwalled forwarder has to send its first
+// request's head, as long as a preamble has.
 var proxyHeadWait = link.PreambleWait
 
 // maxProxyLine is the longest line of the first request's head the forwarder reads,

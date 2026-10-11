@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -147,8 +149,9 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 // TestTheForwarderCarriesTheProxySecret pins how the agent's traffic reaches the
 // gateway's proxy: without a wall the forwarder opens every connection with the relay's
 // preamble and the run's proxy secret, behind a wall it passes on what the wall's relay
-// sends, which opens with it, so the proxy sees the preamble once either way; and the
-// agent's environment and the session's record never hold the secret.
+// sends, which opens with it, so the proxy sees the preamble once either way; the
+// agent's environment and the session's record never hold the secret, and without a
+// wall the agent's proxy URL is the forwarder on loopback with a password.
 func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
 	for _, walled := range []bool{false, true} {
 		t.Run(fmt.Sprint("walled ", walled), func(t *testing.T) {
@@ -177,10 +180,56 @@ func TestTheForwarderCarriesTheProxySecret(t *testing.T) {
 			if bytes.Contains(env, []byte(linktest.ProxySecret)) || bytes.Contains(record, []byte(linktest.ProxySecret)) {
 				t.Error("the proxy secret reached the agent's environment or the record")
 			}
-			if !walled && !bytes.Contains(env, []byte("HTTP_PROXY=http://127.0.0.1:")) {
-				t.Errorf("the agent's environment has no proxy on loopback:\n%s", env)
+			if !walled && !regexp.MustCompile(`(?m)^HTTP_PROXY=http://qory:[A-Za-z0-9_-]{43}@127\.0\.0\.1:[0-9]+$`).Match(env) {
+				t.Errorf("the agent's environment has no proxy on loopback with a password:\n%s", env)
 			}
 		})
+	}
+}
+
+// TestTheUnwalledForwarderTakesOnlyTheAgentsPassword pins the password of an unwalled
+// agent's proxy URL on one machine: another process of the machine that reaches the
+// forwarder without it, or with another password, is closed unanswered and nothing of
+// it reaches the gateway's proxy, while the agent's own request does; the password is
+// in no file of the run directory, and the forwarder is gone with the run.
+func TestTheUnwalledForwarderTakesOnlyTheAgentsPassword(t *testing.T) {
+	strays := filepath.Join(t.TempDir(), "strays")
+	sp, g := specGateway(t, "FAKE_EXIT=0", "FAKE_ALLOWED_URL=http://api.example/a", "FAKE_STRAY="+strays)
+	out := filepath.Join(t.TempDir(), "env")
+	sp.Forwarder = nil
+	sp.Command, sp.Args = "/bin/sh", []string{"-c", `env > "$0"; exec "$1"`, out, os.Args[0]}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit %d", res.ExitCode)
+	}
+	if b, _ := os.ReadFile(strays); string(b) != "closed unanswered\nclosed unanswered\n" {
+		t.Errorf("the forwarder took a connection without the password:\n%s", b)
+	}
+	if got, want := g.Preambles(), []string{link.RelayPreamble + " " + linktest.ProxySecret}; !slices.Equal(got, want) {
+		t.Errorf("the gateway's proxy saw %q, want the agent's one connection", got)
+	}
+	if got := g.Proxied(); !slices.Equal(got, []string{"GET http://api.example/a"}) {
+		t.Errorf("the gateway's proxy answered %q", got)
+	}
+	env, _ := os.ReadFile(out)
+	m := regexp.MustCompile(`(?m)^HTTP_PROXY=http://qory:([A-Za-z0-9_-]{43})@(127\.0\.0\.1:[0-9]+)$`).FindSubmatch(env)
+	if m == nil {
+		t.Fatalf("the agent's proxy URL carries no password:\n%s", env)
+	}
+	filepath.WalkDir(res.Dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(path); bytes.Contains(b, m[1]) {
+				t.Errorf("%s holds the forwarder's password", path)
+			}
+		}
+		return nil
+	})
+	if c, err := net.Dial("tcp", string(m[2])); err == nil {
+		c.Close()
+		t.Error("the forwarder still listens after the run")
 	}
 }
 

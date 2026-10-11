@@ -242,3 +242,84 @@ func TestTheUnwalledForwarderTakesOnlyItsPassword(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestTheOneMachineForwarderTakesOnlyItsPassword pins the password of an unwalled
+// agent's proxy URL on one machine, where the forwarder opens every connection to the
+// gateway's proxy with the run's proxy secret: a connection whose first request carries
+// no Proxy-Authorization, another password or the proxy secret in its place, or that
+// opens with the relay's preamble and the proxy secret, is closed, and nothing of it
+// reaches the gateway's proxy, not even a connection; one that carries the password
+// goes to the proxy after the relay's preamble with the proxy secret, without that
+// header, and the proxy URL carries the password and not the proxy secret.
+func TestTheOneMachineForwarderTakesOnlyItsPassword(t *testing.T) {
+	const (
+		password = "forwarder-password-0123456789abcdefghijklmn"
+		secret   = "proxy-secret-0123456789abcdefghijklmnopqrst"
+	)
+	login := func(pw string) string {
+		return "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("qory:"+pw)) + "\r\n"
+	}
+	up := startUpstream(t)
+	f, err := listenForwarder("127.0.0.1:0", up.ln.Addr().String(), secret, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if env := f.Env(); !slices.Contains(env, "HTTP_PROXY=http://qory:"+password+"@"+f.Addr()) || strings.Contains(strings.Join(env, "\n"), secret) {
+		t.Errorf("the proxy URL %q", env)
+	}
+	send := func(t *testing.T, what string) (closed bool, answer string) {
+		t.Helper()
+		c, err := net.Dial("tcp", f.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if _, err := io.WriteString(c, what); err != nil {
+			return true, ""
+		}
+		c.(*net.TCPConn).CloseWrite()
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		b, err := io.ReadAll(c)
+		var ne net.Error
+		return err == nil || !(errors.As(err, &ne) && ne.Timeout()), string(b)
+	}
+	const get = "GET http://api.example/a HTTP/1.1\r\nHost: api.example\r\n"
+	for name, what := range map[string]string{
+		"no password":      get + "\r\n",
+		"another password": get + login(password[:len(password)-1]+"x") + "\r\n",
+		"the proxy secret": get + login(secret) + "\r\n",
+		"the proxy's own":  link.RelayLine(secret) + get + "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if closed, answer := send(t, what); !closed || answer != "" {
+				t.Errorf("the forwarder answered %q, closed %v", answer, closed)
+			}
+		})
+	}
+	time.Sleep(200 * time.Millisecond)
+	if opened, received := up.seen(); opened != 0 || len(received) != 0 {
+		t.Fatalf("the proxy got %d connections, %q, without the password", opened, received)
+	}
+	if closed, _ := send(t, get+login(password)+"\r\nafter"); !closed {
+		t.Error("the forwarder kept the agent's connection open after its end")
+	}
+	want := link.RelayLine(secret) + get + "\r\nafter"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		opened, received := up.seen()
+		if len(received) == 1 {
+			if opened != 1 || received[0] != want {
+				t.Errorf("the proxy got %d connections, %q; want one, %q", opened, received, want)
+			}
+			if strings.Contains(received[0], password) {
+				t.Error("the password reached the proxy")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the proxy got %d connections, %q", opened, received)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

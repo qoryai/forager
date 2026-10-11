@@ -1141,6 +1141,14 @@ release may change what an existing document does, and says so under Upgrading.
   beside a server.
 - The runtime prepares the launch before the tools start, since the names it sets are
   Forager's own when the variables are resolved.
+- Without a wall on one machine, the agent's proxy URL carries a password,
+  `http://qory:<password>@127.0.0.1:<port>`, where it was the forwarder's address alone.
+  The session makes, holds and checks the password as behind a separate gateway (Added,
+  `session.RemoteGateway`), and the forwarder closes a connection whose first request
+  does not carry it unanswered, before anything reaches the gateway's proxy, so another
+  process of the machine that reaches the port reaches nothing. A program that sends
+  its proxy URL's user name and password as `Proxy-Authorization` reaches the proxy as
+  before.
 
 #### Added
 
@@ -1187,7 +1195,8 @@ release may change what an existing document does, and says so under Upgrading.
   which the forwarder compares in constant time and takes off, closing a connection
   without it unanswered. The run key is in no file and no agent's environment: the
   session takes `QORY_RUN_KEY` out of every agent's environment, the one it inherits
-  among them.
+  among them. On one machine an unwalled agent's proxy URL carries a password of the
+  run's forwarder as well, made and checked the same way (Upgrading, above).
 - `session.Resend(ctx, session.ResendSpec)` sends a separate gateway what a run's
   session did not deliver to it, from the run directory on the session's machine,
   through the run's `RemoteGateway` with its run key, which the caller passes from

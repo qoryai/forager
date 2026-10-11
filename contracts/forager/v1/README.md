@@ -181,11 +181,13 @@ One run, on a developer machine, with a server configured:
 5. It starts the proxy on a loopback port and sets `HTTP_PROXY`, `HTTPS_PROXY` and
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
-   answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path,
-   `QORY_RUN_ID` to the run id, and `QORY_HARNESS_HOME` to the harness's home when the
-   launch spec has one. Nothing else of Forager's enters the environment but
-   the variables (§Variables), the placeholders and, in a walled run, the runtime's
-   declared and reserved variables nothing else sets, as empty.
+   answers. Without a wall the proxy URL carries a password of the run's forwarder
+   alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
+   local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id, and
+   `QORY_HARNESS_HOME` to the harness's home when the launch spec has one. Nothing else
+   of Forager's enters the environment but the variables (§Variables), the placeholders
+   and, in a walled run, the runtime's declared and reserved variables nothing else
+   sets, as empty.
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    Forager's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
@@ -2460,20 +2462,22 @@ The run endpoint).
 
 **Agent traffic.** On one machine the run's agent traffic goes to the gateway's proxy,
 the discovery's `proxy.address` on loopback: inside a wall the relay opens every
-connection with `QORY-RELAY`, a space, the run's proxy secret and a newline (§Limits).
+connection with `QORY-RELAY`, a space, the run's proxy secret and a newline (§Limits),
+and without a wall the session's forwarder does.
 Behind a separate gateway the session's forwarder opens every connection to the
 gateway's one address over TLS 1.3, with the link's trust, bound as every connection of
 the link is (The binding, above), and with `QORY-RELAY`, a space, the run key and a
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
-line off before anything reaches the gateway; without a wall the agent's proxy URL is the
-forwarder's address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`,
-the password a secret the session makes for the run's forwarder alone, 32 bytes from the
-system's random source in base64url, which lives as long as the run and is never logged
-or recorded. The first request of every connection to the forwarder must carry it in
-its one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time;
-the forwarder takes the header off, and closes a connection without it unanswered
-before anything reaches the gateway. The run key reaches neither the agent's
+line off before anything reaches the gateway. Without a wall, on one machine as behind a
+separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
+password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
+makes for the run's forwarder alone, 32 bytes from the system's random source in
+base64url, which lives as long as the run and is never logged or recorded. The first
+request of every connection to the forwarder must carry it in its one
+`Proxy-Authorization`, Basic, the user name ignored, compared in constant time; the
+forwarder takes the header off, and closes a connection without it unanswered before
+anything reaches the gateway. The run key reaches neither the agent's
 environment, from which the session takes `QORY_RUN_KEY` out whatever the agent
 inherits, nor any file, and the agent's view is the same as on one machine.
 The gateway takes the bytes after that line as the run's proxy's, as a connection the
