@@ -999,8 +999,8 @@ func (h *Handler) outcome(w http.ResponseWriter, v verified, runID string, body 
 // gateway node that attached a run through a gateway, from the attaching instance
 // alone, before and after the run's end, or a run not registered, 404; a run through a
 // gateway that may no longer serve the run's workspace, decided as at the attach, 410
-// workspace_not_served; a run it wants nothing more of, 410; the hook's refusal;
-// otherwise the run configuration, 200.
+// workspace_not_served with no digest headers; a run it wants nothing more of, 410; the
+// hook's refusal; otherwise the run configuration, 200.
 func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.mu.Lock()
 	reg := h.runs[runID]
@@ -1199,8 +1199,8 @@ type head struct {
 // accepted from, or, while a run through a gateway is live, from another instance than
 // the attaching one, 409 wrong_gateway for a run through a gateway and wrong_node for a
 // direct run; for a run through a gateway, once the gateway that attached it may no
-// longer serve the run's workspace, decided as at the attach, 410 workspace_not_served,
-// a batch already accepted included; one whose events the store holds every one of, 202
+// longer serve the run's workspace, decided as at the attach, 410 workspace_not_served
+// with no digest headers, a batch already accepted included; one whose events the store holds every one of, 202
 // again; an event of a run it wants nothing more of, 410; otherwise each new event
 // stored and 202. Once the run's starter gave its outcome, a 202 carries it as the end
 // member, until the batch that carries the run's dev.qory.run.exited, whose answer and
@@ -1233,7 +1233,6 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		return
 	}
 	if reg != nil && !reg.serving(h) {
-		h.digests(w, v, reg)
 		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
 		return
 	}

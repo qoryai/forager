@@ -618,8 +618,9 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 // gateway that attached a run may still serve the run's workspace, never by the node's
 // current choice. A change of the node's choice or of a default alone leaves the
 // attached run where it is: its batches accepted, its reloads answered. Once the
-// gateway's organisation no longer covers the workspace, a batch or heartbeat, a resend
-// of one already accepted included, is a signed 410 workspace_not_served, after
+// gateway's organisation no longer covers the run's workspace, even with the node moved
+// to a workspace the gateway serves, a batch or heartbeat, a resend of one already
+// accepted included, is a signed 410 workspace_not_served with no digest header, after
 // wrong_gateway and before deduplication and a run the receiver wants nothing more of,
 // where a resend while the gateway serves the workspace gets the same 202; a reload is the signed 410 and no run
 // configuration, after the 404 of another key; the gateway node attaching again, from
@@ -689,41 +690,58 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
 
+	// refused checks a signed refusal of the status and code that carries no digest
+	// header: a gateway that may no longer serve the workspace learns nothing of it.
+	refused := func(name string, req *http.Request, rec *httptest.ResponseRecorder, status int, code string) {
+		t.Helper()
+		s.expect(name, req, rec, status, code)
+		for _, h := range []string{server.HeaderConfiguration, server.HeaderRunConfiguration} {
+			if got := rec.Header().Get(h); got != "" {
+				t.Errorf("%s: %s %q, want none", name, h, got)
+			}
+		}
+	}
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgTwo}
 	req, rec := s.batchOf(gwKey, accepted)
-	s.expect("a resend of the accepted batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	refused("a resend of the accepted batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
 	req, rec = s.batch(orgGWKey, e, event.RunStarted)
 	s.expect("a batch from another gateway once the gateway may no longer serve the workspace", req, rec, http.StatusConflict, "wrong_gateway")
 	req, rec = s.batch(gwKey, e, event.RunStarted)
-	s.expect("a batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	refused("a batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
 	req, rec = s.batch(gwKey2, e, event.RunHeartbeat)
-	s.expect("a heartbeat once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	refused("a heartbeat once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
 	s.h.Stop = func(run string) bool { return run == id }
 	req, rec = s.batch(gwKey, e, event.RunHeartbeat)
-	s.expect("a heartbeat of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+	refused("a heartbeat of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
 		http.StatusGone, "workspace_not_served")
 	req, rec = reload(gwKey2)
-	s.expect("a reload of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+	refused("a reload of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
 		http.StatusGone, "workspace_not_served")
 	s.h.Stop = nil
 	req, rec = reload(gwKey2)
-	s.expect("a reload once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
-	if got := rec.Header().Get(server.HeaderRunConfiguration); got != "" {
-		t.Errorf("the reload refused carries the run configuration digest %q, want none", got)
-	}
+	refused("a reload once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
 	req, rec = reload(orgGWKey)
 	if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 || !signedAnswer(req, rec) {
 		t.Errorf("a reload from another gateway once the gateway may no longer serve the workspace: %d %s, want a signed 404", rec.Code, rec.Body.String())
 	}
 	req = s.signedAs(gwKey, otherInstance, http.MethodPost, receiver.DefaultRunPath+"/"+id+"/attach", s.attachBody(rk, 30))
-	s.expect("another instance of the gateway node attaching again once it may no longer serve the workspace", req, serve(s.h, req),
+	refused("another instance of the gateway node attaching again once it may no longer serve the workspace", req, serve(s.h, req),
 		http.StatusConflict, "workspace_not_served")
 	req, rec = s.attach(gwKey2, id, s.attachBody(rk, 60))
-	s.expect("the attaching instance attaching again once the gateway may no longer serve the workspace", req, rec,
+	refused("the attaching instance attaching again once the gateway may no longer serve the workspace", req, rec,
 		http.StatusConflict, "workspace_not_served")
-	if got := rec.Header().Get(server.HeaderRunConfiguration); got != "" {
-		t.Errorf("the repeat attach refused carries the run configuration digest %q, want none", got)
-	}
+
+	// The run's workspace decides, never the node's: the node moved to a workspace the
+	// gateway still serves leaves the run refused.
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws1, Gateway: gw}
+	req, rec = s.batch(gwKey, e, event.RunHeartbeat)
+	refused("a heartbeat once the node moved to a workspace the gateway serves", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = reload(gwKey2)
+	refused("a reload once the node moved to a workspace the gateway serves", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.attach(gwKey2, id, s.attachBody(rk, 60))
+	refused("the attaching instance attaching again once the node moved to a workspace the gateway serves", req, rec,
+		http.StatusConflict, "workspace_not_served")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
 
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
 	served("once the organisation covers the workspace again")
