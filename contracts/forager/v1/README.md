@@ -1510,20 +1510,22 @@ configuration with its digest, the labels and `about`; a refusal reads
 
 **After the attach.** A run's reloads, batches and heartbeats are accepted from the
 active keys of one node alone, so replacing a key keeps working: for a run behind a
-gateway, the gateway node that attached it, under any of its active keys, and while the
-run is live from the attaching instance alone; a batch from any other key, the node
-pool's own among them, or while the run is live from another instance of that node, is a
-signed `409` `wrong_gateway`; for a direct run, the node or node pool that registered
-it, under any of its active keys, and a batch from another node's key is a signed `409`
-`wrong_node`. A reload from any other key is `404` in both cases. The organisation of
-the gateway's key is checked at batches, heartbeats and reloads, and the run's
-organisation at batches, each as every key's is. A run's workspace, node and instance
-come from its registration, never from the gateway's instance id. Once the run is not
-live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or the run no longer
-held, a batch from any instance of the attaching gateway node, under any of its active
-keys, gets the answer the attaching instance would: a resend after a restart or a loss.
-The starter's outcome alone leaves the run live. A run that never attached is never
-opened. Heartbeats are `dev.qory.run.heartbeat` events in batches, as on a direct run.
+gateway, the gateway node that attached it, under any of its active keys: its reloads
+from the attaching instance alone, and its batches and heartbeats from it too while the
+run is live; a batch from any other key, the node pool's own among them, or while the
+run is live from another instance of that node, is a signed `409` `wrong_gateway`; for a
+direct run, the node or node pool that registered it, under any of its active keys, and
+a batch from another node's key is a signed `409` `wrong_node`. A reload from any other
+key is `404` in both cases, and so is one from another instance of the gateway node. The
+organisation of the gateway's key is checked at batches, heartbeats and reloads, and the
+run's organisation at batches, each as every key's is. A run's workspace, node and
+instance come from its registration, never from the gateway's instance id. Once the run
+is not live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or the run no
+longer held, a batch from any instance of the attaching gateway node, under any of its
+active keys, gets the answer the attaching instance would: a resend after a restart or a
+loss. Until then, an outcome alone doesn't change who may send: a batch from another
+instance is still refused. A run that never attached is never opened. Heartbeats are
+`dev.qory.run.heartbeat` events in batches, as on a direct run.
 
 **The outcome.** The run's starter says how the run ended with a signed
 `POST <run.url>/<run_id>/outcome`, `Content-Type: application/json`, signed by any active
