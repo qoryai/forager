@@ -343,33 +343,41 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 
 // TestTheRelayRunsNoHealthCheck pins that the relay's container is created without the
 // image's health check, which would run beside the relay's environment, and that the
-// agent's command is not changed by it.
+// agent's container runs none either, for any image and for one with a Docker of the
+// agent's own, where it would run as the enclosure's root.
 func TestTheRelayRunsNoHealthCheck(t *testing.T) {
-	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
-	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer e.Close(context.Background())
-	got, err := e.Wrap(context.Background(), launch())
-	if err != nil {
-		t.Fatal(err)
-	}
-	created := false
-	for _, line := range rec.lines {
-		if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
-			created = true
-			if !strings.Contains(line, " --read-only --no-healthcheck ") {
-				t.Errorf("the relay is created with the image's health check: %s", line)
+	for _, docker := range []bool{false, true} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+		req := Request{RunID: runID, Image: "i"}
+		if docker {
+			req.Runtime, req.Docker = "sysbox-runc", true
+		}
+		e, err := d.Prepare(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.Wrap(context.Background(), launch())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Close(context.Background())
+		created := false
+		for _, line := range rec.lines {
+			if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
+				created = true
+				if !strings.Contains(line, " --read-only --no-healthcheck ") {
+					t.Errorf("the relay is created with the image's health check: %s", line)
+				}
 			}
 		}
-	}
-	if !created {
-		t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
-	}
-	if slices.Contains(got.Args, "--no-healthcheck") {
-		t.Errorf("the agent's command changed: %s", words(got.Args))
+		if !created {
+			t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
+		}
+		entry := slices.Index(got.Args, "--entrypoint")
+		if !slices.Contains(got.Args[:max(entry, 0)], "--no-healthcheck") {
+			t.Errorf("with a Docker of the agent's own %v, the agent runs the image's health check: %s", docker, words(got.Args))
+		}
 	}
 }
 

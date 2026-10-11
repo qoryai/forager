@@ -23,8 +23,9 @@ const RelayTokenEnv = "QORY_RELAY_TOKEN"
 
 // RelayInsideEnv is the variable of the relay's environment that names the subnets of
 // the enclosure's network, written as CIDR and separated by commas. The relay listens on
-// its one address in each and on no other address, so only the enclosure's network
-// reaches its ports and gets its connections opened with the preamble.
+// its one address in each and on no other address, and takes a connection only from an
+// address in those subnets, so only the enclosure's network reaches its ports and gets
+// its connections opened with the preamble.
 const RelayInsideEnv = "QORY_RELAY_INSIDE"
 
 // RelayReady is the line the relay prints once every port listens. An adapter waits
@@ -34,8 +35,10 @@ const RelayReady = "relay: listening"
 // Relay is the program that runs in the relay, the one peer an enclosure may reach: it
 // listens on a port for each forward, written port=host:port, and copies every
 // connection to that forward's target, fixed when it starts. It listens on its address
-// in each subnet [RelayInsideEnv] names and on no other, and refuses to start when the
-// variable names none, or a subnet that holds no address of this machine's or several.
+// in each subnet [RelayInsideEnv] names and on no other, closes a connection from an
+// address in none of those subnets before it dials anything, and refuses to start when
+// the variable names none, or a subnet that holds no address of this machine's or
+// several.
 // It reads nothing, decides nothing and takes no instruction from whoever connects; the
 // policy stays in the gateway. It prints [RelayReady] to ready once every port listens
 // and returns when the context ends.
@@ -50,7 +53,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("relay: %w", err)
 	}
-	inside, err := insideAddrs(os.Getenv(RelayInsideEnv), local)
+	inside, subnets, err := insideAddrs(os.Getenv(RelayInsideEnv), local)
 	if err != nil {
 		return err
 	}
@@ -81,7 +84,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				serve(ctx, ln, target, preamble)
+				serve(ctx, ln, target, preamble, subnets)
 			}()
 		}
 	}
@@ -91,18 +94,19 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 }
 
 // insideAddrs are the addresses among local that lie in the subnets, written as CIDR and
-// separated by commas: one for each subnet. A subnet that holds none or several is an
-// error, since the relay never listens on an address it cannot tell is the
-// enclosure's.
-func insideAddrs(subnets string, local []net.Addr) ([]net.IP, error) {
+// separated by commas: one for each subnet, in order, and the subnets, parsed. A subnet
+// that holds none or several is an error, since the relay never listens on an address it
+// cannot tell is the enclosure's.
+func insideAddrs(subnets string, local []net.Addr) ([]net.IP, []*net.IPNet, error) {
 	if subnets == "" {
-		return nil, fmt.Errorf("relay: %s names no subnet of the enclosure's network", RelayInsideEnv)
+		return nil, nil, fmt.Errorf("relay: %s names no subnet of the enclosure's network", RelayInsideEnv)
 	}
 	var out []net.IP
+	var nets []*net.IPNet
 	for _, s := range strings.Split(subnets, ",") {
 		_, subnet, err := net.ParseCIDR(s)
 		if err != nil {
-			return nil, fmt.Errorf("relay: %q in %s is not a subnet", s, RelayInsideEnv)
+			return nil, nil, fmt.Errorf("relay: %q in %s is not a subnet", s, RelayInsideEnv)
 		}
 		var in []net.IP
 		for _, a := range local {
@@ -111,11 +115,26 @@ func insideAddrs(subnets string, local []net.Addr) ([]net.IP, error) {
 			}
 		}
 		if len(in) != 1 {
-			return nil, fmt.Errorf("relay: %d addresses of this machine's lie in %s; want one", len(in), subnet)
+			return nil, nil, fmt.Errorf("relay: %d addresses of this machine's lie in %s; want one", len(in), subnet)
 		}
 		out = append(out, in[0])
+		nets = append(nets, subnet)
 	}
-	return out, nil
+	return out, nets, nil
+}
+
+// inSubnets reports whether the connection's remote address lies in one of the subnets.
+func inSubnets(c net.Conn, subnets []*net.IPNet) bool {
+	a, ok := c.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	for _, s := range subnets {
+		if s.Contains(a.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseForward reads port=host:port.
@@ -134,9 +153,10 @@ func parseForward(f string) (int, string, error) {
 // dialWait is how long the target has to accept a connection.
 const dialWait = 10 * time.Second
 
-// serve accepts until the listener closes and copies each connection to the target,
-// after the preamble when there is one.
-func serve(ctx context.Context, ln net.Listener, target, preamble string) {
+// serve accepts until the listener closes and copies each connection from an address in
+// the subnets to the target, after the preamble when there is one. A connection from any
+// other address is closed before anything is dialled.
+func serve(ctx context.Context, ln net.Listener, target, preamble string, subnets []*net.IPNet) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -153,6 +173,10 @@ func serve(ctx context.Context, ln net.Listener, target, preamble string) {
 				return
 			case <-time.After(50 * time.Millisecond):
 			}
+			continue
+		}
+		if !inSubnets(client, subnets) {
+			client.Close()
 			continue
 		}
 		wg.Add(1)
