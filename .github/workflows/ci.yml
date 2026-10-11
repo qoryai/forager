@@ -111,6 +111,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Show the engine's version
+        # A Docker of the agent's own needs Docker Engine 28 or later.
+        run: docker version
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -172,6 +176,10 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Show the engine's version
+        # A Docker of the agent's own needs Docker Engine 28 or later.
+        run: docker version
 
       - name: Run the suite against Docker, with a Docker inside
         # QORY_WALL_REQUIRE turns a skip into a failure, as in the wall job.
