@@ -715,6 +715,30 @@ func TestViaKeepsItsTrustOverACallersTLSDialing(t *testing.T) {
 	}
 }
 
+// roundTripper is a transport of another type than *http.Transport, as a program that
+// embeds Forager may set http.DefaultTransport to.
+type roundTripper struct{}
+
+func (roundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("not sent")
+}
+
+// TestViaWithAnotherDefaultTransport pins that via's transport is made when
+// http.DefaultTransport is not an *http.Transport, with no proxy and via's TLS. It
+// replaces a global, so it runs alone: no test of the package is parallel.
+func TestViaWithAnotherDefaultTransport(t *testing.T) {
+	saved := http.DefaultTransport
+	http.DefaultTransport = roundTripper{}
+	t.Cleanup(func() { http.DefaultTransport = saved })
+	tr, err := server.Via{URL: "https://gateway.example:8443"}.Transport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Proxy != nil || tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion != tls.VersionTLS13 || !tr.DisableKeepAlives {
+		t.Errorf("via's transport has a Proxy %t, TLS %+v, keep-alives off %t; want no proxy and TLS 1.3 alone", tr.Proxy != nil, tr.TLSClientConfig, tr.DisableKeepAlives)
+	}
+}
+
 // TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach pins that a registration
 // answer and an attach print and log without their run key under every verb, by value
 // and by pointer, with the rest of what they hold.

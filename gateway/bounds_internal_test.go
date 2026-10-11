@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -284,5 +286,33 @@ func TestTheLapsedRunsErrorsAreBounded(t *testing.T) {
 		if len(g.lapsedErrs) > keepLapsedErrs {
 			t.Errorf("%d lapsed: %d errors kept", c.lapsed, len(g.lapsedErrs))
 		}
+	}
+}
+
+// roundTripper is a transport of another type than *http.Transport, as a program that
+// embeds Forager may set http.DefaultTransport to.
+type roundTripper struct{}
+
+func (roundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("not sent")
+}
+
+// TestTheRelayWithAnotherDefaultTransport pins that the relay is made when
+// http.DefaultTransport is not an *http.Transport, with the environment's proxy and the
+// answer left encoded. It replaces a global, so it runs alone: no test of the package
+// is parallel.
+func TestTheRelayWithAnotherDefaultTransport(t *testing.T) {
+	saved := http.DefaultTransport
+	http.DefaultTransport = roundTripper{}
+	t.Cleanup(func() { http.DefaultTransport = saved })
+	g := &Gateway{cfg: Config{Server: &Server{URL: "https://apiary.example"}}}
+	rl := g.newRelay(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	defer rl.close(context.Background())
+	tr, ok := rl.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("the relay's transport is a %T", rl.client.Transport)
+	}
+	if tr.Proxy == nil || reflect.ValueOf(tr.Proxy).Pointer() != reflect.ValueOf(http.ProxyFromEnvironment).Pointer() || !tr.DisableCompression {
+		t.Errorf("the relay's transport: the environment's proxy %t, compression off %t", tr.Proxy != nil, tr.DisableCompression)
 	}
 }
