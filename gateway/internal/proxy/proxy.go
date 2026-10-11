@@ -4,8 +4,11 @@
 // session's environment names it in the proxy variables, upper and lower case, with
 // loopback in NO_PROXY so a local server still answers. Every connection through it is
 // one [Decision] handed to an observer: a CONNECT tunnel, decided on its authority, or a
-// plain request, decided on the authority of its absolute-form target. A host a deny
-// entry matches is denied with 403 in either mode, and nothing is opened for it; past
+// plain request, decided on the authority of its absolute-form target. A host is
+// decided and dialled in the form [policy.Host] gives it, a name with no search domain
+// added: rooted, with one trailing dot, or, a name of one label the hosts file holds,
+// at the addresses the file gives it ([Proxy.dialHost]). A host without that form is
+// refused with 403 in either mode before any list is read, with the rule [HostForm]. A host a deny entry matches is denied with 403 in either mode, and nothing is opened for it; past
 // that, in observe mode every decision allows, and in enforce mode a host no allow
 // entry matches is denied the same way. The session continues either way. A decision
 // says what became of the connection as its outcome: dialled, or not dialled because
@@ -46,6 +49,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,6 +125,7 @@ type Proxy struct {
 	in      *inbox
 	srv     *http.Server
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	hosts   func(ctx context.Context, name string) ([]netip.Addr, error)
 	wg      sync.WaitGroup
 	guarded atomic.Bool
 	// token, when set, is what every connection must open with; refused is told of one
@@ -158,6 +163,10 @@ type tunnel struct {
 // GuardRule is the rule a guarded proxy's denial names in its decision: not an allow
 // entry, the wall's own refusal.
 const GuardRule = "wall:own-address"
+
+// HostForm is the rule a denial names when the host has no form [policy.Host] gives: not
+// an allow or deny entry, the proxy's refusal, in either mode.
+const HostForm = "wall:host-form"
 
 // guardError is the guard's refusal at dial time, of a name that resolved to an
 // address the guard does not dial.
@@ -210,21 +219,82 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
 	d := &net.Dialer{Timeout: 30 * time.Second, ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
-		host, _, err := net.SplitHostPort(address)
-		if err != nil || !p.guarded.Load() {
-			return nil
-		}
-		switch ip := net.ParseIP(host); {
-		case linkLocal(ip):
-			return &guardError{host + " is a link-local address; the wall refuses it"}
-		case own(ip) && ctx.Value(namedKey{}) == nil:
-			return &guardError{host + " is this machine's address and no allow entry names the host; the wall refuses it"}
-		}
-		return nil
+		return p.guard(ctx, address)
 	}}
 	p.dial = d.DialContext
+	p.hosts = hostsFile
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
 	return p, nil
+}
+
+// guard is the wall's check of the address a connection is about to dial, host:port:
+// nil when it may be dialled. An unguarded proxy dials every address. Behind a wall the
+// address is judged as itself, an IPv6 address without its zone, and one that does not
+// read as an address is refused, never dialled unjudged. An address that carries an
+// IPv4 address ([carried]) is also judged by that IPv4 address, and refused where it
+// would be.
+func (p *Proxy) guard(ctx context.Context, address string) error {
+	if !p.guarded.Load() {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return &guardError{address + " does not read as an address; the wall refuses it"}
+	}
+	ip := unzoned(host)
+	if ip == nil {
+		return &guardError{host + " does not read as an address; the wall refuses it"}
+	}
+	if err := judge(ctx, host, ip); err != nil {
+		return err
+	}
+	if v4 := carried(ip); v4 != nil {
+		return judge(ctx, v4.String(), v4)
+	}
+	return nil
+}
+
+// judge is the guard's refusal of ip, written as host, or nil when it may be dialled.
+func judge(ctx context.Context, host string, ip net.IP) error {
+	switch {
+	case linkLocal(ip):
+		return &guardError{host + " is a link-local address; the wall refuses it"}
+	case own(ip) && ctx.Value(namedKey{}) == nil:
+		return &guardError{host + " is this machine's address and no allow entry names the host; the wall refuses it"}
+	}
+	return nil
+}
+
+// carriers are the IPv6 ranges whose addresses the guard also judges by the IPv4
+// address in their last 32 bits: ::/96, the IPv4-compatible addresses, and 64:ff9b::/96,
+// the well-known NAT64 prefix. An IPv4 address mapped into IPv6 is judged as IPv4
+// already.
+var carriers = []netip.Prefix{
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+}
+
+// carried is the IPv4 address in the last 32 bits of ip when ip is in one of
+// [carriers], or nil. :: and ::1 carry none: they are this machine's as they are.
+func carried(ip net.IP) net.IP {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok || !a.Is6() || a.Is4In6() || a.IsUnspecified() || a.IsLoopback() {
+		return nil
+	}
+	for _, r := range carriers {
+		if r.Contains(a) {
+			b := a.As16()
+			return net.IPv4(b[12], b[13], b[14], b[15])
+		}
+	}
+	return nil
+}
+
+// unzoned is the IP address host reads as once any zone, from its first %, is cut off,
+// or nil when it reads as none.
+func unzoned(host string) net.IP {
+	host, _, _ = strings.Cut(host, "%")
+	return net.ParseIP(host)
 }
 
 // serve serves the proxy's connections from ln until Close.
@@ -448,16 +518,27 @@ func own(ip net.IP) bool {
 	return false
 }
 
-// decide applies the guard, the deny list, and then the mode and the allow list to a
-// host. The guard decides here what it can without resolving, a literal address and
-// localhost, so the denial is in the record; a name that resolves to such an address
-// is refused when dialled. A host the deny list covers is denied in either mode, with
-// the entry as its rule, before the mode and the allow list are consulted. A denied
-// decision is refused; an allowed one has no outcome until it is dialled.
+// decide applies the host's form, the guard, the deny list, and then the mode and the
+// allow list to a host. A host without the form [policy.Host] gives is refused in
+// either mode before anything else is read; past that, the decision's host is that
+// form, the one dialled as [Proxy.dialHost] says. The guard decides here what it can
+// without resolving, a literal address and localhost, so the denial is in the record; a
+// name that resolves to such an address is refused when dialled, by the address
+// dialled: the one the name resolved to, or the one the hosts file gave it. A host the deny list covers is denied in
+// either mode, with the entry as its rule, before the mode and the allow list are
+// consulted. A denied decision is refused; an allowed one has no outcome until it is
+// dialled.
 func (p *Proxy) decide(method, host string, port int) Decision {
 	r := p.rules.Load()
+	// A host without the form is recorded as sent.
+	d := Decision{Host: host, Port: port, Method: method, Mode: r.mode}
+	host, formed := policy.Host(host)
+	if !formed {
+		d.Rule, d.Outcome = HostForm, Refused
+		return d
+	}
+	d.Host = host
 	rule, ok := policy.Match(r.allow, host)
-	d := Decision{Host: strings.ToLower(host), Port: port, Method: method, Mode: r.mode}
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip)
@@ -506,10 +587,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := r.URL.Hostname()
+	if host == "" {
+		http.Error(w, "the proxy takes an absolute-form request target", http.StatusBadRequest)
+		return
+	}
 	port, err := portOf(r.URL.Port(), r.URL.Scheme)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// A host is decided as sent: one percent-encoded is taken undecoded, and so has no
+	// form.
+	authority := r.RequestURI
+	if _, rest, ok := strings.Cut(authority, "://"); ok {
+		authority = rest
+	}
+	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+		authority = authority[:i]
+	}
+	if h := sent(authority); strings.Contains(h, "%") {
+		host = h
 	}
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
@@ -542,7 +639,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
 	out.RequestURI = ""
-	out.Host = r.URL.Host
+	// The host asked of upstream is the one decided on, in its form.
+	out.URL.Host = d.Host
+	if r.URL.Port() != "" {
+		out.URL.Host = net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
+	} else if strings.Contains(d.Host, ":") {
+		out.URL.Host = "[" + d.Host + "]"
+	}
+	out.Host = out.URL.Host
 	for _, h := range hopByHop {
 		out.Header.Del(h)
 	}
@@ -579,9 +683,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // connect opens a tunnel, or refuses it with a 403 before anything is dialled.
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	host, portText, err := net.SplitHostPort(r.Host)
-	if err != nil {
+	if err != nil || host == "" {
 		http.Error(w, "CONNECT takes host:port", http.StatusBadRequest)
 		return
+	}
+	if h := sent(r.RequestURI); strings.Contains(h, "%") {
+		host = h
 	}
 	port, err := portOf(portText, "")
 	if err != nil {
@@ -621,10 +728,10 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 		defer cancel()
 		defer context.AfterFunc(p.stopped, cancel)()
-		p.term.Load().serve(ctx, client, d, net.JoinHostPort(host, portText))
+		p.term.Load().serve(ctx, client, d, net.JoinHostPort(d.Host, strconv.Itoa(d.Port)))
 		return
 	}
-	upstream, err := p.dial(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(host, portText))
+	upstream, err := p.dialHost(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(d.Host, strconv.Itoa(d.Port)))
 	if err != nil {
 		d = failed(d, err)
 		p.observe(d)
@@ -662,6 +769,16 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
+// sent is the host of an authority as sent: without user information, port and
+// brackets, and not decoded.
+func sent(authority string) string {
+	authority = authority[strings.LastIndex(authority, "@")+1:]
+	if host, _, err := net.SplitHostPort(authority); err == nil {
+		return host
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
+}
+
 // relay copies both ways and closes both ends when either side closes.
 func relay(client, upstream net.Conn, buffered int, r io.Reader) {
 	var wg sync.WaitGroup
@@ -690,6 +807,85 @@ func closeWrite(c net.Conn) {
 	}
 }
 
+// dialHost dials addr, host:port, through the proxy's dialler with a host name rooted:
+// a trailing dot, so the resolver resolves the name as decided and adds no search
+// domain. A name of one label the hosts file holds is dialled at the addresses the file
+// gives it, in its order, and is rooted only when the file does not hold it: Go's
+// resolver keeps such a name without a dot and would not find it rooted. An IP address
+// is dialled as given. A failed lookup names the host as decided, without the dot.
+// Every connection to a host the session asked for is dialled here.
+func (p *Proxy) dialHost(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || strings.HasSuffix(host, ".") {
+		return p.dial(ctx, network, addr)
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return p.dial(ctx, network, addr)
+	}
+	if !strings.Contains(host, ".") {
+		if ips, err := p.hosts(ctx, host); err == nil && len(ips) > 0 {
+			var first error
+			for _, ip := range ips {
+				c, err := p.dial(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return c, nil
+				}
+				if first == nil {
+					first = err
+				}
+				if ctx.Err() != nil {
+					break
+				}
+			}
+			return nil, first
+		}
+	}
+	c, err := p.dial(ctx, network, net.JoinHostPort(host+".", port))
+	if err != nil {
+		err = unrooted(err, host)
+	}
+	return c, err
+}
+
+// noNameServer is how [hostsOnly] dials a name server: it reaches none.
+var noNameServer = func(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("the hosts file alone is read")
+}
+
+// hostsOnly is a resolver that reaches no name server, so only the hosts file answers
+// it.
+var hostsOnly = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+	return noNameServer(ctx, network, address)
+}}
+
+// hostsFile returns the addresses the hosts file gives name, the name looked up exactly
+// as written, or an error when it gives none. The addresses come as the resolver gives
+// them: an IPv4 address mapped into IPv6, and no zone.
+func hostsFile(ctx context.Context, name string) ([]netip.Addr, error) {
+	return hostsOnly.LookupNetIP(ctx, "ip", name)
+}
+
+// unrooted is err with the lookup error in it naming host instead of host rooted. The
+// lookup error may be shared with other lookups of the name, so it is copied, never
+// changed.
+func unrooted(err error, host string) error {
+	switch e := err.(type) {
+	case *net.OpError:
+		if inner := unrooted(e.Err, host); inner != e.Err {
+			op := *e
+			op.Err = inner
+			return &op
+		}
+	case *net.DNSError:
+		if e.Name == host+"." {
+			dns := *e
+			dns.Name = host
+			return &dns
+		}
+	}
+	return err
+}
+
 // dialContext carries into the dial whether the policy names the host, which is what
 // lets a guarded proxy reach this machine for it.
 func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
@@ -703,6 +899,10 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
+	if d.Rule == HostForm {
+		fmt.Fprintf(w, "qory: egress to %+q:%d denied by the gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an IP address in canonical form\n", d.Host, d.Port)
+		return
+	}
 	if d.Rule == GuardRule {
 		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's machine only for a host the policy's allow list names\n", d.Host, d.Port)
 		return
@@ -731,5 +931,5 @@ var hopByHop = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-A
 
 // transport forwards plain requests upstream, directly and never through another proxy.
 func (p *Proxy) transport() *http.Transport {
-	return &http.Transport{Proxy: nil, DialContext: p.dial, DisableCompression: true}
+	return &http.Transport{Proxy: nil, DialContext: p.dialHost, DisableCompression: true}
 }

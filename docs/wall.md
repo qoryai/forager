@@ -162,8 +162,9 @@ Behind a wall, the proxy is guarded:
   name. A `*.` entry above that host is not enough.
 
 A model endpoint or MCP server on the node is reached through the proxy. The session
-reaches it by the node's host name, listed in `egress`. `localhost` inside the container
-is the container.
+reaches it by the node's host name, listed in `egress`, as the hosts file or a name
+server gives it; no search domain is added. `localhost` inside the container is the
+container.
 
 ## From Go
 

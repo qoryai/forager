@@ -35,13 +35,16 @@ import (
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
-		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
-		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
-		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
-		"no directory":                {},
-		"a policy the schema refuses": {Dir: dir, Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "everything"}}},
+		"a certificate":                        {Dir: dir, TLS: &gateway.TLS{}},
+		"a heartbeat of a part":                {Dir: dir, Heartbeat: 1500 * time.Millisecond},
+		"a heartbeat over the bound":           {Dir: dir, Heartbeat: 301 * time.Second},
+		"no directory":                         {},
+		"a policy the schema refuses":          {Dir: dir, Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "everything"}}},
+		"a policy entry outside the host form": {Dir: dir, Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Deny: []string{"127.1"}}}},
 		"a ceiling's paths the schema refuses": {Dir: dir, Policy: (&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}).Under(
 			&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Paths: map[string][]string{"api.example.": {"/v1/*"}}}})},
+		"a ceiling's paths key outside the host form": {Dir: dir, Policy: (&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}).Under(
+			&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Paths: map[string][]string{"127.1": {"/v1/*"}}}})},
 	} {
 		if g, err := gateway.Start(context.Background(), cfg); err == nil {
 			g.Close(context.Background())

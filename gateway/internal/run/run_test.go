@@ -812,3 +812,45 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 		}
 	}
 }
+
+// TestAPolicyEntryOutsideTheHostFormIsRefusedWhereverItIsRead pins that a policy whose
+// entry naming a host is neither a host name nor an IPv4 address in canonical form is
+// refused as one the schema refuses: as a run's policy file, as the node's policy, and
+// as a server's security_policy, at the start and at a reload, run_configuration_invalid
+// and settled.
+func TestAPolicyEntryOutsideTheHostFormIsRefusedWhereverItIsRead(t *testing.T) {
+	for _, bad := range []string{
+		`{"version":1,"egress":{"mode":"observe","deny":["127.1"]}}`,
+		`{"version":1,"egress":{"mode":"enforce","allow":["0x7f.0.0.1"]}}`,
+		`{"version":1,"egress":{"mode":"enforce","allow":["api.example"],"paths":{"2130706433":[]}}}`,
+	} {
+		if _, err := run.ReadPolicy("policy.json", []byte(bad)); err == nil {
+			t.Errorf("%s: read as a policy file", bad)
+		}
+		var node run.Policy
+		if err := json.Unmarshal([]byte(bad), &node); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := run.Decide(run.Config{RunID: runID, Node: &node, Wall: true}); err == nil {
+			t.Errorf("%s: a run opened on it as the node's policy", bad)
+		}
+		for _, r := range []*run.Run{
+			open(t, run.Config{RunID: runID, Server: true}),
+			open(t, run.Config{RunID: runID, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))}),
+		} {
+			_, err := r.Read(*served(bad, digest('2')))
+			var refused *accesskey.Refusal
+			if !errors.As(err, &refused) || refused.Code != "run_configuration_invalid" || !run.Settled(err) {
+				t.Errorf("%s: %v, want run_configuration_invalid", bad, err)
+			}
+		}
+	}
+	// A ceiling's paths beside the run's policy are held to the same form.
+	ceiling := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe", Paths: map[string][]string{"127.1": {"/v1/*"}}}}
+	under := (&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}).Under(ceiling)
+	_, err := run.Decide(run.Config{RunID: runID, Node: under, Wall: true})
+	var pe *policy.Error
+	if !errors.As(err, &pe) {
+		t.Errorf("a ceiling's paths key 127.1: %v, want a *policy.Error", err)
+	}
+}

@@ -84,6 +84,10 @@ release may change what an existing document does, and says so under Upgrading.
   attached it, and `404` otherwise.
 - `json.Marshal` of `server.RegistrationAnswer` and `server.Attach` writes `run_key`
   redacted, and of `server.LinkRunAnswer` `proxy_secret`; `Attach.Body` is the wire form.
+- A policy whose `allow`, `deny` or `paths` entry naming a host is neither a host name
+  nor an IPv4 address in canonical form is refused when it is read, as one the schema
+  refuses, with "egress.<list> holds <entry>, which is neither a host name nor an IPv4
+  address in canonical form".
 
 #### Added
 
@@ -987,6 +991,21 @@ release may change what an existing document does, and says so under Upgrading.
 - The proxy answers a host's `101 Switching Protocols` to a request that asked for no
   upgrade with `502`, `upstream: the host answered 101 Switching Protocols to a request
   that asked for no upgrade`, and closes the host's connection and the client's.
+- The proxy refuses a request to a host that is not a name of ASCII letters, digits,
+  hyphens and dots, or an IP address in canonical form, whatever the mode, with the rule
+  `wall:host-form` and a `403` that reads "qory: egress to "<host>":<port> denied by the
+  gateway: the host is neither a name of ASCII letters, digits, hyphens and dots nor an
+  IP address in canonical form". It decides a name lower-case and without a trailing
+  dot, and an IPv6 address lower-case.
+- The gateway resolves a host name exactly as decided, with no search domain added: a
+  name of one label is reached at the addresses the hosts file gives it, and any other
+  name only as it is written.
+- The proxy refuses a request to an IPv6 address in `::/96` (except `::1`),
+  `::ffff:0:0/96`, `::ffff:0:0:0/96` or `64:ff9b::/96`, whatever the mode, with the rule
+  `wall:host-form`.
+- The wall judges an IPv6 address with a zone by the address alone.
+- The wall also judges an address in `::/96` (other than `::1` and `::`) or
+  `64:ff9b::/96` by the IPv4 address in its last 32 bits.
 
 #### Fixed
 

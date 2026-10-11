@@ -323,7 +323,7 @@ egress:
 |---|---|
 | `version` | `1`. Forager refuses a version it does not read, and the error contains that version |
 | `egress.mode` | `observe`: every connection is recorded, and only a host `deny` covers is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
-| `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
+| `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. An entry that names a host, not a `*.` suffix, is a host name or an IPv4 address in canonical form, four decimal parts with no leading zero; a document with any other is refused as one the schema refuses. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
@@ -368,7 +368,16 @@ cites this document.
 **Matching a connection.** The host of a `CONNECT` request is its authority; the host of
 a plain request is the authority of its absolute-form target, never its `Host` header.
 Host names are compared lower-case; an IP literal matches only an identical entry.
-`deny` is decided first: when an entry of it covers the host, the connection is denied
+A host name is resolved as given, with no search domain added: a short name reaches
+only a host of that exact name, from the hosts file or a name server.
+A host that is neither a name of ASCII letters, digits, hyphens and dots nor an IP
+address in canonical form is denied in either mode before either list, with the rule
+`wall:host-form`. An IP address is in canonical form when it is an IPv4 address of four
+decimal parts with no leading zero, or an IPv6 address in RFC 5952's form, in either
+case, with no zone, and not in ::/96 (except ::1), ::ffff:0:0/96, ::ffff:0:0:0/96 or
+64:ff9b::/96, ranges that each hold an IPv4 address in their last 32 bits. A host whose
+last label is all digits, or 0x followed by hex digits or none, in either case, ends in
+a number and is an address. `deny` is decided first: when an entry of it covers the host, the connection is denied
 in either mode and that entry is the rule reported; only then `allow` and the mode
 decide. `deny` beats `allow` whatever the shapes: `allow: ["*.example"]` with
 `deny: ["tracker.example"]` denies `tracker.example` and reaches `api.example`, and a
@@ -2895,12 +2904,18 @@ reached by default. Two rules, in either mode, observe included:
   local MCP server or model endpoint is reached through the proxy like everything else,
   decided and recorded, when the policy lists it, and the rule that lists it applies
   under observe as well. The session addresses such a server by the machine's host name or
-  an alias of it, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
+  an alias of it, as the hosts file or a name server gives it, with no search domain
+  added, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
+
+An address is judged as itself, an IPv6 address without its zone, and one that does not
+read is refused. An address in `::/96` (other than `::1` and `::`) or `64:ff9b::/96` is
+also judged by the IPv4 address in its last 32 bits, and refused where that address
+would be.
 
 A refusal the proxy can make without resolving, a literal address or `localhost`, is a
 `denied` `dev.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
-resolves to such an address passes the decision, is refused when dialled, and the
-runtime gets a `502`. Without the guard the way around a wall is through the proxy.
+resolves to such an address is refused the same way when it is dialled. Without the
+guard the way around a wall is through the proxy.
 
 **What crosses**, all three the session's, none containing a credential of the
 gateway's: the proxy, as a network address; the pseudo-terminal or the pipes, through

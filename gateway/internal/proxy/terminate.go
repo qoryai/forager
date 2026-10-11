@@ -377,7 +377,7 @@ func (c *Credential) header() (string, string, bool) {
 // against this machine's roots, dialled through the proxy's guarded dialler.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dial, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
+		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
 	})
 	return p.up
 }

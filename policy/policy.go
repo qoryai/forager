@@ -18,8 +18,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -171,7 +173,30 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	if err := json.Unmarshal(j, &p); err != nil {
 		return nil, nil, err
 	}
+	if err := formed(p.Egress); err != nil {
+		return nil, nil, err
+	}
 	return &p, j, nil
+}
+
+// formed refuses an egress entry naming a host, of allow, deny or paths, that is not
+// in the form [Host] gives it: a name, or an IPv4 address of four decimal parts with no
+// leading zero. A *. suffix is held by the schema alone.
+func formed(e Egress) error {
+	for _, list := range []struct {
+		name    string
+		entries []string
+	}{{"allow", e.Allow}, {"deny", e.Deny}, {"paths", slices.Sorted(maps.Keys(e.Paths))}} {
+		for _, entry := range list.entries {
+			if strings.HasPrefix(entry, "*.") {
+				continue
+			}
+			if form, ok := Host(entry); !ok || form != entry {
+				return fmt.Errorf("egress.%s holds %s, which is neither a host name nor an IPv4 address in canonical form", list.name, entry)
+			}
+		}
+	}
+	return nil
 }
 
 // Narrowed is a server's policy, fetched, with the node's policy applied to it: the
@@ -316,6 +341,86 @@ func Match(entries []string, host string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Host is the form of a host a request names that a decision is made on and a
+// connection dialled to, and whether the host has one. A name is ASCII letters, digits,
+// hyphens and dots, lower-cased and without one trailing dot, with no empty label. A
+// host is read as an IPv4 address when it ends in a number as the WHATWG URL Standard
+// tests it: its last label is all digits, or 0x followed by hex digits or none. It is
+// one only as four decimal parts with no leading zero, as [netip.ParseAddr] reads them,
+// so 0x7f.example is a name and 127.1 and example.0x1f have no form. A host with a
+// colon is an IPv6 address, the inside of a bracketed literal: it is one in RFC 5952's
+// form, hex digits in either case, with no zone, and not in ::/96 (except ::1),
+// ::ffff:0:0/96, ::ffff:0:0:0/96 or 64:ff9b::/96. Anything else has no form.
+func Host(host string) (string, bool) {
+	if strings.Contains(host, ":") {
+		a, err := netip.ParseAddr(host)
+		if err != nil || !a.Is6() || a.Zone() != "" || a.String() != strings.ToLower(host) || embedsIPv4(a) {
+			return "", false
+		}
+		return a.String(), true
+	}
+	for i := 0; i < len(host); i++ {
+		if c := host[i]; !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return "", false
+		}
+	}
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "" {
+		return "", false
+	}
+	labels := strings.Split(h, ".")
+	if slices.Contains(labels, "") {
+		return "", false
+	}
+	if endsInNumber(labels[len(labels)-1]) {
+		if a, err := netip.ParseAddr(h); err != nil || !a.Is4() {
+			return "", false
+		}
+	}
+	return h, true
+}
+
+// embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in
+// its last 32 bits: ::/96, the IPv4-compatible addresses, other than ::1, which is in
+// it but has a form; ::ffff:0:0/96, the IPv4-mapped ones; ::ffff:0:0:0/96, the
+// IPv4-translated ones; and 64:ff9b::/96, the well-known NAT64 prefix. Other ranges
+// that hold one, such as 2002::/16, are not among them.
+var embedded = []netip.Prefix{
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+}
+
+// embedsIPv4 reports whether a is in one of the embedded ranges, ::1 apart: the
+// loopback address carries no IPv4 address.
+func embedsIPv4(a netip.Addr) bool {
+	if a == netip.IPv6Loopback() {
+		return false
+	}
+	for _, p := range embedded {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// numeric reports whether s is all decimal digits.
+func numeric(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// endsInNumber reports whether a host's last label, lower-cased, makes it end in a
+// number as the WHATWG URL Standard tests it: all decimal digits, or 0x followed by hex
+// digits or none.
+func endsInNumber(last string) bool {
+	if digits, ok := strings.CutPrefix(last, "0x"); ok {
+		return strings.Trim(digits, "0123456789abcdef") == ""
+	}
+	return numeric(last)
 }
 
 // HostPaths returns the entry of a policy's path rules, by host in the allow list's
