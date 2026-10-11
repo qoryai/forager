@@ -1146,9 +1146,13 @@ release may change what an existing document does, and says so under Upgrading.
   The session makes, holds and checks the password as behind a separate gateway (Added,
   `session.RemoteGateway`), and the forwarder closes a connection whose first request
   does not carry it unanswered, before anything reaches the gateway's proxy, so another
-  process of the machine that reaches the port reaches nothing. A program that sends
-  its proxy URL's user name and password as `Proxy-Authorization` reaches the proxy as
-  before.
+  process of the machine that reaches the port reaches nothing. Without a wall, here and
+  behind a separate gateway, a connection to the forwarder carries one request, a
+  `CONNECT` and its tunnel or one plain HTTP request and its reply, which the forwarder
+  passes on with `Connection: close`, so the password of every request is checked and
+  taken off and none reaches the gateway. A program that sends its proxy URL's user name
+  and password as `Proxy-Authorization`, and opens a new connection after a reply with
+  `Connection: close`, reaches the proxy as before.
 
 #### Added
 

@@ -2473,11 +2473,14 @@ line off before anything reaches the gateway. Without a wall, on one machine as 
 separate gateway, the agent's proxy URL is the forwarder's address on loopback with a
 password, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
 makes for the run's forwarder alone, 32 bytes from the system's random source in
-base64url, which lives as long as the run and is never logged or recorded. The first
-request of every connection to the forwarder must carry it in its one
-`Proxy-Authorization`, Basic, the user name ignored, compared in constant time; the
-forwarder takes the header off, and closes a connection without it unanswered before
-anything reaches the gateway. The run key reaches neither the agent's
+base64url, which lives as long as the run and is never logged or recorded. A connection
+to the forwarder carries one request, a `CONNECT` and its tunnel or one plain HTTP
+request and its reply, so every request is checked: it must carry the password in its
+one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time. The
+forwarder takes the header off, passes the request on with `Connection: close`, passes
+on nothing the agent sends after a plain request, and closes the connection at the end
+of its reply; it closes a connection without the password unanswered before anything
+reaches the gateway. The run key reaches neither the agent's
 environment, from which the session takes `QORY_RUN_KEY` out whatever the agent
 inherits, nor any file, and the agent's view is the same as on one machine.
 The gateway takes the bytes after that line as the run's proxy's, as a connection the

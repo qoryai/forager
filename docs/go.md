@@ -103,13 +103,17 @@ run's proxy secret: without a wall the forwarder writes it, behind one the wall'
 does. Without a wall the agent's proxy URL is the forwarder on loopback with a password,
 `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session makes for
 the run's forwarder alone, 32 bytes from the system's random source in base64url, which
-lives as long as the run and is never logged or recorded. The first request of every
-connection must carry it in its one `Proxy-Authorization`, Basic, the user name ignored;
-the forwarder takes the header off and closes a connection without it unanswered, before
-anything reaches the gateway, so another process of the machine that reaches the port
-reaches nothing. Behind a separate gateway the forwarder reaches the gateway's one
-address over TLS instead, where a bound connection opens the run's proxy with the run
-key: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+lives as long as the run and is never logged or recorded. A connection to the forwarder
+carries one request, a `CONNECT` and its tunnel or one plain HTTP request and its reply,
+so every request is checked: it must carry the password in its one
+`Proxy-Authorization`, Basic, the user name ignored. The forwarder takes the header off,
+passes the request on with `Connection: close`, passes on nothing the agent sends after
+a plain request, and closes the connection at the end of its reply. It closes a
+connection without the password unanswered, before anything reaches the gateway, so
+another process of the machine that reaches the port reaches nothing. Behind a separate
+gateway the forwarder reaches the gateway's one address over TLS instead, where a bound
+connection opens the run's proxy with the run key: see
+[the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
