@@ -106,7 +106,8 @@ const (
 
 // The bounds of a request the one address refuses for its run key: the most of its body
 // the gateway reads, which the refusal's signature covers, and how long it waits for it.
-// A longer body, or one slower, closes the connection unanswered.
+// A longer body, or one slower, closes the connection unanswered. Any other answer than
+// a 2xx waits as long for the rest of its request's body.
 const (
 	refusedBody = 64 << 10
 	refusedWait = 10 * time.Second
@@ -365,9 +366,10 @@ func bearer(values []string) (string, bool) {
 // Connection: close, once its body is read within [refusedBody] and [refusedWait], and
 // the connection closed unanswered when it is not; then the link's handler, with the
 // run key in the request's context and no Authorization left on it, every answer of
-// it other than a 2xx with Connection: close. The connection is admitted once a run
-// request, a reload or a batch is answered 2xx ([forLiveRun]), after the answer. Every
-// answer is signed under the gateway's access key ([signedWriter]).
+// it other than a 2xx with Connection: close, once the rest of its body is read within
+// [refusedWait], and the connection closed unanswered when it is not. The connection is
+// admitted once a run request, a reload or a batch is answered 2xx ([forLiveRun]), after
+// the answer. Every answer is signed under the gateway's access key ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -405,8 +407,15 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 		success := sw.status == 0 || sw.status >= 200 && sw.status < 300
 		if !success {
 			// A run key that passed, of a run that ended or that the server refused among
-			// them: the connection goes with the answer.
+			// them: the connection goes with the answer, signed over a body read whole
+			// within [refusedWait]; one that is not gets no answer, as a refused run key's.
 			sw.header.Set("Connection", "close")
+			rc := http.NewResponseController(w)
+			rc.SetReadDeadline(time.Now().Add(refusedWait))
+			if !sw.flush(true) {
+				rc.SetReadDeadline(time.Now())
+				panic(http.ErrAbortHandler)
+			}
 		}
 		sw.Flush()
 		if success && live && admit != nil {
@@ -476,12 +485,15 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 func (b *capturedBody) Close() error { return b.r.Close() }
 
 // answerRequest is the third line of the answer's signature over the request's body,
-// up to [maxBound]: what the handler read, then the rest; empty for a GET.
-func (b *capturedBody) answerRequest() string {
+// up to [maxBound]: what the handler read, then the rest; empty for a GET. It reports
+// whether it read the body whole, to its end or to [maxBound].
+func (b *capturedBody) answerRequest() (string, bool) {
+	whole := true
 	if b.post && b.n < maxBound {
-		io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
+		_, err := io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
+		whole = err == nil
 	}
-	return hex.EncodeToString(b.h.Sum(nil))
+	return hex.EncodeToString(b.h.Sum(nil)), whole
 }
 
 // signedWriter holds an answer on a bound connection until it is whole, then writes it
@@ -520,16 +532,25 @@ func (s *signedWriter) Write(b []byte) (int, error) {
 }
 
 // Flush signs and writes the answer held, once.
-func (s *signedWriter) Flush() {
+func (s *signedWriter) Flush() { s.flush(false) }
+
+// flush signs and writes the answer held, once, and reports whether it did: with whole,
+// it writes nothing when the request's body was not read whole
+// ([capturedBody.answerRequest]). An answer already written is reported written.
+func (s *signedWriter) flush(whole bool) bool {
 	if s.done {
-		return
+		return true
 	}
 	s.done = true
 	if s.status == 0 {
 		s.status = http.StatusOK
 	}
+	request, read := s.body.answerRequest()
+	if whole && !read {
+		return false
+	}
 	a := accesskey.Answer{
-		Link: true, Status: s.status, RequestSignature: s.body.answerRequest(), Body: s.buf.Bytes(),
+		Link: true, Status: s.status, RequestSignature: request, Body: s.buf.Bytes(),
 		Configuration: s.header.Get(server.HeaderConfiguration), RunConfiguration: s.header.Get(server.HeaderRunConfiguration),
 	}
 	h := s.w.Header()
@@ -542,6 +563,7 @@ func (s *signedWriter) Flush() {
 	if f, ok := s.w.(http.Flusher); ok {
 		f.Flush()
 	}
+	return true
 }
 
 // proxyAddress is the shape of the discovery's proxy.address,

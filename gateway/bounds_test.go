@@ -143,6 +143,24 @@ func TestARequestRefusedForItsRunKeyIsAnsweredOnce(t *testing.T) {
 	b.Close()
 }
 
+// TestTheBodyAfterAnAnswerOtherThan2xxIsBounded pins what the one address waits for of
+// a request's body once its run key passed and its answer is other than a 2xx: the rest
+// of the body within the wait. A batch of a run that ended that sends 100 KiB of its
+// body and then stalls is closed unanswered then, not answered with a signature over
+// what came.
+func TestTheBodyAfterAnAnswerOtherThan2xxIsBounded(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	_, key := endedRun(t, r)
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	fmt.Fprintf(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", key, server.ContentType, 1<<20)
+	b.c.Write(bytes.Repeat([]byte("x"), 100<<10))
+	closedUnansweredWithin(t, "a batch of a run that ended that stalls after 100 KiB", b.r, b.c, gateway.RefusedWait+2*time.Second)
+}
+
 // TestTheLinksBoundsOnTheOneAddress pins the link's server there: a request whose head
 // is over 16 KiB is refused before its run key is read, and every request must arrive
 // whole within 60 seconds.
