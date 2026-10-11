@@ -670,7 +670,7 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 
 // TestViaKeepsItsTrustOverACallersTLSDialing pins that a caller's transport that makes
 // TLS itself cannot switch via's trust off: net/http uses DialTLSContext in place of
-// TLSClientConfig, and here it accepts any certificate, yet under via the system's roots
+// TLSClientConfig, and here it accepts any certificate; under via the system's roots
 // still refuse the test's authority and a pin of another key still refuses the
 // gateway's certificate, while ca_file and the right pin reach it.
 func TestViaKeepsItsTrustOverACallersTLSDialing(t *testing.T) {
