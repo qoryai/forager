@@ -1,0 +1,8 @@
+# via.url is an origin: the target of every request stays the server's.
+version: 1
+url: https://qory.example
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
+via:
+  url: https://gateway.example:8443/relay

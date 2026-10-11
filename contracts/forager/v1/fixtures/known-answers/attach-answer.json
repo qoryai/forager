@@ -1,0 +1,1 @@
+{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"labels":{"repository":"acme/shop"},"about":{"title":"Fix the failing build"}}

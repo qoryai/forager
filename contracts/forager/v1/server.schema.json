@@ -40,6 +40,30 @@
           }
         }
       }
+    },
+    "via": {
+      "description": "The gateway every request to the server goes through, for a keyed machine or a starter behind it: enrolment, discovery, the registration and the outcome each go to via.url's origin with the target, the path and the query, unchanged, discovery's absolute run.url rebased on it too, and the gateway relays them to the server and passes each answer back byte for byte, so every signature is the server's as without it. url stays the server's own, so records and texts name the real server. The chain of the gateway's certificate is always checked on a via connection, since a relayed registration's answer carries the run key. Absent, every request goes to url.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "description": "The gateway's https origin: a host, with a port when there is one, and nothing after it.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://[^/?#@\\s]+$"
+        },
+        "ca_file": {
+          "description": "A PEM file of the authorities the gateway's certificate chains to. Set, it replaces the system's roots for via connections; absent means the system's roots.",
+          "type": "string",
+          "minLength": 1
+        },
+        "certificate_sha256": {
+          "description": "The SHA-256 of the gateway certificate's public key, its DER SubjectPublicKeyInfo, in standard base64 with padding, 44 characters ending in =. Set, only a certificate with that public key is accepted, and its chain is still checked. Absent means no pin.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        }
+      }
     }
   }
 }

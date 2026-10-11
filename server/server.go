@@ -9,7 +9,13 @@
 // where events go and where runs register; [Client.Register] posts the registration a
 // run starts with and reads the run configuration its answer carries;
 // [Client.RunConfiguration] fetches that again by the run's id; [Client.Deliver] posts
-// one signed batch and reads the digests the answer contains. Every request
+// one signed batch and reads the digests the answer contains, and the end member a
+// signed 2xx may carry ([ReadEnd]). A run through a gateway uses three calls more:
+// [Client.RegisterThroughGateway] posts a [GatewayRegistration] and reads the run key
+// its answer carries, [Client.Attach] is the gateway's attach of the run with that run
+// key, and [Client.PostOutcome] posts the run's starter's [Outcome]. With the server
+// document's [Via] set, every request goes to the gateway's origin with its target
+// unchanged, and the gateway relays it to the server. Every request
 // contains the access key id, the instance id and name, the contract revision and the
 // user agent, and is signed with Ed25519 under the access key. Every answer but a 401
 // is verified under the pin before its body or headers are read, and the client logs
@@ -92,6 +98,10 @@ type Config struct {
 	AccessKeyID string `json:"access_key_id"`
 	// ApiaryPublicKey is the pin: every answer is verified under one of its keys.
 	ApiaryPublicKey accesskey.Pin `json:"apiary_public_key"`
+	// Via, when set, is the gateway every request to the server goes through: each is
+	// sent to Via's origin with its target unchanged ([Via]). URL stays the server's
+	// own.
+	Via *Via `json:"via,omitempty"`
 }
 
 // Error is a document that is not a server document. A run does not start on it.
@@ -332,6 +342,11 @@ func (c *Client) Check() error {
 			return fmt.Errorf("the instance's name: %w", err)
 		}
 	}
+	if c.Config.Via != nil {
+		if err := c.Config.Via.Check(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -339,8 +354,9 @@ func (c *Client) Check() error {
 // Timeout, and in either case one that follows no redirect and keeps no cookie. Go
 // copies a request's headers to wherever a redirect points, so a followed 3xx would
 // hand the access key id, the signature and the timestamp to another host and take the
-// answer from it. A 3xx is a status like any other.
-func (c *Client) http() *http.Client {
+// answer from it. A 3xx is a status like any other. With Via set, its transport is the
+// caller's, or Go's default, with Via's trust in place of its TLS ([Via.Transport]).
+func (c *Client) http() (*http.Client, error) {
 	hc := &http.Client{Timeout: Timeout}
 	if c.HTTP != nil {
 		cp := *c.HTTP
@@ -348,7 +364,14 @@ func (c *Client) http() *http.Client {
 	}
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	hc.Jar = nil
-	return hc
+	if v := c.Config.Via; v != nil {
+		t, err := v.transport(hc.Transport)
+		if err != nil {
+			return nil, err
+		}
+		hc.Transport = t
+	}
+	return hc, nil
 }
 
 // answer is what the server answered one request: its status and body, and whether
@@ -365,8 +388,19 @@ type answer struct {
 // signature under the pin, bound to this request's signature. A GET carries the
 // timestamp; a POST's signature covers its body. A 401 is never signed, and a body
 // over max, or a body over MaxRefusal with a status other than 200, counts as
-// unsigned. An error is a transport failure: no answer.
+// unsigned. An error is a transport failure: no answer. With Via set, the request goes
+// to Via's origin with its target, and so its signature, unchanged.
 func (c *Client) send(ctx context.Context, method, u string, body []byte, max int, set func(http.Header)) (*answer, error) {
+	if v := c.Config.Via; v != nil {
+		var err error
+		if u, err = v.rebase(u); err != nil {
+			return nil, err
+		}
+	}
+	hc, err := c.http()
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -396,7 +430,7 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 		return nil, err
 	}
 	req.Header.Set(HeaderSignature, sig)
-	resp, err := c.http().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -682,6 +716,11 @@ type Delivery struct {
 	// its code, status, names, who refused and its message. Nil for any other answer,
 	// and always toward the server.
 	Refusal *accesskey.Refusal
+	// ServerEnd is, toward the server, the end member of a signed 2xx: the outcome the
+	// run's starter gave, which the server sends on every 2xx for the run once it has
+	// recorded one, until the run's dev.qory.run.exited arrives ([ReadEnd]). Nil for any
+	// other answer, and always on the link.
+	ServerEnd *ServerEnd
 }
 
 // Authentic reports whether the answer is one to read: signed under the pin toward the
@@ -731,6 +770,9 @@ func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body
 		d.Digests = Digests{Configuration: a.header.Get(HeaderConfiguration), RunConfiguration: a.header.Get(HeaderRunConfiguration)}
 		if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 			d.Code = r.Code
+		}
+		if d.Status >= 200 && d.Status < 300 {
+			d.ServerEnd = ReadEnd(a.body)
 		}
 	}
 	return d, nil

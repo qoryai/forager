@@ -1,0 +1,13 @@
+# A keyed machine or a starter behind a gateway: every request to the server goes to
+# via.url's origin with its target unchanged, and the gateway relays it. url stays the
+# server's own. The gateway's certificate chains to the authorities of ca_file, and its
+# public key is pinned besides.
+version: 1
+url: https://qory.example
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
+via:
+  url: https://gateway.example:8443
+  ca_file: /etc/qory/gateway-ca.pem
+  certificate_sha256: 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=

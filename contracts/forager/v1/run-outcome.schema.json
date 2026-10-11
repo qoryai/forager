@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-outcome.schema.json",
+  "title": "Run outcome",
+  "description": "The body of the signed POST to <run.url>/<run_id>/outcome, application/json, with which the run's starter says how the run ended. It is signed by any active key of the node or node pool that registered the run, under qory-request-ed25519-v1, sent directly or through a gateway's relay. The outcome sets the run's state whenever it arrives while the run's record is kept, before or after dev.qory.run.exited; the exit code, the signal and Forager's own reason stay on record beside it. Each run gets one outcome: the same one repeated is accepted, and a different one is a signed 409 outcome_given. With no state, the outcome is cancelled with the reason stopped. The answer is a signed 200 whose body is run-outcome-answer.schema.json. A server refuses a time outside 300 seconds of its clock, either way, with an unsigned 401. A member this schema does not define is refused, invalid_request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "time"],
+  "properties": {
+    "version": {
+      "description": "The document format. A server refuses a version it does not read.",
+      "const": 1
+    },
+    "state": {
+      "description": "How the run ended, dev.qory.run.exited's vocabulary. Absent, the outcome is cancelled with the reason stopped.",
+      "enum": ["succeeded", "failed", "cancelled"]
+    },
+    "reason": {
+      "description": "The starter's reason: a code, a lower-case letter, then lower-case letters, digits and underscores, up to 64. A reason that is no code, or that is one of Forager's reserved codes, is dropped, and the outcome is kept. Forager's client sends a reason only with a state.",
+      "type": "string"
+    },
+    "time": {
+      "description": "When the starter gave the outcome, RFC 3339 in UTC with whole seconds. A server refuses a time more than 300 seconds from its clock, either way, with an unsigned 401.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

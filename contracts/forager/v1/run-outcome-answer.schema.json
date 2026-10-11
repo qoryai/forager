@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-outcome-answer.schema.json",
+  "title": "Run outcome answer",
+  "description": "The body of the server's signed 200, application/json, to a run's outcome: {\"version\": 1}, the outcome recorded. The same bytes under any active key of the registering node get it again. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    }
+  }
+}
