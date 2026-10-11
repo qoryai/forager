@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -129,8 +130,9 @@ func gatewayControl(t *testing.T) *control {
 }
 
 // startRemote starts a separate gateway at the control, a gatewayControl when nil, with
-// cfg's Dir, Policy and test settings kept. At the test's end it is closed, and no line
-// it reported holds a run key it was sent.
+// cfg's Dir, Policy, Server and test settings kept, the control's Server when it has
+// none. At the test's end it is closed, and no line it reported holds a run key it was
+// sent.
 func startRemote(t *testing.T, c *control, cfg gateway.Config) *remote {
 	t.Helper()
 	if c == nil {
@@ -138,7 +140,10 @@ func startRemote(t *testing.T, c *control, cfg gateway.Config) *remote {
 	}
 	certFile, keyFile, pool := testCertificate(t, t.TempDir())
 	r := &remote{t: t, c: c, pool: pool}
-	cfg.Listen, cfg.TLS, cfg.Server = "127.0.0.1:0", &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, c.server()
+	cfg.Listen, cfg.TLS = "127.0.0.1:0", &gateway.TLS{CertFile: certFile, KeyFile: keyFile}
+	if cfg.Server == nil {
+		cfg.Server = c.server()
+	}
 	if cfg.Dir == "" {
 		cfg.Dir = t.TempDir()
 	}
@@ -897,6 +902,50 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	}
 	late := runKeyFor(t, event.NewRunID(), nil)
 	refused(t, "a run not held past attach_by", r.do(t, late, http.MethodGet, "/qory-link/configuration", nil), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(mustRunID(t, late), "run_key_expired"))
+}
+
+// TestTheGatewayKeepsItsPin pins that the gateway verifies run keys under the pin it
+// started with: once it has started, the caller's Server losing the signer's key, in
+// place and as a new pin, changes nothing, and a key of the new pin is not the gateway's.
+func TestTheGatewayKeepsItsPin(t *testing.T) {
+	c := gatewayControl(t)
+	srv := c.server()
+	srv.ApiaryPublicKey = slices.Clone(testPin)
+	r := startRemote(t, c, gateway.Config{Server: srv})
+	other := mustGenerate()
+	otherPin := accesskey.ServerKey{Alg: "ed25519", PublicKey: other.PublicKey().String()}
+	good := runKeyFor(t, event.NewRunID(), nil)
+	// The caller changes its Server as the gateway reads run keys: under -race, a
+	// gateway that read the caller's would be a data race.
+	stop, changed := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(changed)
+		pin := srv.ApiaryPublicKey
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			pin[0] = otherPin
+			srv.ApiaryPublicKey = accesskey.Pin{otherPin}
+		}
+	}()
+	if a := r.do(t, good, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Errorf("a run key of the signer as the caller's pin loses it: %d %s", a.status, a.body)
+	}
+	close(stop)
+	<-changed
+	if a := r.do(t, good, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Errorf("a run key of the signer once the caller's pin lost it: %d %s", a.status, a.body)
+	}
+	runID := event.NewRunID()
+	unpinned, err := runkey.Key{RunID: runID, Workspace: testWorkspace, NodeID: keyNode, Gateway: testGateway, InstanceID: keyInstance,
+		GatewayURL: "https://gateway.example:8443", GatewayKeys: gatewayKeys(), Issued: time.Now().Truncate(time.Second), AttachBy: time.Now().Add(time.Hour).Truncate(time.Second)}.Sign(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused(t, "a run key of the caller's new pin", r.do(t, unpinned, http.MethodGet, "/qory-link/configuration", nil), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
 }
 
 // TestTheGatewayAllowsTheSkewPastAttachBy pins the skew the one address allows a run
