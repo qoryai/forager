@@ -912,9 +912,9 @@ compose keeps it out of git:
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
-- `answered`: an empty file the gateway writes before it answers a run request; a
-  gateway that starts again keeps a record that holds it, and the run request that comes
-  again is `409` `run_attached`.
+- `answered`: behind a separate gateway, an empty file the gateway writes before it
+  answers a run request; a gateway that starts again keeps a record that holds it, and
+  the run request that comes again is `409` `run_attached`.
 
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its own
