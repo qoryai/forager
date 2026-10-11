@@ -13,11 +13,11 @@
       "pattern": "^[a-z][a-z0-9_]{0,63}$"
     },
     "names": {
-      "description": "The names the refusal concerns, as dev.qory.run.refused contains them. A name never carries a value, except the run credential's own value in target_differs_from_credential and differs_from_credential, <member>=<the run credential's value>. Absent when the refusal concerns none.",
+      "description": "The names the refusal concerns, as dev.qory.run.refused contains them. A name never carries a value. Absent when the refusal concerns none.",
       "$ref": "events/run.refused.schema.json#/properties/names"
     },
     "message": {
-      "description": "The text the session gives the user as the run's error, today's text word for word, on every refusal of the link: the 403, 409, 400 and 410, the server's passed on, and the 500 internal of a run that fails to open for a reason without a code. For a refusal of the server's it names Qory Apiary's URL as today. A session that reads none uses the code. It may span lines: tab and newline are its only control characters, and every other C0 control character, DEL and every C1 control character, U+0080 to U+009F, is refused. It holds no secret, no run credential and no image reference.",
+      "description": "The text the session gives the user as the run's error, today's text word for word, on every refusal of the link: the 403, 409, 400 and 410, the server's passed on, and the 500 internal of a run that fails to open for a reason without a code. For a refusal of the server's it names Qory Apiary's URL as today. A session that reads none uses the code. It may span lines: tab and newline are its only control characters, and every other C0 control character, DEL and every C1 control character, U+0080 to U+009F, is refused. It holds no secret and no image reference.",
       "type": "string",
       "minLength": 1,
       "maxLength": 8192,
