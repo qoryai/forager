@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -592,8 +593,13 @@ func newRelay(t *testing.T, signer, key *accesskey.Key) *relay {
 // outcome and the registration of discovery's absolute run.url each go to via.url's
 // origin with the target, the query included, unchanged and signed as without via, while
 // url stays the server's own; the chain is checked against ca_file, the pin is honoured,
-// and without ca_file the system's roots refuse the test's authority.
+// and without ca_file the system's roots refuse the test's authority. No proxy is used,
+// the environment's or the caller's transport's: with HTTPS_PROXY and HTTP_PROXY naming
+// a proxy nobody listens at, and a caller's transport whose proxy is that one, every
+// request still reaches the gateway itself.
 func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	signer, key := generate(t), generate(t)
 	g := newRelay(t, signer, key)
 	client := func(v *server.Via) *server.Client {
@@ -638,6 +644,12 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 	if _, _, err := client(&server.Via{URL: g.srv.URL, CAFile: g.caFile}).Discover(ctx); err != nil {
 		t.Errorf("ca_file without a pin: %v", err)
 	}
+	unreachable, _ := url.Parse("http://127.0.0.1:1")
+	withProxy := client(&server.Via{URL: g.srv.URL, CAFile: g.caFile})
+	withProxy.HTTP = &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(unreachable)}}
+	if _, _, err := withProxy.Discover(ctx); err != nil {
+		t.Errorf("a caller's transport with a proxy: %v; want the gateway reached itself", err)
+	}
 }
 
 // TestViaIsChecked pins what via refuses before anything is sent: a URL that is not an
@@ -677,9 +689,12 @@ func TestViaIsChecked(t *testing.T) {
 
 // TestPostViaEnrolsThroughTheGateway pins accesskey's PostVia with via's transport: the
 // enrolment goes to via.url's origin at /.well-known/qory-enrolment, its answer verifies
-// under the server's key as without the gateway, and a via URL that is not https is
-// refused before anything is sent.
+// under the server's key as without the gateway, with HTTPS_PROXY and HTTP_PROXY naming
+// a proxy nobody listens at; a via URL that is not https, and a nil client, which would
+// carry none of the gateway's trust, are refused before anything is sent.
 func TestPostViaEnrolsThroughTheGateway(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	signer := generate(t)
 	var paths []string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -715,7 +730,10 @@ func TestPostViaEnrolsThroughTheGateway(t *testing.T) {
 	if len(paths) != 1 || paths[0] != accesskey.EnrolmentPath {
 		t.Errorf("targets %q", paths)
 	}
-	if _, err := r.PostVia(context.Background(), nil, "https://qory.example", "http://127.0.0.1:1", "qory/test"); err == nil || len(paths) != 1 {
+	if _, err := r.PostVia(context.Background(), &http.Client{Transport: tr}, "https://qory.example", "http://127.0.0.1:1", "qory/test"); err == nil || len(paths) != 1 {
 		t.Errorf("an http via: %v", err)
+	}
+	if _, err := r.PostVia(context.Background(), nil, "https://qory.example", srv.URL, "qory/test"); err == nil || len(paths) != 1 {
+		t.Errorf("a nil client: %v; want it refused before anything is sent", err)
 	}
 }

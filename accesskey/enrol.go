@@ -300,10 +300,14 @@ func (r *EnrolmentRequest) Post(ctx context.Context, hc *http.Client, serverURL,
 // the gateway relays it to the server and passes the answer back byte for byte, so the
 // answer verifies under the server's key as without the gateway. serverURL is the
 // server's origin, which errors name; viaURL is the gateway's https origin. hc is the
-// client, nil for one with a ten-second timeout; it carries the gateway's trust, the
-// transport of the server package's Via.Transport say. In either case it follows no
-// redirect and keeps no cookie.
+// client, and is required: it carries the gateway's trust, so the caller builds it
+// with the transport of the server package's Via.Transport, which uses no proxy of the
+// environment, TLS 1.3 alone and the via's ca_file and pin. A nil hc is an error, and
+// nothing is sent. The copy of hc used follows no redirect and keeps no cookie.
 func (r *EnrolmentRequest) PostVia(ctx context.Context, hc *http.Client, serverURL, viaURL, userAgent string) (*EnrolmentAnswer, error) {
+	if hc == nil {
+		return nil, errors.New("an enrolment through a gateway needs a client with the gateway's trust, built from the server package's Via.Transport")
+	}
 	if err := checkOrigin(serverURL); err != nil {
 		return nil, err
 	}

@@ -20,7 +20,8 @@ import (
 // DER SubjectPublicKeyInfo in standard base64 with padding, 44 characters ending in
 // "=", only a certificate with that public key is accepted besides. A relayed
 // registration's answer carries the run key, so this trust is never relaxed. The
-// connection is TLS 1.3 alone.
+// connection is TLS 1.3 alone, made to the gateway itself: no proxy of the
+// environment is used.
 type Via struct {
 	URL               string `json:"url"`
 	CAFile            string `json:"ca_file,omitempty"`
@@ -49,17 +50,18 @@ func (v Via) Check() error {
 }
 
 // Transport returns a transport to the gateway with Via's trust, as [Client] uses with
-// Via set: Go's default transport, cloned, with TLS 1.3 alone, the chain checked for
-// URL's host name against the system's roots or CAFile's authorities, and the pin when
-// CertificateSHA256 is set. A caller that sends to the gateway itself, an enrolment
+// Via set: Go's default transport, cloned, with no proxy of the environment, TLS 1.3
+// alone, the chain checked for URL's host name against the system's roots or CAFile's
+// authorities, and the pin when CertificateSHA256 is set. A caller that sends to the gateway itself, an enrolment
 // through [accesskey.EnrolmentRequest.PostVia] say, uses it in its http.Client.
 func (v Via) Transport() (*http.Transport, error) {
 	return v.transport(nil)
 }
 
 // transport is base, cloned, or Go's default transport when base is nil, with Via's
-// trust in place of its TLS and no connection kept idle, since a [Client] makes one for
-// each request. A base that is not an *http.Transport cannot carry the trust.
+// trust in place of its TLS, no proxy, the environment's or base's, so the request
+// reaches the gateway itself, and no connection kept idle, since a [Client] makes one
+// for each request. A base that is not an *http.Transport cannot carry the trust.
 func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 	u, err := v.origin()
 	if err != nil {
@@ -79,6 +81,7 @@ func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 		return nil, errors.New("via needs the client's transport to be an *http.Transport, which carries its trust")
 	}
 	t.TLSClientConfig = cfg
+	t.Proxy = nil
 	t.DisableKeepAlives = true
 	t.ForceAttemptHTTP2 = false
 	return t, nil
