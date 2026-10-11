@@ -99,10 +99,13 @@ type station struct {
 	hits  atomic.Int32
 	// runDigest is the run configuration digest the last delivery carried.
 	runDigest atomic.Pointer[string]
+	// closedCode is the code of the signed 410 a closed station answers, run_closed when
+	// nil.
+	closedCode atomic.Pointer[string]
 }
 
 // newStation starts a receiver; closed answers every delivery with a signed 410
-// run_closed, a server's 410 with a code.
+// run_closed, or the station's closedCode, a server's 410 with a code.
 func newStation(t *testing.T, stop func(string) bool, closed bool) *station {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
@@ -128,7 +131,11 @@ func newStation(t *testing.T, stop func(string) bool, closed bool) *station {
 			return
 		}
 		if closed {
-			body := []byte(`{"error":"run_closed"}`)
+			code := "run_closed"
+			if c := s.closedCode.Load(); c != nil {
+				code = *c
+			}
+			body := []byte(`{"error":"` + code + `"}`)
 			w.Header().Set(server.HeaderSignature, signer.SignAnswer(accesskey.Answer{Status: http.StatusGone, RequestSignature: r.Header.Get(server.HeaderSignature), Body: body}))
 			w.WriteHeader(http.StatusGone)
 			w.Write(body)
@@ -263,30 +270,36 @@ func TestReceiverStopEndsDeliveries(t *testing.T) {
 	}
 }
 
-// TestRunClosedIsAStop pins a server's signed 410 run_closed: a stop like any other
-// signed 410. The sink sends nothing more, records the stop, so a resend sends nothing
-// either, reports the one line of a stop, and ends no run.
+// TestRunClosedIsAStop pins a server's signed 410 run_closed, and workspace_not_served,
+// the answer once the gateway that attached the run may no longer serve its workspace:
+// each a stop like any other signed 410. The sink sends nothing more, records the stop,
+// so a resend sends nothing either, reports the one line of a stop, and ends no run.
 func TestRunClosedIsAStop(t *testing.T) {
-	s := newStation(t, nil, true)
-	dir := t.TempDir()
-	var mu sync.Mutex
-	var notes []string
-	w := sink.NewServer(client(s), target(s), dir, func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }, nil)
-	e := event.NewEmitter(event.NewRunID(), nil)
-	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
-	waitFor(t, w.Stopped)
-	w.Write(e.Make(event.RunExited, map[string]any{"state": "succeeded"}))
-	w.Close(context.Background())
-	if s.hits.Load() != 1 || w.RunClosed() || w.Undelivered() != 0 {
-		t.Errorf("%d deliveries, closed %v, %d undelivered", s.hits.Load(), w.RunClosed(), w.Undelivered())
-	}
-	if _, stopped, err := sink.Delivered(dir); err != nil || !stopped {
-		t.Errorf("the record of accepted batches has no stop: %v", err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
-		t.Errorf("reports %q, want one: %q", notes, want)
+	for _, code := range []string{"run_closed", "workspace_not_served"} {
+		t.Run(code, func(t *testing.T) {
+			s := newStation(t, nil, true)
+			s.closedCode.Store(&code)
+			dir := t.TempDir()
+			var mu sync.Mutex
+			var notes []string
+			w := sink.NewServer(client(s), target(s), dir, func(l string) { mu.Lock(); notes = append(notes, l); mu.Unlock() }, nil)
+			e := event.NewEmitter(event.NewRunID(), nil)
+			w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+			waitFor(t, w.Stopped)
+			w.Write(e.Make(event.RunExited, map[string]any{"state": "succeeded"}))
+			w.Close(context.Background())
+			if s.hits.Load() != 1 || w.RunClosed() || w.Undelivered() != 0 {
+				t.Errorf("%d deliveries, closed %v, %d undelivered", s.hits.Load(), w.RunClosed(), w.Undelivered())
+			}
+			if _, stopped, err := sink.Delivered(dir); err != nil || !stopped {
+				t.Errorf("the record of accepted batches has no stop: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if want := "the server wants no more events of this run; the run goes on"; len(notes) != 1 || notes[0] != want {
+				t.Errorf("reports %q, want one: %q", notes, want)
+			}
+		})
 	}
 }
 

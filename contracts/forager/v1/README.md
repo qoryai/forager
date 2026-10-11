@@ -1177,7 +1177,9 @@ are not all of one run, included; `401` for a GET's timestamp, or a registration
 in order: for a run the server holds, a batch from a key outside the one node its
 batches are accepted from, a signed `409` `wrong_gateway` or `wrong_node` (After the
 attach, below); deduplication, so a batch whose delivery id or event ids the server
-already accepted gets the same `2xx` again; then `410` for an event of a run the server
+already accepted gets the same `2xx` again; then, for a run behind a gateway, a signed
+`410` `workspace_not_served` when the gateway that attached it may no longer serve the
+run's workspace, decided as at the attach; then `410` for an event of a run the server
 wants nothing more of. The run endpoint's checks, for a registration, in order: the same
 bytes under any active key of the node or node pool that registered the run get the
 stored answer again, the same run key included, so a key replaced while the run waits
@@ -1354,8 +1356,10 @@ force, Forager fetches the run's configuration again with a signed
 `run-configuration.schema.json` document with the same headers as the registration's
 answer. The server answers it only for a run its node registered, or for the gateway
 node that attached it, under any of that node's active keys, and anything else is
-`404`. A reload that fails, a `404` among them, leaves the policy in
-force; a signed `410` to it stops the deliveries, as to a batch (Delivery, below).
+`404`. For a run behind a gateway that may no longer serve the run's workspace, decided
+as at the attach, the answer is a signed `410` `workspace_not_served`, never a run
+configuration. A reload that fails, a `404` among them, leaves the policy in force; a
+signed `410` to it stops the deliveries, as to a batch (Delivery, below).
 
 ```json
 {"version": 1,
@@ -1528,7 +1532,11 @@ active keys, gets the answer the attaching instance would: a resend after a rest
 loss. Until then, an outcome alone doesn't change who may send: a batch from another
 instance is still refused. After a loss, only the attaching instance's heartbeat makes
 the run live again. A run that never attached is never opened. Heartbeats are
-`dev.qory.run.heartbeat` events in batches, as on a direct run.
+`dev.qory.run.heartbeat` events in batches, as on a direct run. Whether the gateway may
+serve the run's workspace is decided again at each batch, heartbeat and reload, by the
+attach's test, never by the node's current choice: a change of choice or of default
+leaves an attached run where it is (Through a gateway, above), and a gateway that may no
+longer serve the workspace is answered a signed `410` `workspace_not_served`.
 
 **The outcome.** The run's starter says how the run ended with a signed
 `POST <run.url>/<run_id>/outcome`, `Content-Type: application/json`, signed by any active

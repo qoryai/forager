@@ -424,6 +424,14 @@ func (reg *registration) from(v verified, now time.Time) bool {
 	return !reg.through() || reg.instance == v.instance || !reg.live(now)
 }
 
+// serving reports whether the run's batches and reloads may still be served: always for
+// a direct run, and for a run through a gateway while the gateway that attached it may
+// serve the run's workspace, by the attach's test and never by the node's current
+// choice. A run through a gateway not yet attached has no batches or reloads to refuse.
+func (reg *registration) serving(h *Handler) bool {
+	return !reg.through() || reg.attached == "" || h.serves(reg.attached, reg.run.Workspace)
+}
+
 // verified is a request that verified: its access key and id, the node it stands for,
 // its signed instance id, and the signature an answer is bound to.
 type verified struct {
@@ -984,15 +992,22 @@ func (h *Handler) outcome(w http.ResponseWriter, v verified, runID string, body 
 // reload answers one verified reload of a run's configuration by its id: a run whose
 // reloads the request may not send, from the node that registered a direct run or the
 // gateway node that attached a run through a gateway, from the attaching instance
-// alone, before and after the run's end, or a run not registered, 404; a run it wants
-// nothing more of, 410; the hook's refusal; otherwise the run configuration, 200.
+// alone, before and after the run's end, or a run not registered, 404; a run through a
+// gateway that may no longer serve the run's workspace, decided as at the attach, 410
+// workspace_not_served; a run it wants nothing more of, 410; the hook's refusal;
+// otherwise the run configuration, 200.
 func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.mu.Lock()
 	reg := h.runs[runID]
 	allowed := reg != nil && reg.reloadable(v)
+	serving := allowed && reg.serving(h)
 	h.mu.Unlock()
 	if !allowed {
 		h.answer(w, v, http.StatusNotFound, nil)
+		return
+	}
+	if !serving {
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
 		return
 	}
 	if h.Stop != nil && h.Stop(runID) {
@@ -1178,8 +1193,10 @@ type head struct {
 // run it holds the registration of from another node than the one its batches are
 // accepted from, or, while a run through a gateway is live, from another instance than
 // the attaching one, 409 wrong_gateway for a run through a gateway and wrong_node for a
-// direct run; one whose events the store holds every one of, 202 again; an event of a
-// run it wants nothing more of, 410; otherwise each new event stored and 202. Once the
+// direct run; one whose events the store holds every one of, 202 again; for a run
+// through a gateway, once the gateway that attached it may no longer serve the run's
+// workspace, decided as at the attach, 410 workspace_not_served; an event of a run it
+// wants nothing more of, 410; otherwise each new event stored and 202. Once the
 // run's starter gave its outcome, a 202 carries it as the end member, until the batch
 // that carries the run's dev.qory.run.exited, whose answer and every one after it holds
 // none.
@@ -1215,6 +1232,11 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		if !h.Store.Seen(hd.ID) {
 			fresh = true
 		}
+	}
+	if fresh && reg != nil && !reg.serving(h) {
+		h.digests(w, v, reg)
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
+		return
 	}
 	if fresh && h.Stop != nil && h.Stop(subject) {
 		h.digests(w, v, reg)

@@ -534,6 +534,9 @@ release may change what an existing document does, and says so under Upgrading.
   run. A `server.Attach` prints and logs its run key as `[redacted]`, however it is
   printed. `fixtures/run-attach-answer/` has two answers, and `fixtures/invalid/` refused
   attaches and answers.
+- Qory Apiary answers a run's batch or reload with a signed `410` `workspace_not_served`
+  once the gateway that attached the run may no longer serve its workspace, decided as at
+  the attach, and the reference receiver answers the same.
 - The starter's outcome, `POST <run.url>/<run_id>/outcome`, signed by any active key of
   the node or node pool that registered the run, sent directly or through a gateway's
   relay: its body, `run-outcome.schema.json`, holds an optional `state`, `succeeded`,

@@ -109,11 +109,16 @@ func (s *stand) at() string { return server.RegistrationTime(s.now) }
 // instance: a POST of application/json, a batch when the target is the events
 // endpoint, or a GET at the stand's clock.
 func (s *stand) signed(id, method, target string, body []byte) *http.Request {
+	return s.signedAs(id, inst, method, target, body)
+}
+
+// signedAs makes the request signed makes, as the instance given.
+func (s *stand) signedAs(id, instance, method, target string, body []byte) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(string(body)))
 	req.Header.Set(server.HeaderAccessKeyID, id)
-	req.Header.Set(server.HeaderInstanceID, inst)
+	req.Header.Set(server.HeaderInstanceID, instance)
 	req.Header.Set(server.HeaderContractVersion, "1")
-	sr := accesskey.Request{AccessKeyID: id, InstanceID: inst, Method: method, Target: target}
+	sr := accesskey.Request{AccessKeyID: id, InstanceID: instance, Method: method, Target: target}
 	if method == http.MethodPost {
 		sr.Body = body
 		req.Header.Set("Content-Type", receiver.RegistrationType)
@@ -606,6 +611,100 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 	s.h.Stop = func(run string) bool { return run == wanted }
 	req, rec = s.attach(gwKey, wanted, s.attachBody(wantedKey, 30))
 	s.expect("a run it wants nothing more of", req, rec, http.StatusGone, "")
+}
+
+// TestTheGatewayIsDecidedAgainAtEachBatchAndReload pins that the receiver decides again,
+// at each batch, heartbeats included, and each reload, by the attach's test, whether the
+// gateway that attached a run may still serve the run's workspace, never by the node's
+// current choice. A change of the node's choice or of a default alone leaves the
+// attached run where it is: its batches accepted, its reloads answered. Once the
+// gateway's organisation no longer covers the workspace, a fresh batch or heartbeat is a
+// signed 410 workspace_not_served, after wrong_gateway and deduplication and before a
+// run the receiver wants nothing more of; a reload is the signed 410 and no run
+// configuration, after the 404 of another key; another instance of the gateway node
+// attaching again is the 409 workspace_not_served of the attach. Once the organisation
+// covers the workspace again, the run's batches and reloads are served again.
+func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
+	const otherInstance = "i_otherinstance00000000"
+	s := newStand(t)
+	s.h.Gateways[gw] = receiver.Gateway{URL: gwURL, Organisation: orgOne, AccessKeys: []string{gwKey, gwKey2}}
+	id := event.NewRunID()
+	rk := s.runKey(id)
+	if _, rec := s.attach(gwKey, id, s.attachBody(rk, 30)); rec.Code != http.StatusOK {
+		t.Fatalf("the attach: %d %s", rec.Code, rec.Body.String())
+	}
+	e := event.NewEmitter(id, nil)
+	reload := func(keyID string) (*http.Request, *httptest.ResponseRecorder) {
+		req := s.signed(keyID, http.MethodGet, receiver.DefaultRunPath+"/"+id, nil)
+		return req, serve(s.h, req)
+	}
+	served := func(name string) {
+		t.Helper()
+		if _, rec := s.batch(gwKey, e, event.RunStarted); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a batch: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
+		if _, rec := s.batch(gwKey2, e, event.RunHeartbeat); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a heartbeat: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
+		if req, rec := reload(gwKey2); !runAnswer(req, rec, enforceAPI) {
+			t.Errorf("%s: a reload: %d %s, want the run configuration", name, rec.Code, rec.Body.String())
+		}
+	}
+	first := e.Make(event.RunStarted, map[string]any{})
+	first.Time = s.now.UTC().Format(time.RFC3339Nano)
+	line, err := first.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := []byte("[" + string(line) + "]")
+	if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
+		t.Fatalf("the first batch: %d %s", rec.Code, rec.Body.String())
+	}
+	served("after the attach")
+
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: receiver.Direct}
+	served("the node's choice changed to direct")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: orgGW}
+	served("the node's choice changed to another gateway")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: receiver.Default}
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne, Default: orgGW}
+	served("the node's choice changed to the default, another gateway")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
+
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgTwo}
+	if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
+		t.Errorf("a resend of the accepted batch once the gateway may no longer serve the workspace: %d %s, want 202", rec.Code, rec.Body.String())
+	}
+	req, rec := s.batch(orgGWKey, e, event.RunStarted)
+	s.expect("a batch from another gateway once the gateway may no longer serve the workspace", req, rec, http.StatusConflict, "wrong_gateway")
+	req, rec = s.batch(gwKey, e, event.RunStarted)
+	s.expect("a batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.batch(gwKey2, e, event.RunHeartbeat)
+	s.expect("a heartbeat once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	s.h.Stop = func(run string) bool { return run == id }
+	req, rec = s.batch(gwKey, e, event.RunHeartbeat)
+	s.expect("a heartbeat of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+		http.StatusGone, "workspace_not_served")
+	req, rec = reload(gwKey2)
+	s.expect("a reload of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+		http.StatusGone, "workspace_not_served")
+	s.h.Stop = nil
+	req, rec = reload(gwKey2)
+	s.expect("a reload once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	if got := rec.Header().Get(server.HeaderRunConfiguration); got != "" {
+		t.Errorf("the reload refused carries the run configuration digest %q, want none", got)
+	}
+	req, rec = reload(orgGWKey)
+	if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 || !signedAnswer(req, rec) {
+		t.Errorf("a reload from another gateway once the gateway may no longer serve the workspace: %d %s, want a signed 404", rec.Code, rec.Body.String())
+	}
+	req = s.signedAs(gwKey, otherInstance, http.MethodPost, receiver.DefaultRunPath+"/"+id+"/attach", s.attachBody(rk, 30))
+	s.expect("another instance of the gateway node attaching again once it may no longer serve the workspace", req, serve(s.h, req),
+		http.StatusConflict, "workspace_not_served")
+
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
+	served("once the organisation covers the workspace again")
 }
 
 // TestLivenessCountsFromTheAttach pins the liveness of a run through a gateway: from
