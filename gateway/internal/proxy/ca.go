@@ -38,8 +38,8 @@ type cachedLeaf struct {
 }
 
 // leafCap is how many hosts' certificates an authority keeps: past it, the least
-// recently used goes, and is made again when it is asked for. A gateway's own authority
-// answers for every host the clients of its runs reach, so its cache is bounded.
+// recently used goes, and is made again when it is asked for. Every run's authority
+// answers for every host the run reaches, so its cache is bounded.
 var leafCap = 1024
 
 // caLife is how long a run's authority and its certificates are good for: longer than

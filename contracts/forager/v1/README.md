@@ -2199,7 +2199,9 @@ separate gateway the run of the run key it carries. On the local link a batch wi
 `invalid_request`, which ends no run, so no run can be probed. Behind a separate gateway
 a batch of a run the gateway does not hold is a `410`, of the run's end while the
 gateway keeps it, 15 minutes after its record is flushed, and `run_closed` after, or for
-a run that never opened there.
+a run that never opened there. Once the run key's `attach_by` has passed, a batch of a
+run the gateway holds nothing of, its record included, is `409` `run_key_expired`
+instead (The run key on the one address, above).
 A batch whose body does not arrive whole, its client gone before the end, is `400`
 `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
 not decode among them, ends its run at the gateway: the
@@ -2335,7 +2337,11 @@ QORY_RUN_KEY names the run <run id>, not this one". The record is never complete
 gateway writes the end of a run whose session was lost. The gateway's `410`, after
 `session_lost` or any other end, closes the resend, and the events stay in the
 directory: a batch of a run the gateway no longer holds is that `410`, the run's end
-while the gateway keeps it and `run_closed` after (Events, above). A refusal of the run
+while the gateway keeps it and `run_closed` after (Events, above), as long as the
+gateway still has the run's record. Once the run key's `attach_by` has passed, a batch
+of a run the gateway holds nothing of, its record included, is `409` `run_key_expired`
+instead (The run key on the one address, above), which stops the resend as every
+refusal of the run key does. A refusal of the run
 key the gateway passes on, `400` `run_key_invalid`, or `409` `wrong_gateway`,
 `workspace_not_served`, `run_key_expired` or `run_attached`, stops it with that refusal,
 its code, status and message the gateway's, and what was not accepted is under
@@ -2395,7 +2401,9 @@ runs as the session's user and can, so without a wall enforcement is cooperative
 the code and the `from` of its end at the gateway (above) when it ended there, else
 `run_closed` from `gateway`; behind a separate gateway the gateway keeps the end of a
 run it let go of for 15 minutes after its record is flushed, and a run it does not hold
-is `run_closed` after; on the local link an unknown `run_id` is `400`
+is `run_closed` after, unless the run key's `attach_by` has passed and the gateway holds
+nothing of the run, its record included, which is `409` `run_key_expired` (The run key on
+the one address, above); on the local link an unknown `run_id` is `400`
 `invalid_request`. Toward the server
 the reload names the run the same way, a signed `GET <run.url>/<run_id>` (§The server,
 The run endpoint).

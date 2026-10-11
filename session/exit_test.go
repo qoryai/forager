@@ -396,3 +396,44 @@ func TestAnEndUnderAnotherKeyDoesNotEndTheRun(t *testing.T) {
 		})
 	}
 }
+
+// TestTheGatewaysRefusalsOfTheRunKeyAreRecorded pins the run.refused a session behind a
+// separate gateway records when the gateway refuses its run request over the run key:
+// for each of the gateway's codes, run_key_invalid, run_attached, run_key_expired,
+// wrong_gateway and workspace_not_served, the run is a *session.Refusal from gateway
+// with the gateway's message, the runtime never starts, and the session's record holds
+// one run.refused with the code and no status, which event.schema.json validates.
+func TestTheGatewaysRefusalsOfTheRunKeyAreRecorded(t *testing.T) {
+	for code, status := range map[string]int{
+		"run_key_invalid":      400,
+		"run_attached":         409,
+		"run_key_expired":      409,
+		"wrong_gateway":        409,
+		"workspace_not_served": 409,
+	} {
+		t.Run(code, func(t *testing.T) {
+			sp, _ := specGateway(t)
+			sleeps(&sp, 0)
+			sp.Forwarder = nil
+			g := startRemote(t)
+			runID := event.NewRunID()
+			sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, runID)}
+			text := fmt.Sprintf("attach https://apiary.example/v1/runs/%s: %s (status %d)", runID, code, status)
+			g.OnRun(func(server.LinkRunRequest) linktest.Reply {
+				return linktest.Reply{Status: status, Body: map[string]any{"error": code, "from": "gateway", "message": text}}
+			})
+			res, err := session.Run(context.Background(), sp)
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != code || r.Status != status || r.From != "gateway" || err.Error() != text || res != nil {
+				t.Fatalf("%v (%#v), want the gateway's %s, %q", err, r, code, text)
+			}
+			got := ofType(events(t, &session.Result{Dir: filepath.Join(sp.RunsDir, runID)}), "dev.qory.run.refused")
+			if len(got) != 1 || !equalJSON(data(got[0]), map[string]any{"code": code}) {
+				t.Errorf("run.refused %v, want the code %s alone", got, code)
+			}
+			if len(g.Batches()) != 0 {
+				t.Errorf("the gateway received batches: %v", posted(g))
+			}
+		})
+	}
+}
