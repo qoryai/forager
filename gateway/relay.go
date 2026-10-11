@@ -65,7 +65,7 @@ type relay struct {
 // [relayPerMinute] a minute up to [relayBurst], as of at.
 type bucket struct {
 	left float64
-	at     time.Time
+	at   time.Time
 }
 
 // newRelay is the relay to the server of the gateway's server document.
