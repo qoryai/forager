@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,6 +81,13 @@ func Held(g *Gateway) (runs, spent int) {
 
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
+
+// WaitOpens waits for the run requests the gateway is answering to be answered.
+func WaitOpens(g *Gateway) { g.opens.Wait() }
+
+// SetMarked sets what is called once the record of a run on the one address is marked
+// answered, with the context of its run request.
+func SetMarked(c *Config, f func(context.Context)) { c.marked = f }
 
 // SetOpenTries sets the waits between the tries of the run's registration with Qory
 // Apiary as a run opens, and how long after the run request a try may start again, in place of openWaits and openWindow.

@@ -199,17 +199,23 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, err))
 			return
 		}
+		if g.cfg.marked != nil {
+			g.cfg.marked(r.Context())
+		}
 	}
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, answer.reveal())
-	if r.Context().Err() != nil {
+	if r.Context().Err() != nil && !s.remote {
 		// The answer is not sent whole before the handler returns: a session that has
 		// gone now never has it.
 		g.discard(lr)
 		return
 	}
+	// On the one address the record is marked answered, and the answer may still go
+	// once the handler returns: the run is kept as answered, and ends as any run whose
+	// session sends nothing.
 	lr.arm()
 }
 

@@ -1286,6 +1286,66 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 	}
 }
 
+// TestARunMarkedAnsweredIsKeptWhenItsSessionGoes pins a run on the one address whose
+// session goes once its record is marked answered: the run is kept, its record and the
+// mark with it, and the run request that comes again with the same run key is a 409
+// run_attached, with no second attach.
+func TestARunMarkedAnsweredIsKeptWhenItsSessionGoes(t *testing.T) {
+	conns := make(chan *bound, 1)
+	cfg := gateway.Config{}
+	gateway.SetMarked(&cfg, func(ctx context.Context) {
+		var b *bound
+		select {
+		case b = <-conns:
+		default:
+			// A run request after the first: it goes on.
+			return
+		}
+		b.Close()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Error("the run request's context did not end when its connection closed")
+		}
+	})
+	r := startRemote(t, nil, cfg)
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	r.mu.Lock()
+	r.keys = append(r.keys, key)
+	r.mu.Unlock()
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns <- b
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+	req, err := http.NewRequest(http.MethodPost, "https://gateway.example:8443/qory-link/run-configuration", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", server.LinkContentType)
+	if err := req.Write(b.c); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run request's connection closed", func() bool {
+		_, err := b.r.ReadByte()
+		return err != nil
+	})
+	gateway.WaitOpens(r.g)
+	if runs, _ := gateway.Held(r.g); runs != 1 {
+		t.Errorf("%d runs held; want the run kept", runs)
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.Dir, "runs", runID, "answered")); err != nil {
+		t.Errorf("the mark: %v", err)
+	}
+	refused(t, "the run request again", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+}
+
 // firstLineAlone leaves the record of a run in the gateway directory dir as a gateway
 // that stopped without ending the run leaves it: its first line alone, and nothing
 // delivered.
