@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 func TestDockerConforms(t *testing.T) {
 	image := os.Getenv("QORY_WALL_IMAGE")
 	if image == "" {
-		image = "public.ecr.aws/docker/library/busybox:stable"
+		image = "ghcr.io/qoryai/ci-images:busybox-stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 	}
 	conform(t, image, "", false)
 	t.Run("the relay runs no health check", relayRunsNoHealthCheck)
@@ -47,7 +47,7 @@ func TestDockerNestedConforms(t *testing.T) {
 	}
 	image := os.Getenv("QORY_WALL_NESTED_IMAGE")
 	if image == "" {
-		image = "public.ecr.aws/docker/library/docker:dind"
+		image = "ghcr.io/qoryai/ci-images:docker-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470"
 	}
 	conform(t, image, rt, true)
 }
@@ -70,7 +70,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	// hold httpd, so the origin is then busybox.
 	origin := image
 	if docker {
-		origin = "public.ecr.aws/docker/library/busybox:stable"
+		origin = "ghcr.io/qoryai/ci-images:busybox-stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 	}
 	helper := e2e.Helper(t)
 	name := fmt.Sprintf("qory-walltest-origin-%d", os.Getpid())
@@ -91,7 +91,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		for _, kv := range e2e.RecorderEnv() {
 			args = append(args, "--env", kv)
 		}
-		args = append(append(args, "--entrypoint", "/walltest", "public.ecr.aws/docker/library/busybox:stable"), e2e.RecorderArgs...)
+		args = append(append(args, "--entrypoint", "/walltest", "ghcr.io/qoryai/ci-images:busybox-stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"), e2e.RecorderArgs...)
 		if out, err := exec.Command(command, args...).CombinedOutput(); err != nil {
 			t.Fatalf("a recorder: %v: %s", err, out)
 		}
@@ -155,7 +155,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 }
 
 // busybox is the image the relay's own tests start from.
-const busybox = "public.ecr.aws/docker/library/busybox:stable"
+const busybox = "ghcr.io/qoryai/ci-images:busybox-stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 
 // relaySecret is the run's proxy secret in the relay's own tests.
 const relaySecret = "walltest-relay-secret"
