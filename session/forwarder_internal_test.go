@@ -818,10 +818,12 @@ func TestTheUnwalledForwarderBoundsTheUpgradesReplyHead(t *testing.T) {
 }
 
 // TestTheUnwalledForwarderChecksTheRequestLine pins the request line of an unwalled
-// agent's request, checked once the password is: one the gateway's proxy refuses gets
-// the proxy's 400, with its text and Connection: close, and the end, and nothing of it
-// reaches the proxy, not even a connection; an https:// absolute-form request, which
-// the proxy serves, reaches it.
+// agent's request, checked once the password is: origin-form, a version other than
+// HTTP/1.0 or HTTP/1.1, a CONNECT whose target is not host:port, or another method
+// whose target is not absolute-form gets a 400, with its text and Connection: close,
+// and the end, and nothing of it reaches the proxy, not even a connection; an https://
+// absolute-form request reaches it. The origin-form and CONNECT texts are the gateway's
+// proxy's own.
 func TestTheUnwalledForwarderChecksTheRequestLine(t *testing.T) {
 	const (
 		absolute = "the proxy takes an absolute-form request target"

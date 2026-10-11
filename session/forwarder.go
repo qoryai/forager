@@ -256,8 +256,8 @@ func (f *forwarder) serve(c net.Conn) {
 		c.SetReadDeadline(time.Time{})
 		f.admit(c)
 		if err := checkRequestLine(head); err != nil {
-			// A request line the proxy refuses gets the proxy's 400 here, and nothing of
-			// it reaches the proxy.
+			// A request line the check refuses gets a 400 here, and nothing of it
+			// reaches the proxy.
 			badRequest(c, err)
 			return
 		}
@@ -468,19 +468,19 @@ func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Read
 	return out.Bytes(), r, true
 }
 
-// The texts of the gateway's proxy's 400 to a request line it refuses, which the
-// forwarder answers with too.
+// The texts of the forwarder's 400 to a request line it refuses. The origin-form and
+// CONNECT texts are the gateway's proxy's own.
 var (
 	errAbsoluteForm  = errors.New("the proxy takes an absolute-form request target")
 	errConnectTarget = errors.New("CONNECT takes host:port")
 	errVersion       = errors.New("the proxy takes HTTP/1.0 or HTTP/1.1")
 )
 
-// checkRequestLine checks the request line of head, a request's head, as the gateway's
-// proxy does: a method, a target and HTTP/1.0 or HTTP/1.1, each after a single space;
-// for a CONNECT, a target of host:port, its port 1 to 65535, with no '/', '@', '?' or
-// '#'; for any other method, a CONNECT in other case among them, an absolute-form
-// target, with a scheme and a host. Its error is the text of the proxy's 400.
+// checkRequestLine checks the request line of head, a request's head: a method, a
+// target and HTTP/1.0 or HTTP/1.1, each after a single space; for a CONNECT, a target
+// of host:port, its port from 1 to 65535, with no path, user or query ('/', '@', '?'
+// or '#'); for any other method, a CONNECT in other case among them, an absolute-form
+// target, with a scheme and a host. Its error is the text of the forwarder's 400.
 func checkRequestLine(head []byte) error {
 	line, _, _ := bytes.Cut(head, []byte("\n"))
 	method, rest, ok1 := strings.Cut(string(bytes.TrimSuffix(line, []byte("\r"))), " ")
@@ -502,8 +502,8 @@ func checkRequestLine(head []byte) error {
 	return nil
 }
 
-// badRequest answers the agent's connection c with a 400 whose body is err's text, as
-// the gateway's proxy writes its 400s, and Connection: close.
+// badRequest answers the agent's connection c with a 400 whose body is err's text and
+// a newline, as plain text, and Connection: close.
 func badRequest(c net.Conn, err error) {
 	body := err.Error() + "\n"
 	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
