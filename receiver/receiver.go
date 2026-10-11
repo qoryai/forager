@@ -47,8 +47,9 @@
 // while the run is live; a reload from another is a signed 404, and a batch a signed 409
 // wrong_node or wrong_gateway. Once a run through a gateway is not live, its
 // dev.qory.run.exited accepted or its heartbeats gone quiet, a batch from any instance
-// of the attaching gateway node gets the answer the attaching instance would; until
-// then, the starter's outcome alone changes nothing of who may send. The starter's
+// of the attaching gateway node gets the answer the attaching instance would, and only
+// the attaching instance's heartbeat makes the run live again; until then, the
+// starter's outcome alone changes nothing of who may send. The starter's
 // outcome is accepted from any active key of the registering node, once per run, and
 // every 2xx to a batch of the run then carries it as the end member until the batch
 // that carries the run's dev.qory.run.exited. A batch whose events are not all of one
@@ -339,8 +340,9 @@ type registration struct {
 	instance     string
 	attachAnswer []byte
 	attachDigest string
-	// beats are the run's heartbeats accepted; exited says its dev.qory.run.exited
-	// arrived; outcome is its starter's outcome, nil before one.
+	// beats are the run's heartbeats accepted, through a gateway those the attaching
+	// instance stored alone; exited says its dev.qory.run.exited arrived; outcome is its
+	// starter's outcome, nil before one.
 	beats   []beat
 	exited  bool
 	outcome *outcome
@@ -374,10 +376,11 @@ func (reg *registration) sender() string {
 
 // live reports whether the run is live at now: until its dev.qory.run.exited arrives
 // or it has no recent heartbeat, none within 3 × its interval, counted from its
-// registration, or through a gateway from its attach; before the attach, until its
-// attach_by. A heartbeat is as recent as its own time, corrected by the run's clock
-// offset, the smallest arrival time less time over its heartbeats, plus the tolerance,
-// and never more recent than its arrival.
+// registration, or through a gateway from its attach, where the attaching instance's
+// heartbeats alone count; before the attach, until its attach_by. A heartbeat is as
+// recent as its own time, corrected by the run's clock offset, the smallest arrival
+// time less time over its heartbeats, plus the tolerance, and never more recent than
+// its arrival.
 func (reg *registration) live(now time.Time) bool {
 	if reg.exited {
 		return false
@@ -1258,7 +1261,8 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 			return
 		}
 		stored++
-		if t, err := time.Parse(time.RFC3339Nano, hd.Time); err == nil && reg != nil && hd.Type == event.RunHeartbeat {
+		if t, err := time.Parse(time.RFC3339Nano, hd.Time); err == nil && reg != nil && hd.Type == event.RunHeartbeat &&
+			(!reg.through() || reg.instance == v.instance) {
 			reg.beats = append(reg.beats, beat{time: t, arrival: now})
 		}
 	}
