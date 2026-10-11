@@ -1158,7 +1158,9 @@ absent or outside its pattern, signed; `400` `unsupported_contract_version`; `40
 `invalid_request` for a body the contract refuses, a registration with
 `interval_seconds` above 300 or a label value over 256 bytes included; `401` for a GET's timestamp, or a registration's
 `time`, outside ±300 seconds; then each endpoint's own.
-The events endpoint's own, in order: deduplication, so a batch whose delivery id or
+The events endpoint's own, in order: for a run the server holds, a batch from a key
+outside the one node its batches are accepted from, a signed `409` `wrong_gateway` or
+`wrong_node` (After the attach, below); deduplication, so a batch whose delivery id or
 event ids the server already accepted gets the same `2xx` again; then `410` for an event
 of a run the server wants nothing more of.
 The run endpoint's own, for a registration, in order: the same bytes under any active key
@@ -1663,20 +1665,28 @@ without a server. With a fetched run configuration, the policy document of the l
 spec narrows the fetched policy (§The policy).
 
 **The reference receiver** is the public package `receiver` of this module: a plain
-receiver that serves discovery, the run endpoint, its registration and its reload by
-id, and the events endpoint, accepts the public keys listed in its own configuration
-and skips enrolment, verifies each request and answers in the order this section
-defines, signs every answer after verification under its own key, returns the digest
-headers, deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
-`workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the
-server that embeds it is handed the run id, the labels and `about`, and returns the
-run's run configuration, or refuses the run with a status and a code or with no code;
-`about` is for display and never selects a policy. Without a hook it answers every
-registration `{"version": 1}`, no policy. It keeps each registration it accepted by its
-run id: the same bytes under the same access key get the same answer again, and the same
-run id under another access key, even with the same bytes, or other bytes, a signed
-`409` `run_id_used`. It answers a reload only for a run the same access key registered,
-and `404` otherwise. The module's own tests run Forager's client against it.
+receiver that serves discovery, the run endpoint, its registration, its reload by id,
+its attach and its outcome, and the events endpoint, accepts the public keys listed in
+its own configuration, each with the node, node pool or gateway it belongs to, and skips
+enrolment, verifies each request and answers in the order this section defines, signs
+every answer after verification under its own key, returns the digest headers,
+deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
+`workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`; for a key whose
+node or gateway its records hold, `node_id` and `workspaces` are that key's own, a
+gateway's being every workspace it may serve. It resolves each registration's gateway
+from the records of nodes and node pools, workspaces, organisations and gateways it is
+given, as Through a gateway says, at the workspace and the organisation, with no
+operator level; a key with no node is a node of its own, which reports directly. It
+issues each run through a gateway its run key, signed under its own key, and holds no
+organisation suspended. A hook of the server that embeds it is handed the run id, the
+labels, `about` and the run's placement, its node, workspace and gateway, and returns
+the run's run configuration, or refuses the run with a status and a code or with no
+code; `about` is for display and never selects a policy. It asks the hook at the
+registration, at the attach and at each reload. Without a hook it answers every run
+`{"version": 1}`, no policy. A hook decides whether an instance may start a run, the
+instance limit. It keeps each registration it accepted by its run id, with what became
+of the run: its attach, its heartbeats, its `dev.qory.run.exited` and its outcome. The
+module's own tests run Forager's client against it.
 `fixtures/signed/` is what any receiver is tested against: one request per file,
 `method`, `target`, `headers`, a header sent twice being a list of its values, `body`
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
