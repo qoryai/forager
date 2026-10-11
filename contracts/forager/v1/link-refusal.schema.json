@@ -8,7 +8,7 @@
   "required": ["error", "from"],
   "properties": {
     "error": {
-      "description": "The refusal code: the gateway's own, or the server's, passed on with its status.",
+      "description": "The refusal code: the gateway's, or the server's, passed on with its status.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,63}$"
     },
@@ -29,11 +29,11 @@
       "enum": ["gateway", "apiary"]
     },
     "state": {
-      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's own dev.qory.run.exited of it, which the session records in its own dev.qory.run.exited. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
+      "description": "On a 410 that ends a run, how the run ended at the gateway: the state of the gateway's dev.qory.run.exited of it, which the session records in the session's dev.qory.run.exited. Absent on every other refusal, and on a 410 of a run that ended otherwise, run_closed.",
       "$ref": "events/run.exited.schema.json#/properties/state"
     },
     "reason": {
-      "description": "On a 410 that ends a run, the reason of the gateway's own dev.qory.run.exited of it: Forager's code, or the code the run's starter gave. The session records it in its own dev.qory.run.exited. Absent when the run ended with no reason, as when its starter gave an outcome and none, and on every other refusal.",
+      "description": "On a 410 that ends a run, the reason of the gateway's dev.qory.run.exited of it: Forager's code, or the code the run's starter gave. The session records it in the session's dev.qory.run.exited. Absent when the run ended with no reason, as when its starter gave an outcome and none, and on every other refusal.",
       "$ref": "events/run.exited.schema.json#/properties/reason"
     }
   }

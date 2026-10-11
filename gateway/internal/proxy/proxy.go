@@ -217,7 +217,7 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 		case linkLocal(ip):
 			return &guardError{host + " is a link-local address; the wall refuses it"}
 		case own(ip) && ctx.Value(namedKey{}) == nil:
-			return &guardError{host + " is this machine's own address and no allow entry names the host; the wall refuses it"}
+			return &guardError{host + " is this machine's address and no allow entry names the host; the wall refuses it"}
 		}
 		return nil
 	}}
@@ -703,7 +703,7 @@ func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	if d.Rule == GuardRule {
-		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's own machine only for a host the policy's allow list names\n", d.Host, d.Port)
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's machine only for a host the policy's allow list names\n", d.Host, d.Port)
 		return
 	}
 	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)

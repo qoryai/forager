@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["session_id", "error"],
   "properties": {
-    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
     "error": {"description": "The error kind, in the runtime's words: rate_limit, overloaded, authentication_failed.", "type": "string", "minLength": 1},
     "details": {"type": "string"},
     "message": {"type": "string"},

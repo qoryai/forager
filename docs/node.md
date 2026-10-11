@@ -16,15 +16,15 @@ Forager added it in these versions:
 - **0.6.0**: it starts a run's tools outside the container, and passes them the requests
   to the hosts they serve.
 - **0.6.0**: it starts a run in the image of the machine's that its policy selects.
-- **0.6.0**, experimental: it starts a Docker daemon of the agent's own inside the
-  container, under `sysbox-runc`.
+- **0.6.0**, experimental: it starts nested Docker inside the container, under
+  `sysbox-runc`.
 
 To start and configure it: [the wall](wall.md#start-a-walled-run).
 
 ## Runs on a node
 
-On a node, `qory run --wall docker` is started by a person, a CI job or a scheduler of
-your own. The node needs Docker.
+On a node, `qory run --wall docker` is started by a person, a CI job or your scheduler.
+The node needs Docker.
 
 Reporting to Qory Apiary uses the same server every run has:
 

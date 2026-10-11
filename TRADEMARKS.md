@@ -15,7 +15,7 @@ may do with it without asking.
 
 - Name a fork, a tool or a package Qory, or anything confusable with it,
   such as a different spelling, a prefix or a suffix.
-- Use the Qory wordmark as your own, or in a way that implies
+- Use the Qory wordmark as if it were yours, or in a way that implies
   endorsement by, or affiliation with, the project.
 
 A renamed fork is allowed. Keep the NOTICE file, as the licence

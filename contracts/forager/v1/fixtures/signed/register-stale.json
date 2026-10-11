@@ -13,5 +13,5 @@
   "body": "{\"version\":1,\"run_id\":\"0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f\",\"labels\":{\"forge\":\"github.com\",\"repository\":\"acme/shop\"},\"about\":{\"title\":\"Fix the failing build\"},\"forager_version\":\"0.7.0\",\"contract_version\":1,\"interval_seconds\":30,\"events\":[\"*\"],\"time\":\"2023-11-14T21:56:40Z\"}",
   "expect": 401,
   "expect_code": "unauthorized",
-  "note": "register-valid built a thousand seconds before the receiver's clock: a correct signature over a body whose time is outside the window of three hundred seconds either way. The time is checked after the body, and before the run endpoint's own checks, so this is an unsigned 401 even after register-valid's run id was accepted."
+  "note": "register-valid built a thousand seconds before the receiver's clock: a correct signature over a body whose time is outside the window of three hundred seconds either way. The time is checked after the body, and before the run endpoint's checks, so this is an unsigned 401 even after register-valid's run id was accepted."
 }

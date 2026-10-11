@@ -376,7 +376,7 @@ func TestTheRelayRunsNoHealthCheck(t *testing.T) {
 		}
 		entry := slices.Index(got.Args, "--entrypoint")
 		if !slices.Contains(got.Args[:max(entry, 0)], "--no-healthcheck") {
-			t.Errorf("with a Docker of the agent's own %v, the agent runs the image's health check: %s", docker, words(got.Args))
+			t.Errorf("with nested Docker %v, the agent runs the image's health check: %s", docker, words(got.Args))
 		}
 	}
 }

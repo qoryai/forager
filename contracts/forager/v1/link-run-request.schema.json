@@ -70,7 +70,7 @@
   },
   "$defs": {
     "image": {
-      "description": "One image: its name, the reference, the container runtime the wall starts it under, and whether it gives the agent a Docker daemon of its own.",
+      "description": "One image: its name, the reference, the container runtime the wall starts it under, and whether it gives the agent nested Docker.",
       "type": "object",
       "additionalProperties": false,
       "required": ["ref"],
@@ -90,7 +90,7 @@
           "minLength": 1
         },
         "docker": {
-          "description": "True when the agent gets a Docker daemon of its own inside the enclosure, which needs a runtime that runs one without privileges. Absent means false.",
+          "description": "True when the agent gets nested Docker, a Docker daemon inside the wall, separate from the machine's, which needs a runtime that runs one without privileges. Absent means false.",
           "type": "boolean"
         }
       }
