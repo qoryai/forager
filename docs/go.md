@@ -285,9 +285,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
   Any other refusal of a batch is sent again, as the session sends it. A batch for a run
   the gateway no longer holds is its `410`, the run's end while the gateway keeps it and
   then `run_closed`, which closes the resend, as long as the gateway still has the run's
-  record. Once the run key's `attach_by` has passed, a batch for a run the gateway holds
-  nothing of, its record included, is `409` `run_key_expired` instead, which stops the
-  resend as the refusals above do.
+  record. Once the run key's `attach_by` plus a skew of 300 seconds has passed, by the
+  gateway's clock, a batch for a run the gateway holds nothing of, its record included,
+  is `409` `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's own resend,
