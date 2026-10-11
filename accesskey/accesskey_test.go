@@ -55,6 +55,11 @@ type fixtureKeys struct {
 	} `json:"access_key"`
 	SigningKey     signingKey `json:"signing_key"`
 	NextSigningKey signingKey `json:"next_signing_key"`
+	GatewayKey     struct {
+		Secret      string `json:"secret"`
+		AccessKeyID string `json:"access_key_id"`
+		PublicKey   string `json:"public_key"`
+	} `json:"gateway_key"`
 }
 
 type signingKey struct {
@@ -403,13 +408,22 @@ func TestAnswerKnownAnswers(t *testing.T) {
 }
 
 // TestEnrolmentKnownAnswers builds the published enrolment requests from the fixture
-// access key, the code, the name and the timestamp, and checks each body and proof;
-// then verifies the published answer as qory does, under the key the code's first
-// fingerprint selects, and pins only the keys the code carries.
+// access key, or for the gateway's request the fixture gateway key, the code, the name
+// and the timestamp, and checks each body and proof; then verifies the published
+// answers as qory does, under the key the code's first fingerprint selects, and pins
+// only the keys the code carries: the node's, and the gateway's, of a gateway's node.
 func TestEnrolmentKnownAnswers(t *testing.T) {
 	k := keys(t)
 	key := k.accessKey(t)
+	gatewayKey, err := accesskey.ParseSecret(k.GatewayKey.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, v := range vectors(t).Enrolment {
+		key := key
+		if v.Lines[2] == k.GatewayKey.PublicKey {
+			key = gatewayKey
+		}
 		var want accesskey.EnrolmentRequest
 		if err := json.Unmarshal(v.body(t), &want); err != nil {
 			t.Fatal(err)
@@ -450,6 +464,22 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	}
 	if len(got.Pin) != 1 || got.Pin[0].PublicKey != k.SigningKey.PublicKey {
 		t.Errorf("pin %+v; want the fixture signing key alone", got.Pin)
+	}
+	// The answer to the gateway's request.
+	gr, err := accesskey.NewEnrolmentRequest(gatewayKey, vectors(t).Enrolment[2].Lines[1], "gateway-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gans := vectors(t).Answers[9]
+	gw, err := gr.VerifyAnswer(accesskey.Answer{Status: http.StatusCreated, Body: gans.body(t)}, gans.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gw.AccessKeyID != k.GatewayKey.AccessKeyID || gw.NodeID != "ng_f1xt0re000000000" || gw.NodeKind != "gateway" || gw.StoredSecrets {
+		t.Errorf("the gateway's answer %+v", gw)
+	}
+	if _, err := r.VerifyAnswer(accesskey.Answer{Status: http.StatusCreated, Body: gans.body(t)}, gans.Signature); err == nil {
+		t.Error("the gateway's answer verifies for the node's request")
 	}
 	// Signed by another key than the one the code names: refused.
 	other := k.NextSigningKey.key(t)
