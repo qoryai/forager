@@ -53,6 +53,8 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	switch {
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
+	case strings.Contains(line, "{{.Subnet}}"):
+		return []byte("10.89.0.0/24 \n"), nil
 	case strings.Contains(line, "network inspect"):
 		return []byte(r.gateway + " \n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
@@ -203,7 +205,7 @@ func TestDockerCommandLines(t *testing.T) {
 				t.Error("Close left the environment file")
 			}
 			got := strings.Join(rec.lines, "\n") + "\n\nwrapped:\n" + words(append([]string{wrapped.Command}, wrapped.Args...)) + "\n\nenvironment:\n" + string(env)
-			if rec.relayEnv != RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
+			if rec.relayEnv != RelayInsideEnv+"=10.89.0.0/24\n"+RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
 				t.Errorf("the proxy's token belongs in the relay's environment file and nowhere else; the file holds %q", rec.relayEnv)
 			}
 			if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "not-a-real-key") {

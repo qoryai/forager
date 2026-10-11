@@ -31,6 +31,7 @@ nothing.
   proxy, opening every connection with the run's proxy secret, and decides nothing. It
   forwards no packet between its networks.
 - The relay runs no health check of the image's.
+- The relay listens on the wall's inside network alone, on its one address there.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs
