@@ -68,8 +68,9 @@ type remote struct {
 	// issued are the run keys it made, which its link accepts as bearers.
 	issued []string
 	proof  Proof
-	// answerKey signs its answers; nil is key.
+	// answerKey signs its answers; nil is key. unnamed is a key no run key names.
 	answerKey *accesskey.Key
+	unnamed   *accesskey.Key
 	// unsigned answers with no signature.
 	unsigned bool
 	// leaked is what the edge sent on a connection whose proof failed.
@@ -113,6 +114,9 @@ func StartRemoteFake(t testing.TB) *Fake {
 		t.Fatal(err)
 	}
 	if r.server, err = accesskey.Generate(); err != nil {
+		t.Fatal(err)
+	}
+	if r.unnamed, err = accesskey.Generate(); err != nil {
 		t.Fatal(err)
 	}
 	r.tls = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, NextProtos: []string{"http/1.1"}}
@@ -272,11 +276,18 @@ func (r *remote) bearer(values []string) bool {
 
 // sign sets the signature of the answer to req, whose body was body, on h: the six
 // lines of a separate gateway's answer, over the connection's exporter value, under
-// its key, another it was told to answer under, or none.
-func (r *remote) sign(h http.Header, req *http.Request, body []byte, status int, out []byte) {
+// its key, another it was told to answer under, or none; signing, when not
+// [SignedOwn], decides for this answer alone.
+func (r *remote) sign(h http.Header, req *http.Request, body []byte, status int, out []byte, signing Signing) {
 	r.mu.Lock()
 	k, unsigned := r.answerKey, r.unsigned
 	r.mu.Unlock()
+	switch signing {
+	case SignedUnnamed:
+		k, unsigned = r.unnamed, false
+	case Unsigned:
+		unsigned = true
+	}
 	if unsigned {
 		return
 	}

@@ -278,9 +278,12 @@ func noRunKey(t *testing.T, dir, runKey string) {
 
 // TestAResendNeedsTheRunKey pins the run key of a resend that owes: without one the
 // resend says so, and with one it cannot read, or one of another run, it says that,
-// each before any request; and the 401 unauthorized of a gateway that does not take the
-// run key stops the resend with that refusal, what was not accepted under undelivered/.
+// each before any request; and each refusal of the run key the gateway passes on stops
+// the resend with that refusal, the gateway's text, what was not accepted under
+// undelivered/.
 func TestAResendNeedsTheRunKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	resend, g := undeliveredRun(t)
 	before := len(g.Bearers())
 	key := resend.Gateway.RunKey
@@ -294,7 +297,7 @@ func TestAResendNeedsTheRunKey(t *testing.T) {
 	} {
 		sp := resend
 		sp.Gateway = session.RemoteGateway{RunKey: c.key}
-		_, err := session.Resend(context.Background(), sp)
+		_, err := session.Resend(ctx, sp)
 		if err == nil || !strings.HasPrefix(err.Error(), c.want) || (c.key == "" && err.Error() != c.want) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -302,37 +305,94 @@ func TestAResendNeedsTheRunKey(t *testing.T) {
 	if len(g.Bearers()) != before {
 		t.Error("a resend without its run key made a request")
 	}
-	g.OnBatch(func([]map[string]any) linktest.Reply {
-		return linktest.Reply{Status: 401, Body: map[string]any{"error": "unauthorized", "from": "gateway", "message": "the gateway refused the run: unauthorized"}}
-	})
-	got, err := session.Resend(context.Background(), resend)
-	var ref *session.Refusal
-	if !errors.As(err, &ref) || ref.Code != "unauthorized" || ref.From != "gateway" || err.Error() != "the gateway refused the run: unauthorized" {
-		t.Errorf("a 401: %+v %v", got, err)
+	for _, c := range []struct {
+		status int
+		code   string
+	}{{400, "run_key_invalid"}, {409, "wrong_gateway"}, {409, "workspace_not_served"}, {409, "run_key_expired"}, {409, "run_attached"}} {
+		text := "the gateway refused the run: " + c.code
+		g.OnBatch(func([]map[string]any) linktest.Reply {
+			return linktest.Reply{Status: c.status, Body: map[string]any{"error": c.code, "from": "gateway", "message": text}}
+		})
+		got, err := session.Resend(ctx, resend)
+		var ref *session.Refusal
+		if !errors.As(err, &ref) || ref.Code != c.code || ref.Status != c.status || ref.From != "gateway" || err.Error() != text {
+			t.Errorf("%s: %+v %v", c.code, got, err)
+		}
+		if entries, _ := os.ReadDir(filepath.Join(resend.Dir, sink.UndeliveredDir)); len(entries) == 0 {
+			t.Errorf("%s: nothing is under undelivered/", c.code)
+		}
 	}
-	if entries, _ := os.ReadDir(filepath.Join(resend.Dir, sink.UndeliveredDir)); len(entries) == 0 {
-		t.Error("nothing is under undelivered/ after the 401")
+	if ctx.Err() != nil {
+		t.Fatal("the resends did not stop")
 	}
 }
 
-// TestBehindGatewayTellsTheRecordsApart pins BehindGateway: a directory with the
-// session's record and no run stream is a session's behind a separate gateway; one
-// with the stream, or without the session's record, is not.
+// TestBehindGatewayTellsTheRecordsApart pins BehindGateway: a directory is a session's
+// record behind a separate gateway when it holds the mark, a regular file, whatever
+// else it holds; without the mark, or with a mark that is no regular file, it is not.
+// A session behind a separate gateway writes the mark, and one on one machine does not.
 func TestBehindGatewayTellsTheRecordsApart(t *testing.T) {
 	dir := t.TempDir()
-	check := func(what string, want bool) {
+	check := func(what, dir string, want bool) {
 		t.Helper()
 		if got, err := session.BehindGateway(dir); err != nil || got != want {
 			t.Errorf("%s: %v %v, want %v", what, got, err, want)
 		}
 	}
-	check("an empty directory", false)
+	check("an empty directory", dir, false)
 	os.WriteFile(filepath.Join(dir, sink.SessionFile), nil, 0o600)
-	check("the session's record alone", true)
+	check("the session's record alone", dir, false)
+	os.WriteFile(filepath.Join(dir, session.GatewayMark), nil, 0o600)
+	check("with the mark", dir, true)
 	os.WriteFile(filepath.Join(dir, sink.EventsFile), nil, 0o600)
-	check("with the run's stream", false)
-	check2, err := session.BehindGateway(filepath.Join(dir, "none"))
-	if check2 || err != nil {
-		t.Errorf("a directory that does not exist: %v %v", check2, err)
+	check("with the mark and a run stream", dir, true)
+	link := t.TempDir()
+	os.Symlink(filepath.Join(dir, session.GatewayMark), filepath.Join(link, session.GatewayMark))
+	check("a mark that is a symbolic link", link, false)
+	check("a directory that does not exist", filepath.Join(dir, "none"), false)
+
+	sp, _, _ := remoteSpec(t, 0)
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("a run behind a separate gateway", res.Dir, true)
+	local, _ := specGateway(t)
+	sleeps(&local, 0)
+	if res, err = session.Run(context.Background(), local); err != nil {
+		t.Fatal(err)
+	}
+	check("a run on one machine", res.Dir, false)
+}
+
+// TestAnEndUnderAnotherKeyDoesNotEndTheRun pins the gateway's signature mid-run: a 410
+// to a batch signed under a key the run key does not name, or not signed, is no answer,
+// so the run goes on to its runtime's own end and is not closed; what the gateway did
+// not take stays owed.
+func TestAnEndUnderAnotherKeyDoesNotEndTheRun(t *testing.T) {
+	for name, signing := range map[string]linktest.Signing{"another key": linktest.SignedUnnamed, "no signature": linktest.Unsigned} {
+		t.Run(name, func(t *testing.T) {
+			sp, g, _ := remoteSpec(t, 0)
+			sp.Args = []string{"-c", "sleep 3"}
+			g.SetInterval(1)
+			g.OnBatch(func(evs []map[string]any) linktest.Reply {
+				if len(ofType(evs, "dev.qory.run.started")) > 0 {
+					return linktest.Reply{Status: 200}
+				}
+				r := gone("stopped", "failed", "checks_failed")
+				r.Signing = signing
+				return *r
+			})
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RunClosed || res.State != "succeeded" || res.ExitCode != 0 || res.Undelivered == 0 {
+				t.Errorf("result %+v", res)
+			}
+			if _, stopped, err := sink.Delivered(res.Dir); err != nil || stopped {
+				t.Errorf("delivered.log stopped %v, %v", stopped, err)
+			}
+		})
 	}
 }

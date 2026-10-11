@@ -430,7 +430,8 @@ type linkAnswer struct {
 }
 
 // send sends one request on the link and reads its answer, at most most bytes of body:
-// a longer one is read as no body. The request carries User-Agent and the contract
+// a longer one is read as no body on the local link, and behind a separate gateway,
+// past the largest document, is no answer. The request carries User-Agent and the contract
 // revision, and set's headers; no access key, instance, timestamp or signature, and
 // behind a separate gateway the run key. An error is a transport failure: no answer.
 // Behind a separate gateway an answer not signed under a key the run key names, for
@@ -488,7 +489,11 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	}
 	a := &linkAnswer{status: resp.StatusCode, body: b, digests: Digests{Configuration: one(HeaderConfiguration), RunConfiguration: one(HeaderRunConfiguration)}}
 	if k.remote != nil {
-		if len(b) > limit || !k.remote.signed(used.get(), req, body, a, resp.Header.Values(HeaderSignature)) {
+		if len(b) > limit {
+			// Too long to read whole, so its signature is never checked: no answer.
+			return nil, fmt.Errorf("the gateway at %s answered with a body longer than %d bytes", k.remote.url, limit)
+		}
+		if !k.remote.signed(used.get(), req, body, a, resp.Header.Values(HeaderSignature)) {
 			return nil, &GatewayKeyError{URL: k.remote.url}
 		}
 	}

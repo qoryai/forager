@@ -912,7 +912,13 @@ record, numbered by its own sequence (§The gateway's link), and `output.log`. O
 machine they share a run directory when the gateway writes its record in the session's
 runs directory. Behind a separate gateway each machine has a run directory of its own. The gateway's machine holds `events.jsonl`, `delivered.log`
 and `undelivered/` toward the server. The session's machine holds `session.jsonl`,
-`output.log` and `settings.json`, and its delivery state toward the gateway:
+`output.log` and `settings.json`, its mark, and its delivery state toward the gateway:
+
+- `separate-gateway`: an empty file, the mark of a session's record behind a separate
+  gateway, which the session writes as it creates `session.jsonl` and no other writer of
+  a run directory writes. A run directory holds a session's record behind a separate
+  gateway exactly when it holds this name as a regular file, whatever else it holds and
+  wherever the directory is.
 
 - `delivered.log`: what the gateway accepted of `session.jsonl`, a line per batch as the
   gateway's answer comes, the delivery id and the session's sequence of each event in
@@ -2020,8 +2026,8 @@ document:
   `events/run.policy_applied.schema.json`. The session's `dev.qory.run.policy_applied`
   is this object with its own `variables` and `harness_hosts` added (Events, below).
 - `proxy_secret`, on the local link: the run's proxy secret (Agent traffic, below), 22
-  to 256 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, which a URL's password and the
-  relay's preamble carry as they are; the session refuses a run answer on the local link
+  to 256 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, which the relay's preamble
+  carries as they are; the session refuses a run answer on the local link
   without one. Behind a separate gateway the answer has none: the run key opens the
   proxy's connections.
 - `certificate_authority`: the certificate of the run's own certificate authority, PEM,
@@ -2186,8 +2192,10 @@ key: " and the part that is wrong, and with the run key of another run, "resend 
 QORY_RUN_KEY names the run <run id>, not this one". The record is never completed: the
 gateway writes the end of a run whose session was lost. The gateway's `410`, after
 `session_lost` or any other end, closes the resend, and the events stay in the
-directory; its `401` `unauthorized` stops it with that refusal, and what was not
-accepted is under `undelivered/` again.
+directory. A refusal of the run key the gateway passes on, `400` `run_key_invalid`, or
+`409` `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`,
+stops it with that refusal, its code, status and message the gateway's, and what was
+not accepted is under `undelivered/` again; any other refusal of a batch is sent again.
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
 unless its session gave up before the run opened (above). A
@@ -2252,8 +2260,15 @@ the link is (The binding, above), and with `QORY-RELAY`, a space, the run key an
 newline. Behind a wall the forwarder takes the relay's connection, which opens with
 `QORY-RELAY` and a value the session makes for the run's forwarder alone, and takes that
 line off before anything reaches the gateway; without a wall the agent's proxy URL is the
-forwarder's address on loopback, with no password. The run key reaches neither the
-agent's environment nor any file, and the agent's view is the same as on one machine.
+forwarder's address on loopback with a password, `http://qory:<password>@127.0.0.1:<port>`,
+the password a secret the session makes for the run's forwarder alone, 32 bytes from the
+system's random source in base64url, which lives as long as the run and is never logged
+or recorded. The first request of every connection to the forwarder must carry it in
+its one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time;
+the forwarder takes the header off, and closes a connection without it unanswered
+before anything reaches the gateway. The run key reaches neither the agent's
+environment, from which the session takes `QORY_RUN_KEY` out whatever the agent
+inherits, nor any file, and the agent's view is the same as on one machine.
 A proxy request to the gateway's one address without a live run's proxy secret as its
 password is answered `407` with `Proxy-Authenticate: Basic realm="qory"` and the body "a live run's
 proxy secret is required as the proxy password", and closed. The run's proxy secret is

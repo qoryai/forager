@@ -48,7 +48,8 @@ func remoteLink(t *testing.T, f *linktest.Fake, runKey string) *server.Link {
 // gateway: each connection bound before anything is sent, the discovery at
 // /qory-link/configuration, the run request with its narrowing, the reload and a batch,
 // each with the run key as Authorization: Bearer and no X-Qory-Run-Id, and each answer
-// verified under the key the run key names; no proxy of the environment is used.
+// verified under the key the run key names; the transport has no proxy, of the
+// environment or any other.
 func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
@@ -59,6 +60,9 @@ func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	d, err := k.Discover(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !server.UsesNoProxy(k) {
+		t.Error("the link's transport has a proxy")
 	}
 	host := strings.TrimPrefix(f.URL(), "https://")
 	if d.Proxy == nil || d.Proxy.Address != host || k.ProxyAddress() != host || !strings.HasPrefix(d.Run.URL, f.URL()+"/qory-link/") {
@@ -279,6 +283,68 @@ func TestAnAnswerUnderAnotherKeyIsNoAnswer(t *testing.T) {
 		if _, err := k.Reload(ctx, d.Run.URL, remoteRunID); !errors.As(err, &ge) || err.Error() != want {
 			t.Errorf("unsigned %v: a reload mid-run: %v", unsigned, err)
 		}
+	}
+}
+
+// TestARefusalOrAnEndUnderAnotherKeyIsNoAnswer pins that a refusal and a 410 are held
+// to the signature as every answer is: mid-run, a 410 to a batch or a reload, or a 403
+// refusal of a run request, signed under a key the run key does not name or not signed
+// is no answer, no refusal and no end of the run; the same 410 signed under the
+// gateway's own key ends it.
+func TestARefusalOrAnEndUnderAnotherKeyIsNoAnswer(t *testing.T) {
+	ended := map[string]any{"error": "stopped", "from": "gateway", "state": "failed", "reason": "checks_failed"}
+	refused := map[string]any{"error": "placeholder_conflict", "from": "gateway", "names": []string{"GIT_TOKEN"}, "message": "the run passes a value for the placeholder GIT_TOKEN"}
+	for name, signing := range map[string]linktest.Signing{"another key": linktest.SignedUnnamed, "no signature": linktest.Unsigned} {
+		f := linktest.StartRemoteFake(t)
+		k := remoteLink(t, f, f.RunKey(t, remoteRunID))
+		want := "the gateway at " + f.URL() + " answered under a key the run key does not name"
+		ctx := context.Background()
+		d, err := k.Discover(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.OnRun(func(server.LinkRunRequest) linktest.Reply {
+			return linktest.Reply{Status: 403, Body: refused, Signing: signing}
+		})
+		var ge *server.GatewayKeyError
+		var r *accesskey.Refusal
+		if _, err := k.OpenRun(ctx, d.Run.URL, server.LinkRunRequest{RunID: remoteRunID}); !errors.As(err, &ge) || errors.As(err, &r) || err.Error() != want {
+			t.Errorf("%s: a refusal of the run request: %v", name, err)
+		}
+		f.OnRun(nil)
+		if _, err := k.OpenRun(ctx, d.Run.URL, server.LinkRunRequest{RunID: remoteRunID}); err != nil {
+			t.Fatal(err)
+		}
+		f.OnBatch(func([]map[string]any) linktest.Reply {
+			return linktest.Reply{Status: 410, Body: ended, Signing: signing}
+		})
+		if dl, err := k.Deliver(ctx, d.Events.URL, "d-1", []byte("[]"), ""); !errors.As(err, &ge) || err.Error() != want || dl.End != "" || dl.Stop() || dl.Refusal != nil {
+			t.Errorf("%s: a 410 to a batch: %+v %v", name, dl, err)
+		}
+		f.OnReload(func(string) linktest.Reply { return linktest.Reply{Status: 410, Body: ended, Signing: signing} })
+		if _, err := k.Reload(ctx, d.Run.URL, remoteRunID); !errors.As(err, &ge) || errors.As(err, &r) || err.Error() != want {
+			t.Errorf("%s: a 410 to a reload: %v", name, err)
+		}
+		f.OnBatch(func([]map[string]any) linktest.Reply { return linktest.Reply{Status: 410, Body: ended} })
+		if dl, err := k.Deliver(ctx, d.Events.URL, "d-2", []byte("[]"), ""); err != nil || dl.End != "stopped" || dl.State != "failed" || dl.Reason != "checks_failed" {
+			t.Errorf("%s: the 410 under the gateway's key: %+v %v", name, dl, err)
+		}
+	}
+}
+
+// TestAnAnswerTooLongBehindTheGatewayIsNoAnswer pins an answer longer than the largest
+// document behind a separate gateway: no answer, with an error that says so and not
+// that its key is another.
+func TestAnAnswerTooLongBehindTheGatewayIsNoAnswer(t *testing.T) {
+	f := linktest.StartRemoteFake(t)
+	f.OnReload(func(string) linktest.Reply {
+		return linktest.Reply{Status: 200, Body: bytes.Repeat([]byte(" "), server.MaxDocument+1)}
+	})
+	k := remoteLink(t, f, f.RunKey(t, remoteRunID))
+	var ge *server.GatewayKeyError
+	_, err := k.Reload(context.Background(), f.URL()+linktest.RemotePrefix+linktest.RunPath, remoteRunID)
+	if want := fmt.Sprintf("the gateway at %s answered with a body longer than %d bytes", f.URL(), server.MaxDocument); err == nil || errors.As(err, &ge) || !strings.Contains(err.Error(), want) {
+		t.Errorf("a long answer: %v", err)
 	}
 }
 

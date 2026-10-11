@@ -135,7 +135,9 @@ read or that do not match, and `TLS` without `Listen`.
 A session on another machine names the gateway with a `session.RemoteGateway` in place
 of `session.LocalGateway`: the run's run key, the one Qory Apiary answered the run's
 registration with, which the command hands the session from `QORY_RUN_KEY`. The session
-reads no variable itself.
+reads no variable itself, and takes `QORY_RUN_KEY` (`session.EnvRunKey`) out of every
+agent's environment, the one it inherits among them, as it takes out the access key's
+variables.
 
 ```go
 res, err := session.Run(ctx, session.Spec{
@@ -169,13 +171,17 @@ res, err := session.Run(ctx, session.Spec{
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.
 - The run directory on the session's machine holds the session's record,
-  `session.jsonl` and `output.log`, and what the gateway accepted of it, `delivered.log`,
-  and the batches it did not, `undelivered/`; never the run key. The gateway's record,
+  `session.jsonl` and `output.log`, its mark, `separate-gateway` (`session.GatewayMark`),
+  an empty file no other writer of a run directory writes, what the gateway accepted of
+  the record, `delivered.log`, and the batches it did not, `undelivered/`; never the run
+  key. The gateway's record,
   `events.jsonl`, with its own delivery state toward the server, is on the gateway's
   machine ([where the record is](events.md#where-the-record-is)).
-  `session.BehindGateway(dir)` reports whether a run directory holds a record a session
-  made behind a separate gateway, `session.jsonl` without `events.jsonl`, which
-  `session.Resend` sends.
+  `session.BehindGateway(dir string) (bool, error)` reports whether a run directory holds
+  a record a session made behind a separate gateway, which `session.Resend` sends:
+  whether `dir` holds `separate-gateway` as a regular file, not followed if it is a
+  symbolic link, whatever else it holds and wherever the directory is. A directory
+  without it is false; an error other than a missing name is returned.
 - The discovery is `GET /qory-link/configuration`, and must list URLs of the gateway's
   origin under `/qory-link/` alone, and name the gateway's one address, the host and
   port of `gateway_url`, as its proxy; the loopback check of the local link does not
@@ -183,14 +189,21 @@ res, err := session.Run(ctx, session.Spec{
   registration's, and no narrowing: `Spec` has none. The run answer has no labels and no
   proxy secret, and the session's `dev.qory.run.started` has no labels.
 - The gateway's refusals return a `*session.Refusal` as on one machine, its `Error` the
-  refusal's `message`: `unauthorized`, the `401`; and `run_id_used`. A refusal of the
+  refusal's `message`: the run key's refusals the gateway passes on, `400`
+  `run_key_invalid`, and `409` `wrong_gateway`, `workspace_not_served`,
+  `run_key_expired` and `run_attached`; and `run_id_used`. A refusal of the
   run request is recorded in the session's record alone. A `410` with a state and a
   reason ends the run as on one machine: `Result.RunClosed`, `State` and `Reason`.
 - Agent traffic goes to the gateway's one address over TLS through the session's
   forwarder, each connection bound and opened with the run key. Without a wall, the
-  agent's proxy URL is the forwarder on loopback, `http://127.0.0.1:<port>`, with no
-  password. Behind a wall, the relay reaches the forwarder with a value the session makes
-  for the run's forwarder alone, which the forwarder takes off: see
+  agent's proxy URL is the forwarder on loopback, `http://qory:<password>@127.0.0.1:<port>`,
+  the password a secret the session makes for the run's forwarder alone, 32 bytes from
+  the system's random source in base64url, which lives as long as the run and is never
+  logged or recorded. The first request of every connection must carry it in its one
+  `Proxy-Authorization`, Basic, the user name ignored; the forwarder takes the header off
+  and closes a connection without it unanswered, before anything reaches the gateway.
+  Behind a wall, the relay reaches the forwarder with a value the session makes for the
+  run's forwarder alone, which the forwarder takes off: see
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
 
@@ -241,9 +254,12 @@ res, err := session.Resend(ctx, session.ResendSpec{
   one it cannot read, "QORY_RUN_KEY is not a run key: " and the part that is wrong; one
   of another run, "resend <dir>: QORY_RUN_KEY names the run <id>, not this one". A
   record that owes nothing, or of a run that never opened, needs none.
-- The gateway's `401` `unauthorized`, at the discovery or at a batch, is a
-  `*session.Refusal` from `gateway`, its text the gateway's message, with the events
-  left under `undelivered/`; nothing more is sent after it.
+- A refusal of the run key the gateway passes on, `400` `run_key_invalid`, or `409`
+  `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`, at the
+  discovery or at a batch, is a `*session.Refusal` from `gateway`, its code and status
+  the gateway's and its text the gateway's message, with the events left under
+  `undelivered/`; nothing more is sent after it. Any other refusal of a batch is sent
+  again, as the session sends it.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's own resend,

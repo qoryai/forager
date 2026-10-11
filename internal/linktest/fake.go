@@ -26,12 +26,30 @@ const (
 const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
-// unless it is a []byte, none when nil, and headers of its own beside the digest.
+// unless it is a []byte, none when nil, and headers of its own beside the digest; and,
+// on a separate gateway, how it is signed.
 type Reply struct {
 	Status int
 	Body   any
 	Header http.Header
+	// Signing is how a separate gateway signs this answer, [SignedOwn] by default, which
+	// [Fake.AnswerUnderUnnamedKey] changes for every answer.
+	Signing Signing
 }
+
+// Signing is how a fake separate gateway signs one answer.
+type Signing int
+
+// The ways a fake separate gateway signs an answer.
+const (
+	// SignedOwn is the fake's way for every answer: its own key, unless
+	// [Fake.AnswerUnderUnnamedKey] says otherwise.
+	SignedOwn Signing = iota
+	// SignedUnnamed is a signature under a key no run key of the fake's names.
+	SignedUnnamed
+	// Unsigned is no signature.
+	Unsigned
+)
 
 // Fake is a scriptable gateway on a local link, or a separate one, [StartRemoteFake]:
 // it answers discovery, run requests, reloads and batches as
@@ -347,7 +365,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 	if rm != nil {
-		rm.sign(w.Header(), r, body, reply.Status, out)
+		rm.sign(w.Header(), r, body, reply.Status, out, reply.Signing)
 	}
 	w.WriteHeader(reply.Status)
 	w.Write(out)

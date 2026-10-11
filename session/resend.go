@@ -90,8 +90,10 @@ type ResendResult struct {
 // directory that holds the run's stream, events.jsonl, is a gateway's record, which
 // gateway.Resend sends; [BehindGateway] tells the two apart. A run the gateway has
 // ended, or holds no more after its session was lost, answers with its 410: RunClosed,
-// and the events stay in the directory. The gateway's 401 unauthorized, at the
-// discovery or at a batch, is a [*Refusal] with its code and From gateway; what was not
+// and the events stay in the directory. A refusal of the run key the gateway passes on,
+// 400 run_key_invalid, or 409 wrong_gateway, workspace_not_served, run_key_expired or
+// run_attached, at the discovery or at a batch, is a [*Refusal] with its code, its
+// status, the gateway's text and From gateway, and nothing more is sent: what was not
 // accepted is under undelivered/.
 func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if spec.ForagerVersion == "" {
@@ -204,8 +206,20 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	return res, nil
 }
 
-// refusing is the link's deliveries during a resend, which stop at the gateway's 401
-// unauthorized: sending again cannot change it.
+// resendStops are the refusals of a batch that stop a resend, by code, with the status
+// each comes with: the run key's, which the gateway passes on from Qory Apiary and
+// which sending again cannot change. Any other refusal is sent again, as the session
+// sends it.
+var resendStops = map[string]int{
+	"run_key_invalid":      http.StatusBadRequest,
+	"wrong_gateway":        http.StatusConflict,
+	"workspace_not_served": http.StatusConflict,
+	"run_key_expired":      http.StatusConflict,
+	"run_attached":         http.StatusConflict,
+}
+
+// refusing is the link's deliveries during a resend, which stop at a refusal of
+// [resendStops].
 type refusing struct {
 	to   sink.Deliverer
 	stop context.CancelFunc
@@ -214,14 +228,14 @@ type refusing struct {
 	ref *Refusal
 }
 
-// Deliver posts one batch through the link, and stops the resend at the gateway's 401
-// unauthorized; after it, nothing more is sent, and each delivery is that refusal.
+// Deliver posts one batch through the link, and stops the resend at a refusal of
+// [resendStops]; after it, nothing more is sent, and each delivery is that refusal.
 func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (server.Delivery, error) {
 	if ref := r.refused(); ref != nil {
 		return server.Delivery{}, ref
 	}
 	d, err := r.to.Deliver(ctx, eventsURL, deliveryID, body, runDigest)
-	if err == nil && unauthorized(d) {
+	if err == nil && stops(d) {
 		r.mu.Lock()
 		if r.ref == nil {
 			r.ref = d.Refusal
@@ -232,16 +246,17 @@ func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, bo
 	return d, err
 }
 
-// refused is the gateway's 401 unauthorized, nil for none.
+// refused is the refusal that stopped the resend, nil for none.
 func (r *refusing) refused() *Refusal {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ref
 }
 
-// unauthorized reports whether the gateway refused a batch with its 401 unauthorized.
-func unauthorized(d server.Delivery) bool {
-	return d.Refusal != nil && d.Refusal.From == accesskey.FromGateway && d.Status == http.StatusUnauthorized && d.Code == accesskey.CodeUnauthorized
+// stops reports whether the gateway refused a batch with a refusal of [resendStops].
+func stops(d server.Delivery) bool {
+	status, ok := resendStops[d.Code]
+	return ok && d.Refusal != nil && d.Refusal.From == accesskey.FromGateway && d.Status == status
 }
 
 // recordedLine is one line of session.jsonl and what Resend reads of it.
@@ -341,22 +356,33 @@ func owedOf(lines []recordedLine, accepted map[string]bool, stopped bool) []reco
 	return owed
 }
 
+// GatewayMark is the file a session writes in its run directory, empty, when it makes
+// its record behind a separate gateway, as it makes session.jsonl: no other writer of a
+// run directory writes it, a gateway on one machine, its own record or a session on
+// one machine.
+const GatewayMark = "separate-gateway"
+
+// markBehindGateway writes [GatewayMark] in the run directory dir.
+func markBehindGateway(dir string) error {
+	f, err := os.OpenFile(filepath.Join(dir, GatewayMark), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // BehindGateway reports whether the run directory dir holds a record a session made
-// behind a separate gateway, which [Resend] sends: the session's record, session.jsonl,
-// without the run's stream, events.jsonl, which a gateway on the session's machine
-// writes beside it and gateway.Resend sends. A directory without session.jsonl is
-// false. It reads nothing but the two names; an error other than a name that does not
+// behind a separate gateway, which [Resend] sends: whether dir holds [GatewayMark] as a
+// regular file, read without following a symbolic link, whatever else it holds and
+// wherever it is, the runs directory of a session or of a gateway. It reads that one
+// name; a directory without it is false, and an error other than a name that does not
 // exist is returned.
 func BehindGateway(dir string) (bool, error) {
-	if _, err := os.Lstat(filepath.Join(dir, sink.SessionFile)); errors.Is(err, fs.ErrNotExist) {
+	info, err := os.Lstat(filepath.Join(dir, GatewayMark))
+	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
 		return false, err
 	}
-	if _, err := os.Lstat(filepath.Join(dir, sink.EventsFile)); errors.Is(err, fs.ErrNotExist) {
-		return true, nil
-	} else if err != nil {
-		return false, err
-	}
-	return false, nil
+	return info.Mode().IsRegular(), nil
 }

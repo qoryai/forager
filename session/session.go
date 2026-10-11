@@ -518,6 +518,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if remote != nil {
+		// The mark of a session's record behind a separate gateway, which BehindGateway
+		// reads.
+		if err := markBehindGateway(dir); err != nil {
+			files.Close(ctx)
+			return nil, err
+		}
+	}
 	unlock, err := lock(dir)
 	if err != nil {
 		files.Close(ctx)
@@ -1071,8 +1079,8 @@ func placeholders(names []string) []string {
 }
 
 // environment is the session's environment: base with Forager's variables set,
-// replacing any of the same names, and without the access key's variables, whichever of
-// them brought one.
+// replacing any of the same names, and without the access key's variables or the run
+// key's, [EnvRunKey], whichever of them brought one.
 func environment(base []string, sets ...[]string) []string {
 	var extra []string
 	for _, s := range sets {
@@ -1090,7 +1098,8 @@ func environment(base []string, sets ...[]string) []string {
 			out = append(out, kv)
 		}
 	}
-	return accesskey.WithoutVariables(append(out, extra...))
+	out = slices.DeleteFunc(append(out, extra...), func(kv string) bool { return strings.HasPrefix(kv, EnvRunKey+"=") })
+	return accesskey.WithoutVariables(out)
 }
 
 // heartbeat emits run.heartbeat every interval, its elapsed seconds counted from

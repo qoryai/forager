@@ -76,14 +76,16 @@ func (r *sepRun) started() bool {
 // key as its bearer, the run request carries no labels and no about, which are the
 // registration's, the agent's traffic reaches the gateway's proxy on a connection
 // opened with QORY-RELAY and the run key, through the session's forwarder, whose
-// password the agent's proxy URL carries; and the run key is in no file of the run
-// directory and not in the agent's environment.
+// password the agent's proxy URL carries; and the run key, which the agent's inherited
+// environment holds in QORY_RUN_KEY, is in no file of the run directory and not in the
+// agent's environment.
 func TestASessionRunsBehindASeparateGateway(t *testing.T) {
 	g := startRemote(t)
 	g.SetInterval(30)
 	runID := event.NewRunID()
 	key := g.RunKey(t, runID)
 	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r.sp.Env = append(r.sp.Env, session.EnvRunKey+"="+key)
 	res, err := session.Run(context.Background(), r.sp)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +115,7 @@ func TestASessionRunsBehindASeparateGateway(t *testing.T) {
 	}
 	noRunKey(t, res.Dir, key)
 	env, _ := os.ReadFile(r.envFile)
-	if strings.Contains(string(env), key[4:40]) || !regexp.MustCompile(`(?m)^HTTP_PROXY=http://qory:[A-Za-z0-9_-]{43}@127\.0\.0\.1:[0-9]+$`).Match(env) {
+	if strings.Contains(string(env), key[4:40]) || strings.Contains(string(env), "QORY_RUN_KEY") || !regexp.MustCompile(`(?m)^HTTP_PROXY=http://qory:[A-Za-z0-9_-]{43}@127\.0\.0\.1:[0-9]+$`).Match(env) {
 		t.Errorf("the agent's environment:\n%s", env)
 	}
 	password := regexp.MustCompile(`HTTP_PROXY=http://qory:([A-Za-z0-9_-]+)@`).FindSubmatch(env)

@@ -65,9 +65,10 @@ func (g localGateway) LogValue() slog.Value { return slog.StringValue(g.String()
 // is sent; every answer of the gateway must be signed under one. It holds no access key:
 // the gateway's signs toward the server.
 //
-// The session reads no environment: the caller passes the run key, from QORY_RUN_KEY.
+// The session reads no environment: the caller passes the run key, from [EnvRunKey].
 // It is never written to a file, set in an agent's environment or printed: fmt and
-// log/slog show a RemoteGateway by its gateway's URL alone.
+// log/slog show a RemoteGateway by its gateway's URL alone, and EnvRunKey is taken out
+// of every agent's environment, the one it inherits among them.
 type RemoteGateway struct {
 	// RunKey is the run key Qory Apiary answered the run's registration with: qrk_,
 	// its payload and its signature.
@@ -76,16 +77,20 @@ type RemoteGateway struct {
 
 func (RemoteGateway) gateway() {}
 
+// EnvRunKey is the variable a runner passes a run's run key in. The session never reads
+// it, and no agent it starts receives it, whatever environment the agent has.
+const EnvRunKey = "QORY_RUN_KEY"
+
 // key reads the run key, as a runner does: an unreadable one is an error that names the
 // part that is wrong, never the run key.
 func (g *RemoteGateway) key() (runkey.Key, error) {
 	k, err := runkey.Parse(g.RunKey)
 	if err != nil {
-		var re *runkey.Error
-		if errors.As(err, &re) {
-			return runkey.Key{}, errors.New("QORY_RUN_KEY is not a run key: " + re.Reason)
+		reason := err.Error()
+		if re := (*runkey.Error)(nil); errors.As(err, &re) {
+			reason = re.Reason
 		}
-		return runkey.Key{}, errors.New("QORY_RUN_KEY is not a run key")
+		return runkey.Key{}, errors.New("QORY_RUN_KEY is not a run key: " + reason)
 	}
 	return k, nil
 }
