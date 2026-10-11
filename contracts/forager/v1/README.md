@@ -1931,12 +1931,14 @@ delivers the run's events toward the server under its own access key, and fetche
 reload of the run at the run endpoint, as a direct node's gateway does. An answer whose
 `X-Qory-Configuration` differs from the one in force makes it read its discovery again
 and serve the workspaces that discovery lists, for every run, not only the one whose
-answer said so. A gateway that stopped between the attach and the run answer leaves a
-record that holds the run's `dev.qory.run.registered` alone: the run request that comes
-again removes it, and the gateway attaches the run again, which the server answers the
-same. An attach that fails, the server's refusal or no answer, leaves nothing of the
-run at the gateway: the run request that comes again, with the same run key, asks for
-the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
+answer said so. A gateway that stopped between the attach and marking the run's record
+`answered` (The record files) leaves a record that holds the run's
+`dev.qory.run.registered` alone: the run request that comes again removes it, and the
+gateway attaches the run again, which the server answers the same; one that stopped
+after it keeps the record, and the run request that comes again is `409`
+`run_attached`. An attach that fails, the server's refusal or no answer, leaves nothing
+of the run at the gateway: the run request that comes again, with the same run key, asks
+for the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
 again answers its reloads and batches `410` `run_closed` and its run request `409`
 `run_attached`, and `qory run resend` writes its
 `dev.qory.run.exited` with `gateway_lost` (§The server).
@@ -1966,7 +1968,7 @@ them itself. Its limits, each answered by the relay itself with no body, in this
 
 | Status | When |
 |---|---|
-| `429` | more than 60 requests a minute from one source, in bursts of at most 20, or more than 240 a minute from one IPv6 /48, in bursts of at most 80. The relay follows at most 65,536 sources; a new one past that lets go of the one idle longest. |
+| `429` | more than 60 requests a minute from one source, in bursts of at most 20, or more than 240 a minute from one IPv6 /48, in bursts of at most 80. The relay follows at most 65,536 sources; a new one past that lets go of the one idle longest. Of one IPv6 /48 it follows at most 256 sources; a new one past that lets go of that /48's source idle longest. |
 | `404` | a path other than the four |
 | `405` | one of the four paths, its escapes decoded, with another method |
 | `404` | one of the four paths with its method, but a path with an escaped byte (`%2F` and the like) or a query on a `POST` |
