@@ -42,16 +42,17 @@
 // and returns its run configuration or refuses the run; without it every run gets
 // {"version":1}, no policy. A run's reloads and batches are accepted from one node
 // alone, under any of its active keys: the node that registered a direct run, or the
-// gateway node that attached a run through a gateway, and while that run is live from
-// the instance id its attach was signed with alone; a reload from another is a signed
-// 404, and a batch a signed 409 wrong_node or wrong_gateway. Once a run through a
-// gateway is not live, its dev.qory.run.exited accepted or its heartbeats gone quiet,
-// any instance of the attaching gateway node gets the answer the attaching instance
-// would; the starter's outcome alone leaves the run live. The starter's outcome is
-// accepted from any active key of the registering node, once per run, and every 2xx to
-// a batch of the run then carries it as the end member until the batch that carries the
-// run's dev.qory.run.exited. A batch whose events are not all of one run is a signed
-// 400 invalid_request. A delivery it verified is deduplicated on each event's id,
+// gateway node that attached a run through a gateway, that run's reloads from the
+// instance id its attach was signed with alone, and its batches from that instance too
+// while the run is live; a reload from another is a signed 404, and a batch a signed 409
+// wrong_node or wrong_gateway. Once a run through a gateway is not live, its
+// dev.qory.run.exited accepted or its heartbeats gone quiet, a batch from any instance
+// of the attaching gateway node gets the answer the attaching instance would; until
+// then, the starter's outcome alone changes nothing of who may send. The starter's
+// outcome is accepted from any active key of the registering node, once per run, and
+// every 2xx to a batch of the run then carries it as the end member until the batch
+// that carries the run's dev.qory.run.exited. A batch whose events are not all of one
+// run is a signed 400 invalid_request. A delivery it verified is deduplicated on each event's id,
 // handed to a [Store], and answered 202 with the digests in force; it reads nothing of
 // an event's data but a heartbeat's time and the type. [File] is a store that appends
 // events to one JSON lines file and remembers the ids it holds. It keeps one store and
@@ -403,9 +404,16 @@ func (reg *registration) live(now time.Time) bool {
 	return !now.After(last.Add(3 * reg.interval))
 }
 
-// from reports whether the run's reloads and batches are accepted from a verified
-// request at now: from its sender, under any of its active keys, and for a run through a
-// gateway, while the run is live, from the attaching instance alone.
+// reloadable reports whether the run's reloads are accepted from a verified request:
+// from its sender, under any of its active keys, and for a run through a gateway from
+// the attaching instance alone.
+func (reg *registration) reloadable(v verified) bool {
+	return reg.sender() == v.node && (!reg.through() || reg.instance == v.instance)
+}
+
+// from reports whether the run's batches are accepted from a verified request at now:
+// from its sender, under any of its active keys, and for a run through a gateway, while
+// the run is live, from the attaching instance alone.
 func (reg *registration) from(v verified, now time.Time) bool {
 	if reg.sender() != v.node {
 		return false
@@ -997,13 +1005,13 @@ func (h *Handler) outcome(w http.ResponseWriter, v verified, runID string, body 
 
 // reload answers one verified reload of a run's configuration by its id: a run whose
 // reloads the request may not send, from the node that registered a direct run or the
-// gateway node that attached a run through a gateway, and while that run is live from
-// the attaching instance alone, or a run not registered, 404; a run it wants nothing
-// more of, 410; the hook's refusal; otherwise the run configuration, 200.
+// gateway node that attached a run through a gateway, from the attaching instance
+// alone, before and after the run's end, or a run not registered, 404; a run it wants
+// nothing more of, 410; the hook's refusal; otherwise the run configuration, 200.
 func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.mu.Lock()
 	reg := h.runs[runID]
-	allowed := reg != nil && reg.from(v, h.now())
+	allowed := reg != nil && reg.reloadable(v)
 	h.mu.Unlock()
 	if !allowed {
 		h.answer(w, v, http.StatusNotFound, nil)

@@ -177,10 +177,11 @@ func TestRunAttachedComesAfterTheRest(t *testing.T) {
 // run is live, the gateway node that attached it, under any of its active keys and the
 // instance id its attach was signed with, gets the stored attach answer, its batches
 // accepted and its reloads answered; another instance of the same node attaching gets
-// 409 run_attached, its batch 409 wrong_gateway and its reload 404, and the starter's
-// outcome alone leaves it so. Once the run's dev.qory.run.exited is accepted, a batch
-// from the other instance, under either key, gets the answer the attaching instance
-// would: a resend of a batch already accepted the same 202, deduplicated.
+// 409 run_attached, its batch 409 wrong_gateway, before deduplication, so its resend of
+// a batch already accepted too, and its reload 404, and the starter's outcome alone
+// leaves it so. Once the run's dev.qory.run.exited is accepted, a batch from the other
+// instance, under either key, gets the answer the attaching instance would: a resend of
+// a batch already accepted the same 202, deduplicated. Its reload is 404 still.
 func TestTheAttachingInstanceSendsWhileTheRunIsLive(t *testing.T) {
 	b := newBench(t)
 	rk := b.runKey(runID)
@@ -219,7 +220,10 @@ func TestTheAttachingInstanceSendsWhileTheRunIsLive(t *testing.T) {
 	stored("the same node and instance attaching again", b.attach(gwID, inst, runID, rk))
 	stored("the same instance attaching again with its old id under the node's other key", b.attach(gwID2, inst, runID, rk))
 	coded("another instance of the same node attaching", b.attach(gwID, otherInst, runID, rk), http.StatusConflict, "run_attached")
-	accepted("a batch from the attaching instance", b.serve(gwID, inst, http.MethodPost, DefaultEventsPath, b.events(e, event.RunStarted)))
+	started := b.events(e, event.RunStarted)
+	accepted("a batch from the attaching instance", b.serve(gwID, inst, http.MethodPost, DefaultEventsPath, started))
+	coded("another instance's resend of the accepted batch while the run is live", b.serve(gwID, otherInst, http.MethodPost, DefaultEventsPath, started),
+		http.StatusConflict, "wrong_gateway")
 	coded("a batch from another instance while the run is live", b.serve(gwID, otherInst, http.MethodPost, DefaultEventsPath, b.events(e, event.RunHeartbeat)),
 		http.StatusConflict, "wrong_gateway")
 	if rec := reload(gwID2, inst); rec.Code != http.StatusOK {
@@ -248,14 +252,15 @@ func TestTheAttachingInstanceSendsWhileTheRunIsLive(t *testing.T) {
 		t.Errorf("the resends stored %d events, want none", b.store.Count()-count)
 	}
 	accepted("a new batch from another instance after the end", b.serve(gwID, otherInst, http.MethodPost, DefaultEventsPath, b.events(e, event.RunHeartbeat)))
-	if rec := reload(gwID, otherInst); rec.Code != http.StatusOK {
-		t.Errorf("a reload from another instance after the end: %d", rec.Code)
+	coded("a reload from another instance after the end", reload(gwID2, otherInst), http.StatusNotFound, "")
+	if rec := reload(gwID, inst); rec.Code != http.StatusOK {
+		t.Errorf("a reload from the attaching instance after the end: %d", rec.Code)
 	}
 }
 
 // TestAnotherInstanceSendsOnceTheHeartbeatsGoQuiet pins the other way a run stops being
 // live: with no heartbeat within 3 × its interval of the attach, a batch from another
-// instance of the attaching gateway node is accepted.
+// instance of the attaching gateway node is accepted, and its reload is 404 still.
 func TestAnotherInstanceSendsOnceTheHeartbeatsGoQuiet(t *testing.T) {
 	b := newBench(t)
 	rk := b.runKey(runID)
@@ -271,5 +276,8 @@ func TestAnotherInstanceSendsOnceTheHeartbeatsGoQuiet(t *testing.T) {
 	b.now = start.Add(91 * time.Second)
 	if rec := b.serve(gwID, otherInst, http.MethodPost, DefaultEventsPath, b.events(e, event.RunStarted)); rec.Code != http.StatusAccepted {
 		t.Errorf("a batch from another instance 91 seconds after the attach: %d %s, want 202", rec.Code, rec.Body.String())
+	}
+	if rec := b.serve(gwID, otherInst, http.MethodGet, DefaultRunPath+"/"+runID, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("a reload from another instance 91 seconds after the attach: %d, want 404", rec.Code)
 	}
 }
