@@ -107,13 +107,19 @@ type Gateway struct {
 // in memory to a session in this process and, unless [Config.NoLinkSocket], on a socket
 // in a private directory of its own, and the shared proxy listener on loopback; with
 // Listen, its one address alone. It serves sessions until Close, and sends nothing more
-// before a session opens a run.
+// before a session opens a run. It keeps its own copy of the Server and its pin: what
+// the caller changes in them later changes nothing.
 //
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; and once discovery is read, a Listen whose
 // access key is not a gateway's, whose node id is not ng_.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
+	if cfg.Server != nil {
+		s := *cfg.Server
+		s.ApiaryPublicKey = slices.Clone(s.ApiaryPublicKey)
+		cfg.Server = &s
+	}
 	cert, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
