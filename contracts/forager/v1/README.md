@@ -2914,8 +2914,10 @@ would be.
 
 A refusal the proxy can make without resolving, a literal address or `localhost`, is a
 `denied` `dev.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
-resolves to such an address is refused the same way when it is dialled. Without the
-guard the way around a wall is through the proxy.
+resolves to such an address is never dialled at it: a name's addresses are tried in
+order, past any the guard refuses, and when none connects, the first one tried decides
+the answer, the same refusal if the guard refused it and a `502` if it failed. Without
+the guard the way around a wall is through the proxy.
 
 **What crosses**, all three the session's, none containing a credential of the
 gateway's: the proxy, as a network address; the pseudo-terminal or the pipes, through
