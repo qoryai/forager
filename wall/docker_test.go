@@ -339,6 +339,38 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 	}
 }
 
+// TestTheRelayRunsNoHealthCheck pins that the relay's container is created without the
+// image's health check, which would run beside the relay's environment, and that the
+// agent's command is not changed by it.
+func TestTheRelayRunsNoHealthCheck(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	got, err := e.Wrap(context.Background(), launch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := false
+	for _, line := range rec.lines {
+		if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
+			created = true
+			if !strings.Contains(line, " --read-only --no-healthcheck ") {
+				t.Errorf("the relay is created with the image's health check: %s", line)
+			}
+		}
+	}
+	if !created {
+		t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
+	}
+	if slices.Contains(got.Args, "--no-healthcheck") {
+		t.Errorf("the agent's command changed: %s", words(got.Args))
+	}
+}
+
 // TestDockerReapsWhatARunLeft pins that a reap asks by the run's label and removes the
 // containers before the networks.
 func TestDockerReapsWhatARunLeft(t *testing.T) {

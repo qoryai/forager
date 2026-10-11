@@ -380,7 +380,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	// The relay is on both networks, so it forwards no packet between them: what it
 	// passes on is the connections it copies to the proxy, and nothing routed through it.
 	create = append(create, "--sysctl", "net.ipv4.ip_forward=0", "--sysctl", "net.ipv6.conf.all.forwarding=0")
-	create = append(create, "--env-file", relayEnvFile, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	// The image's health check would run inside the relay, as its user and beside its
+	// environment, with the relay's way out; the relay runs none.
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)

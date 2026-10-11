@@ -1069,6 +1069,10 @@ release may change what an existing document does, and says so under Upgrading.
   entry, the agent's `docker` command read the empty one as unset, and the containers it
   started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
   wall's, when the run's is unset or empty; a non-empty one stays as it is.
+- The engine ran the agent's image's health check in the relay's container, as the
+  relay's user, where it could read the run's proxy secret from the relay's environment
+  and reach what the relay reaches. `wall.Docker` now creates the relay with
+  `--no-healthcheck`; the agent's container is unchanged.
 
 ### Session
 

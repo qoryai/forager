@@ -30,6 +30,7 @@ nothing.
 - The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
   proxy, opening every connection with the run's proxy secret, and decides nothing. It
   forwards no packet between its networks.
+- The relay runs no health check of the image's.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs
