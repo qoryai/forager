@@ -844,7 +844,8 @@ type attachBody struct {
 // one: a key that is not a gateway's, 409 not_a_gateway; a run key that does not verify
 // under the receiver's key, or whose run id is not the path's, 400 run_key_invalid; the
 // same gateway node, under any of its active keys and the instance id its attach was
-// signed with, attaching the same live run again, the stored answer; a run that has
+// signed with, attaching the same live run again, the stored answer while the gateway
+// may serve the run's workspace, else 409 workspace_not_served; a run that has
 // ended, its dev.qory.run.exited arrived, an outcome given, lost after the attach, one
 // it wants nothing more of, or whose registration it does not hold, 410; past the run
 // key's attach_by and never attached, 409 run_key_expired; a run key that names another
@@ -882,6 +883,10 @@ func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body [
 	ended := reg.exited || reg.outcome != nil || (h.Stop != nil && h.Stop(runID)) || (reg.attached != "" && !reg.live(now))
 	switch {
 	case reg.attached == v.node && reg.instance == v.instance && !ended:
+		if !h.serves(v.node, k.Workspace) {
+			h.refuseSigned(w, v, http.StatusConflict, "workspace_not_served")
+			return
+		}
 		h.answerAttach(w, v, reg.attachAnswer, reg.attachDigest)
 		return
 	case ended:

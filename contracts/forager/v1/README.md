@@ -1502,11 +1502,11 @@ with the same refusal. Then the attach's checks, in order:
 |---|---|---|---|
 | a | `409` signed | `not_a_gateway` | the signing key is not a gateway's |
 | b | `400` signed | `run_key_invalid` | the run key does not verify, or its `run_id` is not the path's |
-| 1 | `200` signed | — | the same gateway node, under any of its active keys and with the same signed `X-Qory-Instance-Id`, attaching the same live run again gets the stored answer, kept by gateway node, instance id and run id, not by the bytes |
+| 1 | `200` signed | — | the same gateway node, under any of its active keys and with the same signed `X-Qory-Instance-Id`, attaching the same live run again gets the stored answer, kept by gateway node, instance id and run id, not by the bytes, while the gateway still serves the run's workspace; once it may no longer serve it, row 5 answers instead |
 | 2 | `410` signed | any or none | the run has ended: its `dev.qory.run.exited` arrived, an outcome ended it, or it was lost after the attach |
 | 3 | `409` signed | `run_key_expired` | past `attach_by`, never attached |
 | 4 | `409` signed | `wrong_gateway` | the run key names another gateway node |
-| 5 | `409` signed | `workspace_not_served` | the gateway does not serve the run's workspace |
+| 5 | `409` signed | `workspace_not_served` | the gateway does not serve the run's workspace, whether or not it attached the run before (row 1) |
 | 6 | `409` signed | `run_attached` | another gateway node, or another instance of the same node, has attached the run |
 
 Forager's client builds the body with `server.Attach`, whose `Body` sets `time` from the

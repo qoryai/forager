@@ -514,9 +514,10 @@ release may change what an existing document does, and says so under Upgrading.
   answer stays a plain run configuration. Its refusals, after the shared order, in
   order: `409` `not_a_gateway`; `400` `run_key_invalid`, a run key that does not verify
   or whose `run_id` is not the path's; the stored answer to the same gateway node, under
-  any of its active keys, attaching the same live run again; `410`, the run has ended;
-  `409` `run_key_expired`, past `attach_by` and never attached; `409` `wrong_gateway`,
-  the run key names another gateway; `409` `workspace_not_served`; and `409`
+  any of its active keys, attaching the same live run again while the gateway still
+  serves the run's workspace; `410`, the run has ended; `409` `run_key_expired`, past
+  `attach_by` and never attached; `409` `wrong_gateway`, the run key names another
+  gateway; `409` `workspace_not_served`; and `409`
   `run_attached`, another gateway node attached the run. After the attach a run's
   reloads, batches and heartbeats are accepted from the active keys of one node alone:
   for a run behind a gateway the gateway node that attached it, a batch from any other

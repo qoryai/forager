@@ -621,19 +621,30 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 // gateway's organisation no longer covers the workspace, a fresh batch or heartbeat is a
 // signed 410 workspace_not_served, after wrong_gateway and deduplication and before a
 // run the receiver wants nothing more of; a reload is the signed 410 and no run
-// configuration, after the 404 of another key; another instance of the gateway node
-// attaching again is the 409 workspace_not_served of the attach. Once the organisation
-// covers the workspace again, the run's batches and reloads are served again.
+// configuration, after the 404 of another key; the gateway node attaching again, from
+// the attaching instance or another, is the 409 workspace_not_served of the attach, and
+// no run configuration. While the gateway may serve the workspace, the attaching
+// instance attaching again gets the stored answer, byte for byte. Once the organisation
+// covers the workspace again, the run is served again, its stored answer included.
 func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	const otherInstance = "i_otherinstance00000000"
 	s := newStand(t)
 	s.h.Gateways[gw] = receiver.Gateway{URL: gwURL, Organisation: orgOne, AccessKeys: []string{gwKey, gwKey2}}
 	id := event.NewRunID()
 	rk := s.runKey(id)
-	if _, rec := s.attach(gwKey, id, s.attachBody(rk, 30)); rec.Code != http.StatusOK {
-		t.Fatalf("the attach: %d %s", rec.Code, rec.Body.String())
+	_, attached := s.attach(gwKey, id, s.attachBody(rk, 30))
+	if attached.Code != http.StatusOK {
+		t.Fatalf("the attach: %d %s", attached.Code, attached.Body.String())
 	}
 	e := event.NewEmitter(id, nil)
+	replayed := func(name string) {
+		t.Helper()
+		req, rec := s.attach(gwKey2, id, s.attachBody(rk, 60))
+		if rec.Code != http.StatusOK || rec.Body.String() != attached.Body.String() || !signedAnswer(req, rec) ||
+			rec.Header().Get(server.HeaderRunConfiguration) != attached.Header().Get(server.HeaderRunConfiguration) {
+			t.Errorf("%s: the same instance attaching again: %d %s, want the stored answer", name, rec.Code, rec.Body.String())
+		}
+	}
 	reload := func(keyID string) (*http.Request, *httptest.ResponseRecorder) {
 		req := s.signed(keyID, http.MethodGet, receiver.DefaultRunPath+"/"+id, nil)
 		return req, serve(s.h, req)
@@ -649,6 +660,7 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 		if req, rec := reload(gwKey2); !runAnswer(req, rec, enforceAPI) {
 			t.Errorf("%s: a reload: %d %s, want the run configuration", name, rec.Code, rec.Body.String())
 		}
+		replayed(name)
 	}
 	first := e.Make(event.RunStarted, map[string]any{})
 	first.Time = s.now.UTC().Format(time.RFC3339Nano)
@@ -702,6 +714,12 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	req = s.signedAs(gwKey, otherInstance, http.MethodPost, receiver.DefaultRunPath+"/"+id+"/attach", s.attachBody(rk, 30))
 	s.expect("another instance of the gateway node attaching again once it may no longer serve the workspace", req, serve(s.h, req),
 		http.StatusConflict, "workspace_not_served")
+	req, rec = s.attach(gwKey2, id, s.attachBody(rk, 60))
+	s.expect("the attaching instance attaching again once the gateway may no longer serve the workspace", req, rec,
+		http.StatusConflict, "workspace_not_served")
+	if got := rec.Header().Get(server.HeaderRunConfiguration); got != "" {
+		t.Errorf("the repeat attach refused carries the run configuration digest %q, want none", got)
+	}
 
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
 	served("once the organisation covers the workspace again")
