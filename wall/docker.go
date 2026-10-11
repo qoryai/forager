@@ -436,6 +436,10 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	} else {
 		run = append(run, e.hardening()...)
 	}
+	// The image's health check would run inside the agent's container beside its
+	// environment, and with a Docker of the agent's own as the enclosure's root; the
+	// agent's container runs none.
+	run = append(run, "--no-healthcheck")
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {

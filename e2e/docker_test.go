@@ -153,6 +153,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 			return left, nil
 		},
 	})
+	t.Run("the agent's container runs no health check", func(t *testing.T) { agentRunsNoHealthCheck(t, command, helper, image, rt, docker) })
 }
 
 // busybox is the image the relay's own tests start from.
@@ -166,10 +167,10 @@ const relaySecret = "walltest-relay-secret"
 // launch that starts the agent's container.
 type relayRun struct {
 	// relay is the relay's container, inside the enclosure's network and outside its
-	// ordinary one.
-	relay, inside, outside string
-	proxy                  net.Listener
-	agent                  wall.Launch
+	// ordinary one, and container the agent's container once the agent starts.
+	relay, inside, outside, container string
+	proxy                             net.Listener
+	agent                             wall.Launch
 }
 
 // relayEngine is the command the relay's own tests run, QORY_WALL_COMMAND or docker, and
@@ -191,10 +192,18 @@ func relayEngine(t *testing.T) (command, helper string) {
 // removed when the test ends.
 func startRelay(t *testing.T, command, helper, image string, args ...string) relayRun {
 	t.Helper()
-	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs}
+	return startEnclosure(t, command, helper, wall.Request{Image: image}, args...)
+}
+
+// startEnclosure is startRelay for the request's image, runtime and Docker of the
+// agent's own; the request's run id is the test's own.
+func startEnclosure(t *testing.T, command, helper string, req wall.Request, args ...string) relayRun {
+	t.Helper()
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
 	runID := fmt.Sprintf("walltest-relay-%d-%d", os.Getpid(), time.Now().UnixNano())
+	req.RunID = runID
 	ctx := context.Background()
-	e, err := w.Prepare(ctx, wall.Request{RunID: runID, Image: image})
+	e, err := w.Prepare(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +219,24 @@ func startRelay(t *testing.T, command, helper, image string, args ...string) rel
 	if err != nil {
 		t.Fatal(err)
 	}
-	return relayRun{relay: "qory-" + runID + "-relay", inside: "qory-" + runID + "-in", outside: "qory-" + runID + "-out", proxy: proxy, agent: agent}
+	return relayRun{relay: "qory-" + runID + "-relay", inside: "qory-" + runID + "-in", outside: "qory-" + runID + "-out",
+		container: "qory-" + runID + "-agent", proxy: proxy, agent: agent}
+}
+
+// start starts the agent's container and returns what it printed when it ends, or
+// when ctx ends, which kills the docker command and leaves the container to Close.
+func (r relayRun) start(ctx context.Context, t *testing.T) func() string {
+	t.Helper()
+	var out strings.Builder
+	agent := exec.CommandContext(ctx, r.agent.Command, r.agent.Args...)
+	agent.Env, agent.Dir, agent.Stdout, agent.Stderr = r.agent.Env, r.agent.Dir, &out, &out
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return func() string {
+		agent.Wait()
+		return out.String()
+	}
 }
 
 // relayRunsNoHealthCheck starts the relay from an image with a health check and requires
@@ -351,5 +377,39 @@ func relayTakesInsideAlone(t *testing.T) {
 	case s := <-accepted:
 		t.Errorf("a connection from the relay's ordinary network reached the proxy: %q", s)
 	case <-time.After(3 * time.Second):
+	}
+}
+
+// agentRunsNoHealthCheck starts the agent from an image with a health check and requires
+// that the engine runs none in the agent's container, where it would run beside the
+// agent's environment and, with a Docker of the agent's own, as the enclosure's root.
+func agentRunsNoHealthCheck(t *testing.T, command, helper, image, rt string, docker bool) {
+	tag := fmt.Sprintf("qory-walltest-agent-health:%d", os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", tag, "-")
+	build.Stdin = strings.NewReader("FROM " + image + "\nHEALTHCHECK --interval=1s CMD true\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image with a health check: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rmi", "--force", tag).Run() })
+	r := startEnclosure(t, command, helper, wall.Request{Image: tag, Runtime: rt, Docker: docker}, "-c", "sleep 120")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	wait := r.start(ctx, t)
+	defer func() {
+		cancel()
+		wait()
+	}()
+	for {
+		out, err := exec.Command(command, "inspect", "--format", "{{.State.Running}} {{json .State.Health}}", r.container).CombinedOutput()
+		if got := strings.TrimSpace(string(out)); err == nil && strings.HasPrefix(got, "true ") {
+			if got != "true null" {
+				t.Errorf("the agent's container runs the image's health check: %s", got)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the agent's container never ran: %s", out)
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 }
