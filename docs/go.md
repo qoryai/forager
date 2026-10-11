@@ -134,7 +134,7 @@ A separate gateway runs no sessions of its own machine: it makes no local link, 
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
 `LocalLink` gets "the gateway serves other machines on its address, and runs no
 sessions". Every run there opens by its run key: the gateway refuses one with
-`run_key_invalid`, `wrong_gateway`, `workspace_not_served` or `run_key_expired` before it
+`run_key_invalid`, `run_key_expired`, `wrong_gateway` or `workspace_not_served` before it
 asks the server, attaches the run, writes the record's `dev.qory.run.registered` from
 the run key and the attach's answer, and gives a run answer with no labels and no proxy
 secret. When the server's answer to a batch carries the outcome the run's starter

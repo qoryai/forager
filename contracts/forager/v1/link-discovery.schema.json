@@ -12,7 +12,7 @@
       "const": 1
     },
     "events": {
-      "description": "Where the session posts its batches, which events, and the run's heartbeat interval. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url and the path /qory-link/events.",
+      "description": "Where the session posts its batches, which events, and the run's heartbeat interval. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin the request reached, the run key's gateway_url, and the path /qory-link/events.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url", "types", "interval_seconds"],
@@ -26,7 +26,7 @@
       }
     },
     "run": {
-      "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url and the path /qory-link/run-configuration.",
+      "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin the request reached, the run key's gateway_url, and the path /qory-link/run-configuration.",
       "$ref": "configuration.schema.json#/properties/run"
     },
     "proxy": {

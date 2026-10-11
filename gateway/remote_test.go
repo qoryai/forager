@@ -307,21 +307,22 @@ type answer struct {
 func (a answer) refusal() map[string]any { return refusalOf(a.body) }
 
 // do sends one request on a fresh bound connection with the run key as its bearer
-// value, none when empty, and returns its answer, whose signature it checks.
-func (r *remote) do(t *testing.T, runKey, method, path string, body []byte) answer {
+// value, none when empty, and the fields of extra, and returns its answer, whose
+// signature it checks.
+func (r *remote) do(t *testing.T, runKey, method, path string, body []byte, extra ...http.Header) answer {
 	t.Helper()
 	b, err := r.bind(t, gatewayKeys())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	return b.do(t, runKey, method, path, body)
+	return b.do(t, runKey, method, path, body, extra...)
 }
 
 // do sends one request on b with the run key as its bearer value, none when empty, on
 // the origin gateway.example:8443, and returns its answer, whose signature it checks
 // under the gateway's key over the six lines of a separate gateway's answer.
-func (b *bound) do(t *testing.T, runKey, method, path string, body []byte) answer {
+func (b *bound) do(t *testing.T, runKey, method, path string, body []byte, extra ...http.Header) answer {
 	t.Helper()
 	var rd io.Reader
 	if body != nil {
@@ -333,6 +334,11 @@ func (b *bound) do(t *testing.T, runKey, method, path string, body []byte) answe
 	}
 	if runKey != "" {
 		req.Header.Set("Authorization", "Bearer "+runKey)
+	}
+	for _, h := range extra {
+		for k, v := range h {
+			req.Header[k] = v
+		}
 	}
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", server.LinkContentType)
@@ -732,13 +738,53 @@ func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
 	if e.a.ProxySecret != "" {
 		t.Error("the run answer gives a proxy secret")
 	}
+	// A run key of the live run that no pinned key signed opens nothing.
+	unpinned, err := runkey.Key{RunID: e.a.RunID, Workspace: testWorkspace, NodeID: keyNode, Gateway: testGateway, InstanceID: keyInstance,
+		GatewayURL: "https://gateway.example:8443", GatewayKeys: gatewayKeys(), Issued: time.Now().Truncate(time.Second), AttachBy: time.Now().Add(time.Hour).Truncate(time.Second)}.Sign(mustGenerate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := relayed(unpinned).Get(o.URL); err == nil {
+		t.Error("the relay of the live run with a run key no pinned key signed was answered")
+	}
+}
+
+// TestABatchBehindTheGatewayIsOfItsRunKeysRun pins the run of a batch behind a separate
+// gateway: the run of its run key alone, whatever X-Qory-Run-Id it carries; a batch of
+// run A's events with A's run key and B's run id goes to A, and B's record gets nothing
+// of it.
+func TestABatchBehindTheGatewayIsOfItsRunKeysRun(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	a := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	b := r.open(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{})
+	beat := heartbeat(a.a.RunID)
+	body, _ := json.Marshal([]map[string]any{beat})
+	if got := r.do(t, a.key, http.MethodPost, "/qory-link/events", body, http.Header{server.HeaderRunID: {b.a.RunID}}); got.status != http.StatusAccepted {
+		t.Fatalf("the batch: %d %s", got.status, got.body)
+	}
+	has := func(runID string) bool {
+		for _, l := range r.record(runID) {
+			if l.ID == beat["id"] {
+				return true
+			}
+		}
+		return false
+	}
+	eventually(t, "the heartbeat in A's record", func() bool { return has(a.a.RunID) })
+	if has(b.a.RunID) {
+		t.Error("B's record has A's heartbeat")
+	}
+	if got := b.post(t, heartbeat(b.a.RunID)); got.status != http.StatusAccepted {
+		t.Errorf("B after: %d %s", got.status, got.body)
+	}
 }
 
 // TestEveryRequestCarriesAnAcceptedRunKey pins the run key on the one address, in
 // order, on every path: none, two, another scheme, one that is no run key or that no
-// pinned key signed, is 400 run_key_invalid; one of another gateway 409 wrong_gateway;
-// of a workspace discovery does not list 409 workspace_not_served; past its attach_by
-// with nothing of the run here 409 run_key_expired. Each 409 reads as the server's
+// pinned key signed, is 400 run_key_invalid; then in the server's order of the attach,
+// past its attach_by with nothing of the run here 409 run_key_expired, before one of
+// another gateway 409 wrong_gateway, and one of a workspace discovery does not list 409
+// workspace_not_served. Each 409 reads as the server's
 // refusal of the attach. A run key past its attach_by of a run the gateway holds goes
 // on. Each answer is signed, and nothing is attached.
 func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
@@ -813,6 +859,12 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		}, "run_key_expired"},
 		"another gateway's, late": {func(k *runkey.Key) {
 			k.Gateway, k.AttachBy, k.Issued = "ng_0therg4teway0000", time.Now().Add(-time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+		}, "run_key_expired"},
+		"another workspace's, late": {func(k *runkey.Key) {
+			k.Workspace, k.AttachBy, k.Issued = "ws_0therw0rkspace00", time.Now().Add(-time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+		}, "run_key_expired"},
+		"another gateway's and workspace's": {func(k *runkey.Key) {
+			k.Gateway, k.Workspace = "ng_0therg4teway0000", "ws_0therw0rkspace00"
 		}, "wrong_gateway"},
 	} {
 		key := runKeyFor(t, runID, c.change)
@@ -973,6 +1025,16 @@ func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	}
 	if runs, _ := gateway.Held(r.g); runs != 0 {
 		t.Errorf("%d runs held", runs)
+	}
+	// A run that never attached is kept of nothing: the run request that comes again
+	// attaches it, with the same run key.
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "not_a_gateway"})
+	refused(t, "the first try", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "not_a_gateway", "apiary", r.attachLine(runID, "not_a_gateway"))
+	r.c.attachRefusal.Store(nil)
+	if e := r.open(t, key, server.LinkRunRequest{}); e.a.RunID != runID {
+		t.Errorf("the run attached again is %s", e.a.RunID)
 	}
 }
 
@@ -1138,8 +1200,9 @@ func TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun(t *testing.T) {
 }
 
 // TestTheRelay pins the relay of the server's four endpoints on unbound connections:
-// each forwarded with its target unchanged, the hop-by-hop fields dropped, and its
-// answer passed back byte for byte, its signature among it; every other path 404 and
+// each forwarded with its target unchanged, in origin form when it came in absolute
+// form, the fields of one connection dropped both ways, those its Connection names
+// among them, and its answer passed back byte for byte, its signature among it; every other path 404 and
 // other method 405; a body over its endpoint's bound 413; and an answer over 1 MiB
 // 502, each the relay's own, with no body and nothing sent on.
 func TestTheRelay(t *testing.T) {
@@ -1153,7 +1216,13 @@ func TestTheRelay(t *testing.T) {
 		}
 		b, _ := io.ReadAll(req.Body)
 		mu.Lock()
-		got = append(got, req.Method+" "+req.RequestURI+" "+fmt.Sprint(len(b))+" "+req.Header.Get("Connection")+req.Header.Get(server.HeaderSignature))
+		hop := ""
+		for _, k := range []string{"Connection", "X-Secret", "Keep-Alive", "Proxy-Authorization", "Te"} {
+			if req.Header.Get(k) != "" {
+				hop += k + " "
+			}
+		}
+		got = append(got, req.Method+" "+req.RequestURI+" "+fmt.Sprint(len(b))+" "+hop+req.Header.Get(server.HeaderSignature))
 		big := strings.HasSuffix(req.URL.Path, "/big")
 		mu.Unlock()
 		if req.URL.Query().Get("big") != "" || big {
@@ -1162,6 +1231,8 @@ func TestTheRelay(t *testing.T) {
 		}
 		w.Header().Set(server.HeaderSignature, "answer-signature")
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Connection", "X-Answer-Secret")
+		w.Header().Set("X-Answer-Secret", "of the connection")
 		w.Write(answerBody)
 		return true
 	}
@@ -1203,8 +1274,9 @@ func TestTheRelay(t *testing.T) {
 		if c.method == http.MethodPost {
 			body = bytes.Repeat([]byte("a"), c.size)
 		}
-		resp, b := send(c.method, c.target, body, http.Header{server.HeaderSignature: {"request-signature"}})
-		if resp.StatusCode != http.StatusOK || !bytes.Equal(b, answerBody) || resp.Header.Get(server.HeaderSignature) != "answer-signature" {
+		resp, b := send(c.method, c.target, body, http.Header{server.HeaderSignature: {"request-signature"},
+			"Connection": {"X-Secret"}, "X-Secret": {"of the connection"}, "Keep-Alive": {"timeout=5"}, "Proxy-Authorization": {"Basic eDp5"}, "Te": {"trailers"}})
+		if resp.StatusCode != http.StatusOK || !bytes.Equal(b, answerBody) || resp.Header.Get(server.HeaderSignature) != "answer-signature" || resp.Header.Get("X-Answer-Secret") != "" {
 			t.Errorf("%s %s: %d %q", c.method, c.target, resp.StatusCode, b)
 		}
 		mu.Lock()
@@ -1220,7 +1292,17 @@ func TestTheRelay(t *testing.T) {
 			}
 		}
 	}
+	// A target in absolute form goes on in origin form, to the server's origin.
+	c := r.dialTLS(t)
+	io.WriteString(c, "GET https://other.example/.well-known/qory-configuration?x=2 HTTP/1.1\r\nHost: other.example\r\n\r\n")
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != http.StatusOK {
+		t.Errorf("a target in absolute form: %v %v", resp, err)
+	}
+	c.Close()
 	mu.Lock()
+	if last := got[len(got)-1]; last != "GET /.well-known/qory-configuration?x=2 0 " {
+		t.Errorf("a target in absolute form went on as %q", last)
+	}
 	sent := len(got)
 	mu.Unlock()
 	for _, c := range []struct {

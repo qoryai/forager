@@ -65,7 +65,6 @@ type Gateway struct {
 	cancel context.CancelFunc
 
 	dir     string
-	secret  secretValue
 	ln      net.Listener
 	link    *linkListener
 	http    *http.Server

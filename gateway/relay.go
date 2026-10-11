@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -42,11 +43,26 @@ var outcomePath = regexp.MustCompile(`^/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 // hopHeaders are the fields of one connection, never relayed (RFC 9110 §7.6.1).
 var hopHeaders = []string{"Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"}
 
+// dropHop removes from h the fields of one connection: those its Connection names, and
+// [hopHeaders].
+func dropHop(h http.Header) {
+	for _, v := range h.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			if name = textproto.TrimString(name); name != "" {
+				h.Del(name)
+			}
+		}
+	}
+	for _, k := range hopHeaders {
+		h.Del(k)
+	}
+}
+
 // relay is the gateway's relay of the server's four endpoints, on connections of the
 // one address that open with no binding: a keyed machine's or a starter's enrolment,
 // discovery, registration and outcome, each signed by the holder's own key. It
-// forwards each request to the server's origin with its target, the path and the query,
-// unchanged, and passes the answer back byte for byte, so the request's signature and
+// forwards each request to the server's origin with its target in origin form, the path
+// and the query, unchanged, and passes the answer back byte for byte, so the request's signature and
 // the answer's are the server's. It relays nothing else, the attach above all, and
 // serves none of them itself.
 type relay struct {
@@ -174,7 +190,7 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rl.wait)
 	defer cancel()
-	out, err := http.NewRequestWithContext(ctx, r.Method, rl.origin.Scheme+"://"+rl.origin.Host+r.RequestURI, bytes.NewReader(body))
+	out, err := http.NewRequestWithContext(ctx, r.Method, rl.origin.Scheme+"://"+rl.origin.Host+r.URL.RequestURI(), bytes.NewReader(body))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -183,9 +199,7 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out.Body, out.ContentLength = nil, 0
 	}
 	out.Header = r.Header.Clone()
-	for _, h := range hopHeaders {
-		out.Header.Del(h)
-	}
+	dropHop(out.Header)
 	resp, err := rl.client.Do(out)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -202,11 +216,10 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := w.Header()
-	for k, v := range resp.Header {
+	answerHeader := resp.Header.Clone()
+	dropHop(answerHeader)
+	for k, v := range answerHeader {
 		h[k] = v
-	}
-	for _, k := range hopHeaders {
-		h.Del(k)
 	}
 	h.Set("Content-Length", strconv.Itoa(len(answer)))
 	w.WriteHeader(resp.StatusCode)

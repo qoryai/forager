@@ -819,8 +819,9 @@ Forager never writes, kept so that records written before still validate: `quiet
 `run_ended_at_issuer`, `issuer_unreachable` and `issuer_answer_invalid`. A
 `dev.qory.run.exited` with the old `quiet` contains `quiet_seconds`, and no other does. Any other code
 is the starter's, carried as given, and a receiver shows a code it does not know as it
-is. A starter's reason that equals a reserved code is dropped, and the run has no
-reason, its outcome kept. The session writes `timeout` and `interrupted`, the resend of
+is. A starter's reason that equals a reserved code is dropped, its outcome kept: the run
+has no reason, but for a `cancelled` run, whose reason is then `stopped`, as when its
+starter gave none (§The gateway's link, The end member). The session writes `timeout` and `interrupted`, the resend of
 a record writes `gateway_lost` (§The server), and the gateway writes the others, on a
 session's run on its link. The state of each of Forager's own endings:
 
@@ -1838,12 +1839,12 @@ this order, from `gateway`:
 | # | Status | Code | When |
 |---|---|---|---|
 | 1 | `400` | `run_key_invalid` | no single `Authorization` of the Bearer scheme, or a value that is not a run key that verifies under the server's pin |
-| 2 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
-| 3 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
-| 4 | `409` | `run_key_expired` | past its `attach_by`, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded |
+| 2 | `409` | `run_key_expired` | past its `attach_by`, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded |
+| 3 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
+| 4 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
 
-The message of `run_key_invalid` is "the gateway refused the run: run_key_invalid".
-Each `409` is the gateway's own refusal of the attach, decided before it asks the
+Rows 2 to 4 are in the order the server decides an attach's refusals in. The message
+of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is the gateway's own refusal of the attach, decided before it asks the
 server, and its message is the line the server's refusal of the attach gives:
 `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
 that passes names the request's run: a run request for another `run_id`, or a reload of
@@ -1868,7 +1869,9 @@ and serve the workspaces that discovery lists, for every run, not only the one w
 answer said so. A gateway that stopped between the attach and the run answer leaves a
 record that holds the run's `dev.qory.run.registered` alone: the run request that comes
 again removes it, and the gateway attaches the run again, which the server answers the
-same. A run that was open at a gateway that stopped is over: the gateway that starts
+same. An attach that fails, the server's refusal or no answer, leaves nothing of the
+run at the gateway: the run request that comes again, with the same run key, asks for
+the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
 again answers its reloads and batches `410` `run_closed` and its run request `409`
 `run_attached`, and `qory run resend` writes its
 `dev.qory.run.exited` with `gateway_lost` (§The server).
@@ -1884,10 +1887,11 @@ not `ng_`.
 open with the binding is the relay's: HTTP/1.1, for a keyed machine or a starter whose
 server document holds `via` (§The server, Via). The relay forwards four endpoints alone
 to the origin of the gateway's own server document, with the target, the path and the
-query, unchanged: the enrolment, `POST /.well-known/qory-enrolment`; discovery,
+query, unchanged, in origin form when it came in absolute form: the enrolment, `POST /.well-known/qory-enrolment`; discovery,
 `GET /.well-known/qory-configuration`; a registration, a `POST` to the path of the
 `run.url` of the gateway's discovery; and an outcome, a `POST` to that path, a slash, a
-run's id and `/outcome`. It drops the fields of one connection (RFC 9110 §7.6.1), asks
+run's id and `/outcome`. It drops the fields of one connection (RFC 9110 §7.6.1), those
+its `Connection` names among them, asks
 for no compression, and passes the server's answer back byte for byte, its status and
 its fields but those of one connection, so each request's signature and each answer's
 stay the server's. It relays nothing else, the attach above all, and answers none of
@@ -2015,7 +2019,7 @@ order:
 | `400` | `run_key_invalid` | behind a separate gateway, a `run_id` that is not the run key's |
 | `400` | `invalid_request` | behind a separate gateway, `labels` or `about` in the request |
 | `409` | `run_attached` | behind a separate gateway, a run the gateway holds or is opening, live or ended, or holds a record of; its message `attach <run.url>/<run_id>: run_attached (status 409)` |
-| `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
+| `409` | `run_id_used` | on the local link, a `run_id` that already names a run at this gateway, live or ended; no names. Behind a separate gateway the gateway answers `run_attached` instead (above) |
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `passes` and `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown`, `placeholder_conflict` and the like |
 
@@ -2278,7 +2282,8 @@ run's last events and its `dev.qory.run.exited` and delivers them, and ignores a
 later `end`, the first having ended the run. The session's next request is the `410`
 `stopped` with that state and reason, its message "the run has ended: <state>, <words>":
 the reason's words, `no outcome given` for `stopped`, and any other reason with spaces
-for its underscores, "the run has ended: failed, checks failed" for `checks_failed`.
+for its underscores, "the run has ended: failed, checks failed" for `checks_failed`;
+with no reason, "the run has ended: <state>", "the run has ended: succeeded".
 
 The session stops the runtime as at its time limit, records its own
 `dev.qory.run.exited` with the `410`'s state and reason, and its code as the reason after
@@ -2872,7 +2877,7 @@ the option experimental.
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels, `proxy_secret` and `run_secret`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
-| `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, a gateway key's answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
+| `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, and a gateway's request under the fixture gateway key, the answer, the answer to the gateway's request, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json` (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 

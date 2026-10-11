@@ -324,8 +324,16 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		var registered map[string]any
 		if remote {
 			rc, digest, registered, regErr = g.attach(ask, conf, req.RunID, how)
-			if registered == nil {
-				return fail(regErr)
+			var accepted *server.DocumentError
+			if registered == nil || (regErr != nil && !errors.As(regErr, &accepted)) {
+				// The run never attached: nothing of it is kept, so a later run request
+				// attaches it again, which the server answers alike for the same gateway.
+				lr.release()
+				if derr := st.Discard(g.base); derr != nil {
+					g.report(fmt.Sprintf("run %s: closing its record: %v", req.RunID, derr))
+				}
+				cancel()
+				return nil, false, codeless(regErr)
 			}
 		} else {
 			// The registration: built once, so every try sends the same bytes, its time

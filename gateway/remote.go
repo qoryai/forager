@@ -92,11 +92,12 @@ func (g *Gateway) attachRefused(code string, status int, runID string) *accesske
 
 // admitRunKey decides the bearer value of a request on the one address, in order: no
 // value, or one that is no run key that verifies under the server's pin, is
-// run_key_invalid, 400; a run key that names another gateway than the one discovery
-// lists of the access key is wrong_gateway, 409; one of a workspace discovery does not
-// list is workspace_not_served, 409; one past its attach_by of a run the gateway holds
-// nothing of, never attached here, is run_key_expired, 409. ok says the request
-// carried one bearer value in its syntax.
+// run_key_invalid, 400; then, in the server's order of the attach, a run key past its
+// attach_by of a run the gateway holds nothing of, never attached here, is
+// run_key_expired, 409; one that names another gateway than the one discovery lists of
+// the access key is wrong_gateway, 409; one of a workspace discovery does not list is
+// workspace_not_served, 409. ok says the request carried one bearer value in its
+// syntax.
 func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Refusal) {
 	if !ok {
 		return runkey.Key{}, runKeyInvalid()
@@ -107,12 +108,12 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	}
 	conf, _ := g.config()
 	switch {
+	case g.now().After(k.AttachBy) && !g.knows(k.RunID):
+		return k, g.attachRefused(codeRunKeyExpired, http.StatusConflict, k.RunID)
 	case k.Gateway != conf.NodeID:
 		return k, g.attachRefused(codeWrongGateway, http.StatusConflict, k.RunID)
 	case !slices.Contains(conf.Workspaces, k.Workspace):
 		return k, g.attachRefused(codeWorkspaceNotServed, http.StatusConflict, k.RunID)
-	case g.now().After(k.AttachBy) && !g.knows(k.RunID):
-		return k, g.attachRefused(codeRunKeyExpired, http.StatusConflict, k.RunID)
 	}
 	return k, nil
 }
