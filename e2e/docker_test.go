@@ -154,6 +154,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		},
 	})
 	t.Run("the agent's container runs no health check", func(t *testing.T) { agentRunsNoHealthCheck(t, command, helper, image, rt, docker) })
+	t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image, rt, docker) })
 }
 
 // busybox is the image the relay's own tests start from.
@@ -412,4 +413,42 @@ func agentRunsNoHealthCheck(t *testing.T, command, helper, image, rt string, doc
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// insideHasNoIPv6 requires that the inside network has no IPv6 subnet, and that the
+// agent's container starts with no IPv6 address but loopback's ::1 and with IPv6 off by
+// default for an interface made later.
+func insideHasNoIPv6(t *testing.T, command, helper, image, rt string, docker bool) {
+	r := startEnclosure(t, command, helper, wall.Request{Image: image, Runtime: rt, Docker: docker},
+		"-c", "cat /proc/net/if_inet6; echo default=$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6)")
+	t.Run("the inside network has none", func(t *testing.T) {
+		out, err := exec.Command(command, "network", "inspect", "--format", "{{.EnableIPv6}}", r.inside).CombinedOutput()
+		if got := strings.TrimSpace(string(out)); err != nil || got != "false" {
+			t.Errorf("the inside network's IPv6 is enabled: %v: %s", err, out)
+		}
+	})
+	t.Run("the agent's container has loopback's alone", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		out := r.start(ctx, t)()
+		var loopback, others []string
+		disabled := false
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			f := strings.Fields(line)
+			switch {
+			case line == "default=1":
+				disabled = true
+			case len(f) == 6 && f[0] == "00000000000000000000000000000001" && f[5] == "lo":
+				loopback = append(loopback, line)
+			case len(f) == 6:
+				others = append(others, line)
+			}
+		}
+		if len(loopback) != 1 || len(others) != 0 {
+			t.Errorf("the agent's IPv6 addresses, want loopback's ::1 alone:\n%s", out)
+		}
+		if !disabled {
+			t.Errorf("the agent's container starts with IPv6 on by default for an interface made later:\n%s", out)
+		}
+	})
 }
