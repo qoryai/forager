@@ -241,7 +241,7 @@ func (t Tool) Check() error { return tool.Definition(t).Check() }
 
 // Discovery is what the server's configuration document lists of the run's access key.
 type Discovery struct {
-	// NodeID is the id of the access key's node, nd_, or node pool, np_.
+	// NodeID is the id of the access key's node, nd_, node pool, np_, or gateway, ng_.
 	NodeID string
 	// Secrets is true when the document lists a secrets section.
 	Secrets bool

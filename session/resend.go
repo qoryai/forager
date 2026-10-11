@@ -6,13 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -26,8 +25,10 @@ import (
 // ResendSpec is what sending a run's record again through its separate gateway is
 // given.
 type ResendSpec struct {
-	// Gateway is the separate gateway the run spoke to, as the run's Spec gave it: the
-	// resend reaches it as the run did.
+	// Gateway is the separate gateway the run spoke to, by the run's run key, which the
+	// caller passes from QORY_RUN_KEY: the resend reaches it as the run did. The run key
+	// is never written to the run directory, which a walled agent sees, so the resend
+	// has it from the caller alone.
 	Gateway RemoteGateway
 	// Dir is the run directory on the session's machine, the one that holds the
 	// session's record, session.jsonl; its name is the run id.
@@ -82,15 +83,20 @@ type ResendResult struct {
 //
 // The record is never completed: a session that was lost leaves its run's end to the
 // gateway, which writes it itself. A record still held by its session is [ErrRunning].
-// Every batch carries the run's secret the directory keeps, run-secret, which is
-// removed once nothing is owed: everything accepted, the run ended at the gateway, or
-// nothing owed from the start; it is kept after a refusal or a failure to send. A
-// directory that keeps none sends without it, and the gateway answers with the 401.
-// A directory that holds the run's stream, events.jsonl, is a gateway's record, which
-// gateway.Resend sends. A run the gateway has ended answers with its 410: RunClosed,
-// and the events stay in the directory. The gateway's 401 unauthorized, at the
-// discovery or at a batch, is a [*Refusal] with its code and From gateway; what was not
-// accepted is under undelivered/.
+// A record that owes something is sent with the run's run key, Gateway's RunKey: without
+// one the resend returns "resend <dir>: the run key is needed to send to its gateway;
+// set QORY_RUN_KEY", one it cannot read is "QORY_RUN_KEY is not a run key: " and the
+// part that is wrong, and one of another run is refused, before any request. A
+// directory that holds the run's stream, events.jsonl, is a gateway's record, which
+// gateway.Resend sends; [BehindGateway] tells the two apart. A run the gateway has
+// ended, or holds no more after its session was lost, answers with its 410: RunClosed,
+// and the events stay in the directory. A refusal of the run key the gateway passes on,
+// 400 run_key_invalid, or 409 wrong_gateway, workspace_not_served, run_key_expired or
+// run_attached, at the discovery or at a batch, is a [*Refusal] with its code, its
+// status, the gateway's text and From gateway, and nothing more is sent: what was not
+// accepted is under undelivered/. A 401 unauthorized, which the gateway does not send,
+// stops it the same way. A batch of a run the gateway no longer holds is its 410, the
+// run's end while the gateway keeps it and run_closed after, which closes the resend.
 func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if spec.ForagerVersion == "" {
 		spec.ForagerVersion = "dev"
@@ -129,8 +135,18 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	}
 	owed := owedOf(lines, accepted, stopped)
 	if len(owed) == 0 {
-		removeRunSecret(spec.Dir)
 		return ResendResult{}, nil
+	}
+	// The record owes the gateway: the run key reaches it.
+	if spec.Gateway.RunKey == "" {
+		return ResendResult{}, fmt.Errorf("resend %s: the run key is needed to send to its gateway; set QORY_RUN_KEY", spec.Dir)
+	}
+	key, err := spec.Gateway.key()
+	if err != nil {
+		return ResendResult{}, err
+	}
+	if runID := filepath.Base(spec.Dir); key.RunID != runID {
+		return ResendResult{}, fmt.Errorf("resend %s: QORY_RUN_KEY names the run %s, not this one", spec.Dir, key.RunID)
 	}
 	// How the run ended, as far as the record says.
 	state, reason := exitOf(lines)
@@ -139,7 +155,6 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		return ResendResult{}, err
 	}
 	defer k.Close()
-	k.UseRunSecret(readRunSecret(spec.Dir))
 	disc, err := k.Discover(ctx)
 	if err != nil {
 		return ResendResult{}, err
@@ -147,7 +162,6 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	target := sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}
 	owed = slices.DeleteFunc(owed, func(l recordedLine) bool { return !target.Wants(l.Type) })
 	if len(owed) == 0 {
-		removeRunSecret(spec.Dir)
 		return ResendResult{}, nil
 	}
 	// What was spooled is in session.jsonl as well, and is spooled again if the
@@ -191,15 +205,26 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 		}
 		res.Undelivered = len(owed) - res.Sent
 	}
-	if res.RunClosed || res.Undelivered == 0 {
-		// Nothing more is owed: the gateway took everything, or ended the run.
-		removeRunSecret(spec.Dir)
-	}
 	return res, nil
 }
 
-// refusing is the link's deliveries during a resend, which stop at the gateway's 401
-// unauthorized: sending again cannot change it.
+// resendStops are the refusals of a batch that stop a resend, by code, with the status
+// each comes with: the run key's, which the gateway passes on from Qory Apiary and
+// which sending again cannot change. Any other refusal is sent again, as the session
+// sends it.
+var resendStops = map[string]int{
+	// The gateway sends no 401; one stops the resend all the same, so it never sends
+	// again into a refusal it cannot change.
+	accesskey.CodeUnauthorized: http.StatusUnauthorized,
+	"run_key_invalid":          http.StatusBadRequest,
+	"wrong_gateway":            http.StatusConflict,
+	"workspace_not_served":     http.StatusConflict,
+	"run_key_expired":          http.StatusConflict,
+	"run_attached":             http.StatusConflict,
+}
+
+// refusing is the link's deliveries during a resend, which stop at a refusal of
+// [resendStops].
 type refusing struct {
 	to   sink.Deliverer
 	stop context.CancelFunc
@@ -208,17 +233,14 @@ type refusing struct {
 	ref *Refusal
 }
 
-// errRefusedBefore is a delivery not sent, after the gateway's 401 unauthorized.
-var errRefusedBefore = errors.New("the gateway refused the resend: unauthorized")
-
-// Deliver posts one batch through the link, and stops the resend at the gateway's 401
-// unauthorized; after it, nothing more is sent.
+// Deliver posts one batch through the link, and stops the resend at a refusal of
+// [resendStops]; after it, nothing more is sent, and each delivery is that refusal.
 func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (server.Delivery, error) {
-	if r.refused() != nil {
-		return server.Delivery{}, errRefusedBefore
+	if ref := r.refused(); ref != nil {
+		return server.Delivery{}, ref
 	}
 	d, err := r.to.Deliver(ctx, eventsURL, deliveryID, body, runDigest)
-	if err == nil && unauthorized(d) {
+	if err == nil && stops(d) {
 		r.mu.Lock()
 		if r.ref == nil {
 			r.ref = d.Refusal
@@ -229,16 +251,17 @@ func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, bo
 	return d, err
 }
 
-// refused is the gateway's 401 unauthorized, nil for none.
+// refused is the refusal that stopped the resend, nil for none.
 func (r *refusing) refused() *Refusal {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ref
 }
 
-// unauthorized reports whether the gateway refused a batch with its 401 unauthorized.
-func unauthorized(d server.Delivery) bool {
-	return d.Refusal != nil && d.Refusal.From == accesskey.FromGateway && d.Status == http.StatusUnauthorized && d.Code == accesskey.CodeUnauthorized
+// stops reports whether the gateway refused a batch with a refusal of [resendStops].
+func stops(d server.Delivery) bool {
+	status, ok := resendStops[d.Code]
+	return ok && d.Refusal != nil && d.Refusal.From == accesskey.FromGateway && d.Status == status
 }
 
 // recordedLine is one line of session.jsonl and what Resend reads of it.
@@ -259,8 +282,8 @@ type recordedLine struct {
 // a run.refused of a code the session does not decide or with a status, which the
 // session records in its own record alone, nor a run.exited whose reason is the code of
 // a gateway's 410, one of [server.EndCodes], which only the session's own record of a
-// 410 holds. Its own record of a 410 with a reason outside Forager's own, or none, reads
-// as a posted one does: delivered.log's stopped tells it apart ([owedOf]).
+// 410 holds. Its own record of a 410 with the starter's reason, or none, reads as a
+// posted one does: delivered.log's stopped tells it apart ([owedOf]).
 func (l recordedLine) posted() bool {
 	switch l.Type {
 	case event.RunExited:
@@ -307,54 +330,6 @@ func sessionRecord(file string) ([]recordedLine, error) {
 	return out, nil
 }
 
-// runSecretFile is the file of the run directory that keeps the run's secret behind a
-// separate gateway, the run answer's run_secret followed by a newline, mode 0600: written
-// when the run opens, so that [Resend] reaches the run, and removed once nothing is owed.
-const runSecretFile = "run-secret"
-
-// writeRunSecret writes the run's secret to the run directory, mode 0600, by a temporary
-// file renamed into place. Its error never holds the secret.
-func writeRunSecret(dir, secret string) error {
-	f, err := os.CreateTemp(dir, "."+runSecretFile+"-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	_, err = f.WriteString(secret + "\n")
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp, filepath.Join(dir, runSecretFile))
-	}
-	if err != nil {
-		os.Remove(tmp)
-	}
-	return err
-}
-
-// readRunSecret is the run's secret the run directory keeps, empty when it keeps none.
-// A file that holds more than a secret could is none.
-func readRunSecret(dir string) string {
-	f, err := os.Open(filepath.Join(dir, runSecretFile))
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxRunSecretFile+1))
-	if err != nil || len(b) > maxRunSecretFile {
-		return ""
-	}
-	return strings.TrimSuffix(string(b), "\n")
-}
-
-// maxRunSecretFile is the most bytes a run-secret file holds: the longest secret the
-// schema allows and its newline.
-const maxRunSecretFile = 257
-
 // owes reports whether the session's record in dir holds an event the link takes,
 // target's, that no batch the gateway accepted contained, as [Resend] reads it: one it
 // would send. A record it cannot read owes.
@@ -386,5 +361,33 @@ func owedOf(lines []recordedLine, accepted map[string]bool, stopped bool) []reco
 	return owed
 }
 
-// removeRunSecret removes the run's secret from the run directory, once nothing is owed.
-func removeRunSecret(dir string) { os.Remove(filepath.Join(dir, runSecretFile)) }
+// GatewayMark is the file a session writes in its run directory, empty, when it makes
+// its record behind a separate gateway, as it makes session.jsonl: no other writer of a
+// run directory writes it, a gateway on one machine, its own record or a session on
+// one machine.
+const GatewayMark = "separate-gateway"
+
+// markBehindGateway writes [GatewayMark] in the run directory dir.
+func markBehindGateway(dir string) error {
+	f, err := os.OpenFile(filepath.Join(dir, GatewayMark), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// BehindGateway reports whether the run directory dir holds a record a session made
+// behind a separate gateway, which [Resend] sends: whether dir holds [GatewayMark] as a
+// regular file, read without following a symbolic link, whatever else it holds and
+// wherever it is, the runs directory of a session or of a gateway. It reads that one
+// name; a directory without it is false, and an error other than a name that does not
+// exist is returned.
+func BehindGateway(dir string) (bool, error) {
+	info, err := os.Lstat(filepath.Join(dir, GatewayMark))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return info.Mode().IsRegular(), nil
+}

@@ -21,26 +21,43 @@ const (
 	RunPath    = "/v1/run-configuration"
 )
 
-// ProxySecret is the proxy secret a fake gateway's default run answer gives.
+// ProxySecret is the proxy secret a fake gateway's default run answer gives on the
+// local link.
 const ProxySecret = "fake-proxy-secret-0123456789abcdef"
 
-// RunSecret is the run secret a fake gateway's default run answer gives.
-const RunSecret = "fake-run-secret-0123456789abcdefghij"
-
 // Reply is one answer of the fake gateway: its status, its body, marshalled as JSON
-// unless it is a []byte, none when nil, and headers of its own beside the digest.
+// unless it is a []byte, none when nil, and headers of its own beside the digest; and,
+// on a separate gateway, how it is signed.
 type Reply struct {
 	Status int
 	Body   any
 	Header http.Header
+	// Signing is how a separate gateway signs this answer, [SignedOwn] by default, which
+	// [Fake.AnswerUnderUnnamedKey] changes for every answer.
+	Signing Signing
 }
 
-// Fake is a scriptable gateway on a local link: it answers discovery, run requests,
-// reloads and batches as contracts/forager/v1/README.md §The gateway's link says, and
-// records what it received. Its proxy is a listener on loopback that records the
-// preamble every connection opens with, and answers every request on it 200 "ok".
-// Every answer carries the run-configuration digest set with SetRunDigest, and the
-// On functions replace an answer; each may be set before the session runs.
+// Signing is how a fake separate gateway signs one answer.
+type Signing int
+
+// The ways a fake separate gateway signs an answer.
+const (
+	// SignedOwn is the fake's way for every answer: its own key, unless
+	// [Fake.AnswerUnderUnnamedKey] says otherwise.
+	SignedOwn Signing = iota
+	// SignedUnnamed is a signature under a key no run key of the fake's names.
+	SignedUnnamed
+	// Unsigned is no signature.
+	Unsigned
+)
+
+// Fake is a scriptable gateway on a local link, or a separate one, [StartRemoteFake]:
+// it answers discovery, run requests, reloads and batches as
+// contracts/forager/v1/README.md §The gateway's link says, and records what it
+// received. The local link's proxy is a listener on loopback that records the preamble
+// every connection opens with, and answers every request on it 200 "ok". Every answer
+// carries the run-configuration digest set with SetRunDigest, and the On functions
+// replace an answer; each may be set before the session runs.
 type Fake struct {
 	*Gateway
 
@@ -56,14 +73,16 @@ type Fake struct {
 	onReload  func(runID string) Reply
 	onBatch   func([]map[string]any) Reply
 	// origin is a separate gateway's, https and its one address; empty on the local
-	// link.
+	// link. prefix begins every path of its link, /qory-link; empty on the local link.
 	origin    string
+	prefix    string
 	remote    *remote
 	requests  []server.LinkRunRequest
 	raw       [][]byte
 	batches   [][]map[string]any
 	reloads   []string
-	secrets   []string
+	runIDs    []string
+	bearers   []string
 	preambles []string
 	proxied   []string
 }
@@ -80,7 +99,7 @@ func StartFake(t testing.TB) *Fake {
 	f.proxy = ln
 	t.Cleanup(func() { ln.Close() })
 	go f.serveProxy()
-	f.Gateway = Start(t, "fake-link-secret-0123456789", http.HandlerFunc(f.serve))
+	f.Gateway = Start(t, http.HandlerFunc(f.serve))
 	return f
 }
 
@@ -175,13 +194,20 @@ func (f *Fake) Reloads() []string {
 	return slices.Clone(f.reloads)
 }
 
-// RunSecrets are the X-Qory-Run-Secret values the reloads and the batches received
-// carried, in order, joined by a comma when one carried several, empty
-// for none.
-func (f *Fake) RunSecrets() []string {
+// RunIDs are the X-Qory-Run-Id values the batches received carried, in order, joined
+// by a comma when one carried several, empty for none.
+func (f *Fake) RunIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.secrets)
+	return slices.Clone(f.runIDs)
+}
+
+// Bearers are the values of Authorization every request of a separate gateway's link
+// carried, in order, joined by a comma when one carried several, empty for none.
+func (f *Fake) Bearers() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.bearers)
 }
 
 // Preambles are the first lines of the connections the fake proxy received, without
@@ -199,17 +225,26 @@ func (f *Fake) Proxied() []string {
 	return slices.Clone(f.proxied)
 }
 
-// RunAnswer is the fake's default answer to a run request: the request's run id and
-// labels, no policy, with the members of policy_applied of none, the proxy secret
-// ProxySecret, the run secret RunSecret, and behind a wall the image the request's
-// default names, none when it names none.
+// RunAnswer is the fake's default answer to a run request on the local link: the
+// request's run id and labels, no policy, with the members of policy_applied of none,
+// the proxy secret ProxySecret, and behind a wall the image the request's default names,
+// none when it names none.
 func RunAnswer(req server.LinkRunRequest) map[string]any {
 	labels := req.Labels
 	if labels == nil {
 		labels = map[string]string{}
 	}
+	a := RemoteRunAnswer(req)
+	a["labels"], a["proxy_secret"] = labels, ProxySecret
+	return a
+}
+
+// RemoteRunAnswer is the fake's default answer to a run request behind a separate
+// gateway: [RunAnswer] without the labels, which are the starter's registration's, and
+// without a proxy secret, since the run key opens the proxy's connections.
+func RemoteRunAnswer(req server.LinkRunRequest) map[string]any {
 	a := map[string]any{
-		"version": 1, "run_id": req.RunID, "labels": labels, "proxy_secret": ProxySecret, "run_secret": RunSecret,
+		"version": 1, "run_id": req.RunID,
 		"applied": map[string]any{"mode": "observe", "allow": []string{}, "deny": []string{}, "source": "none"},
 	}
 	if req.Wall && req.Images != nil && req.Images.Default != "" {
@@ -242,9 +277,16 @@ func Refusal(code, from string, names ...string) map[string]any {
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
+	discovery, runPath, eventsPath := server.WellKnown, f.prefix+RunPath, f.prefix+EventsPath
 	var reply Reply
+	if f.remote != nil {
+		discovery = link.RemoteDiscoveryPath
+		f.bearers = append(f.bearers, strings.Join(r.Header.Values("Authorization"), ","))
+	}
 	switch {
-	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
+	case f.remote != nil && !f.remote.bearer(r.Header.Values("Authorization")):
+		reply = Reply{Status: 401, Body: map[string]any{"error": "unauthorized", "from": "gateway", "message": "the gateway refused the run: unauthorized"}}
+	case r.Method == http.MethodGet && r.URL.Path == discovery:
 		origin, proxy := server.LocalOrigin, f.ProxyAddr()
 		if f.origin != "" {
 			// A separate gateway lists its own origin, and names its one address as its
@@ -256,26 +298,28 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		reply = Reply{Status: 200, Body: map[string]any{
 			"version": 1,
-			"events":  map[string]any{"url": origin + EventsPath, "types": []string{"*"}, "interval_seconds": f.interval},
-			"run":     map[string]any{"url": origin + RunPath},
+			"events":  map[string]any{"url": origin + eventsPath, "types": []string{"*"}, "interval_seconds": f.interval},
+			"run":     map[string]any{"url": origin + runPath},
 			"proxy":   map[string]any{"address": proxy},
 		}}
-	case r.Method == http.MethodPost && r.URL.Path == RunPath:
+	case r.Method == http.MethodPost && r.URL.Path == runPath:
 		var req server.LinkRunRequest
 		json.Unmarshal(body, &req)
 		f.requests = append(f.requests, req)
 		f.raw = append(f.raw, body)
-		if h := f.onRun; h != nil {
+		switch h := f.onRun; {
+		case h != nil:
 			f.mu.Unlock()
 			reply = h(req)
 			f.mu.Lock()
-		} else {
+		case f.remote != nil:
+			reply = Reply{Status: 200, Body: RemoteRunAnswer(req)}
+		default:
 			reply = Reply{Status: 200, Body: RunAnswer(req)}
 		}
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, RunPath+"/"):
-		id := strings.TrimPrefix(r.URL.Path, RunPath+"/")
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/"):
+		id := strings.TrimPrefix(r.URL.Path, runPath+"/")
 		f.reloads = append(f.reloads, id)
-		f.secrets = append(f.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
 		if h := f.onReload; h != nil {
 			f.mu.Unlock()
 			reply = h(id)
@@ -283,12 +327,12 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		} else {
 			reply = Reply{Status: 200, Body: map[string]any{"version": 1, "applied": map[string]any{"mode": "observe", "allow": []string{}, "deny": []string{}, "source": "none"}}}
 		}
-	case r.Method == http.MethodPost && r.URL.Path == EventsPath:
+	case r.Method == http.MethodPost && r.URL.Path == eventsPath:
 		var evs []map[string]any
 		json.Unmarshal(body, &evs)
 		f.batches = append(f.batches, evs)
 		f.digests = append(f.digests, r.Header.Get(server.HeaderRunConfiguration))
-		f.secrets = append(f.secrets, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
+		f.runIDs = append(f.runIDs, strings.Join(r.Header.Values(server.HeaderRunID), ","))
 		if h := f.onBatch; h != nil {
 			f.mu.Unlock()
 			reply = h(evs)
@@ -301,6 +345,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	// A handler may have set the digest while it answered.
 	digest := f.runDigest
+	rm := f.remote
 	f.mu.Unlock()
 	for k, v := range reply.Header {
 		w.Header()[k] = v
@@ -318,6 +363,9 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if out != nil {
 		w.Header().Set("Content-Type", "application/json")
+	}
+	if rm != nil {
+		rm.sign(w.Header(), r, body, reply.Status, out, reply.Signing)
 	}
 	w.WriteHeader(reply.Status)
 	w.Write(out)
@@ -349,19 +397,25 @@ func (f *Fake) serveProxy() {
 				io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
 				return
 			}
-			for {
-				req, err := http.ReadRequest(r)
-				if err != nil {
-					return
-				}
-				io.Copy(io.Discard, req.Body)
-				f.mu.Lock()
-				f.proxied = append(f.proxied, req.Method+" "+req.RequestURI)
-				f.mu.Unlock()
-				if _, err := io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); err != nil {
-					return
-				}
-			}
+			f.answerProxied(c, r)
 		}()
+	}
+}
+
+// answerProxied answers each HTTP request it reads from r, after a connection's
+// preamble, with 200 "ok" on w, and records its request line.
+func (f *Fake) answerProxied(w io.Writer, r *bufio.Reader) {
+	for {
+		req, err := http.ReadRequest(r)
+		if err != nil {
+			return
+		}
+		io.Copy(io.Discard, req.Body)
+		f.mu.Lock()
+		f.proxied = append(f.proxied, req.Method+" "+req.RequestURI)
+		f.mu.Unlock()
+		if _, err := io.WriteString(w, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); err != nil {
+			return
+		}
 	}
 }

@@ -190,7 +190,7 @@ func TestAMountOfTheForagersFilesIsNoRun(t *testing.T) {
 	if !strings.Contains(r.Detail, "the mount "+parent+" contains "+dir) {
 		t.Errorf("detail %q", r.Detail)
 	}
-	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
+	if n := g.Accepted.Load(); n != 0 {
 		t.Errorf("the gateway got %d connections", n)
 	}
 	if w.req.RunID != "" || w.wrapped {

@@ -25,11 +25,9 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// The link's secret and a run of the tests.
+// A run of the tests and its proxy secret.
 const (
-	linkSecret  = "link-secret-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	proxySecret = "proxy-secret-BBBBBBBBBBBBBBBBBBBBBBBB"
-	runSecret   = "run-secret-CCCCCCCCCCCCCCCCCCCCCCCCCC"
 	runID       = "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d"
 	userAgent   = "qory-forager/test"
 	runDigest   = "sha256=" + "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
@@ -41,7 +39,7 @@ const (
 const discovery = `{"version":1,"events":{"url":"http://localhost/v1/events","types":["*"],"interval_seconds":30},"run":{"url":"http://localhost/v1/run-configuration"},"proxy":{"address":"127.0.0.1:41000"},"later":{"a":1}}`
 
 // runAnswer is a run answer with the members the link adds to the schema's.
-var runAnswer = `{"version":1,"run_id":"` + runID + `","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","run_secret":"` + runSecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
+var runAnswer = `{"version":1,"run_id":"` + runID + `","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
 
 // reloadAnswer is a reload answer with the members the link adds to the schema's.
 const reloadAnswer = `{"version":1,"policy":{"version":1,"egress":{"mode":"observe"}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"prod"}},"placeholders":[],"reserved":["EXAMPLE_SOURCE_KEY"],"applied":{"mode":"observe","allow":[],"source":"config","digest":"` + policyHex + `"}}`
@@ -73,17 +71,17 @@ func answer(w http.ResponseWriter, status int, body string) {
 }
 
 // TestTheLinkSpeaksTheContractOverTheSocket pins one run's requests on the local
-// link: each connection opens with the preamble, every request carries User-Agent and
-// the contract revision and none of the signed requests' headers, the run request
-// carries the run's passes and images, a batch its content type and delivery id, the
-// reload and the batch the run answer's run secret, which neither the discovery nor the
-// run request carries, and every answer's digests reach the caller.
+// link: every request carries User-Agent and the contract revision and none of the
+// signed requests' headers, the run request carries the run's passes and images, a
+// batch its content type, delivery id and the run's id in X-Qory-Run-Id, which neither
+// the discovery, the run request nor the reload carries, and every answer's digests
+// reach the caller.
 func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	var mu sync.Mutex
 	var problems []string
 	var request server.LinkRunRequest
 	note := func(f string, a ...any) { mu.Lock(); problems = append(problems, fmt.Sprintf(f, a...)); mu.Unlock() }
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "localhost" || r.Header.Get("User-Agent") != userAgent || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
 			note("%s %s: host %q, headers %v", r.Method, r.URL, r.Host, r.Header)
 		}
@@ -92,12 +90,12 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 				note("%s %s carries %s", r.Method, r.URL, h)
 			}
 		}
-		wantSecret := []string{runSecret}
-		if r.URL.Path == server.WellKnown || r.URL.Path == "/v1/run-configuration" {
-			wantSecret = nil
+		var wantRun []string
+		if r.URL.Path == "/v1/events" {
+			wantRun = []string{runID}
 		}
-		if got := r.Header.Values(server.HeaderRunSecret); fmt.Sprint(got) != fmt.Sprint(wantSecret) {
-			note("%s %s: the run secret %d times, want %d", r.Method, r.URL, len(got), len(wantSecret))
+		if got := r.Header.Values(server.HeaderRunID); fmt.Sprint(got) != fmt.Sprint(wantRun) {
+			note("%s %s: X-Qory-Run-Id %q, want %q", r.Method, r.URL, got, wantRun)
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
@@ -172,8 +170,8 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 			t.Errorf("digests %+v", dg)
 		}
 	}
-	if g.Rejected.Load() != 0 || g.Accepted.Load() == 0 {
-		t.Errorf("%d connections rejected, %d accepted", g.Rejected.Load(), g.Accepted.Load())
+	if g.Accepted.Load() == 0 {
+		t.Error("no connection reached the gateway")
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -182,9 +180,9 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 	}
 }
 
-// TestTheLinkChecksItsPeerBeforeItsSecret pins that the session writes nothing to a
-// socket whose peer is another user: the error says so, and the peer receives no byte.
-func TestTheLinkChecksItsPeerBeforeItsSecret(t *testing.T) {
+// TestTheLinkChecksItsPeerBeforeItSendsAnything pins that the session writes nothing to
+// a socket whose peer is another user: the error says so, and the peer receives no byte.
+func TestTheLinkChecksItsPeerBeforeItSendsAnything(t *testing.T) {
 	socket := linktest.SocketPath(t)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -203,47 +201,17 @@ func TestTheLinkChecksItsPeerBeforeItsSecret(t *testing.T) {
 		b, _ := io.ReadAll(c)
 		received <- len(b)
 	}()
-	k, err := server.NewLocalLink(link.Local{Socket: socket, Secret: linkSecret}, userAgent, nil)
+	k, err := server.NewLocalLink(link.Local{Socket: socket}, userAgent, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.SetPeerUID(k, os.Getuid()+1)
 	_, err = k.Discover(context.Background())
-	if !errors.Is(err, server.ErrLinkPeer) {
+	if !errors.Is(err, server.ErrLinkPeer) || !strings.Contains(err.Error(), "the socket's peer is another user; nothing is sent") {
 		t.Fatalf("a peer of another user: %v", err)
 	}
 	if n := <-received; n != 0 {
 		t.Errorf("the peer received %d bytes", n)
-	}
-	if strings.Contains(err.Error(), linkSecret) {
-		t.Errorf("the error contains the secret: %v", err)
-	}
-}
-
-// TestAConnectionWithoutTheSecretIsClosed pins the fake gateway's side, as the gateway
-// reads the link: a session with another secret is closed unanswered, and no request
-// reaches the handler.
-func TestAConnectionWithoutTheSecretIsClosed(t *testing.T) {
-	var hits atomic.Int32
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); answer(w, 200, discovery) }))
-	other := g.Local()
-	other.Secret = "another-secret-CCCCCCCCCCCCCCCCCCCCCCCC"
-	k, err := server.NewLocalLink(other, userAgent, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer k.Close()
-	if _, err := k.Discover(context.Background()); err == nil {
-		t.Fatal("a session with another secret was answered")
-	} else if strings.Contains(err.Error(), other.Secret) || strings.Contains(err.Error(), linkSecret) {
-		t.Errorf("the error contains a secret: %v", err)
-	}
-	if hits.Load() != 0 || g.Rejected.Load() == 0 || g.Accepted.Load() != 0 {
-		t.Errorf("%d requests answered, %d rejected, %d accepted", hits.Load(), g.Rejected.Load(), g.Accepted.Load())
-	}
-	right, _ := newLink(t, g)
-	if _, err := right.Discover(context.Background()); err != nil || hits.Load() != 1 {
-		t.Errorf("the right secret: %v, %d requests", err, hits.Load())
 	}
 }
 
@@ -251,7 +219,7 @@ func TestAConnectionWithoutTheSecretIsClosed(t *testing.T) {
 // nothing is requested where it points.
 func TestTheLinkFollowsNoRedirect(t *testing.T) {
 	var elsewhere atomic.Int32
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/elsewhere" {
 			elsewhere.Add(1)
 			answer(w, 200, discovery)
@@ -293,7 +261,7 @@ func TestADiscoveryOffTheLinkIsRefused(t *testing.T) {
 		"no heartbeat interval": `{"version":1,"events":{"url":"http://localhost/e","types":["*"]},"run":{"url":"http://localhost/r"}}`,
 		"a node":                `{"version":1,"node_id":"nd_x","events":{"url":"http://localhost/e","types":["*"],"interval_seconds":30},"run":{"url":"http://localhost/r"}}`,
 	} {
-		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, body) }))
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, body) }))
 		k, _ := newLink(t, g)
 		_, err := k.Discover(context.Background())
 		var de *server.DocumentError
@@ -305,7 +273,7 @@ func TestADiscoveryOffTheLinkIsRefused(t *testing.T) {
 			t.Errorf("%s: the error quotes the URL: %v", name, err)
 		}
 	}
-	k, _ := newLink(t, linktest.Start(t, linkSecret, http.NotFoundHandler()))
+	k, _ := newLink(t, linktest.Start(t, http.NotFoundHandler()))
 	for _, u := range []string{"https://gateway.example/v1/run", "http://127.0.0.1/v1/run"} {
 		if _, err := k.OpenRun(context.Background(), u, server.LinkRunRequest{RunID: runID}); err == nil {
 			t.Errorf("a run request to %s was sent", u)
@@ -334,7 +302,7 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 		{401, `{"error":"unauthorized","from":"apiary"}`, "unauthorized", accesskey.FromApiary, nil},
 		{409, `{"error":"instance_limit","from":"someone"}`, "instance_limit", accesskey.FromGateway, nil},
 	} {
-		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, c.status, c.body) }))
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, c.status, c.body) }))
 		k, digests := newLink(t, g)
 		_, err := k.OpenRun(context.Background(), "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
 		var r *accesskey.Refusal
@@ -348,7 +316,7 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 			t.Errorf("%d %s: %d digests handed on", c.status, c.body, len(*digests))
 		}
 	}
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
 	k, _ := newLink(t, g)
 	_, err := k.Reload(context.Background(), "http://localhost/v1/run-configuration", runID)
 	var r *accesskey.Refusal
@@ -387,7 +355,7 @@ func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 		`{"error":"run_closed","from":"gateway","state":"cancelled","reason":"no_longer_needed"}`: {Code: "run_closed", From: gw},
 		`{"error":"something_else","state":"cancelled"}`:                                          {Code: "run_closed", From: gw},
 	} {
-		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, http.StatusGone, body) }))
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, http.StatusGone, body) }))
 		k, digests := newLink(t, g)
 		ctx := context.Background()
 		_, err := k.OpenRun(ctx, "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
@@ -430,7 +398,7 @@ func TestABatchTheGatewayRefusesEndsTheRun(t *testing.T) {
 		{503, `{"error":"invalid_request"}`, ""},
 		{409, `{"error":"run_id_used"}`, ""},
 	} {
-		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, c.status, c.body) }))
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, c.status, c.body) }))
 		k, _ := newLink(t, g)
 		d, err := k.Deliver(context.Background(), "http://localhost/v1/events", "d1", []byte("[]"), "")
 		if err != nil || d.End != c.end || d.Closed() != (c.end != "") || d.Stop() != (c.end != "") || d.Accepted() {
@@ -459,7 +427,7 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 		"a digest without a policy":         strings.Replace(runAnswer, `"policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},`, "", 1),
 		"a label key outside its grammar":   strings.Replace(runAnswer, `"forge":"example-forge"`, `"Forge":"example-forge"`, 1),
 	} {
-		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, body) }))
+		g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, body) }))
 		k, _ := newLink(t, g)
 		_, err := k.OpenRun(context.Background(), "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID})
 		var de *server.DocumentError
@@ -471,7 +439,7 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 			t.Errorf("%s: the error quotes a value: %v", name, err)
 		}
 	}
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		answer(w, 200, `{"version":1,"proxy_secret":"`+proxySecret+`"}`)
 	}))
 	k, _ := newLink(t, g)
@@ -486,62 +454,37 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 	}
 }
 
-// TestTheLinkNeverShowsItsSecret pins that the link secret appears in no error, no
-// print under any verb of the client or of its value, and no log line, and that a run
-// answer prints and logs without its proxy secret or its run secret, and a link without
-// the run secret it carries.
-func TestTheLinkNeverShowsItsSecret(t *testing.T) {
-	if _, err := server.NewLocalLink(link.Local{Socket: "/x", Secret: "with space " + linkSecret}, userAgent, nil); err == nil || strings.Contains(err.Error(), linkSecret) {
-		t.Errorf("a secret no preamble carries: %v", err)
+// TestTheRunAnswerNeverShowsItsProxySecret pins that a run answer prints and logs
+// without its proxy secret under every verb, and that a link prints by the place it
+// speaks to.
+func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
+	if _, err := server.NewLocalLink(link.Local{}, userAgent, nil); err == nil {
+		t.Error("a local link with no socket")
 	}
-	if _, err := server.NewLocalLink(link.Local{Secret: linkSecret}, userAgent, nil); err == nil || strings.Contains(err.Error(), linkSecret) {
-		t.Errorf("no socket: %v", err)
-	}
-	k, err := server.NewLocalLink(link.Local{Socket: linktest.SocketPath(t), Secret: linkSecret}, userAgent, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := linktest.Start(t, http.NotFoundHandler())
+	k, _ := server.NewLocalLink(g.Local(), userAgent, nil)
 	var out bytes.Buffer
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%T"} {
-		fmt.Fprintf(&out, verb+"\n", k)
-		fmt.Fprintf(&out, verb+"\n", *k)
-	}
 	log := slog.New(slog.NewJSONHandler(&out, nil))
-	log.Info("link", "link", k, "value", *k)
-	slog.New(slog.NewTextHandler(&out, nil)).Info("link", "link", k)
-	_, err = k.Discover(context.Background())
-	fmt.Fprintf(&out, "%v\n", err)
-	_, err = k.Deliver(context.Background(), "http://localhost/v1/events", "d", []byte("[]"), "")
-	fmt.Fprintf(&out, "%v\n", err)
-	if err == nil {
-		t.Error("a link with no gateway delivered")
-	}
-	g := linktest.Start(t, linkSecret, http.NotFoundHandler())
-	k2, _ := server.NewLocalLink(g.Local(), userAgent, nil)
-	server.SetPeerUID(k2, os.Getuid()+1)
-	_, err = k2.Discover(context.Background())
-	fmt.Fprintf(&out, "%v\n", err)
-	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret, RunSecret: runSecret}
-	k2.UseRunSecret(runSecret)
+	a := server.LinkRunAnswer{RunID: runID, ProxySecret: proxySecret}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		fmt.Fprintf(&out, verb+"\n", a)
 		fmt.Fprintf(&out, verb+"\n", &a)
-		fmt.Fprintf(&out, verb+"\n", k2)
-		fmt.Fprintf(&out, verb+"\n", *k2)
+		fmt.Fprintf(&out, verb+"\n", k)
+		fmt.Fprintf(&out, verb+"\n", *k)
 	}
-	log.Info("answer", "answer", a, "link", k2)
-	if strings.Contains(out.String(), linkSecret) || strings.Contains(out.String(), proxySecret) || strings.Contains(out.String(), runSecret) {
+	log.Info("answer", "answer", a, "link", k)
+	if strings.Contains(out.String(), proxySecret) {
 		t.Errorf("a secret is shown:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "[redacted]") || !strings.Contains(out.String(), "server.LinkRunAnswer{") {
-		t.Errorf("the run answer is not shown redacted:\n%s", out.String())
+	if !strings.Contains(out.String(), "[redacted]") || !strings.Contains(out.String(), "server.LinkRunAnswer{") || !strings.Contains(out.String(), "server.Link{the gateway's local link "+g.Socket+"}") {
+		t.Errorf("the run answer is not shown redacted, or the link not by its socket:\n%s", out.String())
 	}
 }
 
 // TestALinkInMemoryNeverDialsItsSocket pins the client of a gateway in this process: each
-// connection is the Local's way in memory, it carries the same preamble with the
-// secret, and the socket's path is never dialled, whatever listens there. A Local that
-// has that way needs no socket.
+// connection is the Local's way in memory, it carries HTTP from its first byte, as
+// over the socket, and the socket's path is never dialled, whatever listens there. A
+// Local that has that way needs no socket.
 func TestALinkInMemoryNeverDialsItsSocket(t *testing.T) {
 	socket := linktest.SocketPath(t)
 	ln, err := net.Listen("unix", socket)
@@ -556,31 +499,30 @@ func TestALinkInMemoryNeverDialsItsSocket(t *testing.T) {
 			c.Close()
 		}
 	}()
-	preambles := make(chan bool, 4)
+	firsts := make(chan string, 4)
 	dial := func(context.Context) (net.Conn, error) {
 		client, gateway := net.Pipe()
 		go func() {
 			defer gateway.Close()
 			gateway.SetReadDeadline(time.Now().Add(5 * time.Second))
-			ok, err := link.ReadLinkPreamble(bufio.NewReader(gateway), linkSecret)
-			preambles <- ok && err == nil
+			line, _ := bufio.NewReader(gateway).ReadString('\n')
+			firsts <- line
 		}()
 		return client, nil
 	}
 	for _, l := range []link.Local{
-		link.Local{Socket: socket, Secret: linkSecret}.InMemory(dial),
-		link.Local{Secret: linkSecret}.InMemory(dial),
+		link.Local{Socket: socket}.InMemory(dial),
+		link.Local{}.InMemory(dial),
 	} {
 		k, err := server.NewLocalLink(l, userAgent, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = k.Discover(context.Background())
-		if err == nil || strings.Contains(err.Error(), linkSecret) {
-			t.Errorf("a gateway in memory that answers nothing: %v", err)
+		if _, err = k.Discover(context.Background()); err == nil {
+			t.Error("a gateway in memory that answers nothing answered")
 		}
-		if ok := <-preambles; !ok {
-			t.Error("the connection in memory did not open with the link's preamble")
+		if first := <-firsts; first != "GET /.well-known/qory-configuration HTTP/1.1\r\n" {
+			t.Errorf("the connection in memory opened with %q", first)
 		}
 		k.Close()
 	}
@@ -591,30 +533,39 @@ func TestALinkInMemoryNeverDialsItsSocket(t *testing.T) {
 	}
 }
 
-// TestALinkCarriesTheRunSecretItIsGiven pins UseRunSecret: a link given no run secret
-// carries none; one of the schema's form is carried on every request from then on; a
-// value of another form is ignored, and the link carries what it carried before.
-func TestALinkCarriesTheRunSecretItIsGiven(t *testing.T) {
+// TestABatchNamesItsRunOnceItOpened pins X-Qory-Run-Id on the local link: a batch
+// before the run opened names no run, and every one after names the run the run answer
+// echoed, once.
+func TestABatchNamesItsRunOnceItOpened(t *testing.T) {
 	var mu sync.Mutex
 	var got []string
-	g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		got = append(got, strings.Join(r.Header.Values(server.HeaderRunSecret), ","))
-		mu.Unlock()
-		answer(w, 200, discovery)
+	g := linktest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/run-configuration":
+			answer(w, 200, runAnswer)
+		default:
+			mu.Lock()
+			got = append(got, strings.Join(r.Header.Values(server.HeaderRunID), ","))
+			mu.Unlock()
+			answer(w, 202, "")
+		}
 	}))
 	k, _ := newLink(t, g)
-	for _, give := range []string{"", "not a secret the schema allows", "short", runSecret, "a-secret-of-its-own-form\r\nX-Other: 1"} {
-		if give != "" {
-			k.UseRunSecret(give)
-		}
-		if _, err := k.Discover(context.Background()); err != nil {
+	ctx := context.Background()
+	if _, err := k.Deliver(ctx, "http://localhost/v1/events", "d1", []byte(`[]`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.OpenRun(ctx, "http://localhost/v1/run-configuration", server.LinkRunRequest{RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"d2", "d3"} {
+		if _, err := k.Deliver(ctx, "http://localhost/v1/events", id, []byte(`[]`), ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if want := []string{"", "", "", runSecret, runSecret}; fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("the run secrets carried %q, want %q", got, want)
+	if want := []string{"", runID, runID}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the batches named %q, want %q", got, want)
 	}
 }

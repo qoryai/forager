@@ -616,7 +616,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	if !errors.As(err, &ae) || err.Error() != "about.subjects[0].ref is empty" {
 		t.Errorf("an About without a ref: %v", err)
 	}
-	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
+	if n := g.Accepted.Load(); n != 0 {
 		t.Errorf("the gateway saw %d connections of a refused run", n)
 	}
 	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {

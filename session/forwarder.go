@@ -1,13 +1,17 @@
 package session
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,14 +27,16 @@ const dialWait = 10 * time.Second
 // relay's preamble and the run's proxy secret first; behind a wall the wall's relay
 // writes the preamble itself, and the forwarder passes on what arrives as it is.
 //
-// Behind a separate gateway it reaches the gateway's one address over TLS, with the
-// link's trust: behind a wall, every connection must first open with the relay's
-// preamble and the hop secret the session gave the wall's relay, which the forwarder
-// replaces with the run's proxy secret inside TLS; without a wall, the agent's proxy URL
-// carries the proxy secret as its password, which reaches the gateway inside TLS.
+// Behind a separate gateway it reaches the gateway's one address over TLS, each
+// connection bound to a key the run key names and opened with the relay's preamble and
+// the run key, which the link's proxy dial writes: behind a wall, every connection must
+// first open with the relay's preamble and the hop secret the session gave the wall's
+// relay, which the forwarder takes off; without a wall, its first request must carry
+// the password of the agent's proxy URL, a secret the session made for this run's
+// forwarder alone, which the forwarder takes off.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
-// environment only as an unwalled agent's proxy URL behind a separate gateway.
+// environment only as that password, in the unwalled agent's proxy URL.
 type forwarder struct {
 	ln  net.Listener
 	way forwarding
@@ -47,7 +53,8 @@ type forwarder struct {
 
 // forwarding is where a forwarder sends what it accepts, and with which secrets.
 type forwarding struct {
-	// dial opens one connection to the gateway's proxy.
+	// dial opens one connection to the gateway's proxy: behind a separate gateway, bound
+	// and opened with the run key.
 	dial func(context.Context) (net.Conn, error)
 	// secret, when set, is written in the relay's preamble at the start of every
 	// connection to the proxy.
@@ -56,7 +63,10 @@ type forwarding struct {
 	// relay's preamble, before anything reaches the proxy; the preamble is not passed
 	// on.
 	hop string
-	// password, when set, is the password of the proxy URL [forwarder.Env] gives.
+	// password, when set, is the password of the proxy URL [forwarder.Env] gives, which
+	// the first request of every accepted connection must carry in its one
+	// Proxy-Authorization, Basic, before anything reaches the proxy; the header is not
+	// passed on.
 	password string
 }
 
@@ -101,21 +111,22 @@ func (f *forwarder) Addr() string { return f.ln.Addr().String() }
 func (f *forwarder) Env() []string {
 	u := url.URL{Scheme: "http", Host: f.Addr()}
 	if f.way.password != "" {
-		// The user name is ignored; the password is the run's proxy secret.
+		// The user name is ignored; the password is the forwarder's own.
 		u.User = url.UserPassword(proxyUser, f.way.password)
 	}
 	return link.ProxyEnv(u.String())
 }
 
 // proxyUser is the user name of an unwalled agent's proxy URL behind a separate
-// gateway, which the gateway ignores.
+// gateway, which the forwarder ignores.
 const proxyUser = "qory"
 
-// newHopSecret makes the secret the wall's relay opens every connection to the
-// forwarder with behind a separate gateway: 32 bytes from crypto/rand, base64url
-// without padding. It is good for this run's forwarder alone, so the run's proxy
-// secret is in no file of the wall's.
-func newHopSecret() (string, error) {
+// newForwarderSecret makes a secret of this run's forwarder alone behind a separate
+// gateway: 32 bytes from crypto/rand, base64url without padding. Behind a wall it is the
+// hop secret the wall's relay opens every connection with, so the run key is in no file
+// of the wall's; without one it is the password of the agent's proxy URL, so no other
+// process of the machine reaches the gateway through the forwarder.
+func newForwarderSecret() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
@@ -172,6 +183,17 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 		c.SetReadDeadline(time.Time{})
 	}
+	var src io.Reader = c
+	if f.way.password != "" {
+		// Nothing reaches the proxy from a connection that is not the run's agent.
+		c.SetReadDeadline(time.Now().Add(proxyHeadWait))
+		head, rest, ok := readProxyLogin(c, f.way.password)
+		if !ok {
+			return
+		}
+		c.SetReadDeadline(time.Time{})
+		src = io.MultiReader(bytes.NewReader(head), rest)
+	}
 	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
 	up, err := f.way.dial(ctx)
 	cancel()
@@ -185,13 +207,13 @@ func (f *forwarder) serve(c net.Conn) {
 	defer f.untrack(up)
 	if f.way.secret != "" {
 		up.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(up, link.Preamble(link.RelayPreamble, f.way.secret)); err != nil {
+		if _, err := io.WriteString(up, link.RelayLine(f.way.secret)); err != nil {
 			return
 		}
 		up.SetWriteDeadline(time.Time{})
 	}
 	done := make(chan struct{}, 2)
-	pipe := func(dst, src net.Conn) {
+	pipe := func(dst net.Conn, src io.Reader) {
 		io.Copy(dst, src)
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
@@ -200,10 +222,71 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 		done <- struct{}{}
 	}
-	go pipe(up, c)
+	go pipe(up, src)
 	go pipe(c, up)
 	<-done
 	<-done
+}
+
+// proxyHeadWait is how long a connection to an unwalled forwarder behind a separate
+// gateway has to send its first request's head, as long as a preamble has.
+var proxyHeadWait = link.PreambleWait
+
+// maxProxyHead is the longest line of the first request's head the forwarder reads,
+// and maxProxyLines the most lines.
+const (
+	maxProxyHead  = 8 << 10
+	maxProxyLines = 100
+)
+
+// readProxyLogin reads the head of the first request of a connection, up to its empty
+// line, and reports whether it carries exactly one Proxy-Authorization, Basic, whose
+// password is password, compared in constant time; the user name is ignored. It
+// returns the head without that header, and the reader that holds what follows it. A
+// head with a line longer than [maxProxyHead] bytes or more than [maxProxyLines] lines
+// is refused.
+func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Reader, ok bool) {
+	r := bufio.NewReaderSize(c, maxProxyHead)
+	var out bytes.Buffer
+	logins := 0
+	for i := 0; ; i++ {
+		line, err := r.ReadSlice('\n')
+		if err != nil || i == maxProxyLines {
+			return nil, nil, false
+		}
+		if i > 0 {
+			if l := bytes.TrimRight(line, "\r\n"); len(l) == 0 {
+				out.Write(line)
+				break
+			} else if name, value, found := bytes.Cut(l, []byte(":")); found && strings.EqualFold(string(name), "Proxy-Authorization") {
+				logins++
+				if !proxyLogin(string(bytes.TrimSpace(value)), password) {
+					return nil, nil, false
+				}
+				continue
+			}
+		}
+		out.Write(line)
+	}
+	if logins != 1 {
+		return nil, nil, false
+	}
+	return out.Bytes(), r, true
+}
+
+// proxyLogin reports whether value, a Proxy-Authorization's, is Basic credentials whose
+// password is password, compared in constant time.
+func proxyLogin(value, password string) bool {
+	scheme, cred, found := strings.Cut(value, " ")
+	if !found || !strings.EqualFold(scheme, "Basic") {
+		return false
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cred))
+	if err != nil {
+		return false
+	}
+	_, got, found := strings.Cut(string(b), ":")
+	return found && subtle.ConstantTimeCompare([]byte(got), []byte(password)) == 1
 }
 
 // Close stops listening, ends every dial in flight and every connection; it waits for

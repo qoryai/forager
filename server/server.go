@@ -25,10 +25,11 @@
 // for a 401, answer_unsigned for an answer that does not verify, and the server's own
 // code from a signed answer's body, instance_limit or rate_limited say.
 //
-// A [Link] is the session's client of its gateway's link, the same protocol on the same
-// paths, unsigned: the transport authenticates both ends. It is the one place an
-// unsigned answer is read, and only an answer that came over the link: a [Client]
-// never reads one.
+// A [Link] is the session's client of its gateway's link, the same protocol, its
+// requests unsigned: on the local link the socket's peer authenticates both ends, and a
+// separate gateway proves its key on each connection and signs each answer. It is the
+// one place an unsigned answer is read, and only one that came over the local link: a
+// [Client] never reads one.
 package server
 
 import (
@@ -50,7 +51,8 @@ import (
 	"github.com/qoryai/forager/event"
 )
 
-// The headers of the contract and the content type of a delivery.
+// The headers of the contract and the content type of a delivery. HeaderRunID names
+// the run of a batch on the gateway's local link.
 const (
 	HeaderAccessKeyID      = accesskey.HeaderAccessKeyID
 	HeaderInstanceID       = accesskey.HeaderInstanceID
@@ -61,7 +63,7 @@ const (
 	HeaderRunConfiguration = accesskey.HeaderRunConfiguration
 	HeaderContractVersion  = "X-Qory-Contract-Version"
 	HeaderDelivery         = "X-Qory-Delivery"
-	HeaderRunSecret        = "X-Qory-Run-Secret"
+	HeaderRunID            = "X-Qory-Run-Id"
 	ContentType            = "application/cloudevents-batch+json"
 )
 
@@ -214,10 +216,12 @@ func decode(name, schemaName string, b []byte, out any) error {
 // server's keys. A section Forager does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
-	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
+	// NodeID is the id of the access key's node, nd_, node pool, np_, or gateway, ng_,
+	// for display; the ng_ prefix alone says the key is a gateway's.
 	NodeID string `json:"node_id"`
-	// Workspaces holds exactly one workspace id, ws_: the workspace the access key's node
-	// or node pool belongs to.
+	// Workspaces holds the workspace ids, ws_: for a node's or a node pool's key exactly
+	// one, the workspace the node or node pool belongs to; for a gateway's key one or
+	// more, the workspaces the gateway may serve.
 	Workspaces []string `json:"workspaces"`
 	Events     Events   `json:"events"`
 	// Run is the run endpoint, which every discovered configuration has: a run
@@ -692,8 +696,9 @@ type Delivery struct {
 	// Signed says the answer verified under the pin. An answer that did not is no
 	// answer: it is retried, and nothing else of it is read.
 	Signed bool
-	// Link says the answer came over the gateway's link, where answers are unsigned and
-	// the link's transport authenticates them: a [Link] sets it, and it is never set
+	// Link says the answer came over the gateway's link, whose answers the link
+	// authenticates, the local link by the socket's peer and a separate gateway's by its
+	// signature under a key the run key names: a [Link] sets it, and it is never set
 	// toward the server, where Signed alone decides.
 	Link bool
 	// Code is the refusal code a signed answer's body contains, or an answer's on the

@@ -2,9 +2,11 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -105,8 +107,8 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 
 	for name, what := range map[string]string{
 		"no preamble":         "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n",
-		"another hop":         link.Preamble(link.RelayPreamble, other) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n",
-		"a prefix of the hop": link.Preamble(link.RelayPreamble, hop[:len(hop)-1]),
+		"another hop":         link.RelayLine(other) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n",
+		"a prefix of the hop": link.RelayLine(hop[:len(hop)-1]),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if closed, answer := send(t, what); !closed || answer != "" {
@@ -120,10 +122,10 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 		t.Fatalf("the proxy got %d connections, %q, before any hop", opened, received)
 	}
 
-	if closed, _ := send(t, link.Preamble(link.RelayPreamble, hop)+"CONNECT api.example:443 HTTP/1.1\r\n\r\n"); !closed {
+	if closed, _ := send(t, link.RelayLine(hop)+"CONNECT api.example:443 HTTP/1.1\r\n\r\n"); !closed {
 		t.Error("the forwarder kept the relay's connection open after its end")
 	}
-	want := link.Preamble(link.RelayPreamble, secret) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"
+	want := link.RelayLine(secret) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		opened, received := up.seen()
@@ -133,6 +135,102 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 			}
 			if strings.Contains(received[0], hop) {
 				t.Error("the hop reached the proxy")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the proxy got %d connections, %q", opened, received)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestTheUnwalledForwarderTakesOnlyItsPassword pins the password of an unwalled agent's
+// proxy URL behind a separate gateway: a connection whose first request carries no
+// Proxy-Authorization, another password, a prefix of the password, or two of them, or
+// whose head has a line too long, too many lines, or does not end in time, is closed,
+// and nothing of it reaches the gateway's proxy, not even a connection; one
+// that carries the password goes to the proxy without that header, and the proxy URL
+// carries the password and no other secret.
+func TestTheUnwalledForwarderTakesOnlyItsPassword(t *testing.T) {
+	const password = "forwarder-password-0123456789abcdefghijklmn"
+	login := func(user, pw string) string {
+		return "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pw)) + "\r\n"
+	}
+	up := startUpstream(t)
+	var d net.Dialer
+	f, err := listenForwarding("127.0.0.1:0", forwarding{
+		dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", up.ln.Addr().String()) },
+		password: password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if env := f.Env(); !slices.Contains(env, "HTTP_PROXY=http://qory:"+password+"@"+f.Addr()) {
+		t.Errorf("the proxy URL %q", env)
+	}
+	send := func(t *testing.T, what string) (closed bool, answer string) {
+		t.Helper()
+		c, err := net.Dial("tcp", f.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if _, err := io.WriteString(c, what); err != nil {
+			return true, ""
+		}
+		c.(*net.TCPConn).CloseWrite()
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		b, err := io.ReadAll(c)
+		var ne net.Error
+		return err == nil || !(errors.As(err, &ne) && ne.Timeout()), string(b)
+	}
+	const connect = "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"
+	// The head's bounds: a line longer than the forwarder reads, more lines than it
+	// reads, and a head that does not end in time, each with the password.
+	proxyHeadWait = 300 * time.Millisecond
+	t.Cleanup(func() { proxyHeadWait = link.PreambleWait })
+	slow, err := net.Dial("tcp", f.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Close()
+	io.WriteString(slow, connect+login("qory", password))
+	slow.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadAll(slow); err != nil {
+		t.Errorf("a slow head was not closed: %v", err)
+	}
+	for name, what := range map[string]string{
+		"no password":              connect + "\r\n",
+		"another password":         connect + login("qory", password[:len(password)-1]+"x") + "\r\n",
+		"a prefix of the password": connect + login("qory", password[:len(password)-1]) + "\r\n",
+		"the password twice":       connect + login("qory", password) + login("qory", password) + "\r\n",
+		"another scheme":           connect + "Proxy-Authorization: Bearer " + password + "\r\n\r\n",
+		"no end of the head":       connect + login("qory", password),
+		"a line too long":          connect + login("qory", password) + "X-Long: " + strings.Repeat("a", maxProxyHead) + "\r\n\r\n",
+		"too many lines":           connect + login("qory", password) + strings.Repeat("X-Line: a\r\n", maxProxyLines) + "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if closed, answer := send(t, what); !closed || answer != "" {
+				t.Errorf("the forwarder answered %q, closed %v", answer, closed)
+			}
+		})
+	}
+	time.Sleep(200 * time.Millisecond)
+	if opened, received := up.seen(); opened != 0 || len(received) != 0 {
+		t.Fatalf("the proxy got %d connections, %q, without the password", opened, received)
+	}
+	if closed, _ := send(t, connect+login("anyone", password)+"\r\nafter"); !closed {
+		t.Error("the forwarder kept the agent's connection open after its end")
+	}
+	want := connect + "\r\nafter"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		opened, received := up.seen()
+		if len(received) == 1 {
+			if opened != 1 || received[0] != want {
+				t.Errorf("the proxy got %d connections, %q; want one, %q", opened, received, want)
 			}
 			return
 		}

@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-run-answer.schema.json",
   "title": "Link run answer",
-  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json, unsigned: the link's transport authenticates it. The run id echoed, the run's labels as the gateway holds them, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the run's image when it has a wall, the policy_applied members the gateway decides, the run's proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link to a run request it accepts, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The run id echoed, the policy in force for the run and its digest, the run's variables, the variables the agent sees in place of credentials and tools' secrets, the names of the variables the machine's credentials are read from, the run's image when it has a wall, the policy_applied members the gateway decides, on the local link the run's labels and proxy secret, and the run's certificate authority when the run request's wall is true and the gateway reads inside HTTPS for the run. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "run_id", "labels", "applied", "proxy_secret", "run_secret"],
+  "required": ["version", "run_id", "applied"],
   "dependentRequired": {
     "policy": ["digest"],
     "digest": ["policy"]
@@ -20,7 +20,7 @@
       "$ref": "link-run-request.schema.json#/properties/run_id"
     },
     "labels": {
-      "description": "The run's labels as the gateway holds them: the run request's. The session's dev.qory.run.started contains exactly these.",
+      "description": "The run's labels as the gateway holds them, the run request's: on the local link, where the session's dev.qory.run.started contains exactly these. Behind a separate gateway the labels are the run's registration's, and the answer has none.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "policy": {
@@ -72,12 +72,7 @@
       }
     },
     "proxy_secret": {
-      "description": "The run's proxy secret: at least 128 bits from the system's random source, made by the gateway for this run. The relay opens every connection with it, and without a wall the agent's proxy URL carries it as its password. Compared in constant time, never logged, refused once its run ends, sent between machines only inside TLS. Characters a URL's password and the relay's preamble carry as they are.",
-      "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{22,256}$"
-    },
-    "run_secret": {
-      "description": "The run's secret: at least 128 bits from the system's random source, made by the gateway for this run and given once. The session sends it in X-Qory-Run-Secret on every reload and batch. Compared in constant time, never logged.",
+      "description": "The run's proxy secret: at least 128 bits from the system's random source, made by the gateway for this run. It opens every connection to the gateway's proxy on loopback, in the relay's preamble: behind a wall the wall's relay writes it, and without one the session's forwarder writes it before what the agent sends. It is in no agent's environment. Compared in constant time, never logged, refused once its run ends; it never leaves the machine. Characters the relay's preamble carries as they are. On the local link alone: behind a separate gateway the answer has none, since the run key opens the proxy's connections.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },

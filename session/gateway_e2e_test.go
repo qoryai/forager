@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,7 +109,6 @@ func TestARunThroughARealGateway(t *testing.T) {
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
 	rg := startGateway(t, &sp, gateway.Config{Version: "test", Heartbeat: time.Second,
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}})
-	link := rg.g.LocalLink()
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
 		t.Fatal(err)
@@ -139,12 +139,6 @@ func TestARunThroughARealGateway(t *testing.T) {
 	egress := ofType(numbered, "dev.qory.run.egress")
 	if len(egress) != 1 || data(egress[0])["host"] != "denied.invalid" || data(egress[0])["decision"] != "denied" {
 		t.Errorf("run.egress %v", egress)
-	}
-	for _, name := range []string{"events.jsonl", "session.jsonl"} {
-		b, _ := os.ReadFile(filepath.Join(res.Dir, name))
-		if strings.Contains(string(b), link.Secret) {
-			t.Errorf("%s holds the link secret", name)
-		}
 	}
 }
 
@@ -411,38 +405,10 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 // gate holds back what the session writes to its gateway while it is shut.
 type gate struct{ mu sync.RWMutex }
 
-// gatedConn is a connection to the gateway whose writes wait while its gate is shut,
-// and whose reads heard keeps, when not nil.
+// gatedConn is a connection to the gateway whose writes wait while its gate is shut.
 type gatedConn struct {
 	net.Conn
-	g     *gate
-	heard *heard
-}
-
-func (c gatedConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if c.heard != nil {
-		c.heard.mu.Lock()
-		c.heard.b = append(c.heard.b, b[:n]...)
-		c.heard.mu.Unlock()
-	}
-	return n, err
-}
-
-// heard is what the session read of the gateway.
-type heard struct {
-	mu sync.Mutex
-	b  []byte
-}
-
-// runSecret is the run secret of the run answer the session read, empty for none.
-func (h *heard) runSecret() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if m := regexp.MustCompile(`"run_secret":"([A-Za-z0-9_-]+)"`).FindSubmatch(h.b); m != nil {
-		return string(m[1])
-	}
-	return ""
+	g *gate
 }
 
 func (c gatedConn) Write(b []byte) (int, error) {
@@ -466,13 +432,12 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 			rg := startGateway(t, &sp, gateway.Config{Heartbeat: time.Second})
 			local := rg.g.LocalLink()
 			var shut gate
-			var answers heard
 			sp.Gateway = session.LocalGateway(local.InMemory(func(ctx context.Context) (net.Conn, error) {
 				c, err := local.DialContext(ctx)
 				if err != nil {
 					return nil, err
 				}
-				return gatedConn{Conn: c, g: &shut, heard: &answers}, nil
+				return gatedConn{Conn: c, g: &shut}, nil
 			}))
 			dir := filepath.Join(sp.RunsDir, sp.RunID)
 			going := func() bool {
@@ -493,22 +458,28 @@ func TestARealGatewaysCloseCarriesItsCause(t *testing.T) {
 					return
 				}
 				// A batch of the run's the gateway refuses: a run.registered, which the
-				// gateway alone writes.
-				k, err := server.NewLocalLink(local, "test", nil)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				// The run's secret, as the session read it in the run answer.
-				k.UseRunSecret(answers.runSecret())
+				// gateway alone writes, naming the run in X-Qory-Run-Id as the session does.
 				body, _ := json.Marshal([]map[string]any{{
 					"specversion": "1.0", "id": event.NewID(), "source": event.Source(sp.RunID), "type": event.RunRegistered, "subject": sp.RunID,
 					"time": time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"), "dataschema": event.DataSchema(event.RunRegistered),
 					"data": map[string]any{"forager_version": "x", "events": []string{"*"}, "contract_version": 1, "interval_seconds": 30},
 				}})
-				d, err := k.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), body, "")
-				if err != nil || d.Status != http.StatusBadRequest || d.End != "batch_refused" {
-					t.Errorf("the refused batch: %+v %v", d, err)
+				client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return local.DialContext(ctx) }}}
+				req, _ := http.NewRequest(http.MethodPost, server.LocalOrigin+"/v1/events", bytes.NewReader(body))
+				req.Header.Set("Content-Type", server.ContentType)
+				req.Header.Set("User-Agent", "qory-forager/test")
+				req.Header.Set(server.HeaderContractVersion, strconv.Itoa(server.Revision))
+				req.Header.Set(server.HeaderDelivery, event.NewID())
+				req.Header.Set(server.HeaderRunID, sp.RunID)
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusBadRequest || !bytes.Contains(b, []byte(`"error":"invalid_request"`)) {
+					t.Errorf("the refused batch: %d %s", resp.StatusCode, b)
 				}
 			}()
 			start := time.Now()
