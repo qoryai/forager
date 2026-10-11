@@ -551,7 +551,8 @@ func TestTheEndMember(t *testing.T) {
 }
 
 // relay is a TLS server that stands for a gateway relaying to the server: it answers
-// as the server would, signed, and records the host and the target of each request.
+// as the server would, signed, a registration with through-gateway.json's run key, and
+// records the host and the target of each request.
 type relay struct {
 	srv    *httptest.Server
 	caFile string
@@ -563,6 +564,7 @@ type relay struct {
 func newRelay(t *testing.T, signer, key *accesskey.Key) *relay {
 	t.Helper()
 	g := &relay{}
+	rk := loadThroughGateway(t).RunKey.RunKey
 	g.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.hosts, g.paths = append(g.hosts, r.Host), append(g.paths, r.RequestURI)
 		body, _ := io.ReadAll(r.Body)
@@ -576,6 +578,8 @@ func newRelay(t *testing.T, signer, key *accesskey.Key) *relay {
 		case r.URL.Path == server.WellKnown:
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			out = `{"version":1,"node_id":"np_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"events":{"url":"https://qory.example/v1/events","types":["*"]},"run":{"url":"https://qory.example/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"` + signer.PublicKey().String() + `"}]}`
+		case r.URL.Path == "/v1/runs":
+			out = `{"version":1,"run_id":"` + gatewayRunID + `","run_key":"` + rk + `"}`
 		case strings.HasSuffix(r.URL.Path, "/outcome"):
 			out = `{"version":1}`
 		default:
@@ -620,6 +624,13 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 	if conf.Run.URL != "https://qory.example/v1/runs" || c.Config.URL != "https://qory.example" {
 		t.Errorf("run.url %s, url %s; want the server's", conf.Run.URL, c.Config.URL)
 	}
+	body, err := server.GatewayRegistration{RunID: gatewayRunID}.Body()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans, err := c.RegisterThroughGateway(ctx, conf.Run.URL, body); err != nil || ans.RunID != gatewayRunID {
+		t.Fatalf("registration: %+v, %v", ans, err)
+	}
 	if err := c.PostOutcome(ctx, conf.Run.URL, gatewayRunID, server.Outcome{}); err != nil {
 		t.Fatal(err)
 	}
@@ -628,8 +639,8 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 		t.Fatalf("delivery: %+v, %v", d, err)
 	}
 	host := strings.TrimPrefix(g.srv.URL, "https://")
-	want := []string{server.WellKnown, "/v1/runs/" + gatewayRunID + "/outcome", "/v1/events?shard=2"}
-	if len(g.paths) != 3 || g.paths[0] != want[0] || g.paths[1] != want[1] || g.paths[2] != want[2] {
+	want := []string{server.WellKnown, "/v1/runs", "/v1/runs/" + gatewayRunID + "/outcome", "/v1/events?shard=2"}
+	if len(g.paths) != 4 || g.paths[0] != want[0] || g.paths[1] != want[1] || g.paths[2] != want[2] || g.paths[3] != want[3] {
 		t.Errorf("targets %q; want %q", g.paths, want)
 	}
 	for _, h := range g.hosts {
