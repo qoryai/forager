@@ -27,8 +27,8 @@ nothing.
 ```
 
 - The agent's container is on a network with no route out.
-- The inside network has no IPv6 subnet, and the agent's container starts with no IPv6
-  address but loopback's ::1.
+- On the inside network, the relay is the one peer the agent's container reaches; the
+  engine's host is not one.
 - The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
   proxy, opening every connection with the run's proxy secret, and decides nothing. It
   forwards no packet between its networks.
@@ -74,7 +74,8 @@ wall:
 
 You need:
 
-- the `docker` command, with an engine behind it;
+- the `docker` command, with an engine behind it; for [nested Docker](#nested-docker),
+  Docker Engine 28 or later;
 - [`qory`](https://github.com/qoryai/qory) 0.7.0 or later;
 - an image of yours that contains the runtime and your toolchain. The wall builds none.
 
@@ -461,6 +462,10 @@ wall, separate from the machine's:
 - Unless the run sets a non-empty `DOCKER_CONFIG`, the agent's docker configuration is
   `/run/qory/docker` and its `config.json`, the agent's, 0700 and 0600, in a `/run/qory`
   that is root's, mode 0755. A link at either path stops the run.
+- It needs the `docker` command and Docker Engine 28 or later; with podman, nerdctl or an
+  earlier engine the run is refused before anything is made.
+- Its inside network has an IPv6 subnet, the engine's choice, in Docker's isolated
+  gateway mode, and the relay listens on its address in it too.
 
 What to know:
 

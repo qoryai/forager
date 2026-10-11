@@ -1018,6 +1018,8 @@ release may change what an existing document does, and says so under Upgrading.
   run when the wall writes the agent's docker configuration there, which it does
   whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed it
   before.
+- A wall with nested Docker needs the docker command and Docker Engine 28 or later;
+  another engine is refused before anything is made.
 
 #### Added
 
@@ -1067,6 +1069,8 @@ release may change what an existing document does, and says so under Upgrading.
   the mount that holds it, and is bound at the same path as on the machine, writable,
   only when no mount holds it. `wall.Docker` binds `Launch.Mounts` and passes
   `Launch.Dir` as `--workdir`, and refuses a launch whose `Dir` no mount's path holds.
+- With nested Docker, the wall's inside network has an IPv6 subnet in Docker's isolated
+  gateway mode, and its relay listens on its address in it.
 
 #### Fixed
 
@@ -1098,8 +1102,8 @@ release may change what an existing document does, and says so under Upgrading.
   relay's user, where it could read the run's proxy secret from the relay's environment
   and reach what the relay reaches. `wall.Docker` now creates the relay and the agent's
   container with `--no-healthcheck`.
-- `wall.Docker` creates the inside network with no IPv6 subnet, and the agent's
-  container starts with no IPv6 address but loopback's `::1`.
+- Without nested Docker, `wall.Docker` creates the inside network with no IPv6 subnet,
+  and the agent's container starts with no IPv6 address but loopback's `::1`.
 - The relay listened on every address of its container, so whatever reached its address
   on its ordinary network, another container of the engine or a process of the machine,
   had its connections forwarded to the proxy opened with the run's proxy secret. The

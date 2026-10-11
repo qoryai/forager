@@ -2,12 +2,14 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,11 +42,22 @@ func TestDockerConforms(t *testing.T) {
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
 // own, started under the runtime set in QORY_WALL_RUNTIME, such as sysbox-runc, which the
 // engine must have. QORY_WALL_NESTED_IMAGE defines the image, one that contains dockerd
-// and the docker command; without QORY_WALL_RUNTIME the test is skipped.
+// and the docker command; without QORY_WALL_RUNTIME, or with an engine before Docker
+// Engine 28, the test is skipped.
 func TestDockerNestedConforms(t *testing.T) {
 	rt := os.Getenv("QORY_WALL_RUNTIME")
 	if rt == "" {
 		e2e.Skip(t, "QORY_WALL_RUNTIME names no runtime that runs nested Docker")
+	}
+	command := os.Getenv("QORY_WALL_COMMAND")
+	if command == "" {
+		command = "docker"
+	}
+	out, err := exec.Command(command, "version", "--format", `{{range .Server.Components}}{{if eq .Name "Engine"}}{{.Version}}{{end}}{{end}}`).Output()
+	version := strings.TrimSpace(string(out))
+	major, _, _ := strings.Cut(version, ".")
+	if n, convErr := strconv.Atoi(major); err != nil || convErr != nil || n < 28 {
+		e2e.Skip(t, fmt.Sprintf("nested Docker needs Docker Engine 28 or later; %s gives %q: %v", command, version, err))
 	}
 	image := os.Getenv("QORY_WALL_NESTED_IMAGE")
 	if image == "" {
@@ -154,7 +167,11 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		},
 	})
 	t.Run("the agent's container runs no health check", func(t *testing.T) { agentRunsNoHealthCheck(t, command, helper, image, rt, docker) })
-	t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image, rt, docker) })
+	if docker {
+		t.Run("the inside network's IPv6 subnet is isolated", func(t *testing.T) { insideHasIsolatedIPv6(t, command, helper, image, rt) })
+	} else {
+		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
+	}
 }
 
 // busybox is the image the relay's own tests start from.
@@ -415,22 +432,26 @@ func agentRunsNoHealthCheck(t *testing.T, command, helper, image, rt string, doc
 	}
 }
 
-// insideHasNoIPv6 requires that the inside network has no IPv6 subnet, and that the
-// agent's container starts with no IPv6 address but loopback's ::1 and with IPv6 off by
-// default for an interface made later.
-func insideHasNoIPv6(t *testing.T, command, helper, image, rt string, docker bool) {
-	r := startEnclosure(t, command, helper, wall.Request{Image: image, Runtime: rt, Docker: docker},
-		"-c", "cat /proc/net/if_inet6; echo default=$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6)")
+// insideHasNoIPv6 requires, for any image, that the inside network has no IPv6 subnet;
+// that the agent's container starts with no IPv6 address but loopback's ::1 and with
+// IPv6 off by default for an interface made later; and that the agent cannot turn IPv6
+// on.
+func insideHasNoIPv6(t *testing.T, command, helper, image string) {
+	const conf = "/proc/sys/net/ipv6/conf/"
+	r := startEnclosure(t, command, helper, wall.Request{Image: image},
+		"-c", "cat /proc/net/if_inet6; echo default=$(cat "+conf+"default/disable_ipv6); "+
+			"for c in all default eth0; do { echo 0 > "+conf+"$c/disable_ipv6; } 2>/dev/null && echo wrote=$c; done; "+
+			"echo after=$(cat "+conf+"default/disable_ipv6),$(cat "+conf+"eth0/disable_ipv6)")
 	t.Run("the inside network has none", func(t *testing.T) {
 		out, err := exec.Command(command, "network", "inspect", "--format", "{{.EnableIPv6}}", r.inside).CombinedOutput()
 		if got := strings.TrimSpace(string(out)); err != nil || got != "false" {
 			t.Errorf("the inside network's IPv6 is enabled: %v: %s", err, out)
 		}
 	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := r.start(ctx, t)()
 	t.Run("the agent's container has loopback's alone", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		out := r.start(ctx, t)()
 		var loopback, others []string
 		disabled := false
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -451,4 +472,144 @@ func insideHasNoIPv6(t *testing.T, command, helper, image, rt string, docker boo
 			t.Errorf("the agent's container starts with IPv6 on by default for an interface made later:\n%s", out)
 		}
 	})
+	t.Run("the agent cannot turn IPv6 on", func(t *testing.T) {
+		if strings.Contains(out, "wrote=") || !strings.Contains(out, "\nafter=1,1") {
+			t.Errorf("the agent wrote to disable_ipv6, or it is not 1 for the default and eth0 afterwards:\n%s", out)
+		}
+	})
+}
+
+// insideHasIsolatedIPv6 requires, with nested Docker, that the inside
+// network has an IPv6 subnet in the isolated gateway mode; that on the engine's host
+// the network's bridge has IPv6 off and no IPv6 address; that the relay listens on IPv6
+// at its address in the subnet alone, where it is reached from the inside network and
+// not from outside it; and that the agent's IPv6 addresses are loopback's ::1, a
+// link-local one on eth0 and one in the subnet on eth0.
+func insideHasIsolatedIPv6(t *testing.T, command, helper, image, rt string) {
+	r := startEnclosure(t, command, helper, wall.Request{Image: image, Runtime: rt, Docker: true}, "-c", "cat /proc/net/if_inet6")
+	inspect := func(format, name string) string {
+		t.Helper()
+		out, err := exec.Command(command, "inspect", "--format", format, name).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s of %s: %v: %s", format, name, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	var subnet *net.IPNet
+	for _, s := range strings.Fields(inspect("{{range .IPAM.Config}}{{.Subnet}} {{end}}", r.inside)) {
+		if ip, n, err := net.ParseCIDR(s); err == nil && ip.To4() == nil {
+			subnet = n
+		}
+	}
+	if subnet == nil {
+		t.Fatalf("the inside network has no IPv6 subnet")
+	}
+	relay := net.ParseIP(inspect(fmt.Sprintf("{{(index .NetworkSettings.Networks %q).GlobalIPv6Address}}", r.inside), r.relay))
+	if relay == nil || !subnet.Contains(relay) {
+		t.Fatalf("the relay's IPv6 address on the inside network is %v, not in %v", relay, subnet)
+	}
+	dial := func(network, addr string) string {
+		t.Helper()
+		script := fmt.Sprintf("if nc -z -w 3 %s 3128; then echo connected; else echo refused; fi", addr)
+		out, err := exec.Command(command, "run", "--rm", "--network", network, busybox, "sh", "-c", script).CombinedOutput()
+		if err != nil {
+			t.Fatalf("the dial from %s: %v: %s", network, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	t.Run("the network has an IPv6 subnet in the isolated gateway mode", func(t *testing.T) {
+		got := inspect(`{{.EnableIPv6}} {{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}`, r.inside)
+		if got != "true isolated" {
+			t.Errorf("the inside network's IPv6 and gateway mode: %s", got)
+		}
+	})
+	t.Run("the engine's host has no IPv6 on the network's bridge", func(t *testing.T) {
+		bridge := "br-" + inspect("{{.Id}}", r.inside)[:12]
+		out, err := exec.Command(command, "run", "--rm", "--network", "host", busybox, "sh", "-c",
+			"cat /proc/sys/net/ipv6/conf/"+bridge+"/disable_ipv6; cat /proc/net/if_inet6").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if lines[0] != "1" {
+			t.Errorf("%s has disable_ipv6 %s", bridge, lines[0])
+		}
+		for _, line := range lines[1:] {
+			if f := strings.Fields(line); len(f) == 6 && f[5] == bridge {
+				t.Errorf("%s has an IPv6 address: %s", bridge, line)
+			}
+		}
+	})
+	t.Run("the relay listens on IPv6 at its address in the subnet alone", func(t *testing.T) {
+		out, err := exec.Command(command, "run", "--rm", "--network", "container:"+r.relay, busybox, "cat", "/proc/net/tcp6").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		var listening []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if f := strings.Fields(line); len(f) > 3 && f[3] == "0A" {
+				listening = append(listening, procAddr(f[1]))
+			}
+		}
+		if want := net.JoinHostPort(relay.String(), "3128"); len(listening) != 1 || listening[0] != want {
+			t.Errorf("the relay listens on IPv6 at %v, want %s alone", listening, want)
+		}
+	})
+	t.Run("the relay is reached at its IPv6 address from the inside network and not from outside", func(t *testing.T) {
+		if got := dial(r.inside, relay.String()); got != "connected" {
+			t.Errorf("a container on the inside network dialled the relay at [%s]:3128: %s", relay, got)
+		}
+		for _, network := range []string{r.outside, "bridge", "host"} {
+			if got := dial(network, relay.String()); got != "refused" {
+				t.Errorf("a container on the %s network dialled the relay at [%s]:3128: %s", network, relay, got)
+			}
+		}
+	})
+	t.Run("the agent's IPv6 addresses are loopback's, eth0's link-local and the subnet's", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		out := r.start(ctx, t)()
+		var inSubnet int
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) != 6 {
+				continue
+			}
+			b, err := hex.DecodeString(f[0])
+			ip := net.IP(b)
+			switch {
+			case err != nil || len(b) != 16:
+				t.Errorf("an address that cannot be read: %s", line)
+			case ip.IsLoopback() && f[5] == "lo":
+			case ip.IsLinkLocalUnicast() && f[5] == "eth0":
+			case subnet.Contains(ip) && f[5] == "eth0":
+				inSubnet++
+			default:
+				t.Errorf("the agent has %s on %s", ip, f[5])
+			}
+		}
+		if inSubnet != 1 {
+			t.Errorf("the agent has %d addresses in %s on eth0, want one:\n%s", inSubnet, subnet, out)
+		}
+	})
+}
+
+// procAddr is an address and port of /proc/net/tcp6, written host:port: the address as
+// 32-bit words in the host's byte order, little-endian on every machine the suite runs
+// on, and the port in hexadecimal.
+func procAddr(s string) string {
+	addr, port, _ := strings.Cut(s, ":")
+	b, err := hex.DecodeString(addr)
+	if err != nil || len(b) != 16 {
+		return s
+	}
+	for i := 0; i < len(b); i += 4 {
+		b[i], b[i+1], b[i+2], b[i+3] = b[i+3], b[i+2], b[i+1], b[i]
+	}
+	p, err := strconv.ParseUint(port, 16, 16)
+	if err != nil {
+		return s
+	}
+	return net.JoinHostPort(net.IP(b).String(), strconv.FormatUint(p, 10))
 }

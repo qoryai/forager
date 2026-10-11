@@ -116,6 +116,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Show the engine's version
+        # Nested Docker needs Docker Engine 28 or later.
+        run: docker version
+
       - name: Log in to ghcr.io
         # The suite's busybox is a copy of Docker Hub's, by digest, in qoryai's public
         # package; the machine's engine pulls it with the job's token.
@@ -184,6 +188,10 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Show the engine's version
+        # Nested Docker needs Docker Engine 28 or later.
+        run: docker version
 
       - name: Log in to ghcr.io
         # The suite's busybox and docker:dind are copies of Docker Hub's, by digest, in

@@ -55,6 +55,9 @@ type nested struct {
 	// Config is the agent's docker configuration, the directory above it and its file,
 	// each with its mode and owner as the agent's user sees them, or the error it gets.
 	Config []string `json:"config"`
+	// Neighbours is what a container the agent started, privileged on the enclosure's
+	// network with IPv6 turned on, found on the inside network.
+	Neighbours neighbours `json:"neighbours"`
 }
 
 // inner is what a container the agent started found. An attempt that must fail
@@ -116,11 +119,20 @@ func probeNested() *nested {
 		n.Image = err.Error()
 		return n
 	}
+	// The relay by its IPv4 address, as the agent's docker configuration names it: the
+	// containers the agent starts have IPv4 alone.
 	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
 	relay := ""
 	if err == nil {
 		if addrs, err := net.LookupHost(proxyURL.Hostname()); err == nil && len(addrs) > 0 {
-			relay = "http://" + net.JoinHostPort(addrs[0], proxyURL.Port())
+			addr := addrs[0]
+			for _, a := range addrs {
+				if ip := net.ParseIP(a); ip != nil && ip.To4() != nil {
+					addr = a
+					break
+				}
+			}
+			relay = "http://" + net.JoinHostPort(addr, proxyURL.Port())
 		}
 	}
 	for _, k := range innerKinds {
@@ -128,6 +140,8 @@ func probeNested() *nested {
 	}
 	n.Config = configModes(os.Getenv("DOCKER_CONFIG"))
 	n.Command = commandInner(os.Getenv("PROBE_ALLOWED"))
+	// Last, since it turns IPv6 on for the enclosure's network.
+	n.Neighbours = runNeighbours(c, relay)
 	return n
 }
 
@@ -266,40 +280,10 @@ func runInner(c *http.Client, network string, privileged bool, relay string) inn
 	if network != "" {
 		host["NetworkMode"] = network
 	}
-	body, _ := json.Marshal(map[string]any{
-		"Image":      probeImage,
-		"Cmd":        []string{"/probe", modeInner},
-		"Env":        []string{"PROBE_ORIGIN=" + os.Getenv("PROBE_ALLOWED"), "PROBE_RELAY=" + relay},
-		"HostConfig": host,
-	})
-	b, err := post(c, "http://docker/containers/create", bytes.NewReader(body), "application/json")
+	out, err := runProbe(c, []string{"/probe", modeInner}, []string{"PROBE_ORIGIN=" + os.Getenv("PROBE_ALLOWED"), "PROBE_RELAY=" + relay}, host)
 	if err != nil {
 		return inner{Err: err.Error()}
 	}
-	var created struct {
-		ID string `json:"Id"`
-	}
-	if err := json.Unmarshal(b, &created); err != nil {
-		return inner{Err: err.Error()}
-	}
-	defer func() {
-		req, _ := http.NewRequest("DELETE", "http://docker/containers/"+created.ID+"?force=1", nil)
-		if resp, err := c.Do(req); err == nil {
-			resp.Body.Close()
-		}
-	}()
-	if _, err := post(c, "http://docker/containers/"+created.ID+"/start", nil, "application/json"); err != nil {
-		return inner{Err: err.Error()}
-	}
-	if _, err := post(c, "http://docker/containers/"+created.ID+"/wait", nil, "application/json"); err != nil {
-		return inner{Err: err.Error()}
-	}
-	resp, err := c.Get("http://docker/containers/" + created.ID + "/logs?stdout=1&stderr=1")
-	if err != nil {
-		return inner{Err: err.Error()}
-	}
-	defer resp.Body.Close()
-	out := demux(resp.Body)
 	for _, line := range strings.Split(out, "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), innerPrefix); ok {
 			var r inner
@@ -310,6 +294,65 @@ func runInner(c *http.Client, network string, privileged bool, relay string) inn
 		}
 	}
 	return inner{Err: "no report: " + out}
+}
+
+// runNeighbours starts a container of the probe, privileged on the enclosure's own
+// network, that looks for neighbours on the inside network, and reads its report.
+func runNeighbours(c *http.Client, relay string) neighbours {
+	out, err := runProbe(c, []string{"/probe", modeNeighbours}, []string{"PROBE_RELAY=" + relay}, map[string]any{"Privileged": true, "NetworkMode": "host"})
+	if err != nil {
+		return neighbours{Err: err.Error()}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), neighboursPrefix); ok {
+			var n neighbours
+			if err := json.Unmarshal([]byte(rest), &n); err != nil {
+				return neighbours{Err: err.Error()}
+			}
+			return n
+		}
+	}
+	return neighbours{Err: "no report: " + out}
+}
+
+// runProbe starts one container of the probe with the command, the environment and the
+// host configuration, waits for it to end and returns what it printed. The container is
+// removed.
+func runProbe(c *http.Client, cmd, env []string, host map[string]any) (string, error) {
+	body, _ := json.Marshal(map[string]any{
+		"Image":      probeImage,
+		"Cmd":        cmd,
+		"Env":        env,
+		"HostConfig": host,
+	})
+	b, err := post(c, "http://docker/containers/create", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(b, &created); err != nil {
+		return "", err
+	}
+	defer func() {
+		req, _ := http.NewRequest("DELETE", "http://docker/containers/"+created.ID+"?force=1", nil)
+		if resp, err := c.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	if _, err := post(c, "http://docker/containers/"+created.ID+"/start", nil, "application/json"); err != nil {
+		return "", err
+	}
+	if _, err := post(c, "http://docker/containers/"+created.ID+"/wait", nil, "application/json"); err != nil {
+		return "", err
+	}
+	resp, err := c.Get("http://docker/containers/" + created.ID + "/logs?stdout=1&stderr=1")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	return demux(resp.Body), nil
 }
 
 // demux is the output of a container without a terminal: frames of an 8-byte header,
