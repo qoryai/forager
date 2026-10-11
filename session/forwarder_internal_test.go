@@ -817,6 +817,75 @@ func TestTheUnwalledForwarderBoundsTheUpgradesReplyHead(t *testing.T) {
 	}
 }
 
+// TestTheUnwalledForwarderChecksTheRequestLine pins the request line of an unwalled
+// agent's request, checked once the password is: one the gateway's proxy refuses gets
+// the proxy's 400, with its text and Connection: close, and the end, and nothing of it
+// reaches the proxy, not even a connection; an https:// absolute-form request, which
+// the proxy serves, reaches it.
+func TestTheUnwalledForwarderChecksTheRequestLine(t *testing.T) {
+	const (
+		absolute = "the proxy takes an absolute-form request target"
+		connect  = "CONNECT takes host:port"
+		version  = "the proxy takes HTTP/1.0 or HTTP/1.1"
+	)
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			up := startProxyStandIn(t, secret, nil)
+			f, login := unwalledForwarder(t, up.Addr().String(), secret)
+			send := func(t *testing.T, head string) (*http.Response, string) {
+				t.Helper()
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, head+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				r := bufio.NewReader(c)
+				resp, err := http.ReadResponse(r, nil)
+				if err != nil {
+					t.Fatalf("no answer: %v", err)
+				}
+				b, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("the answer's body: %v", err)
+				}
+				if rest, err := io.ReadAll(r); len(rest) != 0 || err != nil {
+					t.Errorf("after the answer, %q, %v; want the end", rest, err)
+				}
+				return resp, string(b)
+			}
+			for _, r := range []struct{ name, head, text string }{
+				{"origin-form", "GET /x HTTP/1.1\r\nHost: api.example\r\n", absolute},
+				{"HTTP/2.0", "GET http://api.example/ HTTP/2.0\r\nHost: api.example\r\n", version},
+				{"no version", "GET http://api.example/\r\nHost: api.example\r\n", version},
+				{"CONNECT /x", "CONNECT /x HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT with a path", "CONNECT api.example:443/x HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT with a user", "CONNECT user@api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT to port 0", "CONNECT api.example:0 HTTP/1.1\r\nHost: api.example:0\r\n", connect},
+				{"lowercase connect", "connect api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n", absolute},
+			} {
+				t.Run(r.name, func(t *testing.T) {
+					resp, body := send(t, r.head)
+					if resp.StatusCode != http.StatusBadRequest || !resp.Close || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || body != r.text+"\n" {
+						t.Errorf("got %d %q, close %v, %q; want 400 %q with Connection: close", resp.StatusCode, body, resp.Close, resp.Header.Get("Content-Type"), r.text)
+					}
+				})
+			}
+			time.Sleep(200 * time.Millisecond)
+			if raw, requests := up.seen(); len(raw) != 0 || len(requests) != 0 {
+				t.Fatalf("the proxy got %q, %q, from request lines it refuses", raw, requests)
+			}
+			if resp, body := send(t, "GET https://api.example/ HTTP/1.1\r\nHost: api.example\r\n"); resp.StatusCode != 200 || body != "ok 0" {
+				t.Errorf("an https:// request got %d %q", resp.StatusCode, body)
+			}
+			if _, requests := up.seen(); !slices.Equal(requests, []string{"GET https://api.example/ "}) {
+				t.Errorf("the proxy got %q", requests)
+			}
+		})
+	}
+}
+
 // TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
 // never comes: once the agent closes its connection, the forwarder closes the proxy's
 // soon after, rather than at the run's end.

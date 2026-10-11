@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -212,6 +214,12 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		if err := checkRequestLine(head); err != nil {
+			// A request line the proxy refuses gets the proxy's 400 here, and nothing of
+			// it reaches the proxy.
+			badRequest(c, err)
+			return
+		}
 		if connectHead(head) {
 			// The tunnel goes on as it is; a proxy that refuses it closes the connection
 			// rather than reading a second request.
@@ -417,6 +425,49 @@ func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Read
 		return nil, nil, false
 	}
 	return out.Bytes(), r, true
+}
+
+// The texts of the gateway's proxy's 400 to a request line it refuses, which the
+// forwarder answers with too.
+var (
+	errAbsoluteForm  = errors.New("the proxy takes an absolute-form request target")
+	errConnectTarget = errors.New("CONNECT takes host:port")
+	errVersion       = errors.New("the proxy takes HTTP/1.0 or HTTP/1.1")
+)
+
+// checkRequestLine checks the request line of head, a request's head, as the gateway's
+// proxy does: a method, a target and HTTP/1.0 or HTTP/1.1, each after a single space;
+// for a CONNECT, a target of host:port, its port 1 to 65535, with no '/', '@', '?' or
+// '#'; for any other method, a CONNECT in other case among them, an absolute-form
+// target, with a scheme and a host. Its error is the text of the proxy's 400.
+func checkRequestLine(head []byte) error {
+	line, _, _ := bytes.Cut(head, []byte("\n"))
+	method, rest, ok1 := strings.Cut(string(bytes.TrimSuffix(line, []byte("\r"))), " ")
+	target, version, ok2 := strings.Cut(rest, " ")
+	if !ok1 || !ok2 || version != "HTTP/1.0" && version != "HTTP/1.1" {
+		return errVersion
+	}
+	if method == http.MethodConnect {
+		_, portText, err := net.SplitHostPort(target)
+		port, perr := strconv.Atoi(portText)
+		if err != nil || perr != nil || port < 1 || port > 65535 || strings.ContainsAny(target, "/@?#") {
+			return errConnectTarget
+		}
+		return nil
+	}
+	if u, err := url.ParseRequestURI(target); err != nil || u.Scheme == "" || u.Host == "" {
+		return errAbsoluteForm
+	}
+	return nil
+}
+
+// badRequest answers the agent's connection c with a 400 whose body is err's text, as
+// the gateway's proxy writes its 400s, and Connection: close.
+func badRequest(c net.Conn, err error) {
+	body := err.Error() + "\n"
+	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
+	fmt.Fprintf(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: %d\r\n"+
+		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", len(body), body)
 }
 
 // connectHead reports whether head, a request's head, is a CONNECT's.
