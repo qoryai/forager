@@ -1523,9 +1523,11 @@ kept, before or after `dev.qory.run.exited`; the exit code, the signal and Forag
 reason stay on record beside it. Each run gets one outcome: the same one repeated is
 accepted, and a different one is refused. The refusals, after the shared order: the
 organisation of the signing key, as every key's; the same bytes under any active key of
-the registering node get the stored answer; a signed `404` `not_found` for a run its node
-did not register, or whose record is gone; and a different second outcome is a signed
-`409` `outcome_given`.
+the registering node get the stored answer; so does the same state and reason under any
+of those keys, compared after the reason rules, no `state` counting as `cancelled` with
+`stopped`, whatever its `time` or bytes; a signed `404` `not_found` for a run its node did
+not register, or whose record is gone; and a different state or reason is a signed `409`
+`outcome_given`.
 The answer is a signed `200` with `{"version": 1}`, `run-outcome-answer.schema.json`.
 Forager's client posts it with `Client.PostOutcome` and a `server.Outcome`: an empty
 `State` sends neither `state` nor `reason`, so the zero outcome is `cancelled` with

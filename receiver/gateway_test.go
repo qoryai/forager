@@ -754,8 +754,9 @@ func TestOneNodeSendsForARun(t *testing.T) {
 
 // TestTheOutcome pins the starter's outcome: accepted under any active key of the node
 // that registered the run, before or after the attach and before or after its
-// dev.qory.run.exited; the same bytes again, or the same state and reason in other
-// bytes, accepted again; a different second outcome, 409 outcome_given; a run the key's
+// dev.qory.run.exited; the same bytes again, or the same state and reason with any time
+// or bytes, compared after the reason rules, accepted again; a different state or
+// reason, 409 outcome_given; a run the key's
 // node did not register, even with the same bytes, or never registered, a signed 404
 // not_found, before outcome_given; a body the contract refuses, 400 invalid_request, and
 // a time outside the window the unsigned 401. Every answer is signed, and a 200 is
@@ -781,7 +782,26 @@ func TestTheOutcome(t *testing.T) {
 	ok("the outcome before the attach", key, id, body)
 	ok("the same bytes under the pool's other key", poolKey2, id, body)
 	s.now = s.now.Add(time.Minute)
-	ok("the same outcome in other bytes", key, id, s.outcomeBody("succeeded", "all_checks_passed"))
+	ok("the same state and reason with a new time", key, id, s.outcomeBody("succeeded", "all_checks_passed"))
+	ok("the same state and reason with a new time, under the pool's other key", poolKey2, id, []byte(`{"time":"`+s.at()+`","reason":"all_checks_passed","state":"succeeded","version":1}`))
+
+	// Compared after the reason rules: a reserved reason, or one that is no code, drops
+	// to the same outcome; no state is cancelled with stopped.
+	dropped := event.NewRunID()
+	s.runKey(dropped)
+	ok("an outcome with no reason", key, dropped, s.outcomeBody("failed", ""))
+	s.now = s.now.Add(time.Second)
+	ok("the same state with a reserved reason, which drops", key, dropped, s.outcomeBody("failed", "timeout"))
+	ok("the same state with a reason that is no code, which drops", poolKey2, dropped, s.outcomeBody("failed", "Not A Code"))
+	req, rec = s.outcome(key, dropped, s.outcomeBody("failed", "tests_failed"))
+	s.expect("the same state with a reason that stays", req, rec, http.StatusConflict, "outcome_given")
+	none := event.NewRunID()
+	s.runKey(none)
+	ok("an outcome with no state", key, none, s.outcomeBody("", ""))
+	s.now = s.now.Add(time.Second)
+	ok("no state again with a new time", key, none, s.outcomeBody("", ""))
+	req, rec = s.outcome(key, none, s.outcomeBody("cancelled", "user_cancelled"))
+	s.expect("cancelled with another reason, after no state", req, rec, http.StatusConflict, "outcome_given")
 	req, rec = s.outcome(key, id, s.outcomeBody("failed", "all_checks_passed"))
 	s.expect("another state", req, rec, http.StatusConflict, "outcome_given")
 	req, rec = s.outcome(key, id, s.outcomeBody("succeeded", ""))
