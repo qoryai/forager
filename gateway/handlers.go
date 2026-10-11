@@ -417,7 +417,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	lr.touch()
 	refused := func(why string) {
-		g.report(fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: %s", lr.id, why, batchRefused.state))
+		g.report(fmt.Sprintf("run %s: the gateway refused a batch from the run's session, %s; the run ends: %s", lr.id, why, batchRefused.state))
 		invalid(w)
 		lr.end(batchRefused)
 	}

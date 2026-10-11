@@ -29,9 +29,8 @@ nothing.
 - The agent's container is on a network with no route out.
 - On the inside network, the relay is the one peer the agent's container reaches; the
   engine's host is not one.
-- The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
-  proxy, opening every connection with the run's proxy secret, and decides nothing. It
-  forwards no packet between its networks.
+- The relay copies a fixed port to the gateway's proxy, opening every connection with the
+  run's proxy secret, and decides nothing. It forwards no packet between its networks.
 - Neither the relay nor the agent's container runs the image's health check.
 - The relay listens on the wall's inside network alone, on its one address in each of
   its subnets, and takes a connection only from an address in those subnets.

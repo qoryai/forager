@@ -737,9 +737,10 @@ release may change what an existing document does, and says so under Upgrading.
   `session`, and requires `runtime`, `command`, `args`, `dir` and `interactive`.
   `forager_version` is the session's, and `host` is the agent's machine's.
   `dev.qory.run.exited`'s `reason` has `session_lost`, the session was silent,
-  `batch_refused`, the gateway refused a batch of its, and `stopped`, which the gateway
-  writes, beside `timeout`, `interrupted`, `run_closed` and `gateway_lost`; when the
-  gateway ends a session's run it writes the run's `dev.qory.run.exited`, and the
+  `batch_refused`, the gateway refused a batch from the run's session, and `stopped`,
+  which the gateway writes, beside `timeout`, `interrupted`, `run_closed` and
+  `gateway_lost`; when the gateway ends a session's run it writes the run's
+  `dev.qory.run.exited`, and the
   session writes the session's, with the state and the reason of the gateway's `410`, in
   the session's record and never posted. `exit_code` is optional in the schema, and
   Forager writes it on every `dev.qory.run.exited`: `-1` with `gateway_lost` and in
@@ -881,11 +882,11 @@ release may change what an existing document does, and says so under Upgrading.
   that run ended, the state and the reason of the gateway's `dev.qory.run.exited` of
   it; for a resend that completes the record, `failed` and `gateway_lost`.
   `Delivery.ClosedBy` is removed: it always said `gateway`.
-- Each line the gateway reports of a run's end reads
-  `run <id>: <what happened>; the run ends: <state>`: "its session sent nothing for
-  1m30s; the run ends: failed", or "the gateway refused a batch of its session's, <why>;
-  the run ends: failed". The server's signed `410` is "the server wants no more events
-  of this run; the run goes on".
+- Each line the gateway reports of a run's end reads `run <id>: <what happened>; the run
+  ends: <state>`: "its session sent nothing for 1m30s; the run ends: failed", or "the
+  gateway refused a batch from the run's session, <why>; the run ends: failed". The
+  server's signed `410` is "the server wants no more events of this run; the run goes
+  on".
 - A run's certificate authority keeps at most 1024 hosts' certificates, the least
   recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose
@@ -1460,6 +1461,8 @@ release may change what an existing document does, and says so under Upgrading.
   status: `apiary_public_key_missing` for a server without a pin, before any request;
   `unauthorized` for a `401`; `answer_unsigned` for an answer that does not verify; and
   `instance_limit` when the node's live instances are at its limit.
+- `session.Spec.SocketGrace` sets how long the run socket keeps accepting after the
+  runtime exits; zero keeps 200 ms. It is for tests.
 
 #### Changed
 

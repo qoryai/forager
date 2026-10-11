@@ -175,6 +175,10 @@ type Spec struct {
 	Limits wall.Limits
 	// Report receives one line per thing the session reports to its user; nil means Stderr.
 	Report func(string)
+	// SocketGrace is how long the run socket keeps accepting after the runtime exits,
+	// so a hook on its last event is still read; zero or less means 200 ms. For tests:
+	// production leaves it zero.
+	SocketGrace time.Duration
 }
 
 // Result is what a run came to: what the session knows of it. What reached the server
@@ -227,7 +231,7 @@ type Result struct {
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
 	// as the gateway answered it: run_closed, stopped when the run's starter ended it,
 	// session_lost when it heard nothing from the session for three heartbeat
-	// intervals, and batch_refused when it refused a batch of the session's.
+	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
 }
 
@@ -733,7 +737,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	defer fwd.Close()
 
-	sock, err := socket.Listen()
+	sock, err := socket.Listen(spec.SocketGrace)
 	if err != nil {
 		return fail(err)
 	}
