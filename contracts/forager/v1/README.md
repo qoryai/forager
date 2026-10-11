@@ -2320,7 +2320,8 @@ accepted is under `undelivered/` again.
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used` on
 the local link, and behind a separate gateway the gateway answers `run_attached`, unless
-its session gave up before the run opened (above). A
+its session gave up before the run opened (above), or, behind a separate gateway, its
+attach failed, and the gateway asks for the attach again (Attach, above). A
 reload is a `GET` of the run's configuration by its run id instead,
 `<run.url>/<run_id>`: the path of `run.url`, a slash and the `run_id`, with no query.
 The gateway's answers on the link, the run answer and the reload's among them, contain

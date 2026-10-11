@@ -1038,6 +1038,31 @@ func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	}
 }
 
+// TestAnAttachedRunWhoseConfigurationIsRefusedKeepsItsRecord pins an attach the server
+// accepted whose run configuration Forager refuses: the run does not open, a 403
+// run_configuration_invalid from the gateway, but its record is kept, its first line
+// run.registered, and the run request that comes again with the same run key is a 409
+// run_attached, with no second attach.
+func TestAnAttachedRunWhoseConfigurationIsRefusedKeepsItsRecord(t *testing.T) {
+	c := gatewayControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"bogus"}}`, 'a')
+	r := startRemote(t, c, gateway.Config{})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	if a := r.tryOpen(t, key, server.LinkRunRequest{}); a.status != http.StatusForbidden || a.refusal()["error"] != "run_configuration_invalid" || a.refusal()["from"] != "gateway" {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	eventually(t, "the run's record", func() bool {
+		rec := r.record(runID)
+		return len(rec) > 0 && rec[0].Type == "dev.qory.run.registered"
+	})
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'b')
+	refused(t, "the run request again", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches", n)
+	}
+}
+
 // TestTheEndMember pins the end member of the server's 2xx to a batch, behind a
 // separate gateway and on a direct node's local link alike: the gateway ends the run
 // with the outcome, its record's dev.qory.run.exited has its state and reason and
