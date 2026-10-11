@@ -372,7 +372,7 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ekm, _ := r.Context().Value(bindingKey{}).([]byte)
-		body := &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
+		body := newCapturedBody(r, ekm)
 		r.Body = body
 		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, req: r, body: body, header: http.Header{}}
 		defer func() {
@@ -454,6 +454,12 @@ type capturedBody struct {
 	post bool
 	h    hash.Hash
 	n    int
+}
+
+// newCapturedBody is r's body on the connection whose exporter value is ekm, hashed
+// with r's method and target.
+func newCapturedBody(r *http.Request, ekm []byte) *capturedBody {
+	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
 }
 
 func (b *capturedBody) Read(p []byte) (int, error) {

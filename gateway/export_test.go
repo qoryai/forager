@@ -21,9 +21,10 @@ func BoundLine(key *accesskey.Key, ekm []byte) string { return boundLine(key, ek
 // exporter value is ekm, when handler answers req, whose body is body.
 func SignedAnswer(key *accesskey.Key, ekm []byte, req *http.Request, body []byte, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	cb := &capturedBody{r: io.NopCloser(bytes.NewReader(body)), post: req.Method == http.MethodPost}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	cb := newCapturedBody(req, ekm)
 	req.Body = cb
-	sw := &signedWriter{w: rec, key: key, ekm: ekm, req: req, body: cb, header: http.Header{}}
+	sw := &signedWriter{w: rec, key: key, req: req, body: cb, header: http.Header{}}
 	handler(sw, req)
 	sw.Flush()
 	return rec
