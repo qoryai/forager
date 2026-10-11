@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -282,7 +283,8 @@ func pipe(c, up net.Conn, fromAgent, fromProxy io.Reader, closeUp bool) {
 // ends its side, while the reply is awaited closes it instead. A request that asks for
 // an upgrade the proxy answers with 101 makes the connection a tunnel; an agent that
 // sends anything after it, or ends its side, before the proxy's reply is read gets no
-// reply: the connection closes.
+// reply: the connection closes, as it does when the reply's head runs past
+// [maxReplyHead] bytes.
 func passPlain(c, up net.Conn, p *proxied) {
 	if p.upgrade {
 		if err := p.req.WriteProxy(up); err != nil {
@@ -290,11 +292,14 @@ func passPlain(c, up net.Conn, p *proxied) {
 		}
 		// WriteProxy has read the request's body: whatever the agent sends now is early.
 		stop := watchAgent(c, p.from, up, false)
-		r := bufio.NewReader(up)
+		head := &io.LimitedReader{R: up, N: maxReplyHead}
+		r := bufio.NewReader(head)
 		resp, err := http.ReadResponse(r, p.req)
 		if early := stop(); early || err != nil {
 			return
 		}
+		// The bound is the head's alone: the tunnel, or the reply's body, has none.
+		head.N = math.MaxInt64
 		if resp.StatusCode == http.StatusSwitchingProtocols {
 			if err := writeResponseHead(c, resp); err != nil {
 				return
@@ -365,6 +370,10 @@ func writeResponseHead(w io.Writer, resp *http.Response) error {
 	_, err := w.Write(b.Bytes())
 	return err
 }
+
+// maxReplyHead is the most bytes of the proxy's reply to an upgrade the forwarder reads
+// for the reply's head.
+const maxReplyHead = 64 << 10
 
 // maxProxyLine is the longest line of the first request's head the forwarder reads,
 // maxProxyLines the most lines, and maxProxyHead the most bytes of the whole head.
