@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/run-registration-answer.schema.json",
+  "title": "Run registration answer, through a gateway",
+  "description": "The body of the server's signed 200, application/json, to a registration in the gateway shape of run-registration.schema.json: the run's id and its run key, which the starter passes to the run as QORY_RUN_KEY. It carries no run configuration, so the starter never receives the run's policy, and the answer has no X-Qory-Run-Configuration and no ETag: line 6 of its signature is empty, and line 5 carries X-Qory-Configuration as on every answer. The same bytes registered again under any active key of the same node or node pool get this answer again, with the same run key. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "run_id", "run_key"],
+  "properties": {
+    "version": {
+      "description": "The document format. Forager refuses a version it does not read.",
+      "const": 1
+    },
+    "run_id": {
+      "description": "The run's id, the registration's.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "run_key": {
+      "description": "The run key, at most 2048 characters: qrk_, the payload in base64url without padding, a dot, and the signature in base64url without padding. Its payload is run-key.schema.json, and its run_id is the run's.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^qrk_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    }
+  }
+}

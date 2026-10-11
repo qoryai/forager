@@ -225,17 +225,20 @@ func (p PublicKey) X25519() ([]byte, error) {
 }
 
 // The published fixture keys of the contract: the fixture access key, a second fixture
-// access key, and the fixture signing keys of the server, current and next. Their
-// secrets are published, so a machine refuses each as its own key and as a pin.
+// access key, the fixture signing keys of the server, current and next, and the fixture
+// gateway key. Their secrets are published, so a machine refuses each as its own key
+// and as a pin.
 var fixtureKeys = []string{
 	"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
 	"dSnEVtk40rj-kPpsz5FtNGdwpkvLt7UyO2h6zeIM0Aw",
 	"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc",
 	"C0eCPnEJXdWb54rCccV27zifh7ZFYasHz5pOvNAtIEE",
+	"iC0Oo7KGTnpYfz5pjOpEWZmDEuZV4F-l6LURnYuqyM0",
 }
 
 // Fixture reports whether the key is one of the contract's published fixture keys:
-// a fixture access key, or the fixture signing key of the server, current or next.
+// a fixture access key, the fixture gateway key, or the fixture signing key of the
+// server, current or next.
 // Their secrets are published, so qory refuses each as an access key and as a pin, and
 // a server refuses each at enrolment and as its own key.
 func (p PublicKey) Fixture() bool {

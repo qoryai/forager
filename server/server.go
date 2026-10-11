@@ -9,7 +9,11 @@
 // where events go and where runs register; [Client.Register] posts the registration a
 // run starts with and reads the run configuration its answer carries;
 // [Client.RunConfiguration] fetches that again by the run's id; [Client.Deliver] posts
-// one signed batch and reads the digests the answer contains. With the server
+// one signed batch and reads the digests the answer contains, and the end member a
+// signed 2xx may carry ([ReadEnd]). A run through a gateway uses three calls more:
+// [Client.RegisterThroughGateway] posts a [GatewayRegistration] and reads the run key
+// its answer carries, [Client.Attach] is the gateway's attach of the run with that run
+// key, and [Client.PostOutcome] posts the run's starter's [Outcome]. With the server
 // document's [Via] set, every request goes to the gateway's origin with its target
 // unchanged, and the gateway relays it to the server. Every request
 // contains the access key id, the instance id and name, the contract revision and the
@@ -712,6 +716,11 @@ type Delivery struct {
 	// its code, status, names, who refused and its message. Nil for any other answer,
 	// and always toward the server.
 	Refusal *accesskey.Refusal
+	// ServerEnd is, toward the server, the end member of a signed 2xx: the outcome the
+	// run's starter gave, which the server sends on every 2xx for the run once it has
+	// recorded one, until the run's dev.qory.run.exited arrives ([ReadEnd]). Nil for any
+	// other answer, and always on the link.
+	ServerEnd *ServerEnd
 }
 
 // Authentic reports whether the answer is one to read: signed under the pin toward the
@@ -761,6 +770,9 @@ func (c *Client) Deliver(ctx context.Context, eventsURL, deliveryID string, body
 		d.Digests = Digests{Configuration: a.header.Get(HeaderConfiguration), RunConfiguration: a.header.Get(HeaderRunConfiguration)}
 		if r := accesskey.ReadRefusal(a.status, a.body); r != nil {
 			d.Code = r.Code
+		}
+		if d.Status >= 200 && d.Status < 300 {
+			d.ServerEnd = ReadEnd(a.body)
 		}
 	}
 	return d, nil

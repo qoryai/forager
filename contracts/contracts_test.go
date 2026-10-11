@@ -90,12 +90,16 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// registration, run configuration and run credentials fixture passes its schema, the
-// run credentials of the known answers included.
+// registration, run configuration, run credentials, attach answer, outcome and batch
+// answer fixture passes its schema, the run credentials of the known answers included.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-registration.schema.json", "run-configuration.schema.json", "run-credentials.schema.json")
+		"run-registration.schema.json", "run-configuration.schema.json", "run-credentials.schema.json",
+		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json")
 	dirs := map[string]string{
+		"fixtures/run-attach-answer": "run-attach-answer.schema.json",
+		"fixtures/run-outcome":       "run-outcome.schema.json",
+		"fixtures/batch-answer":      "batch-answer.schema.json",
 		"fixtures/policy":            "policy.schema.json",
 		"fixtures/server":            "server.schema.json",
 		"fixtures/configuration":     "configuration.schema.json",
@@ -284,7 +288,9 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
 		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal,
-		"run-credentials.schema.json")
+		"run-credentials.schema.json", "run-key.schema.json", "run-registration-answer.schema.json",
+		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
+		"run-outcome-answer.schema.json", "batch-answer.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
 		kind := namedSchema(s, f)
 		schema, ok := s[kind+".schema.json"]

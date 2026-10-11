@@ -112,9 +112,10 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 }
 
 // TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
-// answers passes its schema: discovery, the registration and its answer, and the
-// enrolment request, answer and signed refusals each against the part of
-// enrolment.schema.json it is.
+// answers passes its schema: discovery, the registration and its answer, the run key's
+// payload, the registration through a gateway, the attach and the outcome, each with
+// its answer, and the enrolment request, answer and signed refusals each against the
+// part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -128,22 +129,30 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		return s.Validate
 	}
 	want := map[string][]string{
-		"fixtures/known-answers/discovery.json":                {"configuration.schema.json"},
-		"fixtures/known-answers/registration.json":             {"run-registration.schema.json"},
-		"fixtures/known-answers/registration-answer.json":      {"run-configuration.schema.json"},
-		"fixtures/enrolment/request.json":                      {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/request-two-fingerprints.json":     {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/answer.json":                       {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
-		"fixtures/enrolment/refusal-key-limit.json":            {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-invalid.json":          {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-limit-rotation.json":   {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-invalid-rotation.json": {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-rate-limited.json":         {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/known-answers/discovery.json":                   {"configuration.schema.json"},
+		"fixtures/known-answers/registration.json":                {"run-registration.schema.json"},
+		"fixtures/known-answers/registration-answer.json":         {"run-configuration.schema.json"},
+		"fixtures/known-answers/run-key-payload.json":             {"run-key.schema.json"},
+		"fixtures/known-answers/registration-gateway.json":        {"run-registration.schema.json"},
+		"fixtures/known-answers/registration-gateway-answer.json": {"run-registration-answer.schema.json"},
+		"fixtures/known-answers/attach.json":                      {"run-attach.schema.json"},
+		"fixtures/known-answers/attach-answer.json":               {"run-attach-answer.schema.json", "run-configuration.schema.json"},
+		"fixtures/known-answers/outcome.json":                     {"run-outcome.schema.json"},
+		"fixtures/known-answers/outcome-answer.json":              {"run-outcome-answer.schema.json"},
+		"fixtures/enrolment/request.json":                         {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/request-two-fingerprints.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid-rotation.json":    {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-rate-limited.json":            {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 	}
 	data := map[string]bool{
-		"fixtures/known-answers/keys.json":        true,
-		"fixtures/known-answers/signatures.json":  true,
-		"fixtures/known-answers/small-order.json": true,
+		"fixtures/known-answers/keys.json":            true,
+		"fixtures/known-answers/signatures.json":      true,
+		"fixtures/known-answers/through-gateway.json": true,
+		"fixtures/known-answers/small-order.json":     true,
 	}
 	for _, dir := range []string{"fixtures/enrolment", "fixtures/known-answers"} {
 		for _, f := range files(t, dir) {
