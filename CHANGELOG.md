@@ -793,10 +793,11 @@ release may change what an existing document does, and says so under Upgrading.
   `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
   that passes names the request's run: a run request or a reload of another `run_id` is
   `run_key_invalid`. The gateway verifies the run key on every request of the run and on
-  every proxy connection, not only the first: once a server key is out of its pin, a run
-  whose run key that key signed gets `run_key_invalid` on its next request, and a new
-  proxy connection of it is closed unanswered. On the run request the gateway attaches
-  the run at the server under its own access key, `server.Client.Attach`, with the tries of a registration, and
+  every proxy connection, not only the first: once the gateway restarts with a server
+  key out of its pin, a run whose run key that key signed gets `run_key_invalid` on its
+  next request, and a new proxy connection of it is closed unanswered. On the run
+  request the gateway attaches the run at the server under its own access key,
+  `server.Client.Attach`, with the tries of a registration, and
   writes the record's first event, `dev.qory.run.registered`, from the run key and the
   attach's answer; a refusal of the attach reaches the session with its code, its status
   and `from: apiary`. A run request for a run the gateway holds or is opening, live or
@@ -1165,8 +1166,8 @@ release may change what an existing document does, and says so under Upgrading.
   behind a separate gateway, a connection to the forwarder carries one request, a
   `CONNECT` and its tunnel or one plain HTTP request and its reply, which the forwarder
   passes on with `Connection: close`, or with `Connection: Upgrade` when it asks for an
-  upgrade, a `101` reply making the connection a tunnel, so the password of every
-  request is checked and taken off and none reaches the gateway. A program that sends
+  upgrade, a `101` reply making the connection a tunnel, so each request's password is
+  checked and taken off before the request is passed on. A program that sends
   its proxy URL's user name and password as `Proxy-Authorization`, and opens a new
   connection after a reply with `Connection: close`, reaches the proxy as before.
 
