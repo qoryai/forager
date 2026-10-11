@@ -12,8 +12,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/link"
@@ -71,7 +73,8 @@ type forwarding struct {
 	// the first request of every accepted connection must carry in its one
 	// Proxy-Authorization, Basic, before anything reaches the proxy; the header is not
 	// passed on. A connection then carries that one request: a CONNECT and its tunnel,
-	// or one plain request and its reply, so every plain request is checked.
+	// or one plain request and its reply, so every plain request is checked; a plain
+	// request that asks for an upgrade the proxy answers with 101 makes it a tunnel.
 	password string
 	// headWait is how long a connection has to send its first request's head when the
 	// password is set; zero is [link.PreambleWait], as long as a preamble has.
@@ -195,7 +198,7 @@ func (f *forwarder) serve(c net.Conn) {
 	}
 	var src io.Reader = c
 	// plain is the one plain request of a connection the password let in.
-	var plain *http.Request
+	var plain *proxied
 	if f.way.password != "" {
 		// Nothing reaches the proxy from a connection that is not the run's agent.
 		wait := f.way.headWait
@@ -235,35 +238,130 @@ func (f *forwarder) serve(c net.Conn) {
 		up.SetWriteDeadline(time.Time{})
 	}
 	if plain != nil {
-		// One plain request, then its reply until the proxy ends it; nothing more of the
-		// agent's goes on, so a request after it on the connection, with the password
-		// in its Proxy-Authorization, never reaches the proxy. The proxy's side is not
-		// half closed, which would end the request at a proxy that reads on.
-		replied := make(chan struct{})
-		go func() {
-			io.Copy(c, up)
-			close(replied)
-		}()
-		if err := plain.WriteProxy(up); err != nil {
-			up.Close()
-		}
-		<-replied
+		passPlain(c, up, plain)
 		return
 	}
+	pipe(c, up, src, up, f.way.password != "")
+}
+
+// pipe copies fromAgent to up and fromProxy, what up sends, to c, each direction until
+// its end, which it passes on as a half close. With closeUp, the end of what up sends
+// closes up before it is passed on, so nothing the agent sends after it reaches the
+// proxy: after a refused CONNECT, say, a request with the password in it.
+func pipe(c, up net.Conn, fromAgent, fromProxy io.Reader, closeUp bool) {
 	done := make(chan struct{}, 2)
-	pipe := func(dst net.Conn, src io.Reader) {
-		io.Copy(dst, src)
+	half := func(dst net.Conn) {
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		} else {
 			dst.Close()
 		}
-		done <- struct{}{}
 	}
-	go pipe(up, src)
-	go pipe(c, up)
+	go func() {
+		io.Copy(up, fromAgent)
+		half(up)
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(c, fromProxy)
+		if closeUp {
+			up.Close()
+		}
+		half(c)
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
+}
+
+// passPlain writes p, the one plain request of the agent's connection c, to up, the
+// proxy, and passes on its reply until the proxy ends it; nothing more of the agent's
+// goes on, so a request after it on the connection, with the password in its
+// Proxy-Authorization, never reaches the proxy. The proxy's side is not half closed,
+// which would end the request at a proxy that reads on; an agent that goes away, or
+// ends its side, while the reply is awaited closes it instead. A request that asks for
+// an upgrade the proxy answers with 101 makes the connection a tunnel.
+func passPlain(c, up net.Conn, p *proxied) {
+	if p.upgrade {
+		if err := p.req.WriteProxy(up); err != nil {
+			return
+		}
+		stop := watchAgent(c, p.from, up, false)
+		r := bufio.NewReader(up)
+		resp, err := http.ReadResponse(r, p.req)
+		stop()
+		if err != nil {
+			return
+		}
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			if err := writeResponseHead(c, resp); err != nil {
+				return
+			}
+			pipe(c, up, p.from, r, true)
+			return
+		}
+		// Any other answer is the request's alone, and the connection ends with it.
+		resp.Close = true
+		resp.Header.Del("Connection")
+		resp.Header.Del("Keep-Alive")
+		stop = watchAgent(c, p.from, up, true)
+		resp.Write(c)
+		stop()
+		return
+	}
+	replied := make(chan struct{})
+	go func() {
+		io.Copy(c, up)
+		close(replied)
+	}()
+	if err := p.req.WriteProxy(up); err != nil {
+		up.Close()
+		<-replied
+		return
+	}
+	stop := watchAgent(c, p.from, up, true)
+	<-replied
+	stop()
+}
+
+// watchAgent closes up when the agent's connection c, read through from, ends or fails,
+// until stop is called. With discard, what the agent sends meanwhile is read and
+// dropped; without it, the watch ends at the first byte the agent sends, which stays
+// in from.
+func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func()) {
+	var stopped atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, err := from.Peek(1); err != nil {
+				if !stopped.Load() {
+					up.Close()
+				}
+				return
+			}
+			if !discard {
+				return
+			}
+			from.Discard(from.Buffered())
+		}
+	}()
+	return func() {
+		stopped.Store(true)
+		c.SetReadDeadline(time.Now())
+		<-done
+		c.SetReadDeadline(time.Time{})
+	}
+}
+
+// writeResponseHead writes the status line and the header of resp to w.
+func writeResponseHead(w io.Writer, resp *http.Response) error {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
+	resp.Header.Write(&b)
+	b.WriteString("\r\n")
+	_, err := w.Write(b.Bytes())
+	return err
 }
 
 // maxProxyLine is the longest line of the first request's head the forwarder reads,
@@ -328,21 +426,41 @@ func closingHead(head []byte) []byte {
 	return append(out, head[end:]...)
 }
 
+// proxied is the one plain request of a connection the password let in.
+type proxied struct {
+	req *http.Request
+	// from holds what the agent sends after the request's head: its body, then whatever
+	// follows.
+	from *bufio.Reader
+	// upgrade is whether the request asks for an upgrade: its Connection names upgrade
+	// and it has an Upgrade.
+	upgrade bool
+}
+
 // plainRequest reads the plain request whose head, without its Proxy-Authorization, is
 // head, and whose body follows in rest, as the one request of its connection: with
-// Connection: close, without Keep-Alive, Proxy-Connection and the headers its Connection
+// Connection: close, or Connection: Upgrade and its Upgrade when it asks for an
+// upgrade, without Keep-Alive, Proxy-Connection and the other headers its Connection
 // names, and with no User-Agent added where it had none. Its body is read from rest as
 // it is written on. It is nil when the head is no request.
-func plainRequest(head []byte, rest io.Reader) *http.Request {
-	req, err := http.ReadRequest(bufio.NewReaderSize(io.MultiReader(bytes.NewReader(head), rest), maxProxyLine))
+func plainRequest(head []byte, rest io.Reader) *proxied {
+	from := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(head), rest), maxProxyLine)
+	req, err := http.ReadRequest(from)
 	if err != nil {
 		return nil
 	}
+	var named []string
 	for _, v := range req.Header.Values("Connection") {
 		for _, name := range strings.Split(v, ",") {
 			if name = strings.TrimSpace(name); name != "" {
-				req.Header.Del(name)
+				named = append(named, name)
 			}
+		}
+	}
+	upgrade := req.Header.Get("Upgrade") != "" && slices.ContainsFunc(named, func(n string) bool { return strings.EqualFold(n, "upgrade") })
+	for _, name := range named {
+		if !upgrade || !strings.EqualFold(name, "upgrade") {
+			req.Header.Del(name)
 		}
 	}
 	for _, name := range []string{"Keep-Alive", "Proxy-Connection", "Proxy-Authorization"} {
@@ -352,9 +470,13 @@ func plainRequest(head []byte, rest io.Reader) *http.Request {
 		// An empty User-Agent is written as none.
 		req.Header["User-Agent"] = []string{""}
 	}
-	req.Header.Set("Connection", "close")
-	req.Close = true
-	return req
+	if upgrade {
+		req.Header.Set("Connection", "Upgrade")
+	} else {
+		req.Header.Set("Connection", "close")
+		req.Close = true
+	}
+	return &proxied{req: req, from: from, upgrade: upgrade}
 }
 
 // proxyLogin reports whether value, a Proxy-Authorization's, is Basic credentials whose

@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os/exec"
 	"slices"
@@ -344,7 +346,9 @@ type proxyStandIn struct {
 	requests []string
 }
 
-func startProxyStandIn(t *testing.T, secret string) *proxyStandIn {
+// startProxyStandIn starts a stand-in that answers with h, when it is set, recording
+// each request's method and URL alone.
+func startProxyStandIn(t *testing.T, secret string, h http.Handler) *proxyStandIn {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -352,6 +356,13 @@ func startProxyStandIn(t *testing.T, secret string) *proxyStandIn {
 	}
 	p := &proxyStandIn{ln: ln, secret: secret}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h != nil {
+			p.mu.Lock()
+			p.requests = append(p.requests, r.Method+" "+r.URL.String())
+			p.mu.Unlock()
+			h.ServeHTTP(w, r)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		p.mu.Lock()
 		p.requests = append(p.requests, r.Method+" "+r.URL.String()+" "+string(b))
@@ -435,7 +446,7 @@ func TestTheUnwalledForwarderTakesOnePlainRequestAConnection(t *testing.T) {
 	credential := base64.StdEncoding.EncodeToString([]byte("qory:" + password))
 	for name, secret := range map[string]string{"on one machine": secret, "behind a separate gateway": ""} {
 		t.Run(name, func(t *testing.T) {
-			up := startProxyStandIn(t, secret)
+			up := startProxyStandIn(t, secret, nil)
 			var d net.Dialer
 			f, err := listenForwarding("127.0.0.1:0", forwarding{
 				dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", up.Addr().String()) },
@@ -522,6 +533,200 @@ func TestTheUnwalledForwarderTakesOnePlainRequestAConnection(t *testing.T) {
 				if strings.Contains(b, "pipelined") {
 					t.Errorf("the pipelined request reached the proxy: %.300q", b)
 				}
+			}
+		})
+	}
+}
+
+// unwalledForwarder is a forwarder of an unwalled agent to target, with the run's proxy
+// secret on one machine or without it behind a separate gateway, and the agent's
+// Proxy-Authorization with its password.
+func unwalledForwarder(t *testing.T, target, secret string) (f *forwarder, login string) {
+	t.Helper()
+	const password = "forwarder-password-0123456789abcdefghijklmn"
+	var d net.Dialer
+	f, err := listenForwarding("127.0.0.1:0", forwarding{
+		dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
+		secret:   secret,
+		password: password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f, "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyUser+":"+password)) + "\r\n"
+}
+
+// unwalledWays are the two unwalled forwarders by name: the run's proxy secret of each.
+var unwalledWays = map[string]string{"on one machine": "proxy-secret-0123456789abcdefghijklmnopqrst", "behind a separate gateway": ""}
+
+// TestTheUnwalledForwarderPassesAnUpgrade pins a plain request that asks for an upgrade,
+// a ws:// one, through an unwalled forwarder to a proxy that passes it on as a reverse
+// proxy of net/http does: a 101 makes the connection a tunnel, with bytes both ways, and
+// any other answer ends the connection with it; neither carries the password to the
+// proxy.
+func TestTheUnwalledForwarderPassesAnUpgrade(t *testing.T) {
+	tool := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws" || r.Header.Get("Upgrade") != "websocket" {
+			http.Error(w, "no upgrade", http.StatusBadRequest)
+			return
+		}
+		c, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+		io.Copy(c, rw.Reader)
+	}))
+	defer tool.Close()
+	toolURL, _ := url.Parse(tool.URL)
+	reverse := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) { r.SetURL(toolURL) }}
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			up := startProxyStandIn(t, secret, reverse)
+			f, login := unwalledForwarder(t, up.Addr().String(), secret)
+
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			c.SetDeadline(time.Now().Add(5 * time.Second))
+			io.WriteString(c, "GET http://tool.example/ws HTTP/1.1\r\nHost: tool.example\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n"+login+"\r\n")
+			r := bufio.NewReader(c)
+			resp, err := http.ReadResponse(r, nil)
+			if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("the upgrade got %v, %v", resp, err)
+			}
+			for _, b := range []string{"ping\n", "pong\n"} {
+				io.WriteString(c, b)
+				if got, err := r.ReadString('\n'); got != b {
+					t.Errorf("the tunnel echoed %q, %v; want %q", got, err, b)
+				}
+			}
+			c.Close()
+
+			refused, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer refused.Close()
+			io.WriteString(refused, "GET http://tool.example/other HTTP/1.1\r\nHost: tool.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"+login+"\r\n")
+			refused.SetReadDeadline(time.Now().Add(5 * time.Second))
+			b, err := io.ReadAll(refused)
+			if err != nil || !strings.HasPrefix(string(b), "HTTP/1.1 400 ") || !strings.HasSuffix(string(b), "no upgrade\n") {
+				t.Errorf("an upgrade the tool refused got %q, %v; want its answer and the end", b, err)
+			}
+
+			raw, requests := up.seen()
+			if want := []string{"GET http://tool.example/ws", "GET http://tool.example/other"}; !slices.Equal(requests, want) {
+				t.Errorf("the proxy got %q, want %q", requests, want)
+			}
+			for _, b := range raw {
+				if strings.Contains(strings.ToLower(b), "proxy-authorization") || strings.Contains(b, "forwarder-password") {
+					t.Errorf("the proxy received the password: %q", b)
+				}
+			}
+		})
+	}
+}
+
+// TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
+// never comes: once the agent closes its connection, the forwarder closes the proxy's
+// soon after, rather than at the run's end.
+func TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft(t *testing.T) {
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			accepted, closed := make(chan struct{}), make(chan struct{})
+			go func() {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				close(accepted)
+				// The proxy reads, and answers nothing, until the forwarder closes.
+				io.Copy(io.Discard, c)
+				close(closed)
+			}()
+			f, login := unwalledForwarder(t, ln.Addr().String(), secret)
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.WriteString(c, "GET http://api.example/slow HTTP/1.1\r\nHost: api.example\r\n"+login+"\r\n")
+			select {
+			case <-accepted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the request did not reach the proxy")
+			}
+			time.Sleep(100 * time.Millisecond)
+			c.Close()
+			select {
+			case <-closed:
+			case <-time.After(2 * time.Second):
+				t.Error("the proxy's connection outlived the agent's")
+			}
+		})
+	}
+}
+
+// TestTheUnwalledForwarderEndsARefusedTunnel pins a CONNECT the proxy refuses, with
+// Connection: close and the end of its side: nothing the agent sends after it, a request
+// with the password say, reaches the proxy.
+func TestTheUnwalledForwarderEndsARefusedTunnel(t *testing.T) {
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			after := make(chan string, 1)
+			go func() {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						after <- "the head did not end: " + err.Error()
+						return
+					}
+					if line == "\r\n" {
+						break
+					}
+				}
+				io.WriteString(c, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+				c.(*net.TCPConn).CloseWrite()
+				c.SetReadDeadline(time.Now().Add(3 * time.Second))
+				b, _ := io.ReadAll(r)
+				after <- string(b)
+			}()
+			f, login := unwalledForwarder(t, ln.Addr().String(), secret)
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			io.WriteString(c, "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"+login+"\r\n")
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if b, err := io.ReadAll(c); err != nil || !strings.HasPrefix(string(b), "HTTP/1.1 403 ") {
+				t.Fatalf("the refused CONNECT got %q, %v", b, err)
+			}
+			// An agent that minds neither the Connection: close nor the end.
+			io.WriteString(c, "GET http://api.example/second HTTP/1.1\r\nHost: api.example\r\n"+login+"\r\n")
+			if b := <-after; b != "" {
+				t.Errorf("the proxy got %q after its refusal", b)
 			}
 		})
 	}

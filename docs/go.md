@@ -108,12 +108,13 @@ carries one request, a `CONNECT` and its tunnel or one plain HTTP request and it
 so every request is checked: it must carry the password in its one
 `Proxy-Authorization`, Basic, the user name ignored. The forwarder takes the header off,
 passes the request on with `Connection: close`, passes on nothing the agent sends after
-a plain request, and closes the connection at the end of its reply. It closes a
-connection without the password unanswered, before anything reaches the gateway, so
-another process of the machine that reaches the port reaches nothing. Behind a separate
-gateway the forwarder reaches the gateway's one address over TLS instead, where a bound
-connection opens the run's proxy with the run key: see
-[the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+a plain request, and closes the connection at the end of its reply; a plain request
+that asks for an upgrade goes on with `Connection: Upgrade` instead, and a `101` reply
+makes the connection a tunnel. It closes a connection without the password unanswered,
+before anything reaches the gateway, so another process of the machine that reaches the
+port reaches nothing. Behind a separate gateway the forwarder reaches the gateway's one
+address over TLS instead, where a bound connection opens the run's proxy with the run
+key: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is

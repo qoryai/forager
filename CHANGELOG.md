@@ -1149,10 +1149,11 @@ release may change what an existing document does, and says so under Upgrading.
   process of the machine that reaches the port reaches nothing. Without a wall, here and
   behind a separate gateway, a connection to the forwarder carries one request, a
   `CONNECT` and its tunnel or one plain HTTP request and its reply, which the forwarder
-  passes on with `Connection: close`, so the password of every request is checked and
-  taken off and none reaches the gateway. A program that sends its proxy URL's user name
-  and password as `Proxy-Authorization`, and opens a new connection after a reply with
-  `Connection: close`, reaches the proxy as before.
+  passes on with `Connection: close`, or with `Connection: Upgrade` when it asks for an
+  upgrade, a `101` reply making the connection a tunnel, so the password of every
+  request is checked and taken off and none reaches the gateway. A program that sends
+  its proxy URL's user name and password as `Proxy-Authorization`, and opens a new
+  connection after a reply with `Connection: close`, reaches the proxy as before.
 
 #### Added
 

@@ -2479,8 +2479,10 @@ request and its reply, so every request is checked: it must carry the password i
 one `Proxy-Authorization`, Basic, the user name ignored, compared in constant time. The
 forwarder takes the header off, passes the request on with `Connection: close`, passes
 on nothing the agent sends after a plain request, and closes the connection at the end
-of its reply; it closes a connection without the password unanswered before anything
-reaches the gateway. The run key reaches neither the agent's
+of its reply; a plain request that asks for an upgrade goes on with
+`Connection: Upgrade` instead, and a `101` reply makes the connection a tunnel. It
+closes a connection without the password unanswered before anything reaches the
+gateway. The run key reaches neither the agent's
 environment, from which the session takes `QORY_RUN_KEY` out whatever the agent
 inherits, nor any file, and the agent's view is the same as on one machine.
 The gateway takes the bytes after that line as the run's proxy's, as a connection the
