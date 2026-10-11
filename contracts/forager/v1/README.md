@@ -982,6 +982,31 @@ apiary_public_key:                    # the pin: the server's Ed25519 keys, one 
 `url` is the server's origin and nothing after it: no path, no query, no fragment.
 Forager finds every endpoint through the configuration document under it.
 
+**Via.** A keyed machine or a starter behind a gateway reaches the server through that
+gateway's relay. Its server document then holds `via`, `server.schema.json`:
+
+```yaml
+via:
+  url: https://gateway.example:8443     # https; scheme and host[:port] only
+  ca_file: /etc/qory/gateway-ca.pem     # optional: the authorities, in place of the system's roots
+  certificate_sha256: 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=   # optional: the pin
+```
+
+With `via` set, Forager sends every request to the server, the enrolment, discovery, the
+registration and the outcome, to `via.url`'s origin with the target, the path and the
+query, unchanged, discovery's absolute `run.url` rebased on it too. The gateway forwards
+each to the server's origin and passes the answer back byte for byte, so the request's
+signature and the answer's are the server's, as without `via`. `url` stays the server's
+own, so records and texts name the real server. A `via` connection is TLS 1.3 alone, and
+its chain is always checked, for `via.url`'s host name, against the system's roots, or,
+when `ca_file` is set, against the authorities of that file, which replace them;
+`certificate_sha256`, optional, is the SHA-256 of the gateway certificate's DER
+SubjectPublicKeyInfo in standard base64 with padding, 44 characters ending in `=`, and
+with it only a certificate with that public key is accepted, its chain still checked.
+The trust is never relaxed there, since a relayed registration's answer carries the run
+key. `server.Via` holds the setting, its `Transport` the trust, and
+`accesskey.EnrolmentRequest.PostVia` sends an enrolment through it.
+
 **The access key.** The access key authenticates Forager to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
 padding, 47 characters, from the system's random source; the prefix lets secret scanners
@@ -1036,7 +1061,9 @@ event, `dev.qory.run.exited`, or until it has no recent heartbeat: none within 3
 corrected by the run's clock offset (the smallest arrival time less `time` over the
 run's heartbeats), plus a tolerance of 300 seconds, and never more recent than its
 arrival. So a backlog delivered late keeps no run live, and a clock that runs ahead
-holds nothing live. The gateway's link judges a session by arrival alone (§The
+holds nothing live. A run behind a gateway counts from its attach (The attach, below):
+its liveness follows the attach's `interval_seconds`, and before the attach the run is
+lost at its run key's `attach_by`. The gateway's link judges a session by arrival alone (§The
 gateway's link, Heartbeats and liveness): there, "the session lives" is not the
 server's "live".
 
@@ -1072,8 +1099,9 @@ id, exactly as the headers contain them, an absent instance id as an empty line.
 - for a POST, `POST`; the request target exactly as sent; then the raw request body. A
   POST's signature covers its path and its body, so a body signed for one endpoint fails
   at every other. No timestamp line is signed on a POST: a replayed batch is a duplicate
-  the receiver already discards by event id, and a registration carries its own `time`
-  in the signed body, which the server holds to the same window as a GET's timestamp.
+  the receiver already discards by event id, and a registration, an attach and an
+  outcome carry their own `time` in the signed body, which the server holds to the same
+  window as a GET's timestamp.
 
 The signature covers the access key id, the instance id, and the method, the target and
 the timestamp of a GET, or the method, the target and the body of a POST.
@@ -1093,7 +1121,7 @@ line in `fixtures/known-answers/signatures.json`:
   `fixtures/known-answers/registration.json`, 357 bytes:
   `6IKFHBaK2bZgvqTdylVxM_G2Nueq2crrZ4PjVSE7LQ3MdkJt06YgxcIWBE9mEEwnThWwvMGKC130M1JhPJIqCQ`.
 
-**A signed POST** is a batch or a run's registration. A batch, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers):
+**A signed POST** is a batch, a run's registration, its attach or its outcome. A batch, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers):
 one `POST` per batch to the events URL, with the headers above and:
 
 | Header | Value |
@@ -1161,14 +1189,24 @@ absent or outside its pattern, signed; `400` `unsupported_contract_version`; `40
 The events endpoint's own, in order: deduplication, so a batch whose delivery id or
 event ids the server already accepted gets the same `2xx` again; then `410` for an event
 of a run the server wants nothing more of.
-The run endpoint's own, for a registration, in order: a registration the server already
-accepted for that run id, with the same bytes under the same access key, gets the same
-answer again; `410`, signed, with any code or none: the server takes no run here;
-`409`, signed, such as `instance_limit`, for a new instance id beyond its node's limit,
-or a `409` code of the server's own; then `409` `run_id_used` for a registration whose
-run id the server already accepted under another access key, even with the same bytes,
-or with other bytes: other labels or another body. For a reload, the server answers
-only for a run the same access key registered, and anything else is `404`.
+The run endpoint's own, for a registration, in order: the same bytes under any active key
+of the node or node pool that registered the run get the stored answer again, the same
+run key included, so a key replaced while the run waits keeps working; `410`, signed,
+with any code or none: the server takes no run here; `409` `node_is_direct` or
+`node_uses_gateway`, signed, for a body whose shape does not match the node's resolved
+choice (Through a gateway, below); `409` `no_default_gateway`, the node's choice is the
+default and no default resolves for its workspace; `409` `gateway_not_serving`, the
+named gateway may no longer serve the node's workspace; `409` `gateway_without_key`,
+the resolved gateway has no active access key, so no run could attach at it; `409`
+`instance_limit` for a new instance id beyond its node's limit; then `409` `run_id_used`
+for a registration whose run id the server already accepted from another node, even
+with the same bytes, or with other bytes: other labels or another body; then a `409`
+code of the server's own. The four codes of the resolution come before the limit, so a
+run that can go nowhere never takes a slot. A gateway's own key registers no run: a
+signed `409` `gateway_key`. For a reload, the server answers only for a run its node
+registered, under any of the node's active keys, or, for a run behind a gateway, for the
+gateway node that attached it, and anything else is `404`, so a run id cannot be
+probed.
 
 **Failure.** Every authentication failure is `401` with the body
 `{"error":"unauthorized"}` and nothing more, unsigned: a missing or empty
@@ -1309,7 +1347,7 @@ refusal's body, and a body's code only from a signed answer:
 | Status | Meaning |
 |---|---|
 | 200, signed | the run is registered: the body is its run configuration |
-| 409, signed, such as `instance_limit` or `run_id_used`, or a code of the server's own | no run, with its code |
+| 409, signed, such as `instance_limit`, `run_id_used`, `node_uses_gateway` or `gateway_key`, or a code of the server's own | no run, with its code |
 | 410, with any code or none, signed or not | no run: the server takes no run here, and the registration is not accepted |
 | anything else, an answer that does not verify, or no answer within ten seconds | asked again or final as §The gateway's link, Tries as a run opens, says; in the end no run, with the code of a signed answer when it carries one |
 
@@ -1318,8 +1356,9 @@ force, Forager fetches the run's configuration again with a signed
 `GET <run.url>/<run_id>`, `run.url` followed by a slash and the run's id, with
 `X-Qory-Timestamp` as every GET. The answer is a signed `200`, `application/json`, a
 `run-configuration.schema.json` document with the same headers as the registration's
-answer. The server answers it only for a run the same access key registered, and
-anything else is `404`. A reload that fails, a `404` among them, leaves the policy in
+answer. The server answers it only for a run its node registered, or for the gateway
+node that attached it, under any of that node's active keys, and anything else is
+`404`. A reload that fails, a `404` among them, leaves the policy in
 force; a signed `410` to it stops the deliveries, as to a batch (Delivery, below).
 
 ```json
@@ -1347,6 +1386,190 @@ anything but a signed `200`, or with a document Forager refuses, is no run,
 `POST` of the session's run request instead, and its answer is the gateway's (§The
 gateway's link).
 
+**Through a gateway.** Each node or node pool records one of three choices: `direct`,
+`default`, or a named gateway, `ng_` followed by 16 lower-case Crockford base32
+characters. The server resolves the choice at every registration, from the access key's
+record and never from the body: `direct` means the run has no gateway, and the
+registration answers as above; a named gateway is that gateway, if it may still serve
+the node's workspace, checked again here; `default` resolves most specific first, the
+workspace's default, else its organisation's, else its operator's. A change of choice
+or of default applies to new registrations only: a run already registered attaches at
+the gateway its run key names. The holder's role decides the body's shape, with no
+member to say so: a direct node's gateway sends the direct shape above, and a starter,
+or a keyed machine's `qory` behind a gateway, sends the gateway shape of
+`run-registration.schema.json`:
+
+```json
+{"version": 1,
+ "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d",
+ "labels": {"repository": "acme/shop"},
+ "about": {"title": "Fix the failing build"},
+ "attach_seconds": 600,
+ "time": "2026-10-11T12:00:00Z"}
+```
+
+- `version`, `run_id` and `time`, required, as in the direct shape.
+- `labels` and `about`, optional, information alone: the server gives them back in the
+  attach's answer, and they select no policy.
+- `attach_seconds`, optional: the attach window the run asks for. Absent means the
+  server's default, 600 seconds; one above its ceiling, 3600 seconds, is clamped to the
+  ceiling, and the run key's `attach_by` states the window granted; below 1, or not an
+  integer, is `invalid_request`.
+- `forager_version`, `contract_version`, `interval_seconds` and `events` are absent: they
+  move to the attach. A body with some of them and not all, or with them and
+  `attach_seconds`, is `invalid_request`.
+
+A body whose shape does not match what the access key's choice resolves to is a signed
+`409` of the server's own: `node_is_direct` for the gateway shape from a key whose choice
+is `direct`, and `node_uses_gateway` for the direct shape from a key whose choice
+resolves to a gateway, a machine whose node was moved behind a gateway while it still
+runs its own, say. The pool's instance slot is taken at `instance_limit` and frees when
+the run ends, or at `attach_by` if the run never attached. The answer for a run resolved
+to a gateway is a signed `200`, `application/json`, `run-registration-answer.schema.json`:
+
+```json
+{"version": 1, "run_id": "0192f0c1-7d4e-7a2b-8c3d-4e5f6a7b8c9d", "run_key": "qrk_…"}
+```
+
+It carries no run configuration, so the starter never receives the run's policy, and it
+has no `X-Qory-Run-Configuration` and no `ETag`: line 6 of its signature is empty, and
+line 5 carries `X-Qory-Configuration` as on every answer. Forager's client builds the
+body with `server.GatewayRegistration`, whose `Body` sets `time` from the clock when it
+is left empty, and posts it with `Client.RegisterThroughGateway`, which takes the answer
+only when its `run_id` is the registration's and its `run_key` reads as one of that run;
+a refusal reads `register <run.url>: <code> (status 409)`, and no error contains the run
+key.
+
+**The run key.** One string, `qrk_`, the payload in base64url without padding, `.`, and
+the signature in base64url without padding, at most 2048 characters and no white
+space. The payload is the exact JSON bytes Qory Apiary signed, `run-key.schema.json`, and
+nobody re-serialises them. The signature is 64 bytes of Ed25519 under Qory Apiary's
+server key, over the domain line, a line feed, then the payload bytes:
+
+```
+qory-run-key-ed25519-v1\n<payload bytes>
+```
+
+| Member | Type | Meaning |
+|---|---|---|
+| `version` | integer, `1` | the payload's version |
+| `signer` | fingerprint | the server key that signed it, as an enrolment code names keys, so the server's key can rotate inside a live run |
+| `run_id` | canonical lower-case UUID | the run |
+| `workspace` | `^ws_…$` | the run's workspace, from the registering node's or node pool's record |
+| `node_id` | `^n[dp]_…$` | the node or node pool that registered the run; any of its active keys may give the outcome |
+| `gateway` | `^ng_…$` | the gateway the node's choice resolved to at this registration |
+| `gateway_url` | `https://host[:port]`, the origin alone | where the edge reaches the gateway, the only address the run key is ever sent to |
+| `gateway_public_key` | 1 or 2 of `{alg: "ed25519", public_key}` | the gateway's live keys, current then next |
+| `instance_id` | the instance id's pattern | the registration's signed instance id |
+| `issued` | RFC 3339 in UTC, whole seconds | when Qory Apiary made it |
+| `attach_by` | RFC 3339 in UTC, whole seconds | the end of the attach window |
+
+Every member is required, and a member the schema does not define is refused. A gateway
+and Qory Apiary verify a run key in this order: split it on the last `.` after `qrk_`;
+decode both parts strictly; find the pinned server key whose fingerprint equals
+`signer`; verify the signature over the domain line, a line feed and the payload bytes
+under it; then read the payload against the schema. A key that is not pinned, a
+signature that fails or a payload that does not read is no run key. A runner pins no
+server key, so it can only parse: the prefix, two parts of base64url and a payload that
+passes the schema. From the parse it takes only `run_id`, `gateway_url` and
+`gateway_public_key`; the parse grants nothing, and a runner never checks `issued` or
+`attach_by`, since its clock decides nothing. The `runkey` package is both readings:
+`Verify` under a pin, whose `Key` reports `Verified`, and `Parse`, whose `Key` never
+does; `Key.Sign` makes one under a server key. Its errors name the part that is wrong,
+`its signature does not verify` say, and never contain the run key.
+
+**The attach.** The gateway the run key names takes the run on with a signed
+`POST <run.url>/<run_id>/attach`, `Content-Type: application/json`, signed by the
+gateway's own access key under `qory-request-ed25519-v1`, whose body is a
+`run-attach.schema.json` document, every member required:
+
+```json
+{"version": 1, "run_key": "qrk_…", "interval_seconds": 30, "events": ["*"],
+ "forager_version": "v0.7.0-dev", "contract_version": 1, "time": "2026-10-11T12:00:05Z"}
+```
+
+The answer is a signed `200`, `run-attach-answer.schema.json`: the run's run
+configuration document, as a direct registration's answer carries it, with
+`X-Qory-Run-Configuration` and `ETag`, and two members more, `labels` and `about`, as the
+starter's registration gave them, information alone, each absent when the registration
+had none. A reload's answer stays a plain run configuration. The attach's refusals come
+after the shared order above, `time` among it. The organisation of the gateway's key is
+checked as every key's is, and the run's organisation once the run key verifies, each
+with the same refusal. Then the attach's own, in order:
+
+| # | Status | Code | When |
+|---|---|---|---|
+| a | `409` signed | `not_a_gateway` | the signing key is not a gateway's |
+| b | `400` signed | `run_key_invalid` | the run key does not verify, or its `run_id` is not the path's |
+| 1 | `200` signed | — | the same gateway node, under any of its active keys, attaching the same live run again gets the stored answer, kept by gateway node and run id, not by the bytes |
+| 2 | `410` signed | any or none | the run has ended: its `dev.qory.run.exited` arrived, an outcome ended it, or it was lost after the attach |
+| 3 | `409` signed | `run_key_expired` | past `attach_by`, never attached |
+| 4 | `409` signed | `wrong_gateway` | the run key names another gateway node |
+| 5 | `409` signed | `workspace_not_served` | the gateway does not serve the run's workspace |
+| 6 | `409` signed | `run_attached` | another gateway node has attached the run |
+
+Forager's client builds the body with `server.Attach`, whose `Body` sets `time` from the
+clock when it is left empty, and posts it with `Client.Attach`, which returns the run
+configuration with its digest, the labels and `about`; a refusal reads
+`attach <run.url>/<run_id>: <code> (status <status>)`, and a signed `410` is no run.
+
+**After the attach.** A run's reloads, batches and heartbeats are accepted from the
+active keys of one node alone, so replacing a key keeps working: for a run behind a
+gateway, the gateway node that attached it, under any of its active keys and its own
+instance id, and a batch from any other key, the node pool's own among them, is a signed
+`409` `wrong_gateway`; for a direct run, the node or node pool that registered it, under
+any of its active keys, and a batch from another node's key is a signed `409`
+`wrong_node`. A reload from any other key is `404` in both cases. The organisation of
+the gateway's key is checked at batches, heartbeats and reloads, and the run's
+organisation at batches, each as every key's is. A run's workspace, node and instance
+come from its registration, never from the gateway's instance id. Events after the end
+are accepted from the attaching gateway node: a resend after a restart or a loss. A run
+that never attached is never opened. Heartbeats are `dev.qory.run.heartbeat` events in
+batches, as on a direct run.
+
+**The outcome.** The run's starter says how the run ended with a signed
+`POST <run.url>/<run_id>/outcome`, `Content-Type: application/json`, signed by any active
+key of the node or node pool that registered the run, under `qory-request-ed25519-v1`,
+sent directly or through a gateway's relay. Its body is a `run-outcome.schema.json`
+document:
+
+```json
+{"version": 1, "state": "succeeded", "reason": "all_checks_passed", "time": "2026-10-11T12:30:00Z"}
+```
+
+- `state`, optional: `succeeded`, `failed` or `cancelled`, `dev.qory.run.exited`'s
+  vocabulary. With no `state`, the outcome is `cancelled` with the reason `stopped`.
+- `reason`, optional: a code, a lower-case letter, then lower-case letters, digits and
+  `_`, up to 64. One that is one of Forager's reserved codes, or that is not a code, is
+  dropped, and the outcome is kept.
+- `time`, required, held to the same window as a registration's.
+
+The starter's outcome sets the run's state whenever it arrives while the run's record is
+kept, before or after `dev.qory.run.exited`; the exit code, the signal and Forager's own
+reason stay on record beside it. Each run gets one outcome: the same one repeated is
+accepted, and a different one is refused. The refusals, after the shared order: the
+organisation of the signing key, as every key's; the same bytes under any active key of
+the registering node get the stored answer; `404` for a run its node did not register, or
+whose record is gone; and a different second outcome is a signed `409` `outcome_given`.
+The answer is a signed `200` with `{"version": 1}`, `run-outcome-answer.schema.json`.
+Forager's client posts it with `Client.PostOutcome` and a `server.Outcome`: an empty
+`State` sends neither `state` nor `reason`, so the zero outcome is `cancelled` with
+`stopped`; a `Reason` without a `State` is refused before anything is sent; a `Time` left
+empty is the clock's now; a refusal reads `outcome <run.url>/<run_id>: <code> (status
+<status>)`.
+
+**Known answers of a run through a gateway.** `fixtures/known-answers/through-gateway.json`
+holds, under the fixture keys of `keys.json`: the run key of
+`run-key-payload.json`, its signed message line by line and its signature under the
+fixture signing key; the registration through a gateway, `registration-gateway.json`,
+signed under the fixture access key, and its `200`, `registration-gateway-answer.json`,
+which carries that run key; the attach, `attach.json`, signed under the fixture gateway
+key, `ak_f1xt0re00000000g`, and its `200`, `attach-answer.json`; and the outcome,
+`outcome.json`, signed under the fixture access key, and its `200`,
+`outcome-answer.json`; each request's six lines and each answer's, with their
+signatures. `go generate ./runkey` writes them, and the module's tests fail while they
+differ.
+
 **Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
 events of one run, in sequence order, never empty. Forager cuts a batch at one
 hundred events, at one mebibyte, or after one second since its first event, whichever
@@ -1358,7 +1581,7 @@ Forager reads a body's code only from a signed answer:
 
 | Status | Meaning |
 |---|---|
-| 2xx, signed | accepted; Forager forgets the batch |
+| 2xx, signed | accepted; Forager forgets the batch, and reads the body's `end` when it has one (below) |
 | 410, signed, with any code or none | stop: the server requests nothing more for this run. Forager sends no further batch and the run continues on the file sink |
 | anything else, an answer that does not verify, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
 
@@ -1371,6 +1594,23 @@ its sections for the batches that follow: the events URL and the filter. A
 header absent means nothing, and so does a digest of an answer that does not verify.
 This is how a control plane changes a run's policy while it runs, and the whole of it:
 Forager reads a body's code only from a signed answer.
+
+**The end member.** A signed `2xx` to a batch may carry a body, `application/json`,
+`batch-answer.schema.json`, covered by line 4 of its signature, the body's hash:
+
+```json
+{"end": {"state": "succeeded", "reason": "all_checks_passed"}}
+```
+
+`state` is required, and `reason` is absent when the outcome has none. An empty body, or
+one without `end`, means no end. Once the server has recorded the run's starter's outcome
+(The outcome, above), it sends `end` on every `2xx` for the run until the run's
+`dev.qory.run.exited` arrives; the answer to the batch that carries
+`dev.qory.run.exited` holds no `end`. A signed `410` still stops the run's events, and
+carries no `end`. Forager's client reads `end` only from a signed `2xx`, as
+`Delivery.ServerEnd` (`server.ReadEnd`): an `end` whose `state` is none of the three is no
+end, and a `reason` that is not a code, or is one of Forager's reserved codes, is dropped
+and the state kept.
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
@@ -2761,9 +3001,12 @@ the option experimental.
 | Directory | Contains | Validated against |
 |---|---|---|
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
-| `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin | `server.schema.json` |
+| `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin, one of them with `via`, its `ca_file` and its pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation | `configuration.schema.json` |
-| `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member | `run-registration.schema.json` |
+| `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member; and in the gateway shape, one with labels, `about` and `attach_seconds`, and one with `version`, `run_id` and `time` alone | `run-registration.schema.json` |
+| `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
+| `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
+| `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`, the first and the last batch of a run a gateway opened, `gateway-first.json` and `gateway-quiet.json`, and the `dev.qory.run.exited` of such a run that ends `gateway_lost`, `failed` with no `exit_code`, `gateway-lost.json`, and of one its starter ended with the outcome `succeeded` and the reason `all_checks_passed`, `gateway-outcome.json`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`, and a session's own of a runtime that exited 0 and whose starter gave `failed` and `checks_failed` at the exit, `session-outcome.json`; and, in the shape of a batch, `refused-differs-from-credential.json`, the `dev.qory.run.refused` a session records when a gateway refuses its run request with `differs_from_credential`, each name a member and the run credential's value; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
@@ -2773,7 +3016,7 @@ the option experimental.
 | `fixtures/run-credentials/` | run credentials documents that are accepted: one starter with one key without a kid, and one starter during a rotation, two keys with kids, a scope, details, `max_lifetime` and introspection | `run-credentials.schema.json`; `runcredential.Issuers.Check` |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them, and an outcome answer whose `reason` is one of Forager's reserved codes; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited` with no outcome answer, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
-| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`; each key recomputed from its seed, each signature verified and signed again, each point checked with integer arithmetic |
+| `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `outcome.json` and `outcome-answer.json` (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `fixtures/known-answers/run-credentials/` | `keys.json`, the fixture starter's seed, bytes 193 to 224, and how its keys derive from it; the public keys `rs256.pem`, `es256.pem` and `eddsa.pem`; `one-key.json` and `two-keys.json`, two configurations of the fixture starter; `credentials.json`, run credentials signed under the keys, with `now`, each with its outcome and, for a refused one, the step that refuses it: the serialisation (padding, a line feed, a space, four parts, two parts), the header (`alg` `none`, `HS256` under the RSA public key as the secret, a `kid` unknown, no `kid` with two keys, an `alg` other than the key's, `crit`, a `typ` other than `JWT`, a member name twice), the signature (over an altered payload, over an altered header, an `ES256` signature of 63 or 65 bytes, with `R` zero or `S` the order), the claims (a member name twice, `aud` and `iss` another's, no `aud`, expired, no `exp`, `iat` ahead, a lifetime above `max_lifetime`, no `iat`, no `sub`), the scope, or the mapping (a `requester` that is not a string, a `project` with a control character); accepted ones per algorithm, with `typ` `jwt` and without `typ`, and one without `requester`, which leaves that key of `about.details` to the session. The keys are public: Forager refuses each in a configuration, and they are never pinned | `run-credentials.schema.json` for the configurations; `runcredential`'s tests, which derive every file from the seed again, run `Verifier.Verify` on each, and check each on its own against the serialisation, the header, the claims, the scope and the mapping up to the step that refuses it, and verify the signature of each that reaches the signature step |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
