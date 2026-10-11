@@ -356,9 +356,11 @@ func bearer(values []string) (string, bool) {
 // edgeHandler is the link on the one address: every request's run key, its bearer
 // value, decided first ([Gateway.admitRunKey]), a refusal answered with its code and
 // Connection: close, once its body is read within [refusedBody] and [refusedWait], and
-// the connection closed unanswered when it is not; then, the connection admitted, the
-// link's handler, with the run key in the request's context and no Authorization left
-// on it. Every answer is signed under the gateway's access key ([signedWriter]).
+// the connection closed unanswered when it is not; then the link's handler, with the
+// run key in the request's context and no Authorization left on it, every answer of
+// it other than a 2xx with Connection: close. The connection is admitted once a run
+// request, a reload or a batch is answered 2xx ([forLiveRun]), after the answer. Every
+// answer is signed under the gateway's access key ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -387,14 +389,36 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 			refuse(sw, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
-		if admit, ok := r.Context().Value(admitKey{}).(func()); ok {
-			admit()
-		}
+		admit, _ := r.Context().Value(admitKey{}).(func())
+		live := forLiveRun(r)
 		r = r.WithContext(context.WithValue(r.Context(), runKeyKey{}, presented{raw: value, key: k}))
 		r.Header = r.Header.Clone()
 		r.Header.Del("Authorization")
 		next.ServeHTTP(sw, r)
+		success := sw.status == 0 || sw.status >= 200 && sw.status < 300
+		if !success {
+			// A run key that passed, of a run that ended or that the server refused among
+			// them: the connection goes with the answer.
+			sw.header.Set("Connection", "close")
+		}
+		sw.Flush()
+		if success && live && admit != nil {
+			admit()
+		}
 	})
+}
+
+// forLiveRun reports whether r is a request of the link a 2xx answers for a live run
+// only: the run request, a reload or a batch. Once one is answered 2xx, its connection
+// is admitted.
+func forLiveRun(r *http.Request) bool {
+	switch {
+	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
+		return true
+	}
+	return false
 }
 
 // readRefused reads the body of a request refused for its run key, through body, within

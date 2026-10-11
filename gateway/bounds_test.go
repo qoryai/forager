@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
 )
 
@@ -413,7 +415,8 @@ func TestBearer(t *testing.T) {
 
 // TestAnAdmittedConnectionLeavesTheBounds pins the bounds on connections to those whose
 // run key the one address has not admitted: more than 64 proxy connections of a live
-// run from one source all work beside an admitted connection of the link; with them
+// run from one source all work beside a connection of the link whose reload of the run
+// was answered; with them
 // open, 64 connections not admitted are held and the next is closed; a request refused
 // for its run key admits nothing; and once every connection is closed, by either side,
 // none is counted.
@@ -460,7 +463,7 @@ func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	open = append(open, edge)
-	if a := edge.do(t, e.key, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+	if a := edge.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID, nil); a.status != http.StatusOK {
 		t.Fatalf("the link: %d %s", a.status, a.body)
 	}
 	pending(0)
@@ -514,5 +517,121 @@ func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	pending(1)
 	b.Close()
+	pending(0)
+}
+
+// TestAKeyOfNoLiveRunAdmitsNothing pins admission on the link to a live run's: a run key
+// that passes for a run that ended, or for one whose attach the server refused, gets
+// its answer with Connection: close and its connection closed after it, and while its
+// request is open the connection stays counted, so 64 of them from one source are held
+// and the next is closed. A discovery answered admits nothing either.
+func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	pending := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for gateway.PendingConns(r.g) != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d connections counted; want %d", gateway.PendingConns(r.g), want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	answeredAndClosed := func(what string, b *bound, a answer, status int) {
+		t.Helper()
+		if a.status != status || !a.close {
+			t.Errorf("%s: %d close=%v %s", what, a.status, a.close, a.body)
+		}
+		closedAfter(t, what, b.r, b.c)
+		b.Close()
+	}
+	// A run that ended and was let go of.
+	runID := event.NewRunID()
+	ended := runKeyFor(t, runID, nil)
+	e := r.open(t, ended, server.LinkRunRequest{})
+	r.c.end.Store(&server.ServerEnd{State: "succeeded"})
+	eventually(t, "the run let go of", func() bool {
+		e.post(t, heartbeat(runID))
+		runs, spent := gateway.Held(r.g)
+		return runs == 0 && spent == 1
+	})
+	pending(0)
+	for _, req := range []struct {
+		method, path string
+		body         []byte
+	}{
+		{http.MethodGet, "/qory-link/run-configuration/" + runID, nil},
+		{http.MethodPost, "/qory-link/events", []byte("[]")},
+		{http.MethodPost, "/qory-link/run-configuration", []byte(openBody(runID))},
+	} {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := b.do(t, ended, req.method, req.path, req.body)
+		want := http.StatusGone
+		if req.path == "/qory-link/run-configuration" {
+			want = http.StatusConflict
+		}
+		answeredAndClosed("the ended run's "+req.method+" "+req.path, b, a, want)
+	}
+	// A run whose attach the server refused.
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "not_a_gateway"})
+	refusedID := event.NewRunID()
+	refusedKey := runKeyFor(t, refusedID, nil)
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: refusedID})
+	answeredAndClosed("a run request whose attach is refused", b, b.do(t, refusedKey, http.MethodPost, "/qory-link/run-configuration", body), http.StatusConflict)
+	// A discovery answered 200 keeps its connection, counted.
+	b, err = r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := b.do(t, refusedKey, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK || a.close {
+		t.Errorf("a discovery: %d close=%v", a.status, a.close)
+	}
+	pending(1)
+	b.Close()
+	pending(0)
+
+	// 64 batches of the ended run's key, each of 2 MiB declared and 1 MiB sent, are held
+	// counted, and the next connection is closed.
+	var held []*bound
+	defer func() {
+		for _, b := range held {
+			b.Close()
+		}
+	}()
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := range gateway.MaxSourceConns {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		held = append(held, b)
+		fmt.Fprintf(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", ended, server.ContentType, 2<<20)
+		for sent := 0; sent < 1<<20; sent += len(chunk) {
+			b.c.Write(chunk)
+		}
+	}
+	pending(gateway.MaxSourceConns)
+	over, err := net.Dial("tcp", r.g.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer over.Close()
+	over.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := over.Read(make([]byte, 1)); err == nil {
+		t.Error("a connection past the bound sent something")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Errorf("connection %d is held beside %d of a run that ended", gateway.MaxSourceConns+1, gateway.MaxSourceConns)
+	}
+	for _, b := range held {
+		b.Close()
+	}
+	held = nil
 	pending(0)
 }

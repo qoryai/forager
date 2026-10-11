@@ -1844,8 +1844,9 @@ connection by its first bytes after the TLS handshake: a connection that opens w
 (The relay of the server's endpoints, below). The gateway answers the binding under its
 access key, reads the edge's next line within the ten seconds of a preamble, each line
 at most 8 KiB, and closes a connection that sends neither in time unanswered. Until a
-connection's run key is admitted, on its first request of the link or in its relay
-preamble, it counts against three bounds: at most 4096 such connections at once, 64 of
+connection's run key is admitted, on its first request of the link answered for its
+live run (a run request, a reload or a batch answered `2xx`) or in its relay preamble
+of a live run, it counts against three bounds: at most 4096 such connections at once, 64 of
 one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48; one more is closed
 as it is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
 request of the link arrives whole, its body included, within 60 seconds, and its
@@ -1874,7 +1875,9 @@ the refusal's signature covers, up to 64 KiB within 10 seconds, answers with
 `Connection: close` and closes the connection. A body declared or sent longer than
 64 KiB, or one that does not come whole within those 10 seconds, closes the connection
 unanswered. No request without a run key the gateway takes keeps a connection open,
-`OPTIONS *` among them.
+`OPTIONS *` among them. An answer other than a `2xx` to a request whose run key
+passes, a `409` or a `410` among them, carries `Connection: close` too, and the gateway
+closes the connection after it.
 
 Rows 2 to 4 are in the order the server decides an attach's refusals in. The message
 of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is the gateway's own refusal of the attach, decided before it asks the
