@@ -96,7 +96,10 @@ type ResendResult struct {
 // status, the gateway's text and From gateway, and nothing more is sent: what was not
 // accepted is under undelivered/. A 401 unauthorized, which the gateway does not send,
 // stops it the same way. A batch of a run the gateway no longer holds is its 410, the
-// run's end while the gateway keeps it and run_closed after, which closes the resend.
+// run's end while the gateway keeps it and run_closed after, which closes the resend,
+// unless the run key's attach_by plus the 300 s skew has passed, by the gateway's
+// clock, and the gateway holds nothing of the run, its record included: then the batch
+// is 409 run_key_expired, which stops the resend as the refusals above do.
 func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if spec.ForagerVersion == "" {
 		spec.ForagerVersion = "dev"
