@@ -296,8 +296,8 @@ type Handler struct {
 	Log func(string)
 	// Stop, when set, is called per run id to learn whether the receiver wants nothing
 	// more; true is a signed 410 without a code: to a registration, no run; to an
-	// attach, the run has ended; to a reload or a delivery, Forager sends no further
-	// batch and its run goes on. Nil means never.
+	// attach, the run has ended; to a reload or a delivery, a delivery already accepted
+	// included, Forager sends no further batch and its run goes on. Nil means never.
 	Stop func(runID string) bool
 	// Admit, when set, is called for every registration but one the receiver accepted
 	// with the same bytes under a key of the same node, to learn whether the instance
@@ -1200,8 +1200,9 @@ type head struct {
 // the attaching one, 409 wrong_gateway for a run through a gateway and wrong_node for a
 // direct run; for a run through a gateway, once the gateway that attached it may no
 // longer serve the run's workspace, decided as at the attach, 410 workspace_not_served
-// with no digest headers, a batch already accepted included; one whose events the store holds every one of, 202
-// again; an event of a run it wants nothing more of, 410; otherwise each new event
+// with no digest headers; an event of a run it wants nothing more of, 410; each of the
+// two before deduplication, a batch already accepted included, and with nothing stored;
+// one whose events the store holds every one of, 202 again; otherwise each new event
 // stored and 202. Once the run's starter gave its outcome, a 202 carries it as the end
 // member, until the batch that carries the run's dev.qory.run.exited, whose answer and
 // every one after it holds none.
@@ -1236,13 +1237,7 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
 		return
 	}
-	fresh := false
-	for _, hd := range heads {
-		if !h.Store.Seen(hd.ID) {
-			fresh = true
-		}
-	}
-	if fresh && h.Stop != nil && h.Stop(subject) {
+	if h.Stop != nil && h.Stop(subject) {
 		h.digests(w, v, reg)
 		h.answer(w, v, http.StatusGone, nil)
 		return

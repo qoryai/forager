@@ -613,21 +613,22 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 	s.expect("a run it wants nothing more of", req, rec, http.StatusGone, "")
 }
 
-// TestTheGatewayIsDecidedAgainAtEachBatchAndReload pins that the receiver decides again,
-// at each batch, heartbeats included, and each reload, by the attach's test, whether the
-// gateway that attached a run may still serve the run's workspace, never by the node's
-// current choice. A change of the node's choice or of a default alone leaves the
-// attached run where it is: its batches accepted, its reloads answered. Once the
+// TestTheGatewayIsDecidedAgainAtEachBatchAndReload pins that the receiver decides
+// again, at each batch, heartbeats included, and each reload, by the attach's test,
+// whether the gateway that attached a run may still serve the run's workspace, never by
+// the node's current choice. A change of the node's choice or of a default alone leaves
+// the attached run where it is: its batches accepted, its reloads answered. Once the
 // gateway's organisation no longer covers the run's workspace, even with the node moved
 // to a workspace the gateway serves, a batch or heartbeat, a resend of one already
-// accepted included, is a signed 410 workspace_not_served with no digest header, after
-// wrong_gateway and before deduplication and a run the receiver wants nothing more of,
-// where a resend while the gateway serves the workspace gets the same 202; a reload is the signed 410 and no run
-// configuration, after the 404 of another key; the gateway node attaching again, from
-// the attaching instance or another, is the 409 workspace_not_served of the attach, and
-// no run configuration. While the gateway may serve the workspace, the attaching
-// instance attaching again gets the stored answer, byte for byte. Once the organisation
-// covers the workspace again, the run is served again, its stored answer included.
+// accepted included, is a signed 410 workspace_not_served with no digest header and
+// nothing stored, after wrong_gateway and before a run the receiver wants nothing more
+// of and deduplication, where a resend while the gateway serves the workspace gets the
+// same 202; a reload is the signed 410, no digest header and no run configuration,
+// after the 404 of another key; the gateway node attaching again, from the attaching
+// instance or another, is the 409 workspace_not_served of the attach, and no run
+// configuration. While the gateway may serve the workspace, the attaching instance
+// attaching again gets the stored answer, byte for byte. Once the organisation covers
+// the workspace again, the run is served again, its stored answer included.
 func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	const otherInstance = "i_otherinstance00000000"
 	s := newStand(t)
@@ -701,6 +702,8 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 			}
 		}
 	}
+	store := s.h.Store.(*receiver.File)
+	count := store.Count()
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgTwo}
 	req, rec := s.batchOf(gwKey, accepted)
 	refused("a resend of the accepted batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
@@ -742,6 +745,9 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	refused("the attaching instance attaching again once the node moved to a workspace the gateway serves", req, rec,
 		http.StatusConflict, "workspace_not_served")
 	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
+	if store.Count() != count {
+		t.Errorf("the refused batches stored %d events, want none", store.Count()-count)
+	}
 
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
 	served("once the organisation covers the workspace again")
