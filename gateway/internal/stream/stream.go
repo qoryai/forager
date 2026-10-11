@@ -568,8 +568,9 @@ const answeredFile = "answered"
 
 // MarkAnswered marks the run's record answered, before the gateway answers the run's
 // first run request: it creates the empty file answered in the run's record directory,
-// which must not exist yet, and syncs it and the directory, so a gateway that starts
-// again keeps the record ([Stream.Reclaim]). A closed run is [ErrClosed].
+// which must not exist yet, and syncs it, the directory and the directory that holds
+// it, so a gateway that starts again keeps the record ([Stream.Reclaim]). A closed run
+// is [ErrClosed].
 func (r *Run) MarkAnswered() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -583,11 +584,16 @@ func (r *Run) MarkAnswered() error {
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
 		return err
 	}
-	d, err := os.Open(r.dir)
-	if err != nil {
-		return err
+	for _, dir := range []string{r.dir, filepath.Dir(r.dir)} {
+		d, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		if err := errors.Join(d.Sync(), d.Close()); err != nil {
+			return err
+		}
 	}
-	return errors.Join(d.Sync(), d.Close())
+	return nil
 }
 
 // Discard closes the run's stream as [Run.Close] does, then removes what the stream
