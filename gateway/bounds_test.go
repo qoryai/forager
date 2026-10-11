@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -546,15 +547,7 @@ func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 		b.Close()
 	}
 	// A run that ended and was let go of.
-	runID := event.NewRunID()
-	ended := runKeyFor(t, runID, nil)
-	e := r.open(t, ended, server.LinkRunRequest{})
-	r.c.end.Store(&server.ServerEnd{State: "succeeded"})
-	eventually(t, "the run let go of", func() bool {
-		e.post(t, heartbeat(runID))
-		runs, spent := gateway.Held(r.g)
-		return runs == 0 && spent == 1
-	})
+	runID, ended := endedRun(t, r)
 	pending(0)
 	for _, req := range []struct {
 		method, path string
@@ -634,4 +627,96 @@ func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 	}
 	held = nil
 	pending(0)
+}
+
+// endedRun is the id and the run key of a run of r that opened, ended by the server's
+// end member, and was let go of.
+func endedRun(t *testing.T, r *remote) (string, string) {
+	t.Helper()
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	e := r.open(t, key, server.LinkRunRequest{})
+	r.c.end.Store(&server.ServerEnd{State: "succeeded"})
+	eventually(t, "the run let go of", func() bool {
+		e.post(t, heartbeat(runID))
+		runs, spent := gateway.Held(r.g)
+		return runs == 0 && spent == 1
+	})
+	return runID, key
+}
+
+// TestABatchOfARunThatEndedIsAnsweredWithoutItsBodyKept pins what the one address keeps
+// of a request's body for its answer's signature: nothing. A batch of a run that ended,
+// over 64 KiB and up to 2 MiB, gets its signed 410; and 64 connections each holding all
+// but the last byte of a 2 MiB batch of that run hold no more than their buffers.
+func TestABatchOfARunThatEndedIsAnsweredWithoutItsBodyKept(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	_, key := endedRun(t, r)
+	for _, size := range []int{gateway.RefusedBody + 1, 2 << 20} {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// do checks the answer's signature over the whole body.
+		if a := b.do(t, key, http.MethodPost, "/qory-link/events", bytes.Repeat([]byte("x"), size)); a.status != http.StatusGone || !a.close {
+			t.Errorf("a batch of %d bytes of a run that ended: %d close=%v %s", size, a.status, a.close, a.body)
+		}
+		b.Close()
+	}
+
+	// A body past what the signature covers: the answer is signed over the first of it.
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte("x"), gateway.MaxBound+100)
+	fmt.Fprintf(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", key, server.ContentType, len(body))
+	go b.c.Write(body)
+	resp, err := http.ReadResponse(b.r, nil)
+	if err != nil {
+		t.Fatalf("a batch past what the signature covers: %v", err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	a := accesskey.Answer{Link: true, Status: resp.StatusCode, RequestSignature: link.AnswerRequest(b.ekm, http.MethodPost, "/qory-link/events", body[:gateway.MaxBound]), Body: got}
+	if resp.StatusCode != http.StatusGone || !verifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
+		t.Errorf("a batch past what the signature covers: %d %s", resp.StatusCode, got)
+	}
+	b.Close()
+
+	var held []*bound
+	defer func() {
+		for _, b := range held {
+			b.Close()
+		}
+	}()
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	chunk := bytes.Repeat([]byte("x"), 64<<10)
+	for i := range gateway.MaxSourceConns {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		held = append(held, b)
+		fmt.Fprintf(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", key, server.ContentType, 2<<20)
+		for sent := 0; sent < 2<<20; sent += len(chunk) {
+			if sent+len(chunk) == 2<<20 {
+				b.c.Write(chunk[1:])
+			} else {
+				b.c.Write(chunk)
+			}
+		}
+	}
+	time.Sleep(time.Second)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	grew := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("%d connections each holding all but a byte of a 2 MiB batch: heap %+d KiB", len(held), grew>>10)
+	if grew > 16<<20 {
+		t.Errorf("%d connections each holding all but a byte of a 2 MiB batch of a run that ended hold %d MiB", len(held), grew>>20)
+	}
+	if n := gateway.PendingConns(r.g); n != gateway.MaxSourceConns {
+		t.Errorf("%d connections counted; want %d", n, gateway.MaxSourceConns)
+	}
 }

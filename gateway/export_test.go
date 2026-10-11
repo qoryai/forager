@@ -111,6 +111,7 @@ const (
 	MaxSourceConns = maxSourceConns
 	MaxBlockConns  = maxBlockConns
 	RefusedBody    = refusedBody
+	MaxBound       = maxBound
 	RefusedWait    = refusedWait
 	EdgeReadWait   = edgeReadWait
 	EdgeMaxHeader  = edgeMaxHeader

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
@@ -365,9 +366,9 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ekm, _ := r.Context().Value(bindingKey{}).([]byte)
-		body := &capturedBody{r: r.Body, post: r.Method == http.MethodPost}
+		body := &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
 		r.Body = body
-		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, ekm: ekm, req: r, body: body, header: http.Header{}}
+		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, req: r, body: body, header: http.Header{}}
 		defer func() {
 			// A handler that panics has no answer to sign: the connection is closed.
 			if v := recover(); v != nil {
@@ -439,18 +440,22 @@ func readRefused(w http.ResponseWriter, r *http.Request, body *capturedBody) boo
 // bound, and one byte more, which no request the gateway answers in full carries.
 const maxBound = maxBatch + 1
 
-// capturedBody is a request's body on a bound connection, kept as it is read, so its
-// answer's signature covers it: the body of a POST, nothing of a GET.
+// capturedBody is a request's body on a bound connection, hashed as it is read into
+// the third line of its answer's signature ([link.AnswerRequestHash]), so the signature
+// covers it and nothing of it is kept: the body of a POST, nothing of a GET.
 type capturedBody struct {
 	r    io.ReadCloser
 	post bool
-	buf  bytes.Buffer
+	h    hash.Hash
+	n    int
 }
 
 func (b *capturedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
-	if b.post && b.buf.Len() < maxBound {
-		b.buf.Write(p[:min(n, maxBound-b.buf.Len())])
+	if b.post && b.n < maxBound {
+		k := min(n, maxBound-b.n)
+		b.h.Write(p[:k])
+		b.n += k
 	}
 	return n, err
 }
@@ -458,13 +463,13 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 // Close closes the request's body.
 func (b *capturedBody) Close() error { return b.r.Close() }
 
-// whole is the request's body, up to [maxBound]: what the handler read, then the rest;
-// empty for a GET.
-func (b *capturedBody) whole() []byte {
-	if b.post && b.buf.Len() < maxBound {
-		io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.buf.Len())))
+// answerRequest is the third line of the answer's signature over the request's body,
+// up to [maxBound]: what the handler read, then the rest; empty for a GET.
+func (b *capturedBody) answerRequest() string {
+	if b.post && b.n < maxBound {
+		io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
 	}
-	return b.buf.Bytes()
+	return hex.EncodeToString(b.h.Sum(nil))
 }
 
 // signedWriter holds an answer on a bound connection until it is whole, then writes it
@@ -474,7 +479,6 @@ func (b *capturedBody) whole() []byte {
 type signedWriter struct {
 	w      http.ResponseWriter
 	key    *accesskey.Key
-	ekm    []byte
 	req    *http.Request
 	body   *capturedBody
 	header http.Header
@@ -513,7 +517,7 @@ func (s *signedWriter) Flush() {
 		s.status = http.StatusOK
 	}
 	a := accesskey.Answer{
-		Link: true, Status: s.status, RequestSignature: link.AnswerRequest(s.ekm, s.req.Method, s.req.RequestURI, s.body.whole()), Body: s.buf.Bytes(),
+		Link: true, Status: s.status, RequestSignature: s.body.answerRequest(), Body: s.buf.Bytes(),
 		Configuration: s.header.Get(server.HeaderConfiguration), RunConfiguration: s.header.Get(server.HeaderRunConfiguration),
 	}
 	h := s.w.Header()

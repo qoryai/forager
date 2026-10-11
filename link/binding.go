@@ -3,6 +3,7 @@ package link
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"hash"
 )
 
 // The wire of the link to a separate gateway (contracts/forager/v1/README.md §The
@@ -65,8 +66,16 @@ func BoundLine(fingerprint, signature string) string {
 // the hex of ekm, the method, the request target as sent, the path and "?" and the query
 // when it has one, and the body for a POST, empty for a GET, joined by line feeds.
 func AnswerRequest(ekm []byte, method, target string, body []byte) string {
-	h := sha256.New()
-	h.Write([]byte(hex.EncodeToString(ekm) + "\n" + method + "\n" + target + "\n"))
+	h := AnswerRequestHash(ekm, method, target)
 	h.Write(body)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// AnswerRequestHash is the SHA-256 of [AnswerRequest] holding everything before the
+// body, so a body written to it as it arrives gives the same line, the lower-case hex
+// of its Sum, without the body kept.
+func AnswerRequestHash(ekm []byte, method, target string) hash.Hash {
+	h := sha256.New()
+	h.Write([]byte(hex.EncodeToString(ekm) + "\n" + method + "\n" + target + "\n"))
+	return h
 }
