@@ -214,16 +214,18 @@ release may change what an existing document does, and says so under Upgrading.
   before it contacts the server, and an `About` it refuses is no run.
 - Contract `v1` revision 1, amended in place, gains `run_id_used`, a gateway's refusal
   of a run request whose `run_id` already names a run at this gateway, with no names.
-  `events/run.refused.schema.json` lists it, and says that a run request the gateway
-  refuses opens no run at the gateway: the session records the refusal it received in
-  its own record alone, and nothing reaches the server for it. A gateway's `410` before
-  the runtime starts is recorded the same way, as `dev.qory.run.refused` with the
-  `410`'s code and `status` `410`: the schema's codes include `session_lost`,
-  `batch_refused` and `stopped`, and the server's `not_found`, a signed `404` to a run's
-  registration, `accesskey.CodeNotFound`. A code without `status` is held to the
-  schema's list; a code of the server's, with its `status`, is kept as the server sent
-  it, one the list does not hold included, and a receiver shows a code it does not know
-  as it is. `fixtures/batch/` has `refused-not-found.json` and
+  `events/run.refused.schema.json` lists it, and the refusals of a separate gateway over
+  the run key, `run_key_invalid`, `run_attached`, `run_key_expired`, `wrong_gateway` and
+  `workspace_not_served`, which the session records with no `status`, and says that a
+  run request the gateway refuses opens no run at the gateway: the session records the
+  refusal it received in its own record alone, and nothing reaches the server for it. A
+  gateway's `410` before the runtime starts is recorded the same way, as
+  `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
+  include `session_lost`, `batch_refused` and `stopped`, and the server's `not_found`, a
+  signed `404` to a run's registration, `accesskey.CodeNotFound`. A code without
+  `status` is held to the schema's list; a code of the server's, with its `status`, is
+  kept as the server sent it, one the list does not hold included, and a receiver shows
+  a code it does not know as it is. `fixtures/batch/` has `refused-not-found.json` and
   `refused-unlisted-server-code.json`. A session that fails after the run answer and
   before its process starts posts its `dev.qory.run.refused` on the link, and the
   gateway delivers it; `refusal.RunIDUsed` is the code in Go, and
