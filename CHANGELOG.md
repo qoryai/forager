@@ -222,17 +222,18 @@ release may change what an existing document does, and says so under Upgrading.
 - Contract `v1` revision 1, amended in place, gains `run_id_used`, a gateway's refusal
   of a run request whose `run_id` already names a run at this gateway, with no names.
   `events/run.refused.schema.json` lists it, and the refusals of a separate gateway over
-  the run key, `run_key_invalid`, `run_attached`, `run_key_expired`, `wrong_gateway` and
-  `workspace_not_served`, which the session records with no `status`, and says that a
-  run request the gateway refuses opens no run at the gateway: the session records the
-  refusal it received only in the session's record, and nothing reaches the server for
-  it. A gateway's `410` before the runtime starts is recorded the same way, as
-  `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
-  include `session_lost`, `batch_refused` and `stopped`, and the server's `not_found`, a
-  signed `404` to a run's registration, `accesskey.CodeNotFound`. A code without
-  `status` is held to the schema's list; a code of the server's, with its `status`, is
-  kept as the server sent it, one the list does not hold included, and a receiver shows
-  a code it does not know as it is. `fixtures/batch/` has `refused-not-found.json` and
+  the run key, `run_key_invalid`, `run_attached`, `run_key_expired` and `wrong_gateway`,
+  which the session records with no `status`, and the server's `workspace_not_served`,
+  which the session records with its `status`, and says that a run request the gateway
+  refuses opens no run at the gateway: the session records the refusal it received only
+  in the session's record, and nothing reaches the server for it. A gateway's `410`
+  before the runtime starts is recorded the same way, as `dev.qory.run.refused` with the
+  `410`'s code and `status` `410`: the schema's codes include `session_lost`,
+  `batch_refused` and `stopped`, and the server's `not_found`, a signed `404` to a run's
+  registration, `accesskey.CodeNotFound`. A code without `status` is held to the
+  schema's list; a code of the server's, with its `status`, is kept as the server sent
+  it, one the list does not hold included, and a receiver shows a code it does not know
+  as it is. `fixtures/batch/` has `refused-not-found.json` and
   `refused-unlisted-server-code.json`. A session that fails after the run answer and
   before its process starts posts its `dev.qory.run.refused` on the link, and the
   gateway delivers it; `refusal.RunIDUsed` is the code in Go, and
@@ -513,9 +514,10 @@ release may change what an existing document does, and says so under Upgrading.
   answer stays a plain run configuration. Its refusals, after the shared order, in
   order: `409` `not_a_gateway`; `400` `run_key_invalid`, a run key that does not verify
   or whose `run_id` is not the path's; the stored answer to the same gateway node, under
-  any of its active keys, attaching the same live run again; `410`, the run has ended;
-  `409` `run_key_expired`, past `attach_by` and never attached; `409` `wrong_gateway`,
-  the run key names another gateway; `409` `workspace_not_served`; and `409`
+  any of its active keys, attaching the same live run again while the gateway still
+  serves the run's workspace; `410`, the run has ended; `409` `run_key_expired`, past
+  `attach_by` and never attached; `409` `wrong_gateway`, the run key names another
+  gateway; `409` `workspace_not_served`; and `409`
   `run_attached`, another gateway node attached the run. After the attach a run's
   reloads, batches and heartbeats are accepted from the active keys of one node alone:
   for a run behind a gateway the gateway node that attached it, a batch from any other
@@ -533,6 +535,9 @@ release may change what an existing document does, and says so under Upgrading.
   run. A `server.Attach` prints and logs its run key as `[redacted]`, however it is
   printed. `fixtures/run-attach-answer/` has two answers, and `fixtures/invalid/` refused
   attaches and answers.
+- Qory Apiary answers a run's batch or reload with a signed `410` `workspace_not_served`
+  once the gateway that attached the run may no longer serve its workspace, decided as at
+  the attach, and the reference receiver answers the same.
 - The starter's outcome, `POST <run.url>/<run_id>/outcome`, signed by any active key of
   the node or node pool that registered the run, sent directly or through a gateway's
   relay: its body, `run-outcome.schema.json`, holds an optional `state`, `succeeded`,
@@ -565,12 +570,13 @@ release may change what an existing document does, and says so under Upgrading.
   `fixtures/invalid/` refused ones.
 - A gateway enrols as a node does: the enrolment answer's `node_kind` has `gateway`,
   paired with an `ng_` `node_id`, and `accesskey.CheckNodeID` takes `ng_`. Discovery for
-  a gateway's key lists its `ng_` `node_id` and the workspaces it may serve (Changed,
-  below); there is no member that names the key's kind. The fixture gateway key,
+  a gateway's key lists its `ng_` `node_id` and no `workspaces` (Changed, below); there
+  is no member that names the key's kind. The fixture gateway key,
   `ak_f1xt0re00000000g`, its seed bytes 97 to 128, is in `keys.json`, among the
   published fixture keys every side refuses as its key and as a pin;
-  `fixtures/enrolment/` has a gateway's request under it and the answer, and
-  `fixtures/configuration/gateway.json` a gateway key's discovery with two workspaces.
+  `fixtures/enrolment/` has a gateway's request under it and the answer,
+  `fixtures/configuration/gateway.json` a gateway key's discovery, with no `workspaces`,
+  and `fixtures/invalid/configuration-gateway-workspaces.json` one that has them.
 - The server document has `via`, `server.schema.json`: `url`, required, an `https`
   origin, `ca_file` and `certificate_sha256`, the gateway a keyed machine or a starter
   reaches the server through. With `via` set, Forager sends every request to the server,
@@ -623,18 +629,18 @@ release may change what an existing document does, and says so under Upgrading.
   a `receiver.Gateway`, its URL, the workspace or organisation it lives at and its
   access keys. `receiver.AccessKey` has `Node`, what the key belongs to, and a key with
   none is a separate node, which reports directly. It answers a gateway key's discovery
-  with its `ng_` `node_id` and every workspace the gateway may serve, resolves each
-  registration's gateway at the workspace and the organisation, with no operator level,
-  in the run endpoint's order of refusals, and issues each run through a gateway its run
-  key under the receiver's key, its `attach_by` by `attach_seconds`,
-  `receiver.AttachWindow`, 600 seconds, when it asks for none, and
-  `receiver.AttachCeiling`, 3600 seconds, at most. It serves the attach and its refusals
-  in order, accepts a run's reloads and batches from one node alone, a signed `404` and
-  `409` `wrong_node` or `wrong_gateway` otherwise, takes the starter's outcome once per
-  run, and carries it as the `end` member of every `2xx` to a batch of the run until the
-  batch that carries the run's `dev.qory.run.exited`. A batch whose events are not all
-  of one run is `400` `invalid_request`. The `RunConfiguration` hook is asked at the
-  registration, at the attach and at each reload.
+  with its `ng_` `node_id` and no `workspaces`, resolves each registration's gateway at
+  the workspace and the organisation, with no operator level, in the run endpoint's
+  order of refusals, and issues each run through a gateway its run key under the
+  receiver's key, its `attach_by` by `attach_seconds`, `receiver.AttachWindow`, 600
+  seconds, when it asks for none, and `receiver.AttachCeiling`, 3600 seconds, at most.
+  It serves the attach and its refusals in order, accepts a run's reloads and batches
+  from one node alone, a signed `404` and `409` `wrong_node` or `wrong_gateway`
+  otherwise, takes the starter's outcome once per run, and carries it as the `end`
+  member of every `2xx` to a batch of the run until the batch that carries the run's
+  `dev.qory.run.exited`. A batch whose events are not all of one run is `400`
+  `invalid_request`. The `RunConfiguration` hook is asked at the registration, at the
+  attach and at each reload.
 
 #### Changed
 
@@ -692,15 +698,17 @@ release may change what an existing document does, and says so under Upgrading.
   answer that does not verify is retried. §The server defines the access key, nodes
   and instances, the pin, the request string, signed answers, the coded refusals and
   their order, and enrolment.
-- Discovery lists `node_id`, `workspaces` and `apiary_public_key`, each required, and
-  `secrets` for an access key allowed stored secrets. `node_id` is the id of the access
-  key's node, node pool or gateway, `^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`, and the `ng_`
-  prefix alone says the key is a gateway's. `workspaces` holds ids of `ws_` and 16
-  lower-case Crockford base32 characters, Qory Apiary's workspaces and not the directory
-  a run works in: for a node's or a node pool's key exactly one, the workspace the node
-  or node pool belongs to, and for a gateway's key one or more, the workspaces the
-  gateway may serve. A document without `workspaces`, or with two for a key that is not
-  a gateway's, is refused. `server.Configuration` has `Workspaces`.
+- Discovery lists `node_id` and `apiary_public_key`, each required, `workspaces` for a
+  node's or a node pool's key, and `secrets` for an access key allowed stored secrets.
+  `node_id` is the id of the access key's node, node pool or gateway,
+  `^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`, and the `ng_` prefix alone says the key is a
+  gateway's. `workspaces` holds ids of `ws_` and 16 lower-case Crockford base32
+  characters, Qory Apiary's workspaces and not the directory a run works in: for a
+  node's or a node pool's key exactly one, the workspace the node or node pool belongs
+  to. A gateway's key has none: a gateway takes each run's workspace from the run's run
+  key. A document of a node's or a node pool's key without `workspaces` or with two, or
+  of a gateway's key with `workspaces`, is refused. `server.Configuration` has
+  `Workspaces`.
 - The registration's `interval_seconds` is the run's heartbeat interval, a whole number
   of seconds from 1 to 300, `gateway.Config.Heartbeat`, which the heartbeats tick at.
   `elapsed_seconds` counts from the session's discovery of its gateway's link.
@@ -712,12 +720,12 @@ release may change what an existing document does, and says so under Upgrading.
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
   `event-registered-interval-too-long` in place of `server-no-key`;
   `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
-  `node_id`, `workspaces` and `apiary_public_key`; and the `dev.qory.run.registered` of
-  the recorded runs contains `workspace`, `node_id`, `instance_id` and
-  `interval_seconds`. `fixtures/invalid/` has `configuration-no-workspaces`,
-  `configuration-two-workspaces`, `event-registered-no-workspace` and
-  `link-discovery-workspaces`, and the discovery known answer, its body, digest and
-  signature, is recomputed.
+  `node_id` and `apiary_public_key`, and `workspaces` but for a gateway's key; and the
+  `dev.qory.run.registered` of the recorded runs contains `workspace`, `node_id`,
+  `instance_id` and `interval_seconds`. `fixtures/invalid/` has
+  `configuration-no-workspaces`, `configuration-two-workspaces`,
+  `event-registered-no-workspace` and `link-discovery-workspaces`, and the discovery
+  known answer, its body, digest and signature, is recomputed.
 - The contract is at `contracts/forager/v1`, and every `$id` and `dataschema` is
   `https://qory.dev/contracts/forager/v1/…`. `dev.qory.run.registered` and
   `dev.qory.run.started` contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was
@@ -795,10 +803,9 @@ release may change what an existing document does, and says so under Upgrading.
   is not a run key that verifies; `409` `run_key_expired`, past its `attach_by` plus a
   skew of 300 seconds by the gateway's clock, for a run the gateway holds nothing of,
   not open, not opening, not kept after its end and not recorded, a run key within the
-  skew going on as one before `attach_by`, the server deciding its attach; `409`
-  `wrong_gateway`, its `gateway` not the `node_id` the gateway's discovery lists; and
-  `409` `workspace_not_served`, its `workspace` not among the discovery's `workspaces`. Each `409`'s message is the line
-  of the server's refusal of the attach,
+  skew going on as one before `attach_by`, the server deciding its attach; and `409`
+  `wrong_gateway`, its `gateway` not the `node_id` the gateway's discovery lists. Each
+  `409`'s message is the line of the server's refusal of the attach,
   `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
   that passes names the request's run: a run request or a reload of another `run_id` is
   `run_key_invalid`. The gateway verifies the run key on every request of the run and on
@@ -829,14 +836,14 @@ release may change what an existing document does, and says so under Upgrading.
   connection's exporter value and the request, the body hashed as it arrives,
   `link.AnswerRequestHash`, with no copy of it kept. An answer of the server whose
   `X-Qory-Configuration` differs from the one in force makes the gateway read its
-  discovery again and serve the workspaces it lists, for every run. The gateway delivers
-  each run's events toward the server under the gateway's access key, and fetches a
-  reload of the run at the run endpoint, as a direct node's gateway does. A session's
-  narrowing is accepted on the one address and narrows the run's policy, at its start
-  and on each reload; it opens none of the gateway's addresses, which only the policy
-  before it opens, when it enforces and names the host itself. Its
-  `dev.qory.run.policy_applied` has the `source` of the policy it narrows, with the
-  narrowed policy's `digest`, and `source` `config` for a narrowing of no policy.
+  discovery again and put it in force for every run. The gateway delivers each run's
+  events toward the server under the gateway's access key, and fetches a reload of the
+  run at the run endpoint, as a direct node's gateway does. A session's narrowing is
+  accepted on the one address and narrows the run's policy, at its start and on each
+  reload; it opens none of the gateway's addresses, which only the policy before it
+  opens, when it enforces and names the host itself. Its `dev.qory.run.policy_applied`
+  has the `source` of the policy it narrows, with the narrowed policy's `digest`, and
+  `source` `config` for a narrowing of no policy.
 - The one address bounds what a peer holds there before its run key is admitted. Every
   connection, the relay's among them, counts against at most 4096 such connections at
   once, 64 of one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48,
@@ -897,6 +904,9 @@ release may change what an existing document does, and says so under Upgrading.
   and key files it cannot read or that do not match; and, once discovery is read, an
   access key whose node is not a gateway's, "the access key's node <node id> is not a
   gateway, ng_: the gateway's address <address> needs a gateway's access key".
+- `gateway.Start` refuses a gateway's access key without an address: the access key's
+  node <node id> is a gateway, ng_: a gateway without an address needs a node's access
+  key, nd_ or np_.
 - The discovery on the one address, `GET /qory-link/configuration`, lists every URL on
   the origin the session reached, by its `Host`, under `/qory-link/`, and
   `proxy.address` that same address.
@@ -1240,25 +1250,25 @@ release may change what an existing document does, and says so under Upgrading.
   `Spec.About` are neither sent nor reported there; the run answer has no labels and no
   proxy secret, and the session's `dev.qory.run.started` has no labels and no `about`.
   The gateway's refusals of the run key, `400` `run_key_invalid`, and `409`
-  `wrong_gateway`, `workspace_not_served`, `run_key_expired` and `run_attached`, return
-  a `*session.Refusal` with the gateway's message as its text. Agent traffic goes
-  through the session's forwarder to the gateway's one address over TLS, each connection
-  bound and opened with `QORY-RELAY` and the run key. Without a wall the agent's proxy
-  URL is the forwarder on loopback, `http://qory:<password>@127.0.0.1:<port>`, the
-  password a secret the session makes for the run's forwarder alone, 32 bytes from the
-  system's random source in base64url, which lives as long as the run and is never
-  logged or recorded: the first request of every connection must carry it in its one
-  `Proxy-Authorization`, Basic, the user name ignored, compared in constant time. The
-  forwarder reads at most 16 KiB of that request's head, 8 KiB a line and 100 lines,
-  before its password, takes the header off, and closes a connection without it, or
-  with a longer head, unanswered, before anything reaches the gateway. Behind a wall
-  the relay opens every connection with `QORY-RELAY` and a hop secret of the run's
-  forwarder alone, 256 bits from the system's random source, `wall.Launch.ProxyToken`,
-  which the forwarder compares in constant time and takes off, closing a connection
-  without it unanswered. The run key is in no file and no agent's environment: the
-  session takes `QORY_RUN_KEY` out of every agent's environment, the one it inherits
-  among them. On one machine an unwalled agent's proxy URL carries a password of the
-  run's forwarder as well, made and checked the same way (Upgrading, above).
+  `wrong_gateway`, `run_key_expired` and `run_attached`, return a `*session.Refusal`
+  with the gateway's message as its text. Agent traffic goes through the session's
+  forwarder to the gateway's one address over TLS, each connection bound and opened with
+  `QORY-RELAY` and the run key. Without a wall the agent's proxy URL is the forwarder on
+  loopback, `http://qory:<password>@127.0.0.1:<port>`, the password a secret the session
+  makes for the run's forwarder alone, 32 bytes from the system's random source in
+  base64url, which lives as long as the run and is never logged or recorded: the first
+  request of every connection must carry it in its one `Proxy-Authorization`, Basic, the
+  user name ignored, compared in constant time. The forwarder reads at most 16 KiB of
+  that request's head, 8 KiB a line and 100 lines, before its password, takes the header
+  off, and closes a connection without it, or with a longer head, unanswered, before
+  anything reaches the gateway. Behind a wall the relay opens every connection with
+  `QORY-RELAY` and a hop secret of the run's forwarder alone, 256 bits from the system's
+  random source, `wall.Launch.ProxyToken`, which the forwarder compares in constant time
+  and takes off, closing a connection without it unanswered. The run key is in no file
+  and no agent's environment: the session takes `QORY_RUN_KEY` out of every agent's
+  environment, the one it inherits among them. On one machine an unwalled agent's proxy
+  URL carries a password of the run's forwarder as well, made and checked the same way
+  (Upgrading, above).
 - `session.Resend(ctx, session.ResendSpec)` sends a separate gateway what a run's
   session did not deliver to it, from the run directory on the session's machine,
   through the run's `RemoteGateway` with its run key, which the caller passes from
@@ -1282,15 +1292,15 @@ release may change what an existing document does, and says so under Upgrading.
   again; the one it records after the gateway ended the run is the session's alone, and
   is never sent: `delivered.log` says `stopped` before it, whether the `410` answered a
   batch or a reload. A refusal of the run key the gateway passes on, `400`
-  `run_key_invalid`, or `409` `wrong_gateway`, `workspace_not_served`, `run_key_expired`
-  or `run_attached`, at the discovery or at a batch, is a `*session.Refusal` from
-  `gateway`, its code, status and text the gateway's, and stops the resend with the
-  events left under `undelivered/`; so does a `401` `unauthorized`, which the gateway
-  does not send, so a resend never sends again into one. Any other refusal of a batch is
-  sent again. The record is never completed: the gateway writes the end of a run whose
-  session was lost. A record its session holds is `session.ErrRunning`, and a directory
-  with `events.jsonl` is a gateway's record. After a gateway restart, the gateway's
-  resend completes the run `gateway_lost`.
+  `run_key_invalid`, or `409` `wrong_gateway`, `run_key_expired` or `run_attached`, at
+  the discovery or at a batch, is a `*session.Refusal` from `gateway`, its code, status
+  and text the gateway's, and stops the resend with the events left under
+  `undelivered/`; so does a `401` `unauthorized`, which the gateway does not send, so a
+  resend never sends again into one. Any other refusal of a batch is sent again. The
+  record is never completed: the gateway writes the end of a run whose session was lost.
+  A record its session holds is `session.ErrRunning`, and a directory with
+  `events.jsonl` is a gateway's record. After a gateway restart, the gateway's resend
+  completes the run `gateway_lost`.
 - `session.BehindGateway(dir)` reports whether a run directory holds a session's record
   behind a separate gateway, which `session.Resend` sends: whether it holds
   `separate-gateway`, `session.GatewayMark`, as a regular file, not followed if it is a

@@ -36,8 +36,7 @@ type live struct {
 	runDigest string
 	posts     *sink.Server
 	// onConf, when not nil, gets the configuration document a pass read again, and its
-	// digest: the gateway's own copy is replaced with it, the workspaces it serves among
-	// it, not only the run's.
+	// digest: the gateway's copy is replaced with it, not only the run's.
 	onConf func(*server.Configuration, string)
 	// apply puts a fetched policy in force, or says why it cannot; nil until the run
 	// is answered.

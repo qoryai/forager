@@ -81,7 +81,7 @@ func (a *apiary) serve(policy string, digit byte) {
 // configuration is the apiary's discovery and its digest.
 func (a *apiary) configuration() ([]byte, string) {
 	pin, _ := json.Marshal(a.pin)
-	doc := []byte(`{"version":1,"node_id":"` + sepGateway + `","workspaces":["` + sepWorkspace + `"],"apiary_public_key":` + string(pin) +
+	doc := []byte(`{"version":1,"node_id":"` + sepGateway + `","apiary_public_key":` + string(pin) +
 		`,"events":{"url":"` + a.srv.URL + `/v1/events","types":["*"]},"run":{"url":"` + a.srv.URL + `/v1/runs"}}`)
 	sum := sha256.Sum256(doc)
 	return doc, "sha256=" + hex.EncodeToString(sum[:])

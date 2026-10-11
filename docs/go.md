@@ -168,13 +168,13 @@ A separate gateway runs no sessions on the gateway's machine: it makes no local 
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
 `LocalLink` gets "the gateway serves other machines on its address, and runs no
 sessions". Every run there opens by its run key: the gateway refuses one with
-`run_key_invalid`, `run_key_expired`, `wrong_gateway` or `workspace_not_served` before it
-asks the server, attaches the run, writes the record's `dev.qory.run.registered` from
-the run key and the attach's answer, and gives a run answer with no labels and no proxy
-secret. When the server's answer to a batch carries the outcome the run's starter
-gave, it ends the run `stopped` with that state and reason, as a direct node's gateway
-does. A gateway that starts again attaches again a run whose open never answered its
-session, and answers a run that was open before `410` `run_closed`.
+`run_key_invalid`, `run_key_expired` or `wrong_gateway` before it asks the server,
+attaches the run, writes the record's `dev.qory.run.registered` from the run key and the
+attach's answer, and gives a run answer with no labels and no proxy secret. When the
+server's answer to a batch carries the outcome the run's starter gave, it ends the run
+`stopped` with that state and reason, as a direct node's gateway does. A gateway that
+starts again attaches again a run whose open never answered its session, and answers a
+run that was open before `410` `run_closed`.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, a `Listen` without `TLS`, "the gateway's address <address> needs TLS, a
@@ -183,7 +183,10 @@ without a `Server`, "the gateway's address <address> needs a server and a gatewa
 access key: the gateway attaches each run there", certificate and key files it cannot
 read or that do not match, and `TLS` without `Listen`; and once discovery is read, an
 access key that is not a gateway's, "the access key's node <node id> is not a gateway,
-ng_: the gateway's address <address> needs a gateway's access key".
+ng_: the gateway's address <address> needs a gateway's access key". Without `Listen`,
+once discovery is read, it refuses a gateway's access key, "the access key's node
+<node id> is a gateway, ng_: a gateway without an address needs a node's access key,
+nd_ or np_".
 
 ### The session behind a separate gateway
 
@@ -307,17 +310,17 @@ res, err := session.Resend(ctx, session.ResendSpec{
   of another run, "resend <dir>: QORY_RUN_KEY names the run <id>, not this one". A
   record that owes nothing, or of a run that never opened, needs none.
 - A refusal of the run key the gateway passes on, `400` `run_key_invalid`, or `409`
-  `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`, at the
-  discovery or at a batch, is a `*session.Refusal` from `gateway`, its code and status
-  the gateway's and its text the gateway's message, with the events left under
-  `undelivered/`; nothing more is sent after it. A `401` `unauthorized` stops the resend
-  the same way, though the gateway sends none, so a resend never sends again into one.
-  Any other refusal of a batch is sent again, as the session sends it. A batch for a run
-  the gateway no longer holds is its `410`, the run's end while the gateway keeps it and
-  then `run_closed`, which closes the resend, as long as the gateway still has the run's
-  record. Once the run key's `attach_by` plus a skew of 300 seconds has passed, by the
-  gateway's clock, a batch for a run the gateway holds nothing of, its record included,
-  is `409` `run_key_expired` instead, which stops the resend as the refusals above do.
+  `wrong_gateway`, `run_key_expired` or `run_attached`, at the discovery or at a batch,
+  is a `*session.Refusal` from `gateway`, its code and status the gateway's and its text
+  the gateway's message, with the events left under `undelivered/`; nothing more is sent
+  after it. A `401` `unauthorized` stops the resend the same way, though the gateway
+  sends none, so a resend never sends again into one. Any other refusal of a batch is
+  sent again, as the session sends it. A batch for a run the gateway no longer holds is
+  its `410`, the run's end while the gateway keeps it and then `run_closed`, which
+  closes the resend, as long as the gateway still has the run's record. Once the run
+  key's `attach_by` plus a skew of 300 seconds has passed, by the gateway's clock, a
+  batch for a run the gateway holds nothing of, its record included, is `409`
+  `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's resend,

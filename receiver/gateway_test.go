@@ -109,11 +109,16 @@ func (s *stand) at() string { return server.RegistrationTime(s.now) }
 // instance: a POST of application/json, a batch when the target is the events
 // endpoint, or a GET at the stand's clock.
 func (s *stand) signed(id, method, target string, body []byte) *http.Request {
+	return s.signedAs(id, inst, method, target, body)
+}
+
+// signedAs makes the request signed makes, as the instance given.
+func (s *stand) signedAs(id, instance, method, target string, body []byte) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(string(body)))
 	req.Header.Set(server.HeaderAccessKeyID, id)
-	req.Header.Set(server.HeaderInstanceID, inst)
+	req.Header.Set(server.HeaderInstanceID, instance)
 	req.Header.Set(server.HeaderContractVersion, "1")
-	sr := accesskey.Request{AccessKeyID: id, InstanceID: inst, Method: method, Target: target}
+	sr := accesskey.Request{AccessKeyID: id, InstanceID: instance, Method: method, Target: target}
 	if method == http.MethodPost {
 		sr.Body = body
 		req.Header.Set("Content-Type", receiver.RegistrationType)
@@ -608,6 +613,146 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 	s.expect("a run it wants nothing more of", req, rec, http.StatusGone, "")
 }
 
+// TestTheGatewayIsDecidedAgainAtEachBatchAndReload pins that the receiver decides
+// again, at each batch, heartbeats included, and each reload, by the attach's test,
+// whether the gateway that attached a run may still serve the run's workspace, never by
+// the node's current choice. A change of the node's choice or of a default alone leaves
+// the attached run where it is: its batches accepted, its reloads answered. Once the
+// gateway's organisation no longer covers the run's workspace, even with the node moved
+// to a workspace the gateway serves, a batch or heartbeat, a resend of one already
+// accepted included, is a signed 410 workspace_not_served with no digest header and
+// nothing stored, after wrong_gateway and before a run the receiver wants nothing more
+// of and deduplication, where a resend while the gateway serves the workspace gets the
+// same 202; a reload is the signed 410, no digest header and no run configuration,
+// after the 404 of another key; the gateway node attaching again, from the attaching
+// instance or another, is the 409 workspace_not_served of the attach, and no run
+// configuration. While the gateway may serve the workspace, the attaching instance
+// attaching again gets the stored answer, byte for byte. Once the organisation covers
+// the workspace again, the run is served again, its stored answer included.
+func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
+	const otherInstance = "i_otherinstance00000000"
+	s := newStand(t)
+	s.h.Gateways[gw] = receiver.Gateway{URL: gwURL, Organisation: orgOne, AccessKeys: []string{gwKey, gwKey2}}
+	id := event.NewRunID()
+	rk := s.runKey(id)
+	_, attached := s.attach(gwKey, id, s.attachBody(rk, 30))
+	if attached.Code != http.StatusOK {
+		t.Fatalf("the attach: %d %s", attached.Code, attached.Body.String())
+	}
+	e := event.NewEmitter(id, nil)
+	replayed := func(name string) {
+		t.Helper()
+		req, rec := s.attach(gwKey2, id, s.attachBody(rk, 60))
+		if rec.Code != http.StatusOK || rec.Body.String() != attached.Body.String() || !signedAnswer(req, rec) ||
+			rec.Header().Get(server.HeaderRunConfiguration) != attached.Header().Get(server.HeaderRunConfiguration) {
+			t.Errorf("%s: the same instance attaching again: %d %s, want the stored answer", name, rec.Code, rec.Body.String())
+		}
+	}
+	reload := func(keyID string) (*http.Request, *httptest.ResponseRecorder) {
+		req := s.signed(keyID, http.MethodGet, receiver.DefaultRunPath+"/"+id, nil)
+		return req, serve(s.h, req)
+	}
+	var accepted []byte
+	served := func(name string) {
+		t.Helper()
+		if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a resend of the accepted batch: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
+		if _, rec := s.batch(gwKey, e, event.RunStarted); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a batch: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
+		if _, rec := s.batch(gwKey2, e, event.RunHeartbeat); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a heartbeat: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
+		if req, rec := reload(gwKey2); !runAnswer(req, rec, enforceAPI) {
+			t.Errorf("%s: a reload: %d %s, want the run configuration", name, rec.Code, rec.Body.String())
+		}
+		replayed(name)
+	}
+	first := e.Make(event.RunStarted, map[string]any{})
+	first.Time = s.now.UTC().Format(time.RFC3339Nano)
+	line, err := first.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted = []byte("[" + string(line) + "]")
+	if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
+		t.Fatalf("the first batch: %d %s", rec.Code, rec.Body.String())
+	}
+	served("after the attach")
+
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: receiver.Direct}
+	served("the node's choice changed to direct")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: orgGW}
+	served("the node's choice changed to another gateway")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: receiver.Default}
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne, Default: orgGW}
+	served("the node's choice changed to the default, another gateway")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
+
+	// refused checks a signed refusal of the status and code that carries no digest
+	// header: a gateway that may no longer serve the workspace learns nothing of it.
+	refused := func(name string, req *http.Request, rec *httptest.ResponseRecorder, status int, code string) {
+		t.Helper()
+		s.expect(name, req, rec, status, code)
+		for _, h := range []string{server.HeaderConfiguration, server.HeaderRunConfiguration} {
+			if got := rec.Header().Get(h); got != "" {
+				t.Errorf("%s: %s %q, want none", name, h, got)
+			}
+		}
+	}
+	store := s.h.Store.(*receiver.File)
+	count := store.Count()
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgTwo}
+	req, rec := s.batchOf(gwKey, accepted)
+	refused("a resend of the accepted batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.batch(orgGWKey, e, event.RunStarted)
+	s.expect("a batch from another gateway once the gateway may no longer serve the workspace", req, rec, http.StatusConflict, "wrong_gateway")
+	req, rec = s.batch(gwKey, e, event.RunStarted)
+	refused("a batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.batch(gwKey2, e, event.RunHeartbeat)
+	refused("a heartbeat once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	s.h.Stop = func(run string) bool { return run == id }
+	req, rec = s.batch(gwKey, e, event.RunHeartbeat)
+	refused("a heartbeat of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+		http.StatusGone, "workspace_not_served")
+	req, rec = reload(gwKey2)
+	refused("a reload of a run the receiver wants nothing more of, once the gateway may no longer serve the workspace", req, rec,
+		http.StatusGone, "workspace_not_served")
+	s.h.Stop = nil
+	req, rec = reload(gwKey2)
+	refused("a reload once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = reload(orgGWKey)
+	if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 || !signedAnswer(req, rec) {
+		t.Errorf("a reload from another gateway once the gateway may no longer serve the workspace: %d %s, want a signed 404", rec.Code, rec.Body.String())
+	}
+	req = s.signedAs(gwKey, otherInstance, http.MethodPost, receiver.DefaultRunPath+"/"+id+"/attach", s.attachBody(rk, 30))
+	refused("another instance of the gateway node attaching again once it may no longer serve the workspace", req, serve(s.h, req),
+		http.StatusConflict, "workspace_not_served")
+	req, rec = s.attach(gwKey2, id, s.attachBody(rk, 60))
+	refused("the attaching instance attaching again once the gateway may no longer serve the workspace", req, rec,
+		http.StatusConflict, "workspace_not_served")
+
+	// The run's workspace decides, never the node's: the node moved to a workspace the
+	// gateway still serves leaves the run refused.
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws1, Gateway: gw}
+	req, rec = s.batch(gwKey, e, event.RunHeartbeat)
+	refused("a heartbeat once the node moved to a workspace the gateway serves", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = reload(gwKey2)
+	refused("a reload once the node moved to a workspace the gateway serves", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.attach(gwKey2, id, s.attachBody(rk, 60))
+	refused("the attaching instance attaching again once the node moved to a workspace the gateway serves", req, rec,
+		http.StatusConflict, "workspace_not_served")
+	s.h.Nodes[pool] = receiver.Node{Workspace: ws, Gateway: gw}
+	if store.Count() != count {
+		t.Errorf("the refused batches stored %d events, want none", store.Count()-count)
+	}
+
+	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
+	served("once the organisation covers the workspace again")
+}
+
 // TestLivenessCountsFromTheAttach pins the liveness of a run through a gateway: from
 // the attach, with the attach's interval, until 3 × the interval passes with no recent
 // heartbeat, a heartbeat being as recent as its time corrected by the run's clock
@@ -1020,12 +1165,12 @@ func runKeyUnder(t *testing.T, rk string) string {
 // nodeShape is discovery's node_id of a node, node pool or gateway.
 var nodeShape = regexp.MustCompile(`^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`)
 
-// TestEachKeyDiscoversItsOwnNode pins discovery per access key: a gateway's key gets
-// its gateway's id, ng_, as node_id and every workspace the gateway may serve, its
-// workspace's at the workspace level and each of its organisation's at the organisation
-// level, sorted; a pool's key its pool and its one workspace, as Forager's client reads
-// it; a key with no node the document as configured. Each digest is sha256= and the hex
-// SHA-256 of the document served, and the answers to the key's batches carry the same.
+// TestEachKeyDiscoversItsOwnNode pins discovery per access key, as Forager's client
+// reads it: a gateway's key gets its gateway's id, ng_, as node_id and no workspaces
+// member, at the workspace level and at the organisation level alike; a pool's key its
+// pool and its one workspace; a key with no node the document as configured. Each
+// digest is sha256= and the hex SHA-256 of the document served, and the answers to the
+// key's batches carry the same.
 func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 	s := newStand(t)
 	s.now = time.Now().UTC().Truncate(time.Second)
@@ -1039,8 +1184,8 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 		node       string
 		workspaces []string
 	}{
-		gwKey:     {gw, []string{ws}},
-		orgGWKey:  {orgGW, []string{ws, ws1}},
+		gwKey:     {gw, nil},
+		orgGWKey:  {orgGW, nil},
 		key:       {pool, []string{ws}},
 		otherNode: {"nd_f1xt0re000000000", []string{ws}},
 	} {
@@ -1059,11 +1204,14 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 		if digest != digestOf(rec.Body.Bytes()) || (keyID == otherNode) != (rec.Body.String() == string(conf)) {
 			t.Errorf("discovery under %s: the digest %s of %s", keyID, digest, rec.Body.String())
 		}
-		if !strings.HasPrefix(want.node, "ng_") {
-			c, d, err := client(keyID).Discover(context.Background())
-			if err != nil || c.NodeID != want.node || strings.Join(c.Workspaces, ",") != strings.Join(want.workspaces, ",") || d != digest {
-				t.Errorf("discovery under %s, as Forager's client reads it: %+v %s, %v", keyID, c, d, err)
-			}
+		var members map[string]json.RawMessage
+		json.Unmarshal(rec.Body.Bytes(), &members)
+		if _, has := members["workspaces"]; has == strings.HasPrefix(want.node, "ng_") {
+			t.Errorf("discovery under %s: the workspaces member %v in %s", keyID, has, rec.Body.String())
+		}
+		c, d, err := client(keyID).Discover(context.Background())
+		if err != nil || c.NodeID != want.node || strings.Join(c.Workspaces, ",") != strings.Join(want.workspaces, ",") || d != digest {
+			t.Errorf("discovery under %s, as Forager's client reads it: %+v %s, %v", keyID, c, d, err)
 		}
 		_, brec := s.batch(keyID, event.NewEmitter(event.NewRunID(), nil), event.RunStarted)
 		if brec.Header().Get(server.HeaderConfiguration) != digest {
@@ -1140,18 +1288,23 @@ func TestABatchIsOfOneRun(t *testing.T) {
 	s.expect("two runs' events, each stored before", req, rec, http.StatusBadRequest, "invalid_request")
 }
 
-// TestAGatewayServingNoWorkspaceHasNoDiscovery pins that the key of a gateway that
-// may serve no workspace the records hold gets a signed 500 to discovery, no document
-// the schema refuses, and answers to its other requests carry no configuration digest.
-func TestAGatewayServingNoWorkspaceHasNoDiscovery(t *testing.T) {
+// TestAGatewayKeyDiscoversNoWorkspaces pins that the key of a gateway whose
+// organisation holds no workspace in the records gets a signed 200 to discovery, with
+// its node_id, no workspaces member and the digest of the document served, and that the
+// answers to its batches carry that digest.
+func TestAGatewayKeyDiscoversNoWorkspaces(t *testing.T) {
 	s := newStand(t)
 	s.h.Gateways[orgGW] = receiver.Gateway{URL: "https://gateway-two.example", Organisation: "org_three", AccessKeys: []string{orgGWKey}}
 	req := s.signed(orgGWKey, http.MethodGet, server.WellKnown, nil)
-	if rec := serve(s.h, req); rec.Code != http.StatusInternalServerError || rec.Body.Len() != 0 || !signedAnswer(req, rec) ||
-		rec.Header().Get(server.HeaderConfiguration) != "" {
-		t.Errorf("discovery of a gateway serving no workspace: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	rec := serve(s.h, req)
+	var members map[string]json.RawMessage
+	json.Unmarshal(rec.Body.Bytes(), &members)
+	_, has := members["workspaces"]
+	digest := rec.Header().Get(server.HeaderConfiguration)
+	if rec.Code != http.StatusOK || !signedAnswer(req, rec) || string(members["node_id"]) != `"`+orgGW+`"` || has || digest != digestOf(rec.Body.Bytes()) {
+		t.Errorf("discovery of a gateway's key: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
 	}
-	if _, rec := s.batch(orgGWKey, event.NewEmitter(event.NewRunID(), nil), event.RunStarted); rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) != "" {
+	if _, rec := s.batch(orgGWKey, event.NewEmitter(event.NewRunID(), nil), event.RunStarted); rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) != digest {
 		t.Errorf("a batch under that gateway's key: %d %v", rec.Code, rec.Header())
 	}
 }

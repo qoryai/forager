@@ -26,15 +26,13 @@ const (
 
 // The codes of the attach's refusals the gateway decides itself, before it asks: a run
 // key that does not verify, or names another run than the request; one of another
-// gateway; one of a workspace the gateway does not serve; one past its attach window
-// and the skew of server.Window that never attached here; and a run the gateway
-// already holds.
+// gateway; one past its attach window and the skew of server.Window that never
+// attached here; and a run the gateway already holds.
 const (
-	codeRunKeyInvalid      = "run_key_invalid"
-	codeWrongGateway       = "wrong_gateway"
-	codeWorkspaceNotServed = "workspace_not_served"
-	codeRunKeyExpired      = "run_key_expired"
-	codeRunAttached        = "run_attached"
+	codeRunKeyInvalid = "run_key_invalid"
+	codeWrongGateway  = "wrong_gateway"
+	codeRunKeyExpired = "run_key_expired"
+	codeRunAttached   = "run_attached"
 )
 
 // runKeyKey is the key of a request's [presented] run key in its context.
@@ -61,8 +59,8 @@ func (g *Gateway) config() (*server.Configuration, string) {
 	return g.conf, g.confDigest
 }
 
-// setConfig replaces the configuration document the gateway holds, the workspaces it
-// serves among it, by one read again since an answer carried another digest.
+// setConfig replaces the configuration document the gateway holds by one read again
+// since an answer carried another digest.
 func (g *Gateway) setConfig(conf *server.Configuration, digest string) {
 	g.confMu.Lock()
 	defer g.confMu.Unlock()
@@ -97,10 +95,11 @@ func (g *Gateway) attachRefused(code string, status int, runID string) *accesske
 // attach_by plus the skew of [server.Window], 300 s, by the gateway's clock, of a run
 // the gateway holds nothing of, never attached here, is run_key_expired, 409; one that
 // names another gateway than the one discovery lists of the access key is
-// wrong_gateway, 409; one of a workspace discovery does not list is
-// workspace_not_served, 409. A run key past its attach_by within the skew goes on as
-// one before it, and the server decides its attach. ok says the request carried one
-// bearer value in its syntax.
+// wrong_gateway, 409. A run key past its attach_by within the skew goes on as one
+// before it, and the server decides its attach. The run's workspace is the run key's:
+// the gateway checks it against no list, and the server decides at the attach whether
+// the gateway may serve it. ok says the request carried one bearer value in its
+// syntax.
 func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Refusal) {
 	if !ok {
 		return runkey.Key{}, runKeyInvalid()
@@ -115,8 +114,6 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 		return k, g.attachRefused(codeRunKeyExpired, http.StatusConflict, k.RunID)
 	case k.Gateway != conf.NodeID:
 		return k, g.attachRefused(codeWrongGateway, http.StatusConflict, k.RunID)
-	case !slices.Contains(conf.Workspaces, k.Workspace):
-		return k, g.attachRefused(codeWorkspaceNotServed, http.StatusConflict, k.RunID)
 	}
 	return k, nil
 }

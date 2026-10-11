@@ -114,7 +114,8 @@ type Gateway struct {
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; and once discovery is read, a Listen whose
-// access key is not a gateway's, whose node id is not ng_.
+// access key is not a gateway's, whose node id is not ng_, and a gateway's access key,
+// ng_, without a Listen.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Server != nil {
 		s := *cfg.Server
@@ -182,6 +183,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		}
 		if cfg.Listen != "" && !strings.HasPrefix(conf.NodeID, "ng_") {
 			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, cfg.Listen)
+		}
+		if cfg.Listen == "" && strings.HasPrefix(conf.NodeID, "ng_") {
+			return nil, fmt.Errorf("the access key's node %s is a gateway, ng_: a gateway without an address needs a node's access key, nd_ or np_", conf.NodeID)
 		}
 		g.client, g.conf, g.confDigest = client, conf, digest
 	}
