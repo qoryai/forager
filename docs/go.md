@@ -433,7 +433,7 @@ A program that needs custom code implements the interface.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
   gateway's `410`, unchanged: `run_closed`, `stopped` when the run's starter ended it,
   `session_lost` when it heard nothing from the session for 3 heartbeat intervals, and
-  `batch_refused` when it refused a batch of the session's. The runtime was stopped as at its time limit. A server's
+  `batch_refused` when it refused a batch from the run's session. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
 

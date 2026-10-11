@@ -733,9 +733,10 @@ release may change what an existing document does, and says so under Upgrading.
   `session`, and requires `runtime`, `command`, `args`, `dir` and `interactive`.
   `forager_version` is the session's, and `host` is the agent's machine's.
   `dev.qory.run.exited`'s `reason` has `session_lost`, the session was silent,
-  `batch_refused`, the gateway refused a batch of its, and `stopped`, which the gateway
-  writes, beside `timeout`, `interrupted`, `run_closed` and `gateway_lost`; when the
-  gateway ends a session's run it writes the run's `dev.qory.run.exited`, and the
+  `batch_refused`, the gateway refused a batch from the run's session, and `stopped`,
+  which the gateway writes, beside `timeout`, `interrupted`, `run_closed` and
+  `gateway_lost`; when the gateway ends a session's run it writes the run's
+  `dev.qory.run.exited`, and the
   session writes the session's, with the state and the reason of the gateway's `410`, in
   the session's record and never posted. `exit_code` is optional in the schema, and
   Forager writes it on every `dev.qory.run.exited`: `-1` with `gateway_lost` and in

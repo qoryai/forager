@@ -833,7 +833,7 @@ session's run on its link. The state of each of Forager's endings:
 | the run was stopped from where it was started (a Ctrl-C) before the session observed the runtime's exit; `exit_code` and `signal` are the runtime's | `cancelled` | `interrupted` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
-| the gateway refused a batch of the session's (§The gateway's link) | `failed` | `batch_refused` |
+| the gateway refused a batch from the run's session (§The gateway's link) | `failed` | `batch_refused` |
 
 `stopped` is written only when the starter gave no outcome. On a session's run the
 session records, only in the session's record, how the gateway's `410` says the run
@@ -2352,7 +2352,7 @@ code says why:
 |---|---|---|
 | `stopped` | `gateway` | the run's starter ended the run; `state` and `reason` are the starter's outcome and reason, or `cancelled` and `stopped` when it gave no outcome |
 | `session_lost` | `gateway` | the session was silent for 3 × the heartbeat interval (Heartbeats and liveness, above); `failed` and `session_lost` |
-| `batch_refused` | `gateway` | the gateway refused a batch of the session's (Events, above); `failed` and `batch_refused` |
+| `batch_refused` | `gateway` | the gateway refused a batch from the run's session (Events, above); `failed` and `batch_refused` |
 | `run_closed` | `gateway` | the run had already ended otherwise: after the session's final event, or when the gateway stops; no `state` |
 
 **The end member.** When the server's signed `2xx` to a batch of the run carries `end`,
@@ -2379,8 +2379,8 @@ the gateway with `session_lost` once the gateway has heard nothing from the sess
 itself stops, `qory run resend` sending the run's record again, through
 `gateway.Resend`, writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
 While the session lives, the run normally ends with its runtime exiting by itself; the
-gateway can also end it, with `stopped`, or `batch_refused` after it refused a batch of
-the session's, and the session records that end (The end of a run at the gateway,
+gateway can also end it, with `stopped`, or `batch_refused` after it refused a batch from
+the run's session, and the session records that end (The end of a run at the gateway,
 above).
 
 **Resending a session's record.** Behind a separate gateway the session's machine holds
@@ -2679,7 +2679,7 @@ default. Images need a wall: without one the runtime is a process on the machine
 | name | what a policy, or the machine's default, selects it by, in a credential's grammar |
 | reference | the image, pinned by digest where the machine requires the same image every time |
 | runtime | the container runtime the wall starts it under, one the machine's engine has: `sysbox-runc`. Absent is the engine's default |
-| docker | the agent gets nested Docker (§The wall). It needs a runtime that runs it without privileges. Experimental |
+| docker | the agent gets nested Docker (§The wall). It needs a runtime that runs a Docker daemon without privileges. Experimental |
 
 ```yaml
 version: 1

@@ -82,8 +82,8 @@ starter gives a reason, `dev.qory.run.exited` says why in `reason`: an open code
 Forager's or the starter's, carried as given. The session writes `timeout`, `cancelled`,
 and `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C), and
 posts them. The gateway writes the others: `session_lost`, `failed`, the session was
-silent; `batch_refused`, `failed`, the gateway refused a batch of the session's (see the
-contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
+silent; `batch_refused`, `failed`, the gateway refused a batch from the run's session
+(see the contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
 gave no outcome, or the starter's outcome and reason when it gave one; and sending a
 record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
 the old names `quiet`, `credential_expired`, `credential_check_unreachable` and

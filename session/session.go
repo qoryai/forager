@@ -227,7 +227,7 @@ type Result struct {
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
 	// as the gateway answered it: run_closed, stopped when the run's starter ended it,
 	// session_lost when it heard nothing from the session for three heartbeat
-	// intervals, and batch_refused when it refused a batch of the session's.
+	// intervals, and batch_refused when it refused a batch from the run's session.
 	ClosedReason string
 }
 

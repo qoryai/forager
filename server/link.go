@@ -42,7 +42,7 @@ const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway: the
 // gateway closed the run, the run's starter ended it, the gateway heard nothing from the
-// session for too long, or it refused a batch of the session's. A 410 with another
+// session for too long, or it refused a batch from the run's session. A 410 with another
 // code, or none, is run_closed.
 var EndCodes = []string{event.ReasonRunClosed, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused}
 
