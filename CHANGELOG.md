@@ -82,6 +82,8 @@ release may change what an existing document does, and says so under Upgrading.
   `Admit` is asked at the registration. The handler answers a reload only for a run its
   node registered, under any of the node's active keys, or for the gateway node that
   attached it, and `404` otherwise.
+- `json.Marshal` of `server.RegistrationAnswer` and `server.Attach` writes `run_key`
+  redacted, and of `server.LinkRunAnswer` `proxy_secret`; `Attach.Body` is the wire form.
 
 #### Added
 
