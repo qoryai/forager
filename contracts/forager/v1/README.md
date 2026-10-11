@@ -1156,7 +1156,8 @@ for a registration any type but `application/json` and for a batch any type but
 `X-Qory-Timestamp`, unsigned; `401`; `429`; `400` `bad_request` for an instance id
 absent or outside its pattern, signed; `400` `unsupported_contract_version`; `400`
 `invalid_request` for a body the contract refuses, a registration with
-`interval_seconds` above 300 or a label value over 256 bytes included; `401` for a GET's timestamp, or a registration's
+`interval_seconds` above 300 or a label value over 256 bytes, and a batch whose events
+are not all of one run, included; `401` for a GET's timestamp, or a registration's
 `time`, outside ±300 seconds; then each endpoint's own.
 The events endpoint's own, in order: for a run the server holds, a batch from a key
 outside the one node its batches are accepted from, a signed `409` `wrong_gateway` or

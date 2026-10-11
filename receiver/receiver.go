@@ -46,7 +46,8 @@
 // 404, and a batch a signed 409 wrong_node or wrong_gateway. The starter's outcome is
 // accepted from any active key of the registering node, once per run, and every 2xx to
 // a batch of the run then carries it as the end member until the batch that carries the
-// run's dev.qory.run.exited. A delivery it verified is deduplicated on each event's id,
+// run's dev.qory.run.exited. A batch whose events are not all of one run is a signed
+// 400 invalid_request. A delivery it verified is deduplicated on each event's id,
 // handed to a [Store], and answered 202 with the digests in force; it reads nothing of
 // an event's data but a heartbeat's time and the type. [File] is a store that appends
 // events to one JSON lines file and remembers the ids it holds. It keeps one store and
@@ -269,7 +270,9 @@ type Handler struct {
 	// run, whose url is the run endpoint, and apiary_public_key, the receiver's public
 	// key. For an access key whose node or gateway the records hold, node_id and
 	// workspaces are replaced by its own, and the digest is sha256= and the hex SHA-256
-	// of the document served. Nil means discovery is not served.
+	// of the document served; a gateway's key whose gateway may serve no workspace the
+	// records hold has no document, and its discovery is a signed 500. Nil means
+	// discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration decides the run configuration of a run: as it registers, as it
 	// is attached and reloaded by its id, and for the digest every answer to a delivery
@@ -295,8 +298,8 @@ type Handler struct {
 	// may start a run; false is a signed 409 instance_limit, and the run does not start.
 	// It is not called for a registration refused earlier in the order: a body the
 	// contract refuses, a time outside the window, one Stop refuses, a gateway's key, a
-	// shape that does not match the node's choice or a choice that resolves to no
-	// gateway. Nil admits every instance.
+	// shape that does not match the node's choice, a choice that resolves to no gateway
+	// or a gateway with no active key. Nil admits every instance.
 	Admit func(accessKeyID, instanceID string) bool
 
 	// runs are the registrations accepted, by run id.
@@ -492,7 +495,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !h.fresh(r.Header.Get(server.HeaderTimestamp)):
 		refuse(w, http.StatusUnauthorized, "unauthorized")
 	case to == toDiscovery:
-		doc, digest := h.configuration(v)
+		doc, digest, ok := h.configuration(v)
+		if !ok {
+			h.answer(w, v, http.StatusInternalServerError, nil)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderConfiguration, digest)
 		h.answer(w, v, http.StatusOK, doc)
@@ -505,37 +512,42 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // receiver's digest of it: Configuration's, and for a key whose node or node pool
 // Nodes holds, or whose gateway Gateways holds, with node_id that id and workspaces the
 // node's one workspace, or every workspace the gateway may serve, its digest then
-// sha256= and the hex SHA-256 of the document served.
-func (h *Handler) configuration(v verified) ([]byte, string) {
+// sha256= and the hex SHA-256 of the document served. A gateway that may serve no
+// workspace the records hold has no document the schema accepts, which needs one: false,
+// and its key's discovery is a signed 500.
+func (h *Handler) configuration(v verified) ([]byte, string, bool) {
 	doc, digest := h.Configuration()
 	var workspaces []string
 	if n, ok := h.Nodes[v.key.Node]; ok && v.key.Node != "" {
 		workspaces = []string{n.Workspace}
 	} else if _, ok := h.Gateways[v.key.Node]; ok && v.key.Node != "" {
-		workspaces = h.served(v.key.Node)
+		if workspaces = h.served(v.key.Node); len(workspaces) == 0 {
+			return nil, "", false
+		}
 	} else {
-		return doc, digest
+		return doc, digest, true
 	}
 	var m map[string]json.RawMessage
 	if json.Unmarshal(doc, &m) != nil {
-		return doc, digest
+		return doc, digest, true
 	}
 	m["node_id"], _ = json.Marshal(v.key.Node)
 	m["workspaces"], _ = json.Marshal(workspaces)
 	b, err := json.Marshal(m)
 	if err != nil {
-		return doc, digest
+		return doc, digest, true
 	}
 	sum := sha256.Sum256(b)
-	return b, "sha256=" + hex.EncodeToString(sum[:])
+	return b, "sha256=" + hex.EncodeToString(sum[:]), true
 }
 
 // setConfiguration sets on an answer the digest of the access key's discovery, when
-// discovery is served.
+// discovery is served and has a document for the key.
 func (h *Handler) setConfiguration(w http.ResponseWriter, v verified) {
 	if h.Configuration != nil {
-		_, digest := h.configuration(v)
-		w.Header().Set(server.HeaderConfiguration, digest)
+		if _, digest, ok := h.configuration(v); ok {
+			w.Header().Set(server.HeaderConfiguration, digest)
+		}
 	}
 }
 
@@ -1155,7 +1167,8 @@ type head struct {
 }
 
 // deliver answers one verified delivery, in the events endpoint's order: a batch that
-// is not one, 400 invalid_request; a batch of a run it holds the registration of from
+// is not one, or whose events are not all of one run, 400 invalid_request; a batch of a
+// run it holds the registration of from
 // another node than the one its batches are accepted from, 409 wrong_gateway for a run
 // through a gateway and wrong_node for a direct run; one whose events the store holds
 // every one of, 202 again; an event of a run it wants nothing more of, 410; otherwise
@@ -1170,12 +1183,13 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 	}
 	heads := make([]head, len(batch))
 	for i, raw := range batch {
-		if err := json.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" {
+		if err := json.Unmarshal(raw, &heads[i]); err != nil || heads[i].ID == "" || heads[i].Subject == "" || heads[i].Type == "" ||
+			heads[i].Subject != heads[0].Subject {
 			h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
 			return
 		}
 	}
-	subject := heads[len(heads)-1].Subject
+	subject := heads[0].Subject
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	reg := h.runs[subject]

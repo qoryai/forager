@@ -1071,3 +1071,87 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 		}
 	}
 }
+
+// TestABatchIsOfOneRun pins that a batch whose events are not all of one run is a
+// signed 400 invalid_request, before wrong_gateway and wrong_node and before
+// deduplication: from a key outside the run's node or from the run's own gateway, it
+// stores nothing and changes no run, whichever run its last event names.
+func TestABatchIsOfOneRun(t *testing.T) {
+	s := newStand(t)
+	id, other := event.NewRunID(), event.NewRunID()
+	runKeys := map[string]string{}
+	for _, run := range []string{id, other} {
+		runKeys[run] = s.runKey(run)
+		if _, rec := s.attach(gwKey, run, s.attachBody(runKeys[run], 30)); rec.Code != http.StatusOK {
+			t.Fatalf("the attach: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	lineOf := func(runID, ty string) (string, string) {
+		data := map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}
+		if ty == event.RunExited {
+			data = map[string]any{"state": "succeeded", "exit_code": 0}
+		}
+		ev := event.NewEmitter(runID, nil).Make(ty, data)
+		ev.Time = s.now.UTC().Format(time.RFC3339Nano)
+		line, err := ev.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev.ID, string(line)
+	}
+	exitedID, exited := lineOf(id, event.RunExited)
+	unknownID, unknown := lineOf(event.NewRunID(), event.RunStarted)
+	otherExitedID, otherExited := lineOf(other, event.RunExited)
+	beatID, beat := lineOf(id, event.RunHeartbeat)
+	for name, c := range map[string]struct {
+		keyID string
+		lines []string
+	}{
+		"a key with no node, the gateway run's run.exited then an unknown run's event": {otherNode, []string{exited, unknown}},
+		"a key with no node, an unknown run's event then the gateway run's run.exited": {otherNode, []string{unknown, exited}},
+		"the pool's key, the gateway run's run.exited then an unknown run's event":     {key, []string{exited, unknown}},
+		"the run's gateway, another run's run.exited then a heartbeat of its run":      {gwKey, []string{otherExited, beat}},
+		"the run's gateway, its run's run.exited then another run's":                   {gwKey2, []string{exited, otherExited}},
+	} {
+		req, rec := s.batchOf(c.keyID, []byte("["+strings.Join(c.lines, ",")+"]"))
+		s.expect(name, req, rec, http.StatusBadRequest, "invalid_request")
+	}
+	for _, evID := range []string{exitedID, unknownID, otherExitedID, beatID} {
+		if s.h.Store.Seen(evID) {
+			t.Errorf("the event %s was stored from a batch of more than one run", evID)
+		}
+	}
+	s.now = s.now.Add(10 * time.Second)
+	for _, run := range []string{id, other} {
+		if _, rec := s.attach(gwKey, run, s.attachBody(runKeys[run], 30)); rec.Code != http.StatusOK {
+			t.Errorf("the gateway's attach of %s after the batches of more than one run: %d, want the stored answer of a live run", run, rec.Code)
+		}
+	}
+
+	// Before deduplication: the events of two runs, each stored before, together.
+	if _, rec := s.batchOf(gwKey, []byte("["+beat+"]")); rec.Code != http.StatusAccepted {
+		t.Fatalf("the heartbeat alone: %d", rec.Code)
+	}
+	_, otherBeat := lineOf(other, event.RunHeartbeat)
+	if _, rec := s.batchOf(gwKey, []byte("["+otherBeat+"]")); rec.Code != http.StatusAccepted {
+		t.Fatalf("the other run's heartbeat alone: %d", rec.Code)
+	}
+	req, rec := s.batchOf(gwKey, []byte("["+beat+","+otherBeat+"]"))
+	s.expect("two runs' events, each stored before", req, rec, http.StatusBadRequest, "invalid_request")
+}
+
+// TestAGatewayServingNoWorkspaceHasNoDiscovery pins that the key of a gateway that
+// may serve no workspace the records hold gets a signed 500 to discovery, no document
+// the schema refuses, and answers to its other requests carry no configuration digest.
+func TestAGatewayServingNoWorkspaceHasNoDiscovery(t *testing.T) {
+	s := newStand(t)
+	s.h.Gateways[orgGW] = receiver.Gateway{URL: "https://gateway-two.example", Organisation: "org_three", AccessKeys: []string{orgGWKey}}
+	req := s.signed(orgGWKey, http.MethodGet, server.WellKnown, nil)
+	if rec := serve(s.h, req); rec.Code != http.StatusInternalServerError || rec.Body.Len() != 0 || !signedAnswer(req, rec) ||
+		rec.Header().Get(server.HeaderConfiguration) != "" {
+		t.Errorf("discovery of a gateway serving no workspace: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	}
+	if _, rec := s.batch(orgGWKey, event.NewEmitter(event.NewRunID(), nil), event.RunStarted); rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) != "" {
+		t.Errorf("a batch under that gateway's key: %d %v", rec.Code, rec.Header())
+	}
+}
