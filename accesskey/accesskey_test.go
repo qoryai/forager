@@ -924,6 +924,53 @@ func TestErrorsNeverQuoteASecret(t *testing.T) {
 	}
 }
 
+// TestErrorsNeverQuoteARunKey pins that a run key pasted where another value belongs, a
+// public key, an access key id, an instance id, a name, a pin or a server URL, is
+// named in the error and never quoted, as an access key secret is: a pin or a document
+// that contains one is ErrRunKeyInDocument, which errors.Is reports as
+// ErrSecretInDocument too, and a document with an access key secret is still
+// ErrSecretInDocument alone.
+func TestErrorsNeverQuoteARunKey(t *testing.T) {
+	var v struct {
+		RunKey struct {
+			RunKey string `json:"run_key"`
+		} `json:"run_key"`
+	}
+	if err := json.Unmarshal(read(t, "fixtures/known-answers/through-gateway.json"), &v); err != nil {
+		t.Fatal(err)
+	}
+	rk := v.RunKey.RunKey
+	payload := rk[4:24]
+	_, e1 := accesskey.ParsePublicKey(rk)
+	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + rk + `"}]`))
+	_, e3 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + rk + `":"x"}]`))
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	_, e4 := r.Post(context.Background(), nil, "https://qory.example/?k="+rk, "test")
+	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(rk), accesskey.CheckInstanceID(rk), accesskey.CheckName(rk), accesskey.CheckName(strings.ToUpper(rk[:12])), accesskey.CheckNodeID(rk)} {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(payload)) || strings.Contains(strings.ToLower(err.Error()), "qrk_") {
+			t.Errorf("%d: %v", i, err)
+		}
+	}
+	for i, err := range []error{e2, e3} {
+		if !errors.Is(err, accesskey.ErrRunKeyInDocument) || !errors.Is(err, accesskey.ErrSecretInDocument) || err.Error() != "the document contains a run key, which belongs in QORY_RUN_KEY and nowhere else" {
+			t.Errorf("pin %d: %v; want ErrRunKeyInDocument", i, err)
+		}
+	}
+	if err := accesskey.CheckName("x" + rk[:8]); err == nil || !strings.Contains(err.Error(), "(a value that contains a run key)") {
+		t.Errorf("a name with a run key: %v; want it named", err)
+	}
+	if !accesskey.ContainsSecret("QRK_x") || !accesskey.DocumentContainsSecret(map[string]any{"a": []any{"qrk_x"}}) || accesskey.ContainsSecret("qr_k") {
+		t.Error("ContainsSecret or DocumentContainsSecret does not report qrk_ in any case")
+	}
+	secret := keys(t).AccessKey.Secret
+	if err := accesskey.SecretInDocument([]any{rk, secret}); err != accesskey.ErrSecretInDocument {
+		t.Errorf("a document with both: %v; want ErrSecretInDocument", err)
+	}
+	if err := accesskey.SecretInDocument(map[string]any{"run": "qory.example"}); err != nil {
+		t.Errorf("a document with neither: %v", err)
+	}
+}
+
 // TestRefusedKeysVerifyNothing pins that a key the key checks refuse verifies no
 // signature, as a key and in a pin: the forged signature R = identity, S = 0, which
 // crypto/ed25519 accepts under the identity key for any message, and the same

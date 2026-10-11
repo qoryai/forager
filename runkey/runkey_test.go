@@ -321,3 +321,11 @@ func TestSignRefusesAPayloadTheSchemaRefuses(t *testing.T) {
 		t.Error("signed under no key")
 	}
 }
+
+// TestARunKeyIsASecretToAccesskey pins that package accesskey, which cannot import this
+// one, treats Prefix as it treats an access key secret's.
+func TestARunKeyIsASecretToAccesskey(t *testing.T) {
+	if !accesskey.ContainsSecret(runkey.Prefix) || accesskey.SecretInDocument(runkey.Prefix) != accesskey.ErrRunKeyInDocument {
+		t.Errorf("accesskey does not treat %s as a run key", runkey.Prefix)
+	}
+}

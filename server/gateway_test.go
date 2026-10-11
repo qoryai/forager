@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -700,6 +701,36 @@ func TestViaKeepsItsTrustOverACallersTLSDialing(t *testing.T) {
 		if _, _, err := c.Discover(ctx); (err == nil) != tc.pass {
 			t.Errorf("%s: discovery under a caller's DialTLSContext gave %v; want passed %v", name, err, tc.pass)
 		}
+	}
+}
+
+// TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach pins that a registration
+// answer and an attach print and log without their run key under every verb, by value
+// and by pointer, with the rest of what they hold.
+func TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach(t *testing.T) {
+	rk := runKeyOf(t, gatewayRunID)
+	var out bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&out, nil))
+	a := server.RegistrationAnswer{Version: 1, RunID: gatewayRunID, RunKey: rk}
+	at := server.Attach{Version: 1, RunKey: rk, IntervalSeconds: 30, Events: []string{"*"}, ForagerVersion: "v0.7.0-dev", ContractVersion: 1}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		fmt.Fprintf(&out, verb+"\n", a)
+		fmt.Fprintf(&out, verb+"\n", &a)
+		fmt.Fprintf(&out, verb+"\n", at)
+		fmt.Fprintf(&out, verb+"\n", &at)
+	}
+	log.Info("registered", "answer", a, "attach", at)
+	shown := out.String()
+	if strings.Contains(shown, rk[4:24]) {
+		t.Errorf("a run key is shown:\n%s", shown)
+	}
+	for _, want := range []string{"[redacted]", "server.RegistrationAnswer{", "server.Attach{", gatewayRunID, "v0.7.0-dev", `"run_key":"[redacted]"`, `"interval_seconds":30`} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("%s is not shown:\n%s", want, shown)
+		}
+	}
+	if b, err := at.Body(); err != nil || !strings.Contains(string(b), rk) {
+		t.Errorf("the attach's body %s, %v; want the run key in it", b, err)
 	}
 }
 
