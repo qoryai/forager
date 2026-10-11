@@ -1527,7 +1527,8 @@ is not live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or th
 longer held, a batch from any instance of the attaching gateway node, under any of its
 active keys, gets the answer the attaching instance would: a resend after a restart or a
 loss. Until then, an outcome alone doesn't change who may send: a batch from another
-instance is still refused. A run that never attached is never opened. Heartbeats are
+instance is still refused. After a loss, only the attaching instance's heartbeat makes
+the run live again. A run that never attached is never opened. Heartbeats are
 `dev.qory.run.heartbeat` events in batches, as on a direct run.
 
 **The outcome.** The run's starter says how the run ended with a signed
