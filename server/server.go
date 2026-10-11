@@ -214,10 +214,12 @@ func decode(name, schemaName string, b []byte, out any) error {
 // server's keys. A section Forager does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
-	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
+	// NodeID is the id of the access key's node, nd_, node pool, np_, or gateway, ng_,
+	// for display; the ng_ prefix alone says the key is a gateway's.
 	NodeID string `json:"node_id"`
-	// Workspaces holds exactly one workspace id, ws_: the workspace the access key's node
-	// or node pool belongs to.
+	// Workspaces holds the workspace ids, ws_: for a node's or a node pool's key exactly
+	// one, the workspace the node or node pool belongs to; for a gateway's key one or
+	// more, the workspaces the gateway may serve.
 	Workspaces []string `json:"workspaces"`
 	Events     Events   `json:"events"`
 	// Run is the run endpoint, which every discovered configuration has: a run
