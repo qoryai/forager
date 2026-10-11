@@ -445,8 +445,8 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	run = append(run, "--no-healthcheck")
 	// The agent's container starts with no IPv6 address but loopback's: on the inside
 	// network, which has no IPv6 subnet, the engine leaves its interface without IPv6,
-	// and an interface made later starts without it unless something in the container
-	// changes that. Loopback, there before, keeps ::1, which tools dial localhost by.
+	// and IPv6 is off by default for an interface made later. Loopback, there before,
+	// keeps ::1, which tools dial localhost by.
 	run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
