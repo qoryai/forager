@@ -917,20 +917,24 @@ func TestTheGatewayKeepsItsPin(t *testing.T) {
 	good := runKeyFor(t, event.NewRunID(), nil)
 	// The caller changes its Server as the gateway reads run keys: under -race, a
 	// gateway that read the caller's would be a data race.
-	stop, changed := make(chan struct{}), make(chan struct{})
+	started, stop, changed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(changed)
 		pin := srv.ApiaryPublicKey
-		for {
+		for first := true; ; first = false {
+			pin[0] = otherPin
+			srv.ApiaryPublicKey = accesskey.Pin{otherPin}
+			if first {
+				close(started)
+			}
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			pin[0] = otherPin
-			srv.ApiaryPublicKey = accesskey.Pin{otherPin}
 		}
 	}()
+	<-started
 	if a := r.do(t, good, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
 		t.Errorf("a run key of the signer as the caller's pin loses it: %d %s", a.status, a.body)
 	}
