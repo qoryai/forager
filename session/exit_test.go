@@ -308,7 +308,7 @@ func TestAResendNeedsTheRunKey(t *testing.T) {
 	for _, c := range []struct {
 		status int
 		code   string
-	}{{400, "run_key_invalid"}, {409, "wrong_gateway"}, {409, "workspace_not_served"}, {409, "run_key_expired"}, {409, "run_attached"}, {401, "unauthorized"}} {
+	}{{400, "run_key_invalid"}, {409, "wrong_gateway"}, {409, "run_key_expired"}, {409, "run_attached"}, {401, "unauthorized"}} {
 		text := "the gateway refused the run: " + c.code
 		g.OnBatch(func([]map[string]any) linktest.Reply {
 			return linktest.Reply{Status: c.status, Body: map[string]any{"error": c.code, "from": "gateway", "message": text}}

@@ -91,8 +91,8 @@ type ResendResult struct {
 // gateway.Resend sends; [BehindGateway] tells the two apart. A run the gateway has
 // ended, or holds no more after its session was lost, answers with its 410: RunClosed,
 // and the events stay in the directory. A refusal of the run key the gateway passes on,
-// 400 run_key_invalid, or 409 wrong_gateway, workspace_not_served, run_key_expired or
-// run_attached, at the discovery or at a batch, is a [*Refusal] with its code, its
+// 400 run_key_invalid, or 409 wrong_gateway, run_key_expired or run_attached, at the
+// discovery or at a batch, is a [*Refusal] with its code, its
 // status, the gateway's text and From gateway, and nothing more is sent: what was not
 // accepted is under undelivered/. A 401 unauthorized, which the gateway does not send,
 // stops it the same way. A batch of a run the gateway no longer holds is its 410, the
@@ -221,7 +221,6 @@ var resendStops = map[string]int{
 	accesskey.CodeUnauthorized: http.StatusUnauthorized,
 	"run_key_invalid":          http.StatusBadRequest,
 	"wrong_gateway":            http.StatusConflict,
-	"workspace_not_served":     http.StatusConflict,
 	"run_key_expired":          http.StatusConflict,
 	"run_attached":             http.StatusConflict,
 }

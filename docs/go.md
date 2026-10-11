@@ -307,17 +307,17 @@ res, err := session.Resend(ctx, session.ResendSpec{
   of another run, "resend <dir>: QORY_RUN_KEY names the run <id>, not this one". A
   record that owes nothing, or of a run that never opened, needs none.
 - A refusal of the run key the gateway passes on, `400` `run_key_invalid`, or `409`
-  `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`, at the
-  discovery or at a batch, is a `*session.Refusal` from `gateway`, its code and status
-  the gateway's and its text the gateway's message, with the events left under
-  `undelivered/`; nothing more is sent after it. A `401` `unauthorized` stops the resend
-  the same way, though the gateway sends none, so a resend never sends again into one.
-  Any other refusal of a batch is sent again, as the session sends it. A batch for a run
-  the gateway no longer holds is its `410`, the run's end while the gateway keeps it and
-  then `run_closed`, which closes the resend, as long as the gateway still has the run's
-  record. Once the run key's `attach_by` plus a skew of 300 seconds has passed, by the
-  gateway's clock, a batch for a run the gateway holds nothing of, its record included,
-  is `409` `run_key_expired` instead, which stops the resend as the refusals above do.
+  `wrong_gateway`, `run_key_expired` or `run_attached`, at the discovery or at a batch,
+  is a `*session.Refusal` from `gateway`, its code and status the gateway's and its text
+  the gateway's message, with the events left under `undelivered/`; nothing more is sent
+  after it. A `401` `unauthorized` stops the resend the same way, though the gateway
+  sends none, so a resend never sends again into one. Any other refusal of a batch is
+  sent again, as the session sends it. A batch for a run the gateway no longer holds is
+  its `410`, the run's end while the gateway keeps it and then `run_closed`, which
+  closes the resend, as long as the gateway still has the run's record. Once the run
+  key's `attach_by` plus a skew of 300 seconds has passed, by the gateway's clock, a
+  batch for a run the gateway holds nothing of, its record included, is `409`
+  `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's resend,

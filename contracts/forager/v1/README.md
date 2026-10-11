@@ -2407,10 +2407,10 @@ seconds has passed, by the gateway's clock, a batch of a run the gateway holds n
 of, its record included, is `409` `run_key_expired` instead (The run key on the one
 address, above), which stops the resend as every refusal of the run key does. A refusal of the run
 key the gateway passes on, `400` `run_key_invalid`, or `409` `wrong_gateway`,
-`workspace_not_served`, `run_key_expired` or `run_attached`, stops it with that refusal,
-its code, status and message the gateway's, and what was not accepted is under
-`undelivered/` again; so does a `401` `unauthorized`, which the gateway does not send,
-so a resend never sends again into one. Any other refusal of a batch is sent again.
+`run_key_expired` or `run_attached`, stops it with that refusal, its code, status and
+message the gateway's, and what was not accepted is under `undelivered/` again; so does
+a `401` `unauthorized`, which the gateway does not send, so a resend never sends again
+into one. Any other refusal of a batch is sent again.
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used` on
 the local link, and behind a separate gateway the gateway answers `run_attached`, unless

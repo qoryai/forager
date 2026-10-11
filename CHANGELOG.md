@@ -1279,15 +1279,15 @@ release may change what an existing document does, and says so under Upgrading.
   again; the one it records after the gateway ended the run is the session's alone, and
   is never sent: `delivered.log` says `stopped` before it, whether the `410` answered a
   batch or a reload. A refusal of the run key the gateway passes on, `400`
-  `run_key_invalid`, or `409` `wrong_gateway`, `workspace_not_served`, `run_key_expired`
-  or `run_attached`, at the discovery or at a batch, is a `*session.Refusal` from
-  `gateway`, its code, status and text the gateway's, and stops the resend with the
-  events left under `undelivered/`; so does a `401` `unauthorized`, which the gateway
-  does not send, so a resend never sends again into one. Any other refusal of a batch is
-  sent again. The record is never completed: the gateway writes the end of a run whose
-  session was lost. A record its session holds is `session.ErrRunning`, and a directory
-  with `events.jsonl` is a gateway's record. After a gateway restart, the gateway's
-  resend completes the run `gateway_lost`.
+  `run_key_invalid`, or `409` `wrong_gateway`, `run_key_expired` or `run_attached`, at
+  the discovery or at a batch, is a `*session.Refusal` from `gateway`, its code, status
+  and text the gateway's, and stops the resend with the events left under
+  `undelivered/`; so does a `401` `unauthorized`, which the gateway does not send, so a
+  resend never sends again into one. Any other refusal of a batch is sent again. The
+  record is never completed: the gateway writes the end of a run whose session was lost.
+  A record its session holds is `session.ErrRunning`, and a directory with
+  `events.jsonl` is a gateway's record. After a gateway restart, the gateway's resend
+  completes the run `gateway_lost`.
 - `session.BehindGateway(dir)` reports whether a run directory holds a session's record
   behind a separate gateway, which `session.Resend` sends: whether it holds
   `separate-gateway`, `session.GatewayMark`, as a regular file, not followed if it is a
