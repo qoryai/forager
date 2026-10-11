@@ -1198,13 +1198,13 @@ type head struct {
 // run it holds the registration of from another node than the one its batches are
 // accepted from, or, while a run through a gateway is live, from another instance than
 // the attaching one, 409 wrong_gateway for a run through a gateway and wrong_node for a
-// direct run; one whose events the store holds every one of, 202 again; for a run
-// through a gateway, once the gateway that attached it may no longer serve the run's
-// workspace, decided as at the attach, 410 workspace_not_served; an event of a run it
-// wants nothing more of, 410; otherwise each new event stored and 202. Once the
-// run's starter gave its outcome, a 202 carries it as the end member, until the batch
-// that carries the run's dev.qory.run.exited, whose answer and every one after it holds
-// none.
+// direct run; for a run through a gateway, once the gateway that attached it may no
+// longer serve the run's workspace, decided as at the attach, 410 workspace_not_served,
+// a batch already accepted included; one whose events the store holds every one of, 202
+// again; an event of a run it wants nothing more of, 410; otherwise each new event
+// stored and 202. Once the run's starter gave its outcome, a 202 carries it as the end
+// member, until the batch that carries the run's dev.qory.run.exited, whose answer and
+// every one after it holds none.
 func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 	var batch []json.RawMessage
 	if err := json.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
@@ -1232,16 +1232,16 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		h.refuseSigned(w, v, http.StatusConflict, code)
 		return
 	}
+	if reg != nil && !reg.serving(h) {
+		h.digests(w, v, reg)
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
+		return
+	}
 	fresh := false
 	for _, hd := range heads {
 		if !h.Store.Seen(hd.ID) {
 			fresh = true
 		}
-	}
-	if fresh && reg != nil && !reg.serving(h) {
-		h.digests(w, v, reg)
-		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
-		return
 	}
 	if fresh && h.Stop != nil && h.Stop(subject) {
 		h.digests(w, v, reg)

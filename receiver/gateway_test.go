@@ -618,9 +618,10 @@ func TestTheAttachRefusesInItsOrder(t *testing.T) {
 // gateway that attached a run may still serve the run's workspace, never by the node's
 // current choice. A change of the node's choice or of a default alone leaves the
 // attached run where it is: its batches accepted, its reloads answered. Once the
-// gateway's organisation no longer covers the workspace, a fresh batch or heartbeat is a
-// signed 410 workspace_not_served, after wrong_gateway and deduplication and before a
-// run the receiver wants nothing more of; a reload is the signed 410 and no run
+// gateway's organisation no longer covers the workspace, a batch or heartbeat, a resend
+// of one already accepted included, is a signed 410 workspace_not_served, after
+// wrong_gateway and before deduplication and a run the receiver wants nothing more of,
+// where a resend while the gateway serves the workspace gets the same 202; a reload is the signed 410 and no run
 // configuration, after the 404 of another key; the gateway node attaching again, from
 // the attaching instance or another, is the 409 workspace_not_served of the attach, and
 // no run configuration. While the gateway may serve the workspace, the attaching
@@ -649,8 +650,12 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 		req := s.signed(keyID, http.MethodGet, receiver.DefaultRunPath+"/"+id, nil)
 		return req, serve(s.h, req)
 	}
+	var accepted []byte
 	served := func(name string) {
 		t.Helper()
+		if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
+			t.Errorf("%s: a resend of the accepted batch: %d %s, want 202", name, rec.Code, rec.Body.String())
+		}
 		if _, rec := s.batch(gwKey, e, event.RunStarted); rec.Code != http.StatusAccepted {
 			t.Errorf("%s: a batch: %d %s, want 202", name, rec.Code, rec.Body.String())
 		}
@@ -668,7 +673,7 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted := []byte("[" + string(line) + "]")
+	accepted = []byte("[" + string(line) + "]")
 	if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
 		t.Fatalf("the first batch: %d %s", rec.Code, rec.Body.String())
 	}
@@ -685,10 +690,9 @@ func TestTheGatewayIsDecidedAgainAtEachBatchAndReload(t *testing.T) {
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgOne}
 
 	s.h.Workspaces[ws] = receiver.Workspace{Organisation: orgTwo}
-	if _, rec := s.batchOf(gwKey, accepted); rec.Code != http.StatusAccepted {
-		t.Errorf("a resend of the accepted batch once the gateway may no longer serve the workspace: %d %s, want 202", rec.Code, rec.Body.String())
-	}
-	req, rec := s.batch(orgGWKey, e, event.RunStarted)
+	req, rec := s.batchOf(gwKey, accepted)
+	s.expect("a resend of the accepted batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")
+	req, rec = s.batch(orgGWKey, e, event.RunStarted)
 	s.expect("a batch from another gateway once the gateway may no longer serve the workspace", req, rec, http.StatusConflict, "wrong_gateway")
 	req, rec = s.batch(gwKey, e, event.RunStarted)
 	s.expect("a batch once the gateway may no longer serve the workspace", req, rec, http.StatusGone, "workspace_not_served")

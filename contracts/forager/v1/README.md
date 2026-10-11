@@ -1176,11 +1176,11 @@ are not all of one run, included; `401` for a GET's timestamp, or a registration
 `time`, outside ±300 seconds; then each endpoint's checks. The events endpoint's checks,
 in order: for a run the server holds, a batch from a key outside the one node its
 batches are accepted from, a signed `409` `wrong_gateway` or `wrong_node` (After the
-attach, below); deduplication, so a batch whose delivery id or event ids the server
-already accepted gets the same `2xx` again; then, for a run behind a gateway, a signed
-`410` `workspace_not_served` when the gateway that attached it may no longer serve the
-run's workspace, decided as at the attach; then `410` for an event of a run the server
-wants nothing more of. The run endpoint's checks, for a registration, in order: the same
+attach, below); for a run behind a gateway, a signed `410` `workspace_not_served` when
+the gateway that attached it may no longer serve the run's workspace, decided as at the
+attach; deduplication, so a batch whose delivery id or event ids the server already
+accepted gets the same `2xx` again; then `410` for an event of a run the server wants
+nothing more of. The run endpoint's checks, for a registration, in order: the same
 bytes under any active key of the node or node pool that registered the run get the
 stored answer again, the same run key included, so a key replaced while the run waits
 keeps working; `410`, signed, with any code or none: the server takes no run here; `409`
