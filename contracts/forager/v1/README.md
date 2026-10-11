@@ -1496,12 +1496,12 @@ with the same refusal. Then the attach's own, in order:
 |---|---|---|---|
 | a | `409` signed | `not_a_gateway` | the signing key is not a gateway's |
 | b | `400` signed | `run_key_invalid` | the run key does not verify, or its `run_id` is not the path's |
-| 1 | `200` signed | — | the same gateway node, under any of its active keys, attaching the same live run again gets the stored answer, kept by gateway node and run id, not by the bytes |
+| 1 | `200` signed | — | the same gateway node, under any of its active keys and with the same signed `X-Qory-Instance-Id`, attaching the same live run again gets the stored answer, kept by gateway node, instance id and run id, not by the bytes |
 | 2 | `410` signed | any or none | the run has ended: its `dev.qory.run.exited` arrived, an outcome ended it, or it was lost after the attach |
 | 3 | `409` signed | `run_key_expired` | past `attach_by`, never attached |
 | 4 | `409` signed | `wrong_gateway` | the run key names another gateway node |
 | 5 | `409` signed | `workspace_not_served` | the gateway does not serve the run's workspace |
-| 6 | `409` signed | `run_attached` | another gateway node has attached the run |
+| 6 | `409` signed | `run_attached` | another gateway node, or another instance of the same node, has attached the run |
 
 Forager's client builds the body with `server.Attach`, whose `Body` sets `time` from the
 clock when it is left empty, and posts it with `Client.Attach`, which returns the run
@@ -1510,17 +1510,20 @@ configuration with its digest, the labels and `about`; a refusal reads
 
 **After the attach.** A run's reloads, batches and heartbeats are accepted from the
 active keys of one node alone, so replacing a key keeps working: for a run behind a
-gateway, the gateway node that attached it, under any of its active keys and its own
-instance id, and a batch from any other key, the node pool's own among them, is a signed
-`409` `wrong_gateway`; for a direct run, the node or node pool that registered it, under
-any of its active keys, and a batch from another node's key is a signed `409`
+gateway, the gateway node that attached it, under any of its active keys, and while the
+run is live from the attaching instance alone; a batch from any other key, the node
+pool's own among them, or while the run is live from another instance of that node, is a
+signed `409` `wrong_gateway`; for a direct run, the node or node pool that registered
+it, under any of its active keys, and a batch from another node's key is a signed `409`
 `wrong_node`. A reload from any other key is `404` in both cases. The organisation of
 the gateway's key is checked at batches, heartbeats and reloads, and the run's
 organisation at batches, each as every key's is. A run's workspace, node and instance
-come from its registration, never from the gateway's instance id. Events after the end
-are accepted from the attaching gateway node: a resend after a restart or a loss. A run
-that never attached is never opened. Heartbeats are `dev.qory.run.heartbeat` events in
-batches, as on a direct run.
+come from its registration, never from the gateway's instance id. Once the run is not
+live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or the run no longer
+held, a batch from any instance of the attaching gateway node, under any of its active
+keys, gets the answer the attaching instance would: a resend after a restart or a loss.
+The starter's outcome alone leaves the run live. A run that never attached is never
+opened. Heartbeats are `dev.qory.run.heartbeat` events in batches, as on a direct run.
 
 **The outcome.** The run's starter says how the run ended with a signed
 `POST <run.url>/<run_id>/outcome`, `Content-Type: application/json`, signed by any active
