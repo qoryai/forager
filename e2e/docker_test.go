@@ -47,7 +47,7 @@ func TestDockerConforms(t *testing.T) {
 func TestDockerNestedConforms(t *testing.T) {
 	rt := os.Getenv("QORY_WALL_RUNTIME")
 	if rt == "" {
-		e2e.Skip(t, "QORY_WALL_RUNTIME names no runtime that runs a Docker of the agent's own")
+		e2e.Skip(t, "QORY_WALL_RUNTIME names no runtime that runs nested Docker")
 	}
 	command := os.Getenv("QORY_WALL_COMMAND")
 	if command == "" {

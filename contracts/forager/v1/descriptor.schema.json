@@ -69,7 +69,7 @@
               ]
             },
             "events": {
-              "description": "The runtime's hook event names to install the forwarder for, in the runtime's own spelling.",
+              "description": "The runtime's hook event names to install the forwarder for, in the runtime's spelling.",
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
@@ -83,7 +83,7 @@
       }
     },
     "stop": {
-      "description": "How the session stops the runtime, at a run's time limit or when Forager itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this sets which the runtime gets. A run that sets a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
+      "description": "How the session stops the runtime, at a run's time limit or when Forager itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this sets which the runtime gets. A run that sets a signal or a grace overrides it; absent, SIGTERM and ten seconds.",
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
@@ -174,7 +174,7 @@
           "items": {"$ref": "#/$defs/name"}
         },
         "credential_files": {
-          "description": "Files in which the runtime keeps a credential of its own, ~ being the home of the user Forager runs as.",
+          "description": "Files in which the runtime keeps its credential, ~ being the home of the user Forager runs as.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

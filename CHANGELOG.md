@@ -27,9 +27,9 @@ release may change what an existing document does, and says so under Upgrading.
   went. A run stopped at its time limit, `timeout`, is `cancelled`, and so is
   `session.Result.State`; so is a session's run stopped from where it was started,
   `interrupted`, a Ctrl-C or a signal to the program that runs the session, with the
-  runtime's own `exit_code` and `signal`; such a run was recorded `failed`, or not at
-  all when the runtime exited 0 at the stop. Its `reason` is an open code,
-  `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's own codes, or the run's starter's,
+  runtime's `exit_code` and `signal`; such a run was recorded `failed`, or not at all
+  when the runtime exited 0 at the stop. Its `reason` is an open code,
+  `^[a-z][a-z0-9_]{0,63}$`, with no list: Forager's codes, or the run's starter's,
   carried as given. A receiver reads the state from `state`, and shows a reason it does
   not know as it is.
 - `server.Ended` returns a `server.RunEnd`, the code, who ended the run, and the state
@@ -89,18 +89,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `event.OpenedBySession`, the value of `opened_by`, and `event.ReasonTimeout`,
   `ReasonInterrupted`, `ReasonRunClosed`, `ReasonGatewayLost`, `ReasonSessionLost`,
-  `ReasonStopped` and `ReasonBatchRefused`, Forager's own reasons of
-  `dev.qory.run.exited`; `interrupted` ends a session's run stopped from where it was
-  started, `cancelled`; `stopped` ends a run whose starter ended it and gave no outcome,
-  `cancelled`; `batch_refused` is the gateway's `410` to a session whose batch it
-  refused, the reason of the gateway's own `dev.qory.run.exited`, `failed`, and the
-  reason the session records in its own record after it. The session's
-  `dev.qory.run.started` contains `opened_by` `session`. `event.StateSucceeded`,
-  `StateFailed` and `StateCancelled` are the states of `dev.qory.run.exited`, and
-  `event.IsState` says whether a string is one; `event.Reserved` says whether a reason
-  is one of Forager's reserved codes, the old names among them, and
-  `event.StarterReason` whether it may be a starter's: a code of the pattern of `reason`
-  that is not reserved.
+  `ReasonStopped` and `ReasonBatchRefused`, Forager's reasons of `dev.qory.run.exited`;
+  `interrupted` ends a session's run stopped from where it was started, `cancelled`;
+  `stopped` ends a run whose starter ended it and gave no outcome, `cancelled`;
+  `batch_refused` is the gateway's `410` to a session whose batch it refused, the reason
+  of the gateway's `dev.qory.run.exited`, `failed`, and the reason the session records
+  in the session's record after it. The session's `dev.qory.run.started` contains
+  `opened_by` `session`. `event.StateSucceeded`, `StateFailed` and `StateCancelled` are
+  the states of `dev.qory.run.exited`, and `event.IsState` says whether a string is one;
+  `event.Reserved` says whether a reason is one of Forager's reserved codes, the old
+  names among them, and `event.StarterReason` whether it may be a starter's: a code of
+  the pattern of `reason` that is not reserved.
 - Contract `v1` revision 1, amended in place, lets the run's starter say how a run
   ended, and carries it to the end of the run: the starter posts its outcome to the
   server (the outcome, below), the server hands it to the gateway as the `end` member of
@@ -115,16 +114,16 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.exited` with the old `quiet` contains `quiet_seconds`, and no other
   does. A `410` that ends a run on the link carries the `state` and the `reason` of that
   end, new optional members of `link-refusal.schema.json`. The README's §The events, How
-  a run ends, gives the state of each of Forager's own endings. `fixtures/` has a
-  session's run that the gateway ends `cancelled` with `stopped`, two session batches
-  whose `dev.qory.run.exited` is `cancelled` with `interrupted`, one with the runtime's
-  exit status and one with its signal, `410`s with a `state` and a `reason`, the
-  starter's `failed` and `checks_failed` among them, and refused ones: a
-  `dev.qory.run.exited` without `state`, with a state of no kind it names, with a reason
-  that is no code or `gateway_lost` and `cancelled`, a session's with `timeout` and
-  `succeeded`, with `interrupted` and `failed` or with the old name
-  `run_ended_at_issuer`, two marked beyond the schema, which only the gateway refuses,
-  and refusals with a state of no kind it names.
+  a run ends, gives the state of each of Forager's endings. `fixtures/` has a session's
+  run that the gateway ends `cancelled` with `stopped`, two session batches whose
+  `dev.qory.run.exited` is `cancelled` with `interrupted`, one with the runtime's exit
+  status and one with its signal, `410`s with a `state` and a `reason`, the starter's
+  `failed` and `checks_failed` among them, and refused ones: a `dev.qory.run.exited`
+  without `state`, with a state of no kind it names, with a reason that is no code or
+  `gateway_lost` and `cancelled`, a session's with `timeout` and `succeeded`, with
+  `interrupted` and `failed` or with the old name `run_ended_at_issuer`, two marked
+  beyond the schema, which only the gateway refuses, and refusals with a state of no
+  kind it names.
 - `go test ./contracts -run TestSignedFixtures -update-signed` signs the batches under
   `fixtures/signed/` again under the fixture access key secret, after a change to a
   body; the same test without the flag checks them.
@@ -143,8 +142,8 @@ release may change what an existing document does, and says so under Upgrading.
   new policy by the same node policy. `dev.qory.run.policy_applied` reports the
   narrowed lists and `node_policy`: the node policy's `digest`, `sha256=` and the hex
   SHA-256 of its RFC 8785 serialisation, and its `paths`.
-- Forager's own refusals are `session.Refusal` values too, with the code, the names
-  they concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
+- Forager's refusals are `session.Refusal` values too, with the code, the names they
+  concern, never a value, and a sentence in `Detail`: `run_configuration_invalid`,
   `variable_reserved`, `placeholder_conflict`, `tool_unknown`, `image_unknown`,
   `mount_contains_forager_files`, `mount_mode_conflict`, `mount_shared_with_run`,
   `mount_through_link` and `engine_unreachable`.
@@ -156,10 +155,10 @@ release may change what an existing document does, and says so under Upgrading.
   refused run and the variables that the server vendors:
   `enrolment.schema.json`, the enrolment request and its answer, a `201` that means the
   access key is active, signed with every signed refusal at enrolment under the
-  enrolment answers' own domain line, `qory-enrol-answer-ed25519-v1`, once the server
-  has checked the key and verified the proof under it; `events/run.refused.schema.json`,
-  the data of `dev.qory.run.refused`, which `event.schema.json` lists among its types;
-  and `denied-variables.json`, the built-in deny list of variable names and patterns.
+  enrolment answers' domain line, `qory-enrol-answer-ed25519-v1`, once the server has
+  checked the key and verified the proof under it; `events/run.refused.schema.json`, the
+  data of `dev.qory.run.refused`, which `event.schema.json` lists among its types; and
+  `denied-variables.json`, the built-in deny list of variable names and patterns.
   Forager's code is unchanged.
 - Fixtures with the known answers of the access key: `fixtures/enrolment/`, two
   enrolment requests and the answer; and `fixtures/known-answers/`, the fixture access
@@ -198,8 +197,8 @@ release may change what an existing document does, and says so under Upgrading.
   their signatures under the fixture signing key.
 - The reference receiver accepts the public keys its configuration holds, answers in
   the contract's order of refusals, a registration whose `interval_seconds` is outside
-  1 to 300 being `invalid_request`, and signs every answer after verification under its
-  own key, the `410` of its `Stop` among them. Its new hook `Admit` refuses an
+  1 to 300 being `invalid_request`, and signs every answer after verification under the
+  receiver's key, the `410` of its `Stop` among them. Its new hook `Admit` refuses an
   instance's registration with `instance_limit`.
 - `dev.qory.run.started` contains `about` when the caller passes one: what the run is
   about, as the caller passed it, every member optional. `kind` is the kind of run, at
@@ -226,8 +225,8 @@ release may change what an existing document does, and says so under Upgrading.
   the run key, `run_key_invalid`, `run_attached`, `run_key_expired`, `wrong_gateway` and
   `workspace_not_served`, which the session records with no `status`, and says that a
   run request the gateway refuses opens no run at the gateway: the session records the
-  refusal it received in its own record alone, and nothing reaches the server for it. A
-  gateway's `410` before the runtime starts is recorded the same way, as
+  refusal it received only in the session's record, and nothing reaches the server for
+  it. A gateway's `410` before the runtime starts is recorded the same way, as
   `dev.qory.run.refused` with the `410`'s code and `status` `410`: the schema's codes
   include `session_lost`, `batch_refused` and `stopped`, and the server's `not_found`, a
   signed `404` to a run's registration, `accesskey.CodeNotFound`. A code without
@@ -247,20 +246,19 @@ release may change what an existing document does, and says so under Upgrading.
   the run configuration, the events endpoint and the `410` close, over two transports.
   The local link is a Unix socket in `qory-link-*`, mode `0700`, the socket `0600`, one
   of Forager's files, on the paths toward the server. Before it sends anything the
-  session checks that the socket's peer is its own user, by the peer's uid, and the
-  gateway serves only a peer of its own user, by the same check, and closes any other
-  connection unanswered before it reads anything of it; a connection carries HTTP/1.1
-  from its first byte, with no preamble and no secret of the link. The socket's peer uid
-  is the whole of the local link's trust: a process of the same user that reaches the
-  socket and knows a local run's id can post a batch into the run, fetch its
-  configuration again, or end it. A session in the
-  gateway's own process, as `qory` runs them on one machine, reaches the link in memory,
-  with the same bytes, and never dials the socket's path, where another process of the
-  same user could stand in for the gateway. `gateway.Config.NoLinkSocket`, which
-  `qory run` sets, makes no link directory and no socket: the link is served in memory
-  alone, which no other process reaches, `LocalLink()` has no `Socket`, and its `Files`
-  leave out the link directory and
-  keep every other entry, the pattern of every gateway's link among them. A separate
+  session checks that the socket's peer is the session's user, by the peer's uid, and
+  the gateway serves only a peer of the gateway's user, by the same check, and closes
+  any other connection unanswered before it reads anything of it; a connection carries
+  HTTP/1.1 from its first byte, with no preamble and no secret of the link. The socket's
+  peer uid is the whole of the local link's trust: a process of the same user that
+  reaches the socket and knows a local run's id can post a batch into the run, fetch its
+  configuration again, or end it. A session in the same process as the gateway, as
+  `qory` runs them on one machine, reaches the link in memory, with the same bytes, and
+  never dials the socket's path, where another process of the same user could stand in
+  for the gateway. `gateway.Config.NoLinkSocket`, which `qory run` sets, makes no link
+  directory and no socket: the link is served in memory alone, which no other process
+  reaches, `LocalLink()` has no `Socket`, and its `Files` leave out the link directory
+  and keep every other entry, the pattern of every gateway's link among them. A separate
   gateway, the one the run's run key names, speaks TLS 1.3 alone on its one address,
   with the operator's certificate, whose chain the session verifies for the host name of
   the run key's `gateway_url` against the system's roots; every connection there opens
@@ -299,7 +297,7 @@ release may change what an existing document does, and says so under Upgrading.
   sets anything: the policy in force, what needs a wall, the image, `image_unknown`, the
   credentials and the tools, and `placeholder_conflict` for a placeholder the run passes
   a value for. A refused start is a `403` with the session's code of `refusal.Decides`
-  and `from: gateway`, while the server's refusals pass through with their own status
+  and `from: gateway`, while the server's refusals pass through with the server's status
   and `from: apiary`; a start that fails without a code is a `500` `internal` from
   `gateway` whose `message`, the error's text, the session returns as its error. The
   gateway tries the server's registration up to 3 times, 1 second and then 2 seconds
@@ -316,8 +314,8 @@ release may change what an existing document does, and says so under Upgrading.
   `refusal.Decides` or in `dev.qory.run.refused`'s codes. On the local link the gateway
   applies a reload itself and reports every failed one, with a code or without, with
   today's text, and the reload answers the policy in force with its digest unchanged.
-  The session still checks its own image table and runtime before it sends the request,
-  and leaves out of `passes` a name outside the variable-name grammar. The answer,
+  The session still checks its image table and runtime before it sends the request, and
+  leaves out of `passes` a name outside the variable-name grammar. The answer,
   `link-run-answer.schema.json`, has `run_id`, on the local link `labels`, the run's
   labels as the gateway holds them, the run request's, the policy in force and its
   `digest`, `variables`, `placeholders`, the variables the agent sees in place of a
@@ -326,12 +324,13 @@ release may change what an existing document does, and says so under Upgrading.
   whose value an unwalled run has left out, `image`, the image the run gets when it has
   a wall, `applied`, required, the members of `dev.qory.run.policy_applied` the gateway
   decides, every one but `variables` and `harness_hosts`, which the session adds to
-  write its own, on the local link the run's `proxy_secret`, and its
-  `certificate_authority` when `wall` is true and the gateway reads inside HTTPS for the
-  run, for a credential, a tool or a path rule, and behind a wall with a server always;
-  the session's `dev.qory.run.started` contains exactly those labels, and behind a
-  separate gateway none. Discovery on the link, `GET /.well-known/qory-configuration` on
-  the local link and `GET /qory-link/configuration` behind a separate gateway, is
+  write the session's `dev.qory.run.policy_applied`, on the local link the run's
+  `proxy_secret`, and its `certificate_authority` when `wall` is true and the gateway
+  reads inside HTTPS for the run, for a credential, a tool or a path rule, and behind a
+  wall with a server always; the session's `dev.qory.run.started` contains exactly those
+  labels, and behind a separate gateway none. Discovery on the link,
+  `GET /.well-known/qory-configuration` on the local link and
+  `GET /qory-link/configuration` behind a separate gateway, is
   `link-discovery.schema.json`, with `events.interval_seconds`, the gateway's heartbeat
   interval, `proxy.address`, the gateway's proxy as `host:port`, on loopback on one
   machine, and no `node_id`, `workspaces`, `apiary_public_key` or `secrets`; a batch is
@@ -359,47 +358,47 @@ release may change what an existing document does, and says so under Upgrading.
   gateway writes `dev.qory.run.exited`, `failed` with `batch_refused`, refuses the run's
   proxy secret, or behind a separate gateway its run key on a proxy connection, and
   answers the session's further requests with a `410` `batch_refused`; the session stops
-  the runtime and writes its own `dev.qory.run.exited`, `failed` with `batch_refused`,
-  as the gateway's, in its own record and never posted. `dev.qory.run.policy_applied` is
-  the session's, from the run answer and a reload answer whose digest changed; into a
-  session's run the gateway merges its own `dev.qory.run.egress`, every one after a
-  reload's switch held until the session's `dev.qory.run.policy_applied` of the new
-  policy is numbered, and, when it ends the run, its `dev.qory.run.exited`. A walled
-  agent never reaches the local link's socket; an unwalled one runs as the session's
-  user and can, so without a wall enforcement is cooperative. A session's heartbeats are
-  its run's, and a session silent for 3 × the interval ends the run, `session_lost`.
-  When the gateway ends a session's run, with `session_lost`, `batch_refused`, or
-  `stopped` with the starter's outcome, it writes the run's `dev.qory.run.exited`
-  itself, with the state of that end and `-1`, and delivers it toward the server. It
-  answers the session's next request and every one after it with a `410`, and the
-  session writes its own `dev.qory.run.exited`, with the state and the reason that `410`
-  gives, as the gateway's, in its own record and never posted, and posts nothing more.
-  The `410`'s code is, from `gateway`, `stopped` after the starter's outcome,
-  `session_lost` after a silent session, or `batch_refused` after a refused batch. Every
-  `410` on the link carries `from`, and the gateway's own `410` `run_closed` to a
-  request of a run already ended is unchanged. A server's signed `410`, with any code or
-  none, stops delivery: the gateway sends no further batch for the run and marks its
-  record `stopped`, and the run goes on, its record keeping every event. A `410` to the
-  registration, signed or not, is no run, and no refusal: no server's `410` crosses the
-  link. On one machine the relay opens its connections with `QORY-RELAY` and the run's
-  proxy secret; behind a separate gateway the session's forwarder opens each, bound,
-  with `QORY-RELAY` and the run key, over TLS 1.3 (Session, Added). `fixtures/link/`
-  holds the valid documents, the discovery of a separate gateway and a run answer behind
-  one, without labels and `proxy_secret`, among them, refusals from `gateway` and from
-  `apiary`, most with today's text as their `message`, the gateway's with the
-  `: <code>: <names>` tail, `run_key_invalid` and `run_attached` from `gateway`, and the
-  signed `409` `instance_limit` to the registration and `run_key_expired` to the attach
-  from `apiary` with the server's `run.url` in it, and `fixtures/invalid/link-*` the
-  refused ones, a discovery without `proxy`, a run request that passes a value with a
-  name or whose image has no `ref`, a run answer without `applied` or whose image has no
-  `ref`, a reload answer whose `applied` holds `variables`, a refusal without `from` or
-  with a control character other than tab and newline in its `message`, a C1 one among
-  them, and a batch with a `dev.qory.run.egress`, a `dev.qory.run.started` whose
-  `opened_by` is not `session`, a `dev.qory.run.exited` with each of Forager's reasons
-  but `timeout` and `interrupted`, and a `dev.qory.run.refused` with a code a gateway
-  decides, `run_id_used` among them, `run_closed`, a code of the server's or a name
-  `<member>=<value>`. Package `link` has `LinkDirPrefix`, `LinkSocketName`,
-  `LinkDirMode` and `LinkSocketMode`.
+  the runtime and writes the session's `dev.qory.run.exited`, `failed` with
+  `batch_refused`, as the gateway's, in the session's record and never posted.
+  `dev.qory.run.policy_applied` is the session's, from the run answer and a reload
+  answer whose digest changed; into a session's run the gateway merges the gateway's
+  `dev.qory.run.egress`, every one after a reload's switch held until the session's
+  `dev.qory.run.policy_applied` of the new policy is numbered, and, when it ends the
+  run, its `dev.qory.run.exited`. A walled agent never reaches the local link's socket;
+  an unwalled one runs as the session's user and can, so without a wall enforcement is
+  cooperative. A session's heartbeats are its run's, and a session silent for 3 × the
+  interval ends the run, `session_lost`. When the gateway ends a session's run, with
+  `session_lost`, `batch_refused`, or `stopped` with the starter's outcome, it writes
+  the run's `dev.qory.run.exited` itself, with the state of that end and `-1`, and
+  delivers it toward the server. It answers the session's next request and every one
+  after it with a `410`, and the session writes the session's `dev.qory.run.exited`,
+  with the state and the reason that `410` gives, as the gateway's, in the session's
+  record and never posted, and posts nothing more. The `410`'s code is, from `gateway`,
+  `stopped` after the starter's outcome, `session_lost` after a silent session, or
+  `batch_refused` after a refused batch. Every `410` on the link carries `from`, and the
+  gateway's `410` `run_closed` to a request of a run already ended is unchanged. A
+  server's signed `410`, with any code or none, stops delivery: the gateway sends no
+  further batch for the run and marks its record `stopped`, and the run goes on, its
+  record keeping every event. A `410` to the registration, signed or not, is no run, and
+  no refusal: no server's `410` crosses the link. On one machine the relay opens its
+  connections with `QORY-RELAY` and the run's proxy secret; behind a separate gateway
+  the session's forwarder opens each, bound, with `QORY-RELAY` and the run key, over TLS
+  1.3 (Session, Added). `fixtures/link/` holds the valid documents, the discovery of a
+  separate gateway and a run answer behind one, without labels and `proxy_secret`, among
+  them, refusals from `gateway` and from `apiary`, most with today's text as their
+  `message`, the gateway's with the `: <code>: <names>` tail, `run_key_invalid` and
+  `run_attached` from `gateway`, and the signed `409` `instance_limit` to the
+  registration and `run_key_expired` to the attach from `apiary` with the server's
+  `run.url` in it, and `fixtures/invalid/link-*` the refused ones, a discovery without
+  `proxy`, a run request that passes a value with a name or whose image has no `ref`, a
+  run answer without `applied` or whose image has no `ref`, a reload answer whose
+  `applied` holds `variables`, a refusal without `from` or with a control character
+  other than tab and newline in its `message`, a C1 one among them, and a batch with a
+  `dev.qory.run.egress`, a `dev.qory.run.started` whose `opened_by` is not `session`, a
+  `dev.qory.run.exited` with each of Forager's reasons but `timeout` and `interrupted`,
+  and a `dev.qory.run.refused` with a code a gateway decides, `run_id_used` among them,
+  `run_closed`, a code of the server's or a name `<member>=<value>`. Package `link` has
+  `LinkDirPrefix`, `LinkSocketName`, `LinkDirMode` and `LinkSocketMode`.
 - `link.Local` is what a session needs of a gateway on the same machine: its link
   socket, its proxy address, the files a walled run must not mount and the variables it
   reserves. The one `(*gateway.Gateway).LocalLink()` hands out reaches the gateway in
@@ -484,9 +483,9 @@ release may change what an existing document does, and says so under Upgrading.
   configuration, so the starter never receives the run's policy, and no
   `X-Qory-Run-Configuration` or `ETag`. The run endpoint's refusals of a registration
   gain, after the stored answer and the `410`, in order: `409` `gateway_key`, a
-  gateway's own key, which registers no run; `409` `node_is_direct`, the gateway shape
-  from a key whose choice is `direct`, or `node_uses_gateway`, the direct shape from a
-  key whose choice resolves to a gateway; `409` `no_default_gateway`, the choice is the
+  gateway's key, which registers no run; `409` `node_is_direct`, the gateway shape from
+  a key whose choice is `direct`, or `node_uses_gateway`, the direct shape from a key
+  whose choice resolves to a gateway; `409` `no_default_gateway`, the choice is the
   default and none resolves; `409` `gateway_not_serving`, the named gateway may no
   longer serve the node's workspace; and `409` `gateway_without_key`, the resolved
   gateway has no active access key; all before `instance_limit`, so a run that can go
@@ -504,8 +503,8 @@ release may change what an existing document does, and says so under Upgrading.
   printed.
   `fixtures/run-registration/` has two bodies of the gateway shape, and
   `fixtures/invalid/` refused ones of either shape.
-- The attach, `POST <run.url>/<run_id>/attach`, signed by the gateway's own access key,
-  with which the gateway the run key names takes the run on: its body,
+- The attach, `POST <run.url>/<run_id>/attach`, signed by the gateway's access key, with
+  which the gateway the run key names takes the run on: its body,
   `run-attach.schema.json`, every member required, holds `run_key`, `interval_seconds`,
   `events`, `forager_version`, `contract_version` and `time`. The answer is a signed
   `200`, `run-attach-answer.schema.json`: the run's run configuration with
@@ -569,7 +568,7 @@ release may change what an existing document does, and says so under Upgrading.
   a gateway's key lists its `ng_` `node_id` and the workspaces it may serve (Changed,
   below); there is no member that names the key's kind. The fixture gateway key,
   `ak_f1xt0re00000000g`, its seed bytes 97 to 128, is in `keys.json`, among the
-  published fixture keys every side refuses as its own key and as a pin;
+  published fixture keys every side refuses as its key and as a pin;
   `fixtures/enrolment/` has a gateway's request under it and the answer, and
   `fixtures/configuration/gateway.json` a gateway key's discovery with two workspaces.
 - The server document has `via`, `server.schema.json`: `url`, required, an `https`
@@ -578,17 +577,17 @@ release may change what an existing document does, and says so under Upgrading.
   the enrolment, discovery, the registration and the outcome, to `via.url`'s origin with
   the target, the path and the query, unchanged, discovery's absolute `run.url` rebased
   on it too, and the gateway passes each answer back byte for byte, so each signature is
-  the server's; `url` stays the server's own, so records and texts name the real server.
-  A `via` connection is TLS 1.3 alone, its chain always checked for `via.url`'s host
-  name against the system's roots, or the authorities of `ca_file` in their place, with
+  the server's; `url` stays the server's, so records and texts name the real server. A
+  `via` connection is TLS 1.3 alone, its chain always checked for `via.url`'s host name
+  against the system's roots, or the authorities of `ca_file` in their place, with
   `certificate_sha256`, the SHA-256 of the certificate's DER SubjectPublicKeyInfo in
   standard base64 with padding, as a pin besides. `server.Config.Via`, a `*server.Via`,
   holds it; `Via.Check` refuses one Forager cannot send through, and `Via.Transport` is
-  its transport, with no proxy of the environment. A `server.Client` whose `HTTP` has a
-  transport of its own keeps that transport's `DialContext` under `via` and drops its
+  its transport, with no proxy of the environment. A `server.Client` whose `HTTP` sets a
+  transport keeps that transport's `DialContext` under `via` and drops its
   `DialTLSContext` and `DialTLS`, which would skip the chain check and the pin. The
   gateway a request is relayed through sees the registration answer's run key, so `via`
-  names a gateway trusted at least as much as the run's own gateway.
+  names a gateway trusted at least as much as the run's gateway.
   `accesskey.EnrolmentRequest.PostVia`
   sends an enrolment through it, with a client the caller builds from that transport,
   and verifies the answer as `Post` does. `fixtures/server/via.yaml` has one, and
@@ -623,11 +622,11 @@ release may change what an existing document does, and says so under Upgrading.
   `receiver.Workspace` and a `receiver.Organisation`, each with its default gateway; and
   a `receiver.Gateway`, its URL, the workspace or organisation it lives at and its
   access keys. `receiver.AccessKey` has `Node`, what the key belongs to, and a key with
-  none is a node of its own, which reports directly. It answers a gateway key's
-  discovery with its `ng_` `node_id` and every workspace the gateway may serve, resolves
-  each registration's gateway at the workspace and the organisation, with no operator
-  level, in the run endpoint's order of refusals, and issues each run through a gateway
-  its run key under its own key, its `attach_by` by `attach_seconds`,
+  none is a separate node, which reports directly. It answers a gateway key's discovery
+  with its `ng_` `node_id` and every workspace the gateway may serve, resolves each
+  registration's gateway at the workspace and the organisation, with no operator level,
+  in the run endpoint's order of refusals, and issues each run through a gateway its run
+  key under the receiver's key, its `attach_by` by `attach_seconds`,
   `receiver.AttachWindow`, 600 seconds, when it asks for none, and
   `receiver.AttachCeiling`, 3600 seconds, at most. It serves the attach and its refusals
   in order, accepts a run's reloads and batches from one node alone, a signed `404` and
@@ -723,7 +722,7 @@ release may change what an existing document does, and says so under Upgrading.
   `https://qory.dev/contracts/forager/v1/…`. `dev.qory.run.registered` and
   `dev.qory.run.started` contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was
   not recorded is `gateway_lost`; and the refusal code of a mount that holds Forager's
-  own files is `mount_contains_forager_files`, `refusal.MountContainsForagerFiles`.
+  files is `mount_contains_forager_files`, `refusal.MountContainsForagerFiles`.
   `accesskey.UserAgent(version)` builds the `User-Agent` of every request to a server,
   `qory-forager/<version>`. The four batch fixtures under `fixtures/signed` are signed
   over their new bodies.
@@ -737,19 +736,20 @@ release may change what an existing document does, and says so under Upgrading.
   `batch_refused`, the gateway refused a batch of its, and `stopped`, which the gateway
   writes, beside `timeout`, `interrupted`, `run_closed` and `gateway_lost`; when the
   gateway ends a session's run it writes the run's `dev.qory.run.exited`, and the
-  session writes its own, with the state and the reason of the gateway's `410`, in its
-  own record and never posted. `exit_code` is optional in the schema, and Forager writes
-  it on every `dev.qory.run.exited`: `-1` with `gateway_lost` and in every
-  `dev.qory.run.exited` the gateway writes for a session's run, `session_lost` included.
-  `state` is required on every `dev.qory.run.exited`, `failed` with `gateway_lost`; the
-  schema fixes `exit_code` to `-1` with `gateway_lost` when it is present. The README's
-  events table, §The events and §Fixtures say so. Every `run.started` in the fixtures
-  contains `opened_by`, and the four batches under `fixtures/signed` are signed over
-  their new bodies. `fixtures/invalid/` has a `run.started` without `opened_by`, one
-  whose `opened_by` is of no kind it names, and a session's without `command`.
-- The server judges a run's liveness by its heartbeats' own `time`, corrected by the
-  run's clock offset, with a tolerance of 300 seconds and never later than their
-  arrival, and a delivery id is never used again for other events.
+  session writes the session's, with the state and the reason of the gateway's `410`, in
+  the session's record and never posted. `exit_code` is optional in the schema, and
+  Forager writes it on every `dev.qory.run.exited`: `-1` with `gateway_lost` and in
+  every `dev.qory.run.exited` the gateway writes for a session's run, `session_lost`
+  included. `state` is required on every `dev.qory.run.exited`, `failed` with
+  `gateway_lost`; the schema fixes `exit_code` to `-1` with `gateway_lost` when it is
+  present. The README's events table, §The events and §Fixtures say so. Every
+  `run.started` in the fixtures contains `opened_by`, and the four batches under
+  `fixtures/signed` are signed over their new bodies. `fixtures/invalid/` has a
+  `run.started` without `opened_by`, one whose `opened_by` is of no kind it names, and a
+  session's without `command`.
+- The server judges a run's liveness by its heartbeats' `time`, corrected by the run's
+  clock offset, with a tolerance of 300 seconds and never later than their arrival, and
+  a delivery id is never used again for other events.
 
 ### Gateway
 
@@ -776,17 +776,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `gateway.Config.Listen`, a separate gateway's one address, in place of its local link:
   a gateway with `Listen` serves the sessions of other machines alone, and makes no
-  local link, in memory or on a socket, and no proxy listener on loopback; a session of
-  its own machine that dials its `LocalLink` gets "the gateway serves other machines on
-  its address, and runs no sessions". Every connection is routed by its first bytes
-  after the TLS handshake, served with ALPN `http/1.1`: one that opens with `QORY-BIND`
-  is an edge's, the session's or its forwarder's, which the gateway binds to its TLS
-  with its `QORY-BOUND` line, signed under its access key over the connection's TLS
-  exporter value, and then serves the link, or, after `QORY-RELAY` and a run key, that
-  run's proxy, with at most 2048 characters of run key; any other is the relay of the
-  server's endpoints (below). It reads the edge's next line within the ten seconds of a
-  preamble, each line at most 8 KiB, and closes a connection that sends neither in time
-  unanswered.
+  local link, in memory or on a socket, and no proxy listener on loopback; a session on
+  the gateway's machine that dials its `LocalLink` gets "the gateway serves other
+  machines on its address, and runs no sessions". Every connection is routed by its
+  first bytes after the TLS handshake, served with ALPN `http/1.1`: one that opens with
+  `QORY-BIND` is an edge's, the session's or its forwarder's, which the gateway binds to
+  its TLS with its `QORY-BOUND` line, signed under its access key over the connection's
+  TLS exporter value, and then serves the link, or, after `QORY-RELAY` and a run key,
+  that run's proxy, with at most 2048 characters of run key; any other is the relay of
+  the server's endpoints (below). It reads the edge's next line within the ten seconds
+  of a preamble, each line at most 8 KiB, and closes a connection that sends neither in
+  time unanswered.
 - The one address verifies each request's run key, its one `Authorization: Bearer`,
   under the server's pin before it reads the request's body, in this order, from
   `gateway`: `400` `run_key_invalid`, its message "the gateway refused the run:
@@ -804,11 +804,11 @@ release may change what an existing document does, and says so under Upgrading.
   every proxy connection, not only the first: once the gateway restarts with a server
   key out of its pin, a run whose run key that key signed gets `run_key_invalid` on its
   next request, and a new proxy connection of it is closed unanswered. On the run
-  request the gateway attaches the run at the server under its own access key,
-  `server.Client.Attach`, with the tries of a registration, and
-  writes the record's first event, `dev.qory.run.registered`, from the run key and the
-  attach's answer; a refusal of the attach reaches the session with its code, its status
-  and `from: apiary`. A run request for a run the gateway holds or is opening, live or
+  request the gateway attaches the run at the server under the gateway's access key,
+  `server.Client.Attach`, with the tries of a registration, and writes the record's
+  first event, `dev.qory.run.registered`, from the run key and the attach's answer; a
+  refusal of the attach reaches the session with its code, its status and
+  `from: apiary`. A run request for a run the gateway holds or is opening, live or
   ended, or holds a record of, is `409` `run_attached`, its message
   `attach <run.url>/<run_id>: run_attached (status 409)`. A gateway that stopped between
   the attach and marking the run's record `answered` leaves a record that holds
@@ -829,13 +829,13 @@ release may change what an existing document does, and says so under Upgrading.
   `link.AnswerRequestHash`, with no copy of it kept. An answer of the server whose
   `X-Qory-Configuration` differs from the one in force makes the gateway read its
   discovery again and serve the workspaces it lists, for every run. The gateway delivers
-  each run's events toward the server under its own access key, and fetches a reload of
-  the run at the run endpoint, as a direct node's gateway does. A session's narrowing is
-  accepted on the one address and narrows the run's policy, at its start and on each
-  reload; it opens none of the gateway's own addresses, which only the policy before it
-  opens, when it enforces and names the host itself. Its `dev.qory.run.policy_applied`
-  has the `source` of the policy it narrows, with the narrowed policy's own `digest`,
-  and `source` `config` for a narrowing of no policy.
+  each run's events toward the server under the gateway's access key, and fetches a
+  reload of the run at the run endpoint, as a direct node's gateway does. A session's
+  narrowing is accepted on the one address and narrows the run's policy, at its start
+  and on each reload; it opens none of the gateway's addresses, which only the policy
+  before it opens, when it enforces and names the host itself. Its
+  `dev.qory.run.policy_applied` has the `source` of the policy it narrows, with the
+  narrowed policy's `digest`, and `source` `config` for a narrowing of no policy.
 - The one address bounds what a peer holds there before its run key is admitted. Every
   connection, the relay's among them, counts against at most 4096 such connections at
   once, 64 of one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48,
@@ -847,15 +847,14 @@ release may change what an existing document does, and says so under Upgrading.
   counts against none of them. On a bound connection a request of the link
   arrives whole, its body included, within 60 seconds, and its request line and fields
   within 16 KiB, the 4 KiB net/http allows past that aside: a longer head is net/http's
-  own `431`, unsigned. Every request goes through the run key's check, `OPTIONS *`
-  among them, and one refused for its run key is answered once, with
-  `Connection: close`, after the gateway reads at most 64 KiB of its body, which the
-  refusal's signature covers, within 10 seconds; a body declared or sent longer, or one
-  slower, closes the connection unanswered. Every answer other than
-  a `2xx` to a request whose run key passed, a `409` or a `410` among them, carries
-  `Connection: close`, and the gateway closes the connection after it. A request
-  answered other than `2xx` whose body does not come whole within 10 seconds of the
-  answer closes the connection unanswered.
+  `431`, unsigned. Every request goes through the run key's check, `OPTIONS *` among
+  them, and one refused for its run key is answered once, with `Connection: close`,
+  after the gateway reads at most 64 KiB of its body, which the refusal's signature
+  covers, within 10 seconds; a body declared or sent longer, or one slower, closes the
+  connection unanswered. Every answer other than a `2xx` to a request whose run key
+  passed, a `409` or a `410` among them, carries `Connection: close`, and the gateway
+  closes the connection after it. A request answered other than `2xx` whose body does
+  not come whole within 10 seconds of the answer closes the connection unanswered.
 - A separate gateway forgets a run it stops keeping, 15 minutes after its record is
   flushed, its run id and its record's flush error with it, so neither grows with the
   runs it has served. `Close`'s error keeps the first 16 such errors, in the order the
@@ -873,7 +872,7 @@ release may change what an existing document does, and says so under Upgrading.
   words, `no outcome given` for `stopped`, and any other reason with spaces for its
   underscores, "the run has ended: failed, checks failed" for `checks_failed`; with no
   reason, "the run has ended: <state>". A refused batch is `failed` with `batch_refused`
-  in the gateway's own record, as in the session's.
+  in the gateway's record, as in the session's.
 - `gateway.Delivery` has `ClosedReason`, the code of the gateway's `410` of the first
   run that ended at the gateway, in place of `Reason`, and `State` and `Reason`, how
   that run ended, the state and the reason of the gateway's `dev.qory.run.exited` of
@@ -901,8 +900,8 @@ release may change what an existing document does, and says so under Upgrading.
   the origin the session reached, by its `Host`, under `/qory-link/`, and
   `proxy.address` that same address.
 - The proxy of every run served through the one address is guarded, whatever its wall:
-  the machine's own addresses are refused unless the policy's allow list names the host,
-  as for a walled run.
+  the machine's addresses are refused unless the policy's allow list names the host, as
+  for a walled run.
 - `gateway.Delivery.NotOpened` says a resend to a server sent nothing, and left the
   record as it is, since the run never opened at that server: its registration was
   refused, or it had no server. With no server it is never set: the resend completes
@@ -916,9 +915,9 @@ release may change what an existing document does, and says so under Upgrading.
   `events.jsonl`, none under `undelivered/`.
 - A connection to the one address that does not open with the binding is the relay's:
   HTTP/1.1, for a keyed machine or a starter whose server document holds `via`. The
-  relay forwards four endpoints alone to the origin of the gateway's own server
-  document, with the target unchanged, the path it matched, which holds no escaped byte,
-  and a discovery's query as it came, in origin form when it came in absolute form: the
+  relay forwards four endpoints alone to the origin of the gateway's server document,
+  with the target unchanged, the path it matched, which holds no escaped byte, and a
+  discovery's query as it came, in origin form when it came in absolute form: the
   enrolment, `POST /.well-known/qory-enrolment`; discovery,
   `GET /.well-known/qory-configuration`; a registration, a `POST` to the path of the
   `run.url` of the gateway's discovery; and an outcome, a `POST` to that path, a slash,
@@ -935,16 +934,16 @@ release may change what an existing document does, and says so under Upgrading.
   an escaped byte or a query on a `POST`; `413` a body over 16 KiB for the enrolment,
   64 KiB for a registration or 4 KiB for an outcome; `503` 64 requests
   with the server already; `502` the server not reached, or its answer over 1 MiB; and
-  `504` no answer from the server within 10 seconds. A source is the connection's own
-  IPv4 address or IPv6 /64, never a field the request carries, and the relay lets go of
-  one idle for 20 seconds, the time its burst takes to come back whole, at its sweep
-  every 20 seconds. The relay follows at most 65,536 sources; a new one past that lets
-  go of the one idle longest. Of one IPv6 /48 it follows at most 256 sources; a new one
-  past that lets go of that /48's source idle longest. A connection of the relay reads
-  a request whole, its body included, within 30 seconds, and writes its answer within
-  30 seconds, or is closed; a request's line and fields are within 16 KiB, the 4 KiB
-  net/http allows past that aside, and a longer head is net/http's own `431`, which
-  counts toward no rate.
+  `504` no answer from the server within 10 seconds. A source is the connection's IPv4
+  address or IPv6 /64, never a field the request carries, and the relay lets go of one
+  idle for 20 seconds, the time its burst takes to come back whole, at its sweep every
+  20 seconds. The relay follows at most 65,536 sources; a new one past that lets go of
+  the one idle longest. Of one IPv6 /48 it follows at most 256 sources; a new one past
+  that lets go of that /48's source idle longest. A connection of the relay reads a
+  request whole, its body included, within 30 seconds, and writes its answer within 30
+  seconds, or is closed; a request's line and fields are within 16 KiB, the 4 KiB
+  net/http allows past that aside, and a longer head is net/http's `431`, which counts
+  toward no rate.
 - A separate gateway's calls to the server, the attach and the relay among them, use
   the proxy of the environment, `HTTPS_PROXY` and `NO_PROXY`, `HTTP_PROXY` never, since
   a server over http is on loopback, which Go never proxies: a proxy that ends their TLS
@@ -968,12 +967,12 @@ release may change what an existing document does, and says so under Upgrading.
   the run opened and ended `session_lost` after three heartbeat intervals. A session
   that goes while the run answer is on its way may still leave such a run.
 - The gateway is `gateway`, over `gateway/internal/{proxy,credential,tool}`.
-- The organization of the run's certificate authority is `Forager gateway, one run
-  only`. The gateway's `403` for a link-local address or the machine's own address
-  reads "qory: egress to <host>:<port> denied by the gateway: link-local addresses are
-  never reached through it, and the gateway's own machine only for a host the policy's
-  allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
-  gateway: the path could be read two ways".
+- The organization of the run's certificate authority is
+  `Forager gateway, one run only`. The gateway's `403` for a link-local address or the
+  machine's address reads "qory: egress to <host>:<port> denied by the gateway:
+  link-local addresses are never reached through it, and the gateway's machine only for
+  a host the policy's allow list names", and for an ambiguous path "qory: <method>
+  <host><path> denied by the gateway: the path could be read two ways".
 - The proxy answers a host's `101 Switching Protocols` to a request that asked for no
   upgrade with `502`, `upstream: the host answered 101 Switching Protocols to a request
   that asked for no upgrade`, and closes the host's connection and the client's.
@@ -1010,17 +1009,17 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
-- In an image with a Docker of the agent's own, `dockerd` runs with `/usr/local/sbin`,
+- In an image with nested Docker, `dockerd` runs with `/usr/local/sbin`,
   `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin` as its whole `PATH`, so
   these directories contain the programs it starts, `containerd`, `runc` and `iptables`
   among them. Of the run's environment it gets the proxy and, when the run has one, the
   run's certificate bundle. `docker:dind` needs no change.
-- A link at `/run/qory` or `/run/qory/docker` in an image with a Docker of the agent's
-  own stops the run when the wall writes the agent's docker configuration there, which
-  it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
-  it before.
-- A wall with a Docker of the agent's own needs the docker command and Docker Engine 28
-  or later; another engine is refused before anything is made.
+- A link at `/run/qory` or `/run/qory/docker` in an image with nested Docker stops the
+  run when the wall writes the agent's docker configuration there, which it does
+  whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed it
+  before.
+- A wall with nested Docker needs the docker command and Docker Engine 28 or later;
+  another engine is refused before anything is made.
 
 #### Added
 
@@ -1039,22 +1038,22 @@ release may change what an existing document does, and says so under Upgrading.
   A variable of the other kind stays recorded and never makes `Pinned` true. An address
   that cannot be read leaves the selection unpinned, and then neither the context nor the
   id is asked. Every engine command of `wall.Docker`'s, and the agent's container, then
-  runs with the recorded selection in place of Forager's own; with an address left out,
-  with Forager's own environment. `EngineID` asks the engine's id again through the
-  recorded selection; a run whose engine gave none as it started asks once the enclosure
-  is prepared, and records the answer. A walled run's registry entry records the engine.
+  runs with the recorded selection in place of Forager's; with an address left out, with
+  Forager's environment. `EngineID` asks the engine's id again through the recorded
+  selection; a run whose engine gave none as it started asks once the enclosure is
+  prepared, and records the answer. A walled run's registry entry records the engine.
   `wall.RunContainersExist` asks the engine's id again, when one is recorded, and then
-  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`, with
-  the recorded variables in place of Forager's own. It asks a command other than podman
+  lists a run's containers with `ps --all --quiet --filter label=dev.qory.run=<id>`,
+  with the recorded variables in place of Forager's. It asks a command other than podman
   by its id, through its pinned selection, and refuses one recorded without an id, since
   podman installed under another name reads no `DOCKER_HOST` and every Docker engine gives
   an id; it asks the command named podman by its pinned selection when it gave no id, and
   refuses one recorded with neither.
-- `wall.Binder` is a wall, or an enclosure, that binds files and directories of this
-  machine of its own; `Binds` lists them as `wall.Bind` values, a `Pattern` for a
-  directory the enclosure makes later. `wall.Docker` lists its helper and the pattern
-  `wall.TempDirs()` before it prepares an enclosure; its enclosure lists the helper,
-  the hook socket's directory and the private directory that holds the run's
+- `wall.Binder` is a wall, or an enclosure, that binds extra files and directories of
+  this machine, beyond the launch's mounts; `Binds` lists them as `wall.Bind` values, a
+  `Pattern` for a directory the enclosure makes later. `wall.Docker` lists its helper
+  and the pattern `wall.TempDirs()` before it prepares an enclosure; its enclosure lists
+  the helper, the hook socket's directory and the private directory that holds the run's
   environment files and, with a CA, the `ca-bundle.pem` it binds, which it makes when
   it lists them. The session lists a wall's binds in the registry when the run starts,
   with the pattern of the runs' socket directories, and the enclosure's just before it
@@ -1067,24 +1066,24 @@ release may change what an existing document does, and says so under Upgrading.
 - Behind a wall, the enclosure binds the outermost of the places a run lists, the
   mounts and the workspace, each once: a place inside another one of the same mode is
   reached through the outer one. The workspace is the working directory inside, through
-  the mount that holds it, and is bound at its own path, writable, only when no mount
-  holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
-  and refuses a launch whose `Dir` no mount's path holds.
-- With a Docker of the agent's own, the wall's inside network has an IPv6 subnet in
-  Docker's isolated gateway mode, and its relay listens on its address in it.
+  the mount that holds it, and is bound at the same path as on the machine, writable,
+  only when no mount holds it. `wall.Docker` binds `Launch.Mounts` and passes
+  `Launch.Dir` as `--workdir`, and refuses a launch whose `Dir` no mount's path holds.
+- With nested Docker, the wall's inside network has an IPv6 subnet in Docker's isolated
+  gateway mode, and its relay listens on its address in it.
 
 #### Fixed
 
-- In an enclosure with a Docker of the agent's own, the agent's `docker` command reads
-  its configuration, so the containers it starts get the proxy. `wall.Nest` made
-  `/run/qory` root's with mode 0700, which the agent's user could not pass through: the
-  command printed `WARNING: Error loading config file: open
-  /run/qory/docker/config.json: permission denied`, and its containers reached nothing.
-  `/run/qory` is now root's with mode 0755, whatever the umask, and a `/run/qory`
-  already in the image is set to the same owner and mode; `/run/qory/docker` and its
-  `config.json` stay the agent's, 0700 and 0600, now also whatever the umask or the
-  image made them, and the file is written anew. A link where either directory goes is
-  refused. An image that makes `/run/qory` 0755 to work around this may keep doing so.
+- In an enclosure with nested Docker, the agent's `docker` command reads its
+  configuration, so the containers it starts get the proxy. `wall.Nest` made `/run/qory`
+  root's with mode 0700, which the agent's user could not pass through: the command
+  printed `WARNING: Error loading config file: open /run/qory/docker/config.json:
+  permission denied`, and its containers reached nothing. `/run/qory` is now root's with
+  mode 0755, whatever the umask, and a `/run/qory` already in the image is set to the
+  same owner and mode; `/run/qory/docker` and its `config.json` stay the agent's, 0700
+  and 0600, now also whatever the umask or the image made them, and the file is written
+  anew. A link where either directory goes is refused. An image that makes `/run/qory`
+  0755 to work around this may keep doing so.
 - `wall.Nest` started `dockerd` with the run's environment, so the daemon looked for
   `containerd`, `runc` and `iptables` on the run's `PATH`, which may list a directory of
   the workspace, and ran what it found there as the enclosure's root; `LD_PRELOAD`,
@@ -1111,8 +1110,8 @@ release may change what an existing document does, and says so under Upgrading.
   had its connections forwarded to the proxy opened with the run's proxy secret. The
   relay now listens on its address on the wall's inside network alone: `wall.Docker`
   gives it that network's subnets in `QORY_RELAY_INSIDE`, and `wall.Relay` refuses to
-  start when the variable names none, or a subnet that holds no address of its own or
-  several. `wall.Relay` takes a connection only from an address in those subnets.
+  start when the variable names none, or a subnet that holds no address of the relay's,
+  or several. `wall.Relay` takes a connection only from an address in those subnets.
 
 ### Session
 
@@ -1143,15 +1142,15 @@ release may change what an existing document does, and says so under Upgrading.
   Forager's gateway they always said `gateway`. `ResendResult.ClosedReason` is the code
   of the gateway's `410`, which `ResendResult.Reason` held before, and
   `ResendResult.Reason` is now the reason of how the run ended, as `Result.Reason` is.
-- The session's own record is `session.jsonl` and `output.log` in the run directory; the
+- The session's record is `session.jsonl` and `output.log` in the run directory; the
   gateway writes the run's numbered stream, `events.jsonl`, and its delivery state
-  toward the server. Behind a separate gateway, the session's run directory on its own
-  machine also holds `delivered.log`, what the gateway accepted of `session.jsonl` by
-  the session's sequence, and `stopped` when the gateway ended the run; `undelivered/`,
-  the session's batches the gateway did not accept; and `separate-gateway`, an empty
-  file, `session.GatewayMark`, the mark of a session's record behind a separate gateway.
-  None holds the run key. `Result.Undelivered` counts the session's events the gateway
-  did not accept.
+  toward the server. Behind a separate gateway, the session's run directory on the
+  session's machine also holds `delivered.log`, what the gateway accepted of
+  `session.jsonl` by the session's sequence, and `stopped` when the gateway ended the
+  run; `undelivered/`, the session's batches the gateway did not accept; and
+  `separate-gateway`, an empty file, `session.GatewayMark`, the mark of a session's
+  record behind a separate gateway. None holds the run key. `Result.Undelivered` counts
+  the session's events the gateway did not accept.
 - A refusal the gateway or the server answers the run request with is a
   `*session.Refusal` with `From`, `gateway` or `apiary`, whose `Error` is the refusal's
   `message`, the text the run always returned; the gateway's `wall_required` is the
@@ -1163,13 +1162,13 @@ release may change what an existing document does, and says so under Upgrading.
   and dashes: `catalog.Lookup` refuses a longer name, `runtimetest.Conforms` fails a
   runtime that has one, and the descriptor schema holds `runtime` to the same bound.
 - `session.Spec.Env` is what the run inherits. The values the harness computes itself go in
-  `LaunchFixed`, the values its author wrote as defaults in `LaunchDefaults`, the run's own variables,
-  `--env`, in `Variables.Run`, and the machine's, `wall.env`, in `Variables.Machine`, so
-  the session tells each source apart and applies the highest that sets a name.
-  `HarnessHome` is the harness's home as the agent sees it, an absolute path, and the
-  session sets `QORY_HARNESS_HOME` to it. `OnVariables` receives each name, its source
-  and the values that lost, once the variables are resolved and before the agent
-  starts.
+  `LaunchFixed`, the values its author wrote as defaults in `LaunchDefaults`, the run's
+  variables, `--env`, in `Variables.Run`, and the machine's, `wall.env`, in
+  `Variables.Machine`, so the session tells each source apart and applies the highest
+  that sets a name. `HarnessHome` is the harness's home as the agent sees it, an
+  absolute path, and the session sets `QORY_HARNESS_HOME` to it. `OnVariables` receives
+  each name, its source and the values that lost, once the variables are resolved and
+  before the agent starts.
 - A walled run refuses to pass into the enclosure a `QORY_` variable other than
   `QORY_RUN_ID` and `QORY_RUN_SOCKET`, or a variable a credential's `Env` names, with
   `variable_reserved`, whether it comes from `Env`, `LaunchFixed`, `LaunchDefaults`,
@@ -1181,10 +1180,9 @@ release may change what an existing document does, and says so under Upgrading.
   `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_AUTH_TOKEN`: a value the run passes for one
   reaches the runtime as before.
 - With a server whose run configuration has a `security_policy`, `Spec.Policy` narrows
-  it, where Forager ignored it before, so a caller may pass a policy of its own
-  beside a server.
+  it, where Forager ignored it before, so a caller may pass its policy beside a server.
 - The runtime prepares the launch before the tools start, since the names it sets are
-  Forager's own when the variables are resolved.
+  among Forager's fixed names when the variables are resolved.
 - Without a wall on one machine, the agent's proxy URL carries a password,
   `http://qory:<password>@127.0.0.1:<port>`, where it was the forwarder's address alone.
   The session makes, holds and checks the password as behind a separate gateway (Added,
@@ -1199,20 +1197,19 @@ release may change what an existing document does, and says so under Upgrading.
   its proxy URL's user name and password as `Proxy-Authorization`, and opens a new
   connection after a reply with `Connection: close`, reaches the proxy as before.
 - Without a wall, the forwarder checks the request line of each request the password
-  lets in, and answers one it refuses with a `400` of its own, `Connection: close`,
-  before anything reaches the gateway's proxy: `the proxy takes HTTP/1.0 or HTTP/1.1`
-  for a line that is not a method, a target and `HTTP/1.0` or `HTTP/1.1`, each after a
-  single space; `CONNECT takes host:port` for a `CONNECT` whose target is not
-  `host:port` with a port from 1 to 65535; and `the proxy takes an absolute-form
-  request target` for any other method without an absolute-form target. It reads the
-  proxy's reply head to an upgrade up to 64 KiB, and closes the connection at the
-  first byte the agent sends before the reply to an upgrade. At most 128 connections at
-  once wait to show the password or the hop line; one more closes the one that has
-  waited longest.
+  lets in, and itself answers one it refuses with a `400`, `Connection: close`, before
+  anything reaches the gateway's proxy: `the proxy takes HTTP/1.0 or HTTP/1.1` for a
+  line that is not a method, a target and `HTTP/1.0` or `HTTP/1.1`, each after a single
+  space; `CONNECT takes host:port` for a `CONNECT` whose target is not `host:port` with
+  a port from 1 to 65535; and `the proxy takes an absolute-form request target` for any
+  other method without an absolute-form target. It reads the proxy's reply head to an
+  upgrade up to 64 KiB, and closes the connection at the first byte the agent sends
+  before the reply to an upgrade. At most 128 connections at once wait to show the
+  password or the hop line; one more closes the one that has waited longest.
 
 #### Added
 
-- `session.RemoteGateway{RunKey}`, a separate gateway on a machine of its own, by the
+- `session.RemoteGateway{RunKey}`, a separate gateway on a separate machine, by the
   run's run key, the one Qory Apiary answered the run's registration with, which the
   caller passes from `QORY_RUN_KEY`, `session.EnvRunKey`; the session reads no variable
   itself. It reads the run key as a runner does, unverified, `runkey.Parse`: its
@@ -1264,8 +1261,8 @@ release may change what an existing document does, and says so under Upgrading.
   the link takes that `delivered.log` does not name is posted in order, in the link's
   batches, until the gateway accepts it or the context ends, and what it does not accept
   is under `undelivered/` again, unless the gateway ended the run; the events the
-  session records in its own record alone are not sent. A record that owes nothing is
-  sent nothing, with no request and no run key needed, and the result is the zero
+  session records only in the session's record are not sent. A record that owes nothing
+  is sent nothing, with no request and no run key needed, and the result is the zero
   `ResendResult`. A record with no `delivered.log`, of a run that never opened at the
   gateway, a run refused at its run request say, is `NotOpened`, left as it is and sent
   nothing, with no request. A record that owes something is refused before any request
@@ -1287,7 +1284,7 @@ release may change what an existing document does, and says so under Upgrading.
   does not send, so a resend never sends again into one. Any other refusal of a batch is
   sent again. The record is never completed: the gateway writes the end of a run whose
   session was lost. A record its session holds is `session.ErrRunning`, and a directory
-  with `events.jsonl` is a gateway's record. After a gateway restart, the gateway's own
+  with `events.jsonl` is a gateway's record. After a gateway restart, the gateway's
   resend completes the run `gateway_lost`.
 - `session.BehindGateway(dir)` reports whether a run directory holds a session's record
   behind a separate gateway, which `session.Resend` sends: whether it holds
@@ -1301,7 +1298,7 @@ release may change what an existing document does, and says so under Upgrading.
   `run_closed`, `stopped`, `session_lost` or `batch_refused`. The runtime is stopped as
   at its time limit, and the session's record has `dev.qory.run.exited` with the state
   and the reason the `410` says, such as `cancelled` and `no_longer_needed`, and the
-  runtime's own exit status: `batch_refused` as the reason after a refused batch, and
+  runtime's exit status: `batch_refused` as the reason after a refused batch, and
   `failed` with the code as the reason when the `410` carries no state, or one the
   schema refuses. A run the gateway closed before its runtime started is a
   `*session.Refusal` with the code, status `410` and the text
@@ -1314,7 +1311,7 @@ release may change what an existing document does, and says so under Upgrading.
   still written and posted, and `Run` returns after it, within its bounds. A run whose
   caller's context had ended when the runtime's exit was observed, a Ctrl-C or a signal
   to the caller, is `cancelled` with `interrupted`, in the record, on the link and in
-  the result, with the runtime's own `exit_code` and `signal`, whatever they are. At the
+  the result, with the runtime's `exit_code` and `signal`, whatever they are. At the
   time limit the run is `cancelled` with `timeout`, `Result.TimedOut`, when the
   session's stop signal reached the runtime before its exit was observed; a runtime that
   exited by itself before it is decided by its exit, whatever its status. A runtime that
@@ -1334,18 +1331,17 @@ release may change what an existing document does, and says so under Upgrading.
   with its string `value`, as the server resolved it. An attribute beside `value` is
   ignored. For each name the run takes the value of the highest source that sets it: the
   fixed names, those the session, the proxy, the wall, the runtime's preparation and the
-  placeholders set and the values the harness computes; then the server's; the run's
-  own; the machine's; the harness's written defaults; and what the run inherits. The
-  deny list, which is `denied-variables.json`, the runtime's `denies` and
-  `Variables.Deny`, matched regardless of case with `*` for any run of characters,
-  leaves out a value of the server, the run, the machine or the harness's defaults; its
-  built-in entries leave out a value the harness computes too. The server's value of a
-  variable the runtime declares or reserves, or of one a credential is read from, is
-  left out. A run without a wall takes none of the server's variables unless
-  `Variables.Unwalled` is `accept`; the run's own apply with or without a wall. A value
-  that loses is left out and the run starts. The variables are fixed when the run
-  starts. Tools, the relay, the agent's Docker daemon and the wall's `docker` command
-  keep their own environment.
+  placeholders set and the values the harness computes; then the server's; the run's;
+  the machine's; the harness's written defaults; and what the run inherits. The deny
+  list, which is `denied-variables.json`, the runtime's `denies` and `Variables.Deny`,
+  matched regardless of case with `*` for any run of characters, leaves out a value of
+  the server, the run, the machine or the harness's defaults; its built-in entries leave
+  out a value the harness computes too. The server's value of a variable the runtime
+  declares or reserves, or of one a credential is read from, is left out. A run without
+  a wall takes none of the server's variables unless `Variables.Unwalled` is `accept`;
+  the run's variables apply with or without a wall. A value that loses is left out and
+  the run starts. The variables are fixed when the run starts. Tools, the relay, the
+  agent's Docker daemon and the wall's `docker` command keep their environment.
 - `runtimes.Secrets` is the optional interface of a runtime that declares the secrets it
   needs; a descriptor's runtime implements it. `wall.Setter` is the optional interface
   of a wall that sets variables in the enclosure itself, and `wall.Docker` implements
@@ -1399,13 +1395,13 @@ release may change what an existing document does, and says so under Upgrading.
 - A walled run refuses a mount, or the workspace, that is, contains or lies inside one of
   Forager's files, `mount_contains_forager_files`, before it contacts the server and
   before anything starts, `Local` included. `session.Spec` has `ForagerFiles`, the
-  absolute paths the caller lists as its own, such as the directory of qory's
-  `forager.yaml`. Beside them the session checks the directory of every credential and tool
-  program the machine defines, the file a credential is read from, the private directories
-  of every run's tool sockets, record sockets (`qory-run-*`) and Docker wall environment
-  files (`qory-wall-*`) in the system's temporary directory, the pattern of every
-  gateway's link directories there (`qory-link-*`), whatever the run's gateway, so a
-  walled run behind a separate gateway refuses a mount that reaches one as a run on a
+  absolute paths the caller lists as Forager's files, such as the directory of qory's
+  `forager.yaml`. Beside them the session checks the directory of every credential and
+  tool program the machine defines, the file a credential is read from, the private
+  directories of every run's tool sockets, record sockets (`qory-run-*`) and Docker wall
+  environment files (`qory-wall-*`) in the system's temporary directory, the pattern of
+  every gateway's link directories there (`qory-link-*`), whatever the run's gateway, so
+  a walled run behind a separate gateway refuses a mount that reaches one as a run on a
   local gateway does, and the files a wall lists
   through the new `wall.Filer`: `wall.Docker` lists the directory of the `docker` command,
   of the helper, and the command's configuration directory. The refusal's `Names` are the
@@ -1415,8 +1411,8 @@ release may change what an existing document does, and says so under Upgrading.
   mounts included. A link whose target does not exist yet is followed to the target, a
   path that cannot be resolved is no run, and the check runs again just before the
   enclosure is built.
-- No walled run binds from a place a walled agent of the same user can change: no name on
-  the way to a bind source is looked up in a writable bind, the run's own or another
+- No walled run binds from a place a walled agent of the same user can change: no name
+  on the way to a bind source is looked up in a writable bind, the run's or another
   walled run's still going, or in a directory inside one. A walled run is refused with
   `mount_mode_conflict` when a mount, or the workspace, lies inside another one of the
   run's, or is the same, of the other mode; `Names` holds the inner path and the outer
@@ -1430,28 +1426,29 @@ release may change what an existing document does, and says so under Upgrading.
   the way to one is looked up in; or when one of its binds is, holds or lies inside such a
   run's run directory, whatever the modes. `Names` holds this run's path, the other run's
   id and the other run's path, each as its run passed it. Two runs that bind the same root
-  run side by side, and two read-only binds never conflict. A run whose own helper, or
+  run side by side, and two read-only binds never conflict. A run whose helper, or
   another directory of Forager's its wall binds, lies inside a writable bind of such a
-  run, or is reached through one, does not start. The session keeps the walled runs still
-  going in a registry of its own, per user, `$XDG_STATE_HOME/qory-forager/walled`, else
-  `~/.local/state/qory-forager/walled`, 0700: a file per run, named by its run id, with
-  its process id and its binds, each as passed, as resolved, with the entries its names
-  are looked up as, whether writable, and what it is when it is not a place; the file is
-  held locked for the run's life and removed when it ends, kept when the wall could not be
-  removed. A file whose lock is free is the run of a session that is gone: it is still
-  going while the container engine its entry records holds a container labelled with its
-  run id, in any state, and is removed when the engine holds none. A run that cannot ask
-  that engine, whose engine answers with another id than the one recorded, or that reads
-  such an entry that records no id for a command other than podman, neither a pinned
-  selection nor an id for podman, no engine, or that cannot be read, is refused with
-  `engine_unreachable`; `Names` holds the earlier run's id and then the absolute path of
-  its registry entry, and the sentence reads "Docker could not be asked whether the walled
-  run <id> is still going, so the run does not start: <the error>". A bind of another
-  run's, or a directory on the way to it, that is gone is compared by its names, like a
-  part that does not exist yet; any other failure to resolve one stops the run. A run
-  checks its binds and adds its own entry under a lock of the registry's, before it
-  contacts the server, and again, with its wall's own binds, just before the enclosure
-  binds them. `events/run.refused.schema.json` lists the four codes.
+  run, or is reached through one, does not start. The session keeps the walled runs
+  still going in a separate registry, per user, `$XDG_STATE_HOME/qory-forager/walled`,
+  else `~/.local/state/qory-forager/walled`, 0700: a file per run, named by its run id,
+  with its process id and its binds, each as passed, as resolved, with the entries its
+  names are looked up as, whether writable, and what it is when it is not a place; the
+  file is held locked for the run's life and removed when it ends, kept when the wall
+  could not be removed. A file whose lock is free is the run of a session that is gone:
+  it is still going while the container engine its entry records holds a container
+  labelled with its run id, in any state, and is removed when the engine holds none. A
+  run that cannot ask that engine, whose engine answers with another id than the one
+  recorded, or that reads such an entry that records no id for a command other than
+  podman, neither a pinned selection nor an id for podman, no engine, or that cannot be
+  read, is refused with `engine_unreachable`; `Names` holds the earlier run's id and
+  then the absolute path of its registry entry, and the sentence reads "Docker could not
+  be asked whether the walled run <id> is still going, so the run does not start: <the
+  error>". A bind of another run's, or a directory on the way to it, that is gone is
+  compared by its names, like a part that does not exist yet; any other failure to
+  resolve one stops the run. A run checks its binds and adds its entry under a lock of
+  the registry's, before it contacts the server, and again, with its wall's extra binds,
+  just before the enclosure binds them. `events/run.refused.schema.json` lists the four
+  codes.
 - The session passes every bind's path clean, and a run whose working directory lies in
   none of its binds fails.
 - A run refused with a code is a `session.Refusal`, with the code and the server's
@@ -1487,20 +1484,19 @@ release may change what an existing document does, and says so under Upgrading.
 
 - An image passed to `e2e.Run` with `Docker` needs the `docker` command as well as
   `dockerd`: the suite starts a container with it as the agent's user.
-- `e2e.Options` has `Recorders`: three `e2e.Recorder` values, each the helper
-  started with `e2e.RecorderArgs` and `e2e.RecorderEnv()` in a container of
-  its own, in this order: the host of a runtime's API key, the host of its OAuth
-  credential, then a host the policy allows with no credential. A `Recorder` holds the
-  `Host` the proxy reaches it on and a `Recorded` function that returns the content of
-  `e2e.RecorderFile` in its container. An adapter's test that passes none skips
-  the checks of a runtime's key, `QORY_WALL_REQUIRE` turns those skips into failures,
-  and a number other than none or three fails the suite. A recorder prints
-  `e2e.RecorderReady` once it listens, and `e2e.AwaitRecorder` waits for that
-  line in its container's log, and fails with the log at once when the container stops
-  first; a recorder's container started without `--rm` keeps that log. With
-  `Recorders`, `e2e.Run` points the roots of the process, and the programs it
-  starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE` and
-  `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
+- `e2e.Options` has `Recorders`: three `e2e.Recorder` values, each the helper started
+  with `e2e.RecorderArgs` and `e2e.RecorderEnv()` in a separate container, in this
+  order: the host of a runtime's API key, the host of its OAuth credential, then a host
+  the policy allows with no credential. A `Recorder` holds the `Host` the proxy reaches
+  it on and a `Recorded` function that returns the content of `e2e.RecorderFile` in its
+  container. An adapter's test that passes none skips the checks of a runtime's key,
+  `QORY_WALL_REQUIRE` turns those skips into failures, and a number other than none or
+  three fails the suite. A recorder prints `e2e.RecorderReady` once it listens, and
+  `e2e.AwaitRecorder` waits for that line in its container's log, and fails with the log
+  at once when the container stops first; a recorder's container started without `--rm`
+  keeps that log. With `Recorders`, `e2e.Run` points the roots of the process, and the
+  programs it starts within `Run`, at the suite's authority alone, with `SSL_CERT_FILE`
+  and `SSL_CERT_DIR`. The process reads its roots once, at its first verification of a
   certificate, so the test binary's first verification must come within `Run`; from
   then on, for the rest of the process, it trusts only the suite's authority.
   `TestDockerConforms` starts the recorders from `busybox:stable`.
@@ -1510,14 +1506,13 @@ release may change what an existing document does, and says so under Upgrading.
 - The wall's conformance suite checks a runtime's two credentials from inside the
   enclosure, as Claude Code sends them: an API key in `x-api-key` and an OAuth
   credential as a bearer, each a fake key for a recorder that acts as its host. Each key
-  reaches its own host once, in its own header and in place of the stand-in; another
-  allowed host, plainly and through a tunnel, receives the stand-ins and no key; the
-  probe's environment and every `/proc/*/environ` it reads contain the stand-ins and no
-  key; and the run's directory, output and reports contain no key, after the
-  interactive run as well. The suite points its own process's roots at an authority of
-  its own with `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the
-  recorders. The proxy's tests cover both schemes as well, with a request that carries
-  both stand-ins.
+  reaches its host once, in its header and in place of the stand-in; another allowed
+  host, plainly and through a tunnel, receives the stand-ins and no key; the probe's
+  environment and every `/proc/*/environ` it reads contain the stand-ins and no key; and
+  the run's directory, output and reports contain no key, after the interactive run as
+  well. The suite points its process's roots at a separate authority with
+  `SSL_CERT_FILE` and `SSL_CERT_DIR`, so the proxy verifies the recorders. The proxy's
+  tests cover both schemes as well, with a request that carries both stand-ins.
 - `TestDockerClaudeCodeThroughTheWall` runs Claude Code itself behind the Docker
   adapter, with `QORY_WALL_CLAUDE_IMAGE` set to an image with `claude` on its `PATH`:
   `ANTHROPIC_BASE_URL` points it at a recorder that answers as the Messages API, once
@@ -1526,7 +1521,7 @@ release may change what an existing document does, and says so under Upgrading.
   and the record lists one request through the proxy for each the recorder received,
   each to the recorder.
 - `TestDockerClaudeCodeThroughTheWall` also runs Claude Code interactively, on a
-  pseudo-terminal with a home of its own whose configuration has the onboarding done and
+  pseudo-terminal with a separate home whose configuration has the onboarding done and
   the workspace trusted, with the API key and with the OAuth credential. The test types
   a prompt once Claude Code shows its input and leaves with `/exit`; with the API key,
   Claude Code reaches its input with no approval prompt for the key, and the
@@ -1535,7 +1530,7 @@ release may change what an existing document does, and says so under Upgrading.
   empty, and the recorder receives the chosen credential's header alone, so Claude Code
   reads an empty variable as unset and uses the placeholder.
 - `session`'s tests run a real session behind a real separate gateway, end to end,
-  against a server of the test's own: the session, given the run key alone, binds every
+  against the test's server: the session, given the run key alone, binds every
   connection to the gateway's one address and checks every answer's signature; the
   gateway attaches the run and writes its record's first line with the labels the attach
   gave back; the session's batches are numbered and reach the server; and a change of
@@ -1557,10 +1552,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The wall's conformance suite missed that the agent's `docker` command could not read
   its configuration: the containers it starts through the Engine API receive the relay's
-  address. It also starts one with the image's `docker`
-  command, as the agent's user and with no proxy setting of its own, and requires it to
-  reach the origin through the proxy and nothing else, so the image of
-  `TestDockerNestedConforms` contains the docker command as well as dockerd.
+  address. It also starts one with the image's `docker` command, as the agent's user and
+  with no proxy setting passed to it, and requires it to reach the origin through the
+  proxy and nothing else, so the image of `TestDockerNestedConforms` contains the docker
+  command as well as dockerd.
 
 ## [0.6.0] - 2026-09-28
 

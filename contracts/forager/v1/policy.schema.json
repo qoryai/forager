@@ -23,7 +23,7 @@
           "enum": ["observe", "enforce"]
         },
         "allow": {
-          "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes: paths have a key of their own. Absent means an empty list.",
+          "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes: paths have a separate key. Absent means an empty list.",
           "type": "array",
           "uniqueItems": true,
           "items": {

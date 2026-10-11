@@ -43,7 +43,7 @@ describe is how Forager works, not a flaw in it:
 - in mode `observe` nothing is denied;
 - a host that answers with the headers it was sent shows a session the credential set on
   its request; a credential belongs only on hosts trusted not to;
-- what a credential may do on the paths a run's policy allows is the credential's own
-  grant, not the gateway's.
+- what a credential may do on the paths a run's policy allows is the credential's grant,
+  not the gateway's.
 
 If you are not sure which side something falls on, write anyway.

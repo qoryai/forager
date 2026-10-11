@@ -4,7 +4,7 @@ Forager records the whole session as events. It reports three things, all as
 CloudEvents:
 
 - the session's output,
-- its own observations,
+- Forager's observations,
 - what the runtime reports of its session.
 
 Every event goes to files, always. With a server configured, every event the server's
@@ -28,12 +28,12 @@ passes. `qory` keeps them under its state directory and prints the path:
 - `events.jsonl`: the run's stream, one CloudEvent per line, numbered. The gateway
   writes it, with the run's delivery state toward the server beside it,
   `delivered.log` and `undelivered/`: every event the session posts on the gateway's
-  link, and the gateway's own. `delivered.log` begins `registered <seq>`, the sequence
-  of the run's `dev.qory.run.registered`, once the server accepts the run's
-  registration, then holds a line per batch the server accepted.
-- `session.jsonl`: the session's own record, one CloudEvent per line, numbered by the
-  session's own sequence, which is not the stream's: every event the session posts,
-  and the few it records alone (below).
+  link, and the gateway's. `delivered.log` begins `registered <seq>`, the sequence of
+  the run's `dev.qory.run.registered`, once the server accepts the run's registration,
+  then holds a line per batch the server accepted.
+- `session.jsonl`: the session's record, one CloudEvent per line, numbered by the
+  session's sequence, which is not the stream's: every event the session posts, and the
+  few it records alone (below).
 - `output.log`: the session's bytes.
 
 The gateway's record and the session's are in the same directory when the caller
@@ -77,30 +77,29 @@ around a runtime, as above.
 Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `failed` or
 `cancelled`, stopped before it said how it went. A runtime that exits by itself is
 `succeeded` on 0 and `failed` otherwise. A run its starter ends with an outcome has
-that outcome. When
-a run ends other than by the runtime's own exit, or its starter gives a reason,
-`dev.qory.run.exited` says why in `reason`: an open code, Forager's own or the starter's,
-carried as given. The session writes `timeout`, `cancelled`, and `interrupted`,
-`cancelled`, a run stopped from where it was started (a Ctrl-C), and posts them. The
-gateway writes the others: `session_lost`, `failed`, the session was silent;
-`batch_refused`,
-`failed`, the gateway refused a batch of the session's (see the contract's §The
-gateway's link); `stopped`, `cancelled`, the starter ended the run and gave no outcome,
-or the starter's own outcome and reason when it gave one; and sending a record again
-writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are the old names
-`quiet`, `credential_expired`, `credential_check_unreachable` and
+that outcome. When a run ends other than by the runtime exiting by itself, or its
+starter gives a reason, `dev.qory.run.exited` says why in `reason`: an open code,
+Forager's or the starter's, carried as given. The session writes `timeout`, `cancelled`,
+and `interrupted`, `cancelled`, a run stopped from where it was started (a Ctrl-C), and
+posts them. The gateway writes the others: `session_lost`, `failed`, the session was
+silent; `batch_refused`, `failed`, the gateway refused a batch of the session's (see the
+contract's §The gateway's link); `stopped`, `cancelled`, the starter ended the run and
+gave no outcome, or the starter's outcome and reason when it gave one; and sending a
+record again writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are
+the old names `quiet`, `credential_expired`, `credential_check_unreachable` and
 `credential_check_invalid`, which Forager no longer writes: a starter's reason that
 equals one is dropped. When the gateway ends a session's run, the gateway writes
 the run's `dev.qory.run.exited`, and answers the session's next request with a `410`, a
-code, and the state and the reason of that end. The session records its own
+code, and the state and the reason of that end. The session records its
 `dev.qory.run.exited` in `session.jsonl` alone, with them, and posts nothing more:
 `stopped`, `run_closed`, `session_lost` or `batch_refused` as the gateway ended the
 run. A refusal of the run request with a
 code other than `wall_required` is recorded the same way: the session records
-`dev.qory.run.refused` in its own record alone, since the gateway opened no run. A code of the server's comes with its status, and is recorded as the server sent
-it, `not_found` among them, and one the contract does not list yet too. A run the gateway could not open for a reason
-without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the
-gateway's message says. The contract describes each.
+`dev.qory.run.refused` only in the session's record, since the gateway opened no run. A
+code of the server's comes with its status, and is recorded as the server sent it,
+`not_found` among them, and one the contract does not list yet too. A run the gateway
+could not open for a reason without a code, a `5xx` `internal`, is recorded nowhere: the
+run returns the error the gateway's message says. The contract describes each.
 
 ## The session's events
 

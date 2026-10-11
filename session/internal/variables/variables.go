@@ -279,7 +279,7 @@ func Check(env []string, walled bool, placeholders, machine []string) error {
 			own := strings.HasPrefix(strings.ToUpper(n), "QORY_") && n != envRunID && n != envSocket
 			return own || slices.Contains(machine, n)
 		}); len(reserved) > 0 {
-			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's own or what a value of the machine's is read from", strings.Join(reserved, ", "))
+			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's names or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
 	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {

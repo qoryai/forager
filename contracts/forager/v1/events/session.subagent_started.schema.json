@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["session_id", "agent_id", "agent_type"],
   "properties": {
-    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
     "agent_id": {"type": "string", "minLength": 1},
     "agent_type": {"type": "string", "minLength": 1}
   }

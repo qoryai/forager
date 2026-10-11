@@ -36,7 +36,7 @@
       "$ref": "run-configuration.schema.json#/properties/variables"
     },
     "placeholders": {
-      "description": "The variables the agent sees in place of a credential or a tool's secret the gateway holds: the session sets each to a value that is no credential, and the run passes no value of its own for one, placeholder_conflict. Names alone, never a value. Absent means none.",
+      "description": "The variables the agent sees in place of a credential or a tool's secret the gateway holds: the session sets each to a value that is no credential, and the run passes no value for one, placeholder_conflict. Names alone, never a value. Absent means none.",
       "type": "array",
       "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}
     },
@@ -50,7 +50,7 @@
       "$ref": "link-run-request.schema.json#/$defs/image"
     },
     "applied": {
-      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with its own variables and harness_hosts added.",
+      "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables and harness_hosts added.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode", "allow", "source"],
@@ -77,7 +77,7 @@
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
     "certificate_authority": {
-      "description": "The certificate of the run's own certificate authority, PEM: present when the run request's wall is true and the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and behind a wall with a server always, since a reload may bring path rules or credentials; absent otherwise, and always when wall is false. The certificate the enclosure trusts after the image's own; never its key, which stays with the gateway.",
+      "description": "The certificate of the run's certificate authority, PEM: present when the run request's wall is true and the gateway reads inside HTTPS for the run, for a credential it holds, a tool it starts or a path rule, the policy's or the node's, and behind a wall with a server always, since a reload may bring path rules or credentials; absent otherwise, and always when wall is false. The certificate the enclosure trusts after the image's authorities; never its key, which stays with the gateway.",
       "type": "string",
       "maxLength": 16384,
       "pattern": "^-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\r?\\n?$"

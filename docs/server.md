@@ -3,7 +3,7 @@
 Every event goes to files. With a server configured, every event its configuration
 selects goes there too, signed. The server can also set the run's policy.
 
-A server is a control plane, or a receiver of your own.
+A server is a control plane, or your receiver.
 
 ## In forager.yaml
 
@@ -49,8 +49,8 @@ The gateway reports to the server; the session never speaks to it. A
    the node's policy, is the run's policy. Its `variables` are the server's variables
    for the run. A server with no policy answers `{"version":1}`. The gateway answers
    the session's run request with what follows of them;
-4. posts the events the document selects to the URL it defines, signed: the
-   session's, which it receives on its link and numbers, and its own.
+4. posts the events the document selects to the URL it defines, signed: the session's,
+   which it receives on its link and numbers, and the gateway's.
 
 Every request is signed with the access key, the access key id and the instance id
 among the signed lines. Every answer is signed with the server's key and bound to the
@@ -89,10 +89,10 @@ server's signed `410`, with any code or none, says it wants nothing more of the 
 the gateway sends it no further batch, writes `stopped` to the run's `delivered.log`,
 and reports it once. The run goes on. The gateway keeps numbering the run's events and
 recording them in `events.jsonl`, it answers the session's requests as before, and the
-runtime runs to its own exit. A resend of the run's record sends the server nothing.
-A `410` to the registration, signed or not, with any code or none, is no run, a failure
-without a code: the session returns the gateway's error, which names `run.url` and the
-status, such as
+runtime runs until it exits by itself. A resend of the run's record sends the server
+nothing. A `410` to the registration, signed or not, with any code or none, is no run, a
+failure without a code: the session returns the gateway's error, which names `run.url`
+and the status, such as
 `register https://qory.example/v1/runs: status 410: the server did not accept the run`
 for a signed one.
 
@@ -115,7 +115,7 @@ and for each name the run takes the value of the highest that sets it:
 | --- | --- | --- |
 | `fixed` | the session's, the proxy's, the wall's and the preparation's names, the placeholders, the values the harness computes | `HarnessHome`, `LaunchFixed` |
 | `apiary` | the server's run configuration, resolved by the server | |
-| `run` | the run's own, `qory run --env` | `Variables.Run` |
+| `run` | the run's, `qory run --env` | `Variables.Run` |
 | `machine` | the machine's, `wall.env` | `Variables.Machine` |
 | `harness` | the harness's written defaults | `LaunchDefaults` |
 | `shell` | what the run inherits | `Env` |
@@ -126,7 +126,7 @@ and for each name the run takes the value of the highest that sets it:
 - The deny list leaves out a value of the server, the run, the machine or the harness's
   defaults. The list is the contract's
   [`denied-variables.json`](../contracts/forager/v1/denied-variables.json), the runtime's
-  `denies`, and `Spec.Variables.Deny`. It holds the session's own names, the proxy's, the
+  `denies`, and `Spec.Variables.Deny`. It holds the session's names, the proxy's, the
   trust store's, Docker's and `PATH`. The built-in list leaves out a value the harness
   computes as well; the runtime's `denies` and `Variables.Deny` leave those in.
 - A value of a fixed name from any other source is left out.
@@ -134,8 +134,8 @@ and for each name the run takes the value of the highest that sets it:
   credential is read from, is left out. A node's value of a declared one reaches the
   runtime.
 - A run without a wall takes none of the server's variables, unless
-  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The run's own variables apply
-  with or without a wall.
+  `Spec.Variables.Unwalled` is `session.UnwalledAccept`. The run's variables,
+  `qory run --env`, apply with or without a wall.
 - A value that loses is left out, and the run starts.
 
 ```go
@@ -161,9 +161,10 @@ spec.OnVariables = func(applied session.Applied) { // once, before the agent sta
 ```
 
 `LaunchFixed` is the values the harness computes itself, and `LaunchDefaults` the values
-its author wrote as defaults; the session applies each as its source. `HarnessHome` is an absolute path, and the session sets `QORY_HARNESS_HOME` to it
-as one of its own names; a path that is not absolute, or that holds a NUL, a carriage
-return or a line feed, is an error before anything starts.
+its author wrote as defaults; the session applies each as its source. `HarnessHome` is
+an absolute path, and the session sets `QORY_HARNESS_HOME` to it as one of its names; a
+path that is not absolute, or that holds a NUL, a carriage return or a line feed, is an
+error before anything starts.
 
 Before it resolves anything, the session refuses to pass in what stays outside. It
 checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,

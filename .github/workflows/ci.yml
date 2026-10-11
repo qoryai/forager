@@ -137,7 +137,7 @@ jobs:
         run: go test ./e2e -count=1 -v -run '^TestDockerConforms$'
 
   e2e-docker:
-    name: Wall conformance, a Docker of the agent's own
+    name: Wall conformance, nested Docker
     # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
     # container root is a user of the machine's that is not root. Sysbox is installed on
     # the machine, as a node's owner installs it.
