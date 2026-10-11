@@ -1,0 +1,1271 @@
+package gateway_test
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/runkey"
+	"github.com/qoryai/forager/server"
+)
+
+// The runs of these tests open on a separate gateway's one address, by a run key the
+// control's signing key signs, as an edge of the link sends them: on a bound connection,
+// every answer's signature checked under the gateway's key.
+
+// The run key's values: the node that registered the run, its instance, and a second
+// workspace the gateway serves.
+const (
+	keyNode        = "np_f1xt0re000000000"
+	keyInstance    = "i_gYKDhIWGh4iJiouMjY6PkA"
+	otherWorkspace = "ws_f1xt0re000000001"
+)
+
+// testCertificate writes a certificate for 127.0.0.1, ::1 and localhost, and its key,
+// into dir, signed by an authority of the test's own, which pool trusts.
+func testCertificate(t *testing.T, dir string) (certFile, keyFile string, pool *x509.CertPool) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test authority"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := x509.ParseCertificate(caDER)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "gateway.example"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames: []string{"localhost", "gateway.example"}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	certFile, keyFile = filepath.Join(dir, "gateway.pem"), filepath.Join(dir, "gateway-key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pool = x509.NewCertPool()
+	pool.AddCert(ca)
+	return certFile, keyFile, pool
+}
+
+// runKeyFor is a run key of the run for the tests' gateway, of testWorkspace, issued a
+// minute ago and attachable for ten minutes more, after change, when not nil, has had
+// its say; signed under the control's signing key unless change names another.
+func runKeyFor(t *testing.T, runID string, change func(*runkey.Key)) string {
+	t.Helper()
+	k := runkey.Key{
+		RunID: runID, Workspace: testWorkspace, NodeID: keyNode, Gateway: testGateway, InstanceID: keyInstance,
+		GatewayURL: "https://gateway.example:8443", GatewayKeys: []accesskey.PublicKey{testAccessKey.PublicKey()},
+		Issued: time.Now().Add(-time.Minute).Truncate(time.Second), AttachBy: time.Now().Add(10 * time.Minute).Truncate(time.Second),
+	}
+	if change != nil {
+		change(&k)
+	}
+	s, err := k.Sign(testSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// gatewayKeys are the keys an edge pins for the tests' gateway: its access key's.
+func gatewayKeys() []accesskey.PublicKey { return []accesskey.PublicKey{testAccessKey.PublicKey()} }
+
+// remote is a separate gateway of a test, on 127.0.0.1, its access key a gateway's at
+// its control, with what it reported.
+type remote struct {
+	t    *testing.T
+	c    *control
+	g    *gateway.Gateway
+	cfg  gateway.Config
+	pool *x509.CertPool
+
+	mu      sync.Mutex
+	reports []string
+	keys    []string
+}
+
+// gatewayControl is a control whose access key is a gateway's, serving testWorkspace
+// and otherWorkspace.
+func gatewayControl(t *testing.T) *control {
+	c := newControl(t)
+	c.asGateway(testWorkspace, otherWorkspace)
+	return c
+}
+
+// startRemote starts a separate gateway at the control, a gatewayControl when nil, with
+// cfg's Dir, Policy and test settings kept. At the test's end it is closed, and no line
+// it reported holds a run key it was sent.
+func startRemote(t *testing.T, c *control, cfg gateway.Config) *remote {
+	t.Helper()
+	if c == nil {
+		c = gatewayControl(t)
+	}
+	certFile, keyFile, pool := testCertificate(t, t.TempDir())
+	r := &remote{t: t, c: c, pool: pool}
+	cfg.Listen, cfg.TLS, cfg.Server = "127.0.0.1:0", &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, c.server()
+	if cfg.Dir == "" {
+		cfg.Dir = t.TempDir()
+	}
+	cfg.Report = func(line string) {
+		r.mu.Lock()
+		r.reports = append(r.reports, line)
+		r.mu.Unlock()
+		t.Log("reported: " + line)
+	}
+	r.cfg = cfg
+	g, err := gateway.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.g = g
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		g.Close(ctx)
+		cancel()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for _, line := range r.reports {
+			for _, k := range r.keys {
+				if strings.Contains(line, k) {
+					t.Errorf("a report holds a run key: %s", line)
+				}
+			}
+		}
+	})
+	return r
+}
+
+// reported reports whether the gateway reported a line that holds part.
+func (r *remote) reported(part string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.reports {
+		if strings.Contains(l, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// record is the gateway's record of a run.
+func (r *remote) record(runID string) []recorded {
+	r.t.Helper()
+	return readLines(r.t, filepath.Join(r.cfg.Dir, "runs", runID, "events.jsonl"))
+}
+
+// dialTLS is a TLS 1.3 connection to the one address, trusting the test's authority.
+func (r *remote) dialTLS(t *testing.T) *tls.Conn {
+	t.Helper()
+	c, err := tls.Dial("tcp", r.g.Addr(), &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: r.pool, ServerName: "127.0.0.1", NextProtos: []string{"http/1.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+	return c
+}
+
+// bound is a bound connection of the link, as an edge holds it: the connection, what
+// reads it, and its exporter value.
+type bound struct {
+	c   *tls.Conn
+	r   *bufio.Reader
+	ekm []byte
+}
+
+// Read and Write make bound a net.Conn whose reads go through what read the binding.
+func (b *bound) Read(p []byte) (int, error)         { return b.r.Read(p) }
+func (b *bound) Write(p []byte) (int, error)        { return b.c.Write(p) }
+func (b *bound) Close() error                       { return b.c.Close() }
+func (b *bound) LocalAddr() net.Addr                { return b.c.LocalAddr() }
+func (b *bound) RemoteAddr() net.Addr               { return b.c.RemoteAddr() }
+func (b *bound) SetDeadline(t time.Time) error      { return b.c.SetDeadline(t) }
+func (b *bound) SetReadDeadline(t time.Time) error  { return b.c.SetReadDeadline(t) }
+func (b *bound) SetWriteDeadline(t time.Time) error { return b.c.SetWriteDeadline(t) }
+
+// bind binds a fresh connection as an edge does: its BindWord line, then the gateway's
+// BoundWord line, verified under keys before anything else is sent.
+func (r *remote) bind(t *testing.T, keys []accesskey.PublicKey) (*bound, error) {
+	t.Helper()
+	c := r.dialTLS(t)
+	ekm, err := link.Binding(c.ConnectionState())
+	if err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(c, link.BindWord+"\n"); err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(c)
+	if _, err := link.ReadBound(br, ekm, keys); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return &bound{c: c, r: br, ekm: ekm}, nil
+}
+
+// answer is an answer on a bound connection.
+type answer struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
+// refusal is the answer's body as a refusal's members.
+func (a answer) refusal() map[string]any { return refusalOf(a.body) }
+
+// do sends one request on a fresh bound connection with the run key as its bearer
+// value, none when empty, and returns its answer, whose signature it checks.
+func (r *remote) do(t *testing.T, runKey, method, path string, body []byte) answer {
+	t.Helper()
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	return b.do(t, runKey, method, path, body)
+}
+
+// do sends one request on b with the run key as its bearer value, none when empty, on
+// the origin gateway.example:8443, and returns its answer, whose signature it checks
+// under the gateway's key over the six lines of link.Answer.
+func (b *bound) do(t *testing.T, runKey, method, path string, body []byte) answer {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, "https://gateway.example:8443"+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runKey != "" {
+		req.Header.Set("Authorization", "Bearer "+runKey)
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", server.LinkContentType)
+		if path == "/qory-link/events" {
+			req.Header.Set("Content-Type", server.ContentType)
+		}
+	}
+	if err := req.Write(b.c); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(b.r, req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sent := body
+	if method != http.MethodPost {
+		sent = nil
+	}
+	a := link.Answer{Status: resp.StatusCode, Request: link.AnswerRequest(b.ekm, method, req.URL.RequestURI(), sent), Body: got,
+		Configuration: resp.Header.Get(server.HeaderConfiguration), RunConfiguration: resp.Header.Get(server.HeaderRunConfiguration)}
+	if !link.VerifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
+		t.Errorf("%s %s: the answer %d %s is not signed under the gateway's key for its request", method, path, resp.StatusCode, got)
+	}
+	return answer{status: resp.StatusCode, header: resp.Header, body: got}
+}
+
+// edgeRun is a session's run behind the gateway: its run key and the run answer.
+type edgeRun struct {
+	r   *remote
+	key string
+	a   *server.LinkRunAnswer
+}
+
+// tryOpen sends a run request of the run key's run, and returns the answer.
+func (r *remote) tryOpen(t *testing.T, key string, req server.LinkRunRequest) answer {
+	t.Helper()
+	r.mu.Lock()
+	r.keys = append(r.keys, key)
+	r.mu.Unlock()
+	req.Version = 1
+	if req.RunID == "" {
+		k, err := runkey.Parse(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.RunID = k.RunID
+	}
+	body, _ := json.Marshal(req)
+	return r.do(t, key, http.MethodPost, "/qory-link/run-configuration", body)
+}
+
+// open opens a run by the run key, and starts it: its run.started and policy_applied.
+func (r *remote) open(t *testing.T, key string, req server.LinkRunRequest) *edgeRun {
+	t.Helper()
+	a := r.tryOpen(t, key, req)
+	if a.status != http.StatusOK {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	var ans server.LinkRunAnswer
+	if err := json.Unmarshal(a.body, &ans); err != nil {
+		t.Fatal(err)
+	}
+	e := &edgeRun{r: r, key: key, a: &ans}
+	if got := e.post(t, started(ans.RunID, nil), applied(ans.RunID, ans.Applied)); got.status != http.StatusAccepted {
+		t.Fatalf("the first batch: %d %s", got.status, got.body)
+	}
+	return e
+}
+
+// post posts one batch of the run's events.
+func (e *edgeRun) post(t *testing.T, evs ...map[string]any) answer {
+	t.Helper()
+	body, _ := json.Marshal(evs)
+	return e.r.do(t, e.key, http.MethodPost, "/qory-link/events", body)
+}
+
+// reload asks for the run's configuration again.
+func (e *edgeRun) reload(t *testing.T) answer {
+	t.Helper()
+	return e.r.do(t, e.key, http.MethodGet, "/qory-link/run-configuration/"+e.a.RunID, nil)
+}
+
+// refusalOf decodes a refusal's body.
+func refusalOf(b []byte) map[string]any {
+	var r map[string]any
+	json.Unmarshal(b, &r)
+	return r
+}
+
+// refused checks an answer is the refusal with the status, code, who refused and text.
+func refused(t *testing.T, what string, a answer, status int, code, from, text string) {
+	t.Helper()
+	r := a.refusal()
+	if a.status != status || r["error"] != code || r["from"] != from || r["message"] != text {
+		t.Errorf("%s: %d %s; want %d %s from %s, %q", what, a.status, a.body, status, code, from, text)
+	}
+}
+
+// keyInvalid is the gateway's refusal text of a request without a run key it accepts.
+const keyInvalid = "the gateway refused the run: run_key_invalid"
+
+// attachLine is the text of a refusal of the run's attach with the code, a 409.
+func (r *remote) attachLine(runID, code string) string {
+	return fmt.Sprintf("attach %s%s/%s: %s (status 409)", r.c.srv.URL, runsPath, runID, code)
+}
+
+// validDocument fails the test unless b is valid under the schema.
+func validDocument(t *testing.T, schemaName string, b []byte) {
+	t.Helper()
+	schema, err := contracts.Compile(schemaName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := contracts.Decode("doc.json", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Errorf("%s: %v: %s", schemaName, err, b)
+	}
+}
+
+// TestStartRefusesAnAddressItCannotServe pins Start's checks of the one address: an
+// address that is not host:port, one without TLS, one without a server, TLS files it
+// cannot read or that do not match, TLS without an address, each before anything
+// starts, its error never holding the key; and an access key that is not a gateway's,
+// once discovery is read.
+func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
+	dir := t.TempDir()
+	c := gatewayControl(t)
+	certFile, keyFile, _ := testCertificate(t, t.TempDir())
+	_, otherKey, _ := testCertificate(t, t.TempDir())
+	tlsOf := func(cert, key string) *gateway.TLS { return &gateway.TLS{CertFile: cert, KeyFile: key} }
+	srv := c.server()
+	for name, cfg := range map[string]gateway.Config{
+		"not host:port":                 {Dir: dir, Listen: "127.0.0.1", TLS: tlsOf(certFile, keyFile), Server: srv},
+		"a port out of range":           {Dir: dir, Listen: "127.0.0.1:65536", TLS: tlsOf(certFile, keyFile), Server: srv},
+		"a port that is no number":      {Dir: dir, Listen: "127.0.0.1:https", TLS: tlsOf(certFile, keyFile), Server: srv},
+		"loopback without TLS":          {Dir: dir, Listen: "127.0.0.1:0", Server: srv},
+		"every address without TLS":     {Dir: dir, Listen: ":0", Server: srv},
+		"no server":                     {Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, keyFile)},
+		"a certificate file not there":  {Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(filepath.Join(dir, "none.pem"), keyFile), Server: srv},
+		"a key file not there":          {Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, filepath.Join(dir, "none.pem")), Server: srv},
+		"no files":                      {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{}, Server: srv},
+		"a key of another certificate":  {Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, otherKey), Server: srv},
+		"a certificate without address": {Dir: dir, TLS: tlsOf(certFile, keyFile)},
+		"the key in place of the cert":  {Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(keyFile, keyFile), Server: srv},
+	} {
+		g, err := gateway.Start(context.Background(), cfg)
+		if err == nil {
+			g.Close(context.Background())
+			t.Errorf("%s: started", name)
+			continue
+		}
+		if b, _ := os.ReadFile(keyFile); strings.Contains(err.Error(), string(b[30:60])) {
+			t.Errorf("%s: the error holds the key: %v", name, err)
+		}
+	}
+	for _, c := range []struct {
+		cfg  gateway.Config
+		want string
+	}{
+		{gateway.Config{Dir: dir, Listen: "127.0.0.1:0", Server: srv}, "the gateway's address 127.0.0.1:0 needs TLS, a certificate and its key: every connection of the link there is bound to its TLS"},
+		{gateway.Config{Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, keyFile)}, "the gateway's address 127.0.0.1:0 needs a server and a gateway's access key: the gateway attaches each run there"},
+	} {
+		if _, err := gateway.Start(context.Background(), c.cfg); err == nil || err.Error() != c.want {
+			t.Errorf("%v; want %q", err, c.want)
+		}
+	}
+	// A node's access key serves no address.
+	node := newControl(t)
+	_, err := gateway.Start(context.Background(), gateway.Config{Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, keyFile), Server: node.server()})
+	if want := "the access key's node " + testNode + " is not a gateway, ng_: the gateway's address 127.0.0.1:0 needs a gateway's access key"; err == nil || err.Error() != want {
+		t.Errorf("a node's key: %v; want %q", err, want)
+	}
+}
+
+// TestASeparateGatewayRunsNoSessions pins D-4: a gateway with an address makes no link
+// directory, no socket and no proxy on loopback; its local link has no socket and no
+// proxy, and every connection to it fails, saying why; its one address is its proxy's.
+func TestASeparateGatewayRunsNoSessions(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	l := r.g.LocalLink()
+	if l.Socket != "" || l.Proxy != "" || l.Secret != "" {
+		t.Errorf("the local link of a separate gateway: socket %q, proxy %q", l.Socket, l.Proxy)
+	}
+	if _, err := l.DialContext(context.Background()); err == nil || err.Error() != "the gateway serves other machines on its address, and runs no sessions" {
+		t.Errorf("a connection to its local link: %v", err)
+	}
+	if entries, _ := filepath.Glob(filepath.Join(os.TempDir(), "qory-link-*", "sock")); len(entries) > 0 {
+		for _, e := range entries {
+			if strings.Contains(e, r.cfg.Dir) {
+				t.Errorf("a socket %s", e)
+			}
+		}
+	}
+	if got := r.g.String(); got != "gateway.Gateway{address "+r.g.Addr()+"}" {
+		t.Errorf("String %s", got)
+	}
+}
+
+// TestTheOneAddressIsTLS13Only pins TLS on the one address: 1.3 with the operator's
+// certificate; an earlier version is refused in the handshake, and plain HTTP is no
+// request.
+func TestTheOneAddressIsTLS13Only(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS11, tls.VersionTLS10} {
+		if c, err := tls.Dial("tcp", r.g.Addr(), &tls.Config{MinVersion: version, MaxVersion: version, RootCAs: r.pool, ServerName: "127.0.0.1"}); err == nil {
+			c.Close()
+			t.Errorf("TLS version %#x was served", version)
+		}
+	}
+	c := r.dialTLS(t)
+	if st := c.ConnectionState(); st.Version != tls.VersionTLS13 || st.PeerCertificates[0].Subject.CommonName != "gateway.example" {
+		t.Errorf("version %#x, certificate %s", st.Version, st.PeerCertificates[0].Subject)
+	}
+	c.Close()
+	p, err := net.Dial("tcp", r.g.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.SetDeadline(time.Now().Add(10 * time.Second))
+	io.WriteString(p, link.BindWord+"\nGET /qory-link/configuration HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+	if b, _ := io.ReadAll(p); bytes.Contains(b, []byte("HTTP/1.1")) || bytes.Contains(b, []byte(link.BoundWord)) {
+		t.Errorf("plain TCP was answered: %q", b)
+	}
+}
+
+// fakeGateway serves one TLS 1.3 connection per call of line on a listener of its own,
+// answering the edge's BindWord line with the line line makes of the connection's
+// exporter value, as a gateway that does not hold its key would.
+func fakeGateway(t *testing.T, line func(ekm []byte) string) (addr string, pool *x509.CertPool) {
+	t.Helper()
+	certFile, keyFile, pool := testCertificate(t, t.TempDir())
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				tc := c.(*tls.Conn)
+				if tc.Handshake() != nil {
+					return
+				}
+				b := make([]byte, len(link.BindWord)+1)
+				if _, err := io.ReadFull(tc, b); err != nil {
+					return
+				}
+				ekm, _ := link.Binding(tc.ConnectionState())
+				io.WriteString(tc, line(ekm))
+				io.Copy(io.Discard, tc)
+			}()
+		}
+	}()
+	return ln.Addr().String(), pool
+}
+
+// TestTheBinding pins the binding of a connection to the one address: the gateway's
+// BoundWord line is its key's signature over the connection's exporter value, which an
+// edge that pins the key verifies; an edge that pins another key refuses it. A proof
+// over another connection's exporter value, under another key in the gateway's
+// fingerprint, a signature cut short, or a line that is not one, is ErrNotBound. Every
+// answer is bound to its connection and its request: its signature verifies over its
+// own request line alone.
+func TestTheBinding(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatalf("the binding under the gateway's key: %v", err)
+	}
+	key := runKeyFor(t, event.NewRunID(), nil)
+	a := b.do(t, key, http.MethodGet, "/qory-link/configuration", nil)
+	b.Close()
+	if a.status != http.StatusOK {
+		t.Fatalf("the discovery: %d %s", a.status, a.body)
+	}
+	other := mustGenerate()
+	if _, err := r.bind(t, []accesskey.PublicKey{other.PublicKey()}); !errors.Is(err, link.ErrNotBound) {
+		t.Errorf("an edge that pins another key: %v", err)
+	}
+	// The answer's signature is over its own request: another connection's exporter
+	// value, method, target or body is not it.
+	for name, req := range map[string]string{
+		"another exporter value": link.AnswerRequest(bytes.Repeat([]byte{7}, link.BindingLength), http.MethodGet, "/qory-link/configuration", nil),
+		"another target":         link.AnswerRequest(b.ekm, http.MethodGet, "/qory-link/configuration?x=1", nil),
+		"another method":         link.AnswerRequest(b.ekm, http.MethodPost, "/qory-link/configuration", nil),
+	} {
+		ans := link.Answer{Status: a.status, Request: req, Body: a.body, Configuration: a.header.Get(server.HeaderConfiguration), RunConfiguration: a.header.Get(server.HeaderRunConfiguration)}
+		if link.VerifyAnswer(gatewayKeys(), ans, a.header.Get(server.HeaderSignature)) {
+			t.Errorf("the answer verifies over %s", name)
+		}
+	}
+
+	fp := testAccessKey.PublicKey().Fingerprint()
+	for name, line := range map[string]func(ekm []byte) string{
+		"another connection's exporter value": func([]byte) string {
+			return link.BoundLine(testAccessKey, bytes.Repeat([]byte{1}, link.BindingLength))
+		},
+		"another key in the gateway's fingerprint": func(ekm []byte) string {
+			sig := other.Sign(link.BindingMessage(ekm, fp))
+			return link.BoundWord + " " + fp + " " + base64.RawURLEncoding.EncodeToString(sig) + "\n"
+		},
+		"another key's line": func(ekm []byte) string { return link.BoundLine(other, ekm) },
+		"a signature cut short": func(ekm []byte) string {
+			l := link.BoundLine(testAccessKey, ekm)
+			return l[:len(l)-10] + "\n"
+		},
+		"no signature": func([]byte) string { return link.BoundWord + " " + fp + "\n" },
+		"an HTTP answer": func([]byte) string {
+			return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+		},
+		"nothing": func([]byte) string { return "" },
+	} {
+		addr, pool := fakeGateway(t, line)
+		c, err := tls.Dial("tcp", addr, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: "127.0.0.1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		ekm, _ := link.Binding(c.ConnectionState())
+		io.WriteString(c, link.BindWord+"\n")
+		if name == "nothing" {
+			c.CloseWrite()
+		}
+		if _, err := link.ReadBound(bufio.NewReader(c), ekm, gatewayKeys()); !errors.Is(err, link.ErrNotBound) {
+			t.Errorf("%s: %v; want ErrNotBound", name, err)
+		}
+		c.Close()
+	}
+}
+
+// TestTheOneAddressRoutesByTheFirstBytes pins the routing on the one address: a
+// connection whose first line is not BindWord is the relay's, which answers a path of
+// the link 404 unsigned; on a bound connection, the relay's preamble with a run key of
+// no live run here, or one the gateway refuses, is closed unanswered, and with a live
+// run's run key it reaches that run's proxy, which decides each request by its policy.
+func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
+	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	t.Cleanup(o.Close)
+	r := startRemote(t, nil, gateway.Config{Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1"}}}})
+	key := runKeyFor(t, event.NewRunID(), nil)
+
+	c := r.dialTLS(t)
+	req, _ := http.NewRequest(http.MethodGet, "https://gateway.example:8443/qory-link/configuration", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Write(c)
+	resp, err := http.ReadResponse(bufio.NewReader(c), req)
+	c.Close()
+	if err != nil || resp.StatusCode != http.StatusNotFound || resp.Header.Get(server.HeaderSignature) != "" {
+		t.Errorf("an unbound request of the link: %v %v", resp, err)
+	}
+
+	relayed := func(runKey string) *http.Client {
+		return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: r.g.Addr()}),
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				b, err := r.bind(t, gatewayKeys())
+				if err != nil {
+					return nil, err
+				}
+				io.WriteString(b, link.RelayPreamble+" "+runKey+"\n")
+				return b, nil
+			},
+			DisableKeepAlives: true,
+		}}
+	}
+	if _, err := relayed(key).Get(o.URL); err == nil {
+		t.Error("the relay of a run not open here was answered")
+	}
+	if _, err := relayed("qrk_not.a-run-key").Get(o.URL); err == nil {
+		t.Error("the relay of no run key was answered")
+	}
+	e := r.open(t, key, server.LinkRunRequest{})
+	resp, err = relayed(key).Get(o.URL)
+	if err != nil {
+		t.Fatalf("the relay of the run: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "ok" {
+		t.Errorf("the relay of the run: %d %q", resp.StatusCode, b)
+	}
+	if e.a.ProxySecret != "" || e.a.RunSecret != "" {
+		t.Error("the run answer gives a secret")
+	}
+}
+
+// TestEveryRequestCarriesAnAcceptedRunKey pins the run key on the one address, in
+// order, on every path: none, two, another scheme, one that is no run key or that no
+// pinned key signed, is 400 run_key_invalid; one of another gateway 409 wrong_gateway;
+// of a workspace discovery does not list 409 workspace_not_served; past its attach_by
+// with nothing of the run here 409 run_key_expired. Each 409 reads as the server's
+// refusal of the attach. A run key past its attach_by of a run the gateway holds goes
+// on. Each answer is signed, and nothing is attached.
+func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
+	var now time.Time
+	var mu sync.Mutex
+	cfg := gateway.Config{}
+	gateway.SetNow(&cfg, func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		if now.IsZero() {
+			return time.Now()
+		}
+		return now
+	})
+	r := startRemote(t, nil, cfg)
+	runID := event.NewRunID()
+	good := runKeyFor(t, runID, nil)
+	unpinned, err := runkey.Key{RunID: runID, Workspace: testWorkspace, NodeID: keyNode, Gateway: testGateway, InstanceID: keyInstance,
+		GatewayURL: "https://gateway.example:8443", GatewayKeys: gatewayKeys(), Issued: time.Now().Truncate(time.Second), AttachBy: time.Now().Add(time.Hour).Truncate(time.Second)}.Sign(mustGenerate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []struct{ method, path string }{
+		{http.MethodGet, "/qory-link/configuration"},
+		{http.MethodPost, "/qory-link/run-configuration"},
+		{http.MethodGet, "/qory-link/run-configuration/" + runID},
+		{http.MethodPost, "/qory-link/events"},
+		{http.MethodGet, "/qory-link/nothing"},
+	}
+	send := func(header []string, method, path string) answer {
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer b.Close()
+		req, _ := http.NewRequest(method, "https://gateway.example:8443"+path, nil)
+		req.Header["Authorization"] = header
+		req.Write(b.c)
+		resp, err := http.ReadResponse(b.r, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		a := link.Answer{Status: resp.StatusCode, Request: link.AnswerRequest(b.ekm, method, path, nil), Body: got, Configuration: resp.Header.Get(server.HeaderConfiguration)}
+		if !link.VerifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
+			t.Errorf("%s %s: an unsigned refusal", method, path)
+		}
+		return answer{status: resp.StatusCode, header: resp.Header, body: got}
+	}
+	for name, header := range map[string][]string{
+		"no Authorization":    nil,
+		"two run keys":        {"Bearer " + good, "Bearer " + good},
+		"Basic":               {"Basic " + base64.StdEncoding.EncodeToString([]byte(":"+good))},
+		"no run key":          {"Bearer not-a-run-key"},
+		"a key no pin signed": {"Bearer " + unpinned},
+		"a run key cut short": {"Bearer " + good[:len(good)-4]},
+	} {
+		for _, p := range paths {
+			refused(t, name+" "+p.path, send(header, p.method, p.path), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+		}
+	}
+	for name, c := range map[string]struct {
+		change func(*runkey.Key)
+		code   string
+	}{
+		"another gateway's":   {func(k *runkey.Key) { k.Gateway = "ng_0therg4teway0000" }, "wrong_gateway"},
+		"another workspace's": {func(k *runkey.Key) { k.Workspace = "ws_0therw0rkspace00" }, "workspace_not_served"},
+		"past its attach_by": {func(k *runkey.Key) {
+			k.AttachBy = time.Now().Add(-time.Second).Truncate(time.Second)
+			k.Issued = k.AttachBy.Add(-time.Minute)
+		}, "run_key_expired"},
+		"another gateway's, late": {func(k *runkey.Key) {
+			k.Gateway, k.AttachBy, k.Issued = "ng_0therg4teway0000", time.Now().Add(-time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+		}, "wrong_gateway"},
+	} {
+		key := runKeyFor(t, runID, c.change)
+		for _, p := range paths {
+			refused(t, name+" "+p.path, send([]string{"Bearer " + key}, p.method, p.path), http.StatusConflict, c.code, "gateway", r.attachLine(runID, c.code))
+		}
+	}
+	if n := len(r.c.attached()); n != 0 {
+		t.Errorf("%d attaches", n)
+	}
+	// The second workspace the gateway serves is served.
+	other := runKeyFor(t, event.NewRunID(), func(k *runkey.Key) { k.Workspace = otherWorkspace })
+	if a := r.do(t, other, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Errorf("the second workspace: %d %s", a.status, a.body)
+	}
+	// A run the gateway holds goes on past its key's attach_by.
+	e := r.open(t, good, server.LinkRunRequest{})
+	mu.Lock()
+	now = time.Now().Add(time.Hour)
+	mu.Unlock()
+	if a := e.post(t, heartbeat(runID)); a.status != http.StatusAccepted {
+		t.Errorf("a held run past attach_by: %d %s", a.status, a.body)
+	}
+	late := runKeyFor(t, event.NewRunID(), nil)
+	refused(t, "a run not held past attach_by", r.do(t, late, http.MethodGet, "/qory-link/configuration", nil), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(mustRunID(t, late), "run_key_expired"))
+}
+
+// mustRunID is the run id of a run key.
+func mustRunID(t *testing.T, key string) string {
+	t.Helper()
+	k, err := runkey.Parse(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k.RunID
+}
+
+// TestTheRunRequestBehindTheGateway pins what a run request may carry behind a separate
+// gateway: a run id other than its run key's is run_key_invalid; labels or about, the
+// starter's registration's, are invalid_request; a run the gateway holds, or holds a
+// record of, is 409 run_attached, read as the server's refusal of the attach; and a
+// reload of another run id than the run key's is run_key_invalid.
+func TestTheRunRequestBehindTheGateway(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	refused(t, "another run id", r.tryOpen(t, key, server.LinkRunRequest{RunID: event.NewRunID()}), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+	refused(t, "labels", r.tryOpen(t, key, server.LinkRunRequest{Labels: map[string]string{"repository": "example-namespace/project"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	refused(t, "about", r.tryOpen(t, key, server.LinkRunRequest{About: &server.About{Title: "Fix the failing build"}}), http.StatusBadRequest, "invalid_request", "gateway", "the gateway refused the run: invalid_request")
+	if n := len(r.c.attached()); n != 0 {
+		t.Errorf("%d attaches", n)
+	}
+	e := r.open(t, key, server.LinkRunRequest{})
+	refused(t, "a second run request", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	refused(t, "a reload of another run", r.do(t, key, http.MethodGet, "/qory-link/run-configuration/"+event.NewRunID(), nil), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+	if a := e.reload(t); a.status != http.StatusOK {
+		t.Errorf("the run's reload: %d %s", a.status, a.body)
+	}
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+}
+
+// TestARunThroughTheGateway pins a run behind a separate gateway end to end: the
+// discovery's URLs on the origin the edge names, under /qory-link/, its proxy that
+// address; the attach under the gateway's key with the run key, its interval, the event
+// types and its version; the run answer valid under its schema, with no labels, proxy
+// secret or run secret, and the policy of the attach's answer; the record's first line
+// from the run key and the attach's answer; the run's events at the server, sent under
+// the gateway's key; and a reload.
+func TestARunThroughTheGateway(t *testing.T) {
+	c := gatewayControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	c.mu.Lock()
+	c.attachLabels = map[string]string{"repository": "example-namespace/project"}
+	c.attachAbout = json.RawMessage(`{"title":"Fix the failing build"}`)
+	c.mu.Unlock()
+	r := startRemote(t, c, gateway.Config{Heartbeat: 5 * time.Second, Version: "v0.0.0-test"})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+
+	d := r.do(t, key, http.MethodGet, "/qory-link/configuration", nil)
+	validDocument(t, "link-discovery.schema.json", d.body)
+	var disc server.LinkDiscovery
+	json.Unmarshal(d.body, &disc)
+	if disc.Events.URL != "https://gateway.example:8443/qory-link/events" || disc.Run.URL != "https://gateway.example:8443/qory-link/run-configuration" ||
+		disc.Proxy == nil || disc.Proxy.Address != "gateway.example:8443" || disc.Events.IntervalSeconds != 5 {
+		t.Errorf("the discovery %s", d.body)
+	}
+
+	a := r.tryOpen(t, key, server.LinkRunRequest{})
+	if a.status != http.StatusOK {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	validDocument(t, "link-run-answer.schema.json", a.body)
+	var members map[string]json.RawMessage
+	json.Unmarshal(a.body, &members)
+	for _, m := range []string{"labels", "proxy_secret", "run_secret"} {
+		if _, ok := members[m]; ok {
+			t.Errorf("the run answer holds %s: %s", m, a.body)
+		}
+	}
+	if !bytes.Contains(a.body, []byte("api.example")) {
+		t.Errorf("the run answer has not the attach's policy: %s", a.body)
+	}
+	atts := c.attached()
+	if len(atts) != 1 {
+		t.Fatalf("%d attaches", len(atts))
+	}
+	var att map[string]any
+	json.Unmarshal(atts[0], &att)
+	if att["run_key"] != key || att["interval_seconds"] != float64(5) || att["forager_version"] != "v0.0.0-test" || fmt.Sprint(att["events"]) != "[*]" || att["contract_version"] != float64(server.Revision) {
+		t.Errorf("the attach %s", atts[0])
+	}
+	validDocument(t, "run-attach.schema.json", atts[0])
+
+	var ans server.LinkRunAnswer
+	json.Unmarshal(a.body, &ans)
+	e := &edgeRun{r: r, key: key, a: &ans}
+	if got := e.post(t, started(runID, nil), applied(runID, ans.Applied), heartbeat(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the first batch: %d %s", got.status, got.body)
+	}
+	if got := e.reload(t); got.status != http.StatusOK || !bytes.Contains(got.body, []byte("api.example")) {
+		t.Errorf("the reload: %d %s", got.status, got.body)
+	}
+	if got := e.post(t, exited(runID)); got.status != http.StatusAccepted {
+		t.Fatalf("the last batch: %d %s", got.status, got.body)
+	}
+	eventually(t, "the run's events at the server", func() bool {
+		lines := c.lines(t)
+		return len(lines) > 0 && lines[len(lines)-1].Type == event.RunExited
+	})
+	rec := r.record(runID)
+	validEvents(t, rec)
+	first := rec[0].Data
+	if rec[0].Type != event.RunRegistered || first["workspace"] != testWorkspace || first["node_id"] != keyNode || first["instance_id"] != keyInstance ||
+		first["forager_version"] != "v0.0.0-test" || first["interval_seconds"] != float64(5) || fmt.Sprint(first["labels"]) != "map[repository:example-namespace/project]" ||
+		fmt.Sprint(first["about"]) != "map[title:Fix the failing build]" {
+		t.Errorf("the record's first line %s %v", rec[0].Type, first)
+	}
+	for _, l := range c.lines(t) {
+		if l.Type == event.RunRegistered {
+			t.Error("the record's first line was posted")
+		}
+	}
+}
+
+// TestAnAttachRefusalReachesTheSession pins the server's refusal of the attach: the
+// session has it as the link's refusal, its status and code, from apiary, reading
+// attach <run.url>/<run_id>: <code> (status <status>); the run does not open, and the
+// gateway holds nothing of it.
+func TestAnAttachRefusalReachesTheSession(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	for _, ref := range []receiver.Refusal{{Status: http.StatusConflict, Code: "run_attached"}, {Status: http.StatusConflict, Code: "run_key_expired"}, {Status: http.StatusConflict, Code: "not_a_gateway"}} {
+		r.c.attachRefusal.Store(&ref)
+		runID := event.NewRunID()
+		refused(t, ref.Code, r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{}), ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))
+	}
+	if runs, _ := gateway.Held(r.g); runs != 0 {
+		t.Errorf("%d runs held", runs)
+	}
+}
+
+// TestTheEndMember pins the end member of the server's 2xx to a batch, behind a
+// separate gateway and on a direct node's local link alike: the gateway ends the run
+// with the outcome, its record's dev.qory.run.exited has its state and reason and
+// exit_code -1, numbered and posted after the run's last events; the session's next
+// request is a 410 stopped carrying them; a later end is ignored. An end cancelled
+// with no reason has the reason stopped, "no outcome given". Behind the gateway the
+// ended run, once let go of, still answers its 410.
+func TestTheEndMember(t *testing.T) {
+	for _, c := range []struct {
+		end           server.ServerEnd
+		reason, words string
+	}{
+		{server.ServerEnd{State: "failed", Reason: "checks_failed"}, "checks_failed", "failed, checks failed"},
+		{server.ServerEnd{State: "succeeded"}, "", "succeeded"},
+		{server.ServerEnd{State: "cancelled"}, "stopped", "cancelled, no outcome given"},
+	} {
+		text := "the run has ended: " + c.words
+		ended := func(t *testing.T, rec []recorded, posted []recorded) {
+			t.Helper()
+			var exits []recorded
+			for _, l := range rec {
+				if l.Type == event.RunExited {
+					exits = append(exits, l)
+				}
+			}
+			if len(exits) != 1 || rec[len(rec)-1].Type != event.RunExited {
+				t.Fatalf("%d run.exited in the record %v", len(exits), types(rec))
+			}
+			x := exits[0].Data
+			if x["state"] != c.end.State || (c.reason == "" && x["reason"] != nil) || (c.reason != "" && x["reason"] != c.reason) || x["exit_code"] != float64(-1) {
+				t.Errorf("the record's run.exited %v", x)
+			}
+			validEvents(t, rec)
+			if posted[len(posted)-1].Type != event.RunExited || posted[len(posted)-1].Sequence != exits[0].Sequence {
+				t.Errorf("the server has %v", types(posted))
+			}
+		}
+
+		t.Run("separate "+c.words, func(t *testing.T) {
+			r := startRemote(t, nil, gateway.Config{})
+			runID := event.NewRunID()
+			e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+			r.c.end.Store(&c.end)
+			var last answer
+			eventually(t, "the 410", func() bool {
+				last = e.post(t, heartbeat(runID))
+				return last.status == http.StatusGone
+			})
+			got := last.refusal()
+			if got["error"] != "stopped" || got["from"] != "gateway" || got["message"] != text || got["state"] != c.end.State || (c.reason != "" && got["reason"] != c.reason) {
+				t.Errorf("the 410 %s", last.body)
+			}
+			validDocument(t, "link-refusal.schema.json", last.body)
+			r.c.end.Store(&server.ServerEnd{State: "succeeded", Reason: "other_reason"})
+			eventually(t, "the run let go of", func() bool {
+				runs, spent := gateway.Held(r.g)
+				return runs == 0 && spent == 1
+			})
+			ended(t, r.record(runID), r.c.lines(t))
+			if a := e.reload(t); a.status != http.StatusGone || a.refusal()["message"] != text {
+				t.Errorf("the reload of the ended run: %d %s", a.status, a.body)
+			}
+			refused(t, "a run request again", r.tryOpen(t, e.key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+		})
+
+		t.Run("local "+c.words, func(t *testing.T) {
+			ctl := newControl(t)
+			h := start(t, gateway.Config{Server: ctl.server()})
+			a := h.open(server.LinkRunRequest{})
+			if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+				t.Fatalf("the first batch: %+v", d)
+			}
+			ctl.end.Store(&c.end)
+			var d server.Delivery
+			eventually(t, "the 410", func() bool {
+				d = h.post(heartbeat(a.RunID))
+				return d.Status == http.StatusGone
+			})
+			if d.Code != "stopped" || d.State != c.end.State || d.Reason != c.reason {
+				t.Errorf("the 410 %+v", d)
+			}
+			status, got := h.refusalOf("/v1/events", string(mustJSON(t, []map[string]any{heartbeat(a.RunID)})))
+			if status != http.StatusGone || got["message"] != text {
+				t.Errorf("the 410's message: %d %v", status, got)
+			}
+			ctl.end.Store(&server.ServerEnd{State: "succeeded", Reason: "other_reason"})
+			eventually(t, "the run.exited at the server", func() bool {
+				lines := ctl.lines(t)
+				return len(lines) > 0 && lines[len(lines)-1].Type == event.RunExited
+			})
+			ended(t, h.record(a.RunID), ctl.lines(t))
+		})
+	}
+}
+
+// TestAGatewayRestartedReattaches pins a separate gateway that restarts on its
+// directory: a run it attached whose open never answered its session, its record
+// holding its dev.qory.run.registered alone, is reclaimed, and the session's run
+// request attaches it again and opens it; a run that was live there is over, a 410
+// run_closed to its batch and a 409 run_attached to its run request.
+func TestAGatewayRestartedReattaches(t *testing.T) {
+	dir := t.TempDir()
+	c := gatewayControl(t)
+	before := startRemote(t, c, gateway.Config{Dir: dir})
+	partial, live := event.NewRunID(), event.NewRunID()
+	partialKey, liveKey := runKeyFor(t, partial, nil), runKeyFor(t, live, nil)
+	before.open(t, partialKey, server.LinkRunRequest{})
+	l := before.open(t, liveKey, server.LinkRunRequest{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	before.g.Close(ctx)
+	cancel()
+	// The partial run's record as a gateway that stopped as it opened leaves it: its
+	// first line alone.
+	file := filepath.Join(dir, "runs", partial, "events.jsonl")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, append(bytes.SplitN(b, []byte("\n"), 2)[0], '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "runs", partial, "delivered.log"))
+	attaches := len(c.attached())
+
+	r := startRemote(t, c, gateway.Config{Dir: dir})
+	a := r.tryOpen(t, partialKey, server.LinkRunRequest{})
+	if a.status != http.StatusOK {
+		t.Fatalf("the reclaimed run's request: %d %s", a.status, a.body)
+	}
+	if got := len(c.attached()); got != attaches+1 {
+		t.Errorf("%d attaches after the restart; want 1", got-attaches)
+	}
+	rec := r.record(partial)
+	if len(rec) != 1 || rec[0].Type != event.RunRegistered || rec[0].Sequence != "0000000001" {
+		t.Errorf("the reclaimed run's record %v", types(rec))
+	}
+	l.r = r
+	if got := l.post(t, heartbeat(live)); got.status != http.StatusGone || got.refusal()["error"] != "run_closed" {
+		t.Errorf("a batch of the run live before: %d %s", got.status, got.body)
+	}
+	refused(t, "a run request of the run live before", r.tryOpen(t, liveKey, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(live, "run_attached"))
+}
+
+// TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun pins D4 behind a separate gateway:
+// a batch of another run's events ends the run of its run key, batch_refused, and its
+// later requests are a 410 batch_refused.
+func TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	runID := event.NewRunID()
+	e := r.open(t, runKeyFor(t, runID, nil), server.LinkRunRequest{})
+	if a := e.post(t, heartbeat(event.NewRunID())); a.status != http.StatusBadRequest || a.refusal()["error"] != "invalid_request" {
+		t.Errorf("the batch: %d %s", a.status, a.body)
+	}
+	if a := e.reload(t); a.status != http.StatusGone || a.refusal()["error"] != "batch_refused" {
+		t.Errorf("the run after: %d %s", a.status, a.body)
+	}
+	if !r.reported("run " + runID + ": the gateway refused a batch of its session's, an event of another run; the run ends: failed") {
+		t.Error("no line of the refused batch")
+	}
+}
+
+// TestTheRelay pins the relay of the server's four endpoints on unbound connections:
+// each forwarded with its target unchanged, the hop-by-hop fields dropped, and its
+// answer passed back byte for byte, its signature among it; every other path 404 and
+// other method 405; a body over its endpoint's bound 413; and an answer over 1 MiB
+// 502, each the relay's own, with no body and nothing sent on.
+func TestTheRelay(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	var got []string
+	var mu sync.Mutex
+	answerBody := []byte(`{"version":1}`)
+	f := func(w http.ResponseWriter, req *http.Request) bool {
+		if req.URL.Path == "/v1/events" {
+			return false
+		}
+		b, _ := io.ReadAll(req.Body)
+		mu.Lock()
+		got = append(got, req.Method+" "+req.RequestURI+" "+fmt.Sprint(len(b))+" "+req.Header.Get("Connection")+req.Header.Get(server.HeaderSignature))
+		big := strings.HasSuffix(req.URL.Path, "/big")
+		mu.Unlock()
+		if req.URL.Query().Get("big") != "" || big {
+			w.Write(make([]byte, gateway.RelayMaxAnswer+1))
+			return true
+		}
+		w.Header().Set(server.HeaderSignature, "answer-signature")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(answerBody)
+		return true
+	}
+	r.c.intercept.Store(&f)
+	send := func(method, target string, body []byte, header http.Header) (*http.Response, []byte) {
+		t.Helper()
+		c := r.dialTLS(t)
+		defer c.Close()
+		var rd io.Reader
+		if body != nil {
+			rd = bytes.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, "https://gateway.example:8443"+target, rd)
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		if err := req.Write(c); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(c), req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, target, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, b
+	}
+	outcome := runsPath + "/" + event.NewRunID() + "/outcome"
+	for _, c := range []struct {
+		method, target string
+		size           int
+	}{
+		{http.MethodPost, "/.well-known/qory-enrolment", gateway.RelayEnrolment},
+		{http.MethodGet, "/.well-known/qory-configuration?x=1", 0},
+		{http.MethodPost, runsPath, gateway.RelayRegister},
+		{http.MethodPost, outcome, gateway.RelayOutcome},
+	} {
+		var body []byte
+		if c.method == http.MethodPost {
+			body = bytes.Repeat([]byte("a"), c.size)
+		}
+		resp, b := send(c.method, c.target, body, http.Header{server.HeaderSignature: {"request-signature"}})
+		if resp.StatusCode != http.StatusOK || !bytes.Equal(b, answerBody) || resp.Header.Get(server.HeaderSignature) != "answer-signature" {
+			t.Errorf("%s %s: %d %q", c.method, c.target, resp.StatusCode, b)
+		}
+		mu.Lock()
+		last := got[len(got)-1]
+		mu.Unlock()
+		if want := c.method + " " + c.target + " " + fmt.Sprint(c.size) + " request-signature"; last != want {
+			t.Errorf("forwarded %q; want %q", last, want)
+		}
+		if c.method == http.MethodPost {
+			resp, b := send(c.method, c.target, append(body, 'a'), nil)
+			if resp.StatusCode != http.StatusRequestEntityTooLarge || len(b) != 0 {
+				t.Errorf("%s %s over its bound: %d %q", c.method, c.target, resp.StatusCode, b)
+			}
+		}
+	}
+	mu.Lock()
+	sent := len(got)
+	mu.Unlock()
+	for _, c := range []struct {
+		method, target string
+		status         int
+	}{
+		{http.MethodGet, "/qory-link/configuration", http.StatusNotFound},
+		{http.MethodPost, runsPath + "/" + event.NewRunID() + "/attach", http.StatusNotFound},
+		{http.MethodGet, runsPath + "/" + event.NewRunID(), http.StatusNotFound},
+		{http.MethodPost, "/v1/events", http.StatusNotFound},
+		{http.MethodGet, "/.well-known/qory-enrolment", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/.well-known/qory-configuration", http.StatusMethodNotAllowed},
+		{http.MethodGet, runsPath, http.StatusMethodNotAllowed},
+	} {
+		resp, b := send(c.method, c.target, nil, nil)
+		if resp.StatusCode != c.status || len(b) != 0 {
+			t.Errorf("%s %s: %d %q; want %d", c.method, c.target, resp.StatusCode, b, c.status)
+		}
+	}
+	mu.Lock()
+	if len(got) != sent {
+		t.Errorf("forwarded %q", got[sent:])
+	}
+	mu.Unlock()
+	if resp, b := send(http.MethodGet, "/.well-known/qory-configuration?big=1", nil, nil); resp.StatusCode != http.StatusBadGateway || len(b) != 0 {
+		t.Errorf("an answer over its bound: %d %d bytes", resp.StatusCode, len(b))
+	}
+}
+
+// TestTheRelaysRateAndWait pins the relay's rate per source address, a burst of 20 then
+// 429 with no body, and its wait for the server: an answer that does not come in time
+// is 504, and a server not reached 502.
+func TestTheRelaysRateAndWait(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	statuses := map[int]int{}
+	for range gateway.RelayBurst + 5 {
+		c := r.dialTLS(t)
+		req, _ := http.NewRequest(http.MethodGet, "https://gateway.example:8443/nothing", nil)
+		req.Write(c)
+		resp, err := http.ReadResponse(bufio.NewReader(c), req)
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		statuses[resp.StatusCode]++
+	}
+	if statuses[http.StatusNotFound] < gateway.RelayBurst || statuses[http.StatusNotFound] > gateway.RelayBurst+1 || statuses[http.StatusTooManyRequests] < 4 {
+		t.Errorf("statuses %v", statuses)
+	}
+
+	cfg := gateway.Config{}
+	gateway.SetRelayWait(&cfg, 200*time.Millisecond)
+	slow := startRemote(t, nil, cfg)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f := func(w http.ResponseWriter, req *http.Request) bool {
+		if req.URL.Path != server.WellKnown {
+			return false
+		}
+		select {
+		case <-release:
+		case <-req.Context().Done():
+		}
+		return true
+	}
+	slow.c.intercept.Store(&f)
+	get := func(rm *remote) int {
+		c := rm.dialTLS(t)
+		defer c.Close()
+		req, _ := http.NewRequest(http.MethodGet, "https://gateway.example:8443"+server.WellKnown, nil)
+		req.Write(c)
+		resp, err := http.ReadResponse(bufio.NewReader(c), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode
+	}
+	if got := get(slow); got != http.StatusGatewayTimeout {
+		t.Errorf("a server that does not answer in time: %d", got)
+	}
+	slow.c.srv.CloseClientConnections()
+	slow.c.srv.Listener.Close()
+	if got := get(slow); got != http.StatusBadGateway {
+		t.Errorf("a server not reached: %d", got)
+	}
+}
+
+// validEvents fails the test unless every event of the record is valid under its
+// type's schema.
+func validEvents(t *testing.T, rec []recorded) {
+	t.Helper()
+	for _, l := range rec {
+		name := "events/" + strings.TrimPrefix(l.Type, "dev.qory.") + ".schema.json"
+		schema, err := contracts.Compile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(l.Data)
+		doc, _ := contracts.Decode("data.json", b)
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("%s %s: %v", l.Type, b, err)
+		}
+	}
+}

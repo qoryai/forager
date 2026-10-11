@@ -64,9 +64,11 @@ func mediaType(r *http.Request, want string) bool {
 }
 
 // openRun answers a run request: 400 invalid_request for a body the schema refuses and
-// for a narrowing, which the local link refuses; 409 run_id_used for a run id that
-// already names a run here; the run's refusal when it does not open; else the run
-// answer.
+// for a narrowing, which the local link refuses; on the one address 400 run_key_invalid
+// for a run id that is not the run key's, 400 invalid_request for labels or about, which
+// are the starter's registration's, and 409 run_attached for a run the gateway holds,
+// is opening or has a record of; 409 run_id_used for a run id that already names a run here; the run's
+// refusal when it does not open; else the run answer.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	deadline := g.openDeadline()
 	if !mediaType(r, server.LinkContentType) {
@@ -83,14 +85,23 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		invalid(w)
 		return
 	}
-	var id *runIdentity
+	how := opening{remote: s.remote, request: r.Context(), deadline: deadline}
 	if s.remote {
-		got, ok := identityOf(r.Context())
-		if !ok {
-			refuseUnauthorized(w)
+		p, _ := runKeyOf(r.Context())
+		if req.RunID != p.key.RunID {
+			ref := runKeyInvalid()
+			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
-		id = &got
+		var members struct {
+			Labels json.RawMessage `json:"labels"`
+			About  json.RawMessage `json:"about"`
+		}
+		if json.Unmarshal(body, &members) != nil || members.Labels != nil || members.About != nil {
+			invalid(w)
+			return
+		}
+		how.runKey, how.key = p.raw, p.key
 	}
 	g.mu.Lock()
 	if g.closing {
@@ -108,12 +119,18 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	if g.used[req.RunID] {
 		g.mu.Unlock()
+		if s.remote {
+			// A second session presents a run the gateway holds, or is opening.
+			ref := g.attachRefused(codeRunAttached, http.StatusConflict, req.RunID)
+			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
+			return
+		}
 		refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 		return
 	}
 	g.used[req.RunID] = true
 	g.mu.Unlock()
-	lr, recorded, err := g.open(req, opening{remote: s.remote, id: id, request: r.Context(), deadline: deadline})
+	lr, recorded, err := g.open(req, how)
 	if err != nil {
 		if r.Context().Err() != nil {
 			// The session gave up waiting for its answer: the run did not open, and its
@@ -126,7 +143,12 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		if !recorded {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, stream.ErrRunning) || errors.Is(err, stream.ErrOpen) {
 				// The run's record is there already: a run of another gateway's, or of
-				// this machine's before.
+				// this machine's before; on the one address a run attached here before.
+				if s.remote {
+					ref := g.attachRefused(codeRunAttached, http.StatusConflict, req.RunID)
+					refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
+					return
+				}
 				refuse(w, http.StatusConflict, refusal.RunIDUsed, nil, accesskey.FromGateway, gatewayText(refusal.RunIDUsed))
 				return
 			}
@@ -146,7 +168,7 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	if id != nil && g.cfg.opened != nil {
+	if s.remote && g.cfg.opened != nil {
 		g.cfg.opened()
 	}
 	if r.Context().Err() != nil {
@@ -165,6 +187,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, answer.reveal())
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 	if r.Context().Err() != nil {
 		// The answer is not sent whole before the handler returns: a session that has
 		// gone now never has it.
@@ -300,11 +325,10 @@ func (g *Gateway) indexSecret(lr *linkRun) {
 	g.bySecret[lr.runSecretSum] = lr.id
 }
 
-// secretRun is the run id of the session's run whose run secret the request carries in
-// X-Qory-Run-Secret, live, ended or let go of; empty when it carries none, more than one,
-// or one of no run here. The secret's SHA-256 picks the one candidate, which is compared
-// in constant time, in full for a run the gateway still holds. The secret is never
-// logged or reported.
+// secretRun is the run id of the session's run on the local link whose run secret the
+// request carries in X-Qory-Run-Secret, live or ended; empty when it carries none, more
+// than one, or one of no run here. The secret's SHA-256 picks the one candidate, which is
+// compared in full in constant time. The secret is never logged or reported.
 func (g *Gateway) secretRun(r *http.Request) string {
 	values := r.Header.Values(server.HeaderRunSecret)
 	if len(values) != 1 {
@@ -314,17 +338,9 @@ func (g *Gateway) secretRun(r *http.Request) string {
 	sum := sha256.Sum256(presented)
 	g.mu.Lock()
 	runID, ok := g.bySecret[sum]
-	lr, sp := g.runs[runID], g.spent[runID]
+	lr := g.runs[runID]
 	g.mu.Unlock()
-	switch {
-	case !ok:
-		return ""
-	case lr != nil:
-		ok = subtle.ConstantTimeCompare([]byte(lr.runSecret.reveal()), presented) == 1
-	default:
-		ok = subtle.ConstantTimeCompare(sp.secretSum[:], sum[:]) == 1
-	}
-	if !ok {
+	if !ok || lr == nil || subtle.ConstantTimeCompare([]byte(lr.runSecret.reveal()), presented) != 1 {
 		return ""
 	}
 	return runID
@@ -344,76 +360,36 @@ func (g *Gateway) pathRun(r *http.Request, pathID string) string {
 func (g *Gateway) localRun(runID string) *linkRun {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if lr := g.runs[runID]; lr != nil && lr.cred == nil {
+	if lr := g.runs[runID]; lr != nil && !lr.remote {
 		return lr
 	}
 	return nil
 }
 
-// remoteRun is the session's run of runID, the run whose run secret the request
-// carries, live or ended, when the bearer value a request on the one address carried is
-// of its key; nil when there is none to go on with, an empty runID among them: the 410
-// answered for a run of the key that the gateway has let go of, and otherwise the 401
-// unauthorized, so no run is reached but the one of the identity's key whose secret the
-// request carries.
-func (g *Gateway) remoteRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
-	id, ok := identityOf(r.Context())
-	if !ok {
-		refuseUnauthorized(w)
-		return nil, id
-	}
-	g.mu.Lock()
-	lr := g.runs[runID]
-	g.mu.Unlock()
-	if lr != nil && lr.cred != nil && lr.cred.key == id.Key {
-		return lr, id
-	}
-	if lr == nil {
-		if sp, spent := g.spentOf(runID); spent && sp.key == id.Key {
-			gone(w, sp.end)
-			return nil, id
-		}
-	}
-	refuseUnauthorized(w)
-	return nil, id
-}
-
-// admit decides a request of the run on the one address, after its run is found: a run
-// that ended is its 410; otherwise an identity with a later expiry keeps what the run
-// leaves until then. It reports whether the request goes on.
-func (lr *linkRun) admit(w http.ResponseWriter, id runIdentity) bool {
-	if end, ended := lr.gone(); ended {
-		gone(w, end)
-		return false
-	}
-	lr.renew(id)
-	return true
-}
-
-// reload answers a GET of a run's configuration by its run id, with the run's secret:
-// the reload answer as it stands, 410 for a run that ended at the gateway; on the local
-// link 400 invalid_request for a run id this gateway holds no run of, or a request
-// without that run's secret, and on the one address 401 unauthorized for either, or a
-// run id that is not of the identity's key.
+// reload answers a GET of a run's configuration by its run id: the reload answer as it
+// stands, 410 for a run that ended at the gateway. On the local link the request
+// carries the run's secret, and a run id this gateway holds no run of, or a request
+// without that run's secret, is 400 invalid_request. On the one address the run id is
+// the run key's, any other 400 run_key_invalid, and a run the gateway does not hold a
+// 410 ([Gateway.heldRun]).
 func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	var lr *linkRun
 	if s.remote {
-		var id runIdentity
-		if lr, id = g.remoteRun(w, r, g.pathRun(r, runID)); lr == nil {
+		if p, _ := runKeyOf(r.Context()); runID != p.key.RunID {
+			ref := runKeyInvalid()
+			refuse(w, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
-		if !lr.admit(w, id) {
+		if lr = g.heldRun(w, runID); lr == nil {
 			return
 		}
-	} else {
-		if lr = g.localRun(g.pathRun(r, runID)); lr == nil {
-			invalid(w)
-			return
-		}
-		if end, ended := lr.gone(); ended {
-			gone(w, end)
-			return
-		}
+	} else if lr = g.localRun(g.pathRun(r, runID)); lr == nil {
+		invalid(w)
+		return
+	}
+	if end, ended := lr.gone(); ended {
+		gone(w, end)
+		return
 	}
 	lr.touch()
 	lr.mu.Lock()
@@ -426,13 +402,13 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 	w.Write(body)
 }
 
-// batch answers one link batch of the run whose secret it carries: 202 when its events
-// are numbered; 410 for a run that ended at the gateway; 400 invalid_request for one
-// the link refuses, which ends the run, failed: its record says batch_refused, and the
-// session's later requests are a 410 batch_refused. The run is found before the body is
-// read: a batch without a run's secret, or with one of no run here, is 400
-// invalid_request on the local link, and on the one address, as one whose run is not of
-// the identity's key, 401 unauthorized; neither ends a run.
+// batch answers one link batch of its run: 202 when its events are numbered; 410 for
+// a run that ended at the gateway; 400 invalid_request for one the link refuses, which
+// ends the run, failed: its record says batch_refused, and the session's later requests
+// are a 410 batch_refused. The run is found before the body is read: on the local link
+// by the run's secret the batch carries, and a batch without one, or with one of no run
+// here, is 400 invalid_request, which ends no run; on the one address by its run key,
+// and a run the gateway does not hold is a 410 ([Gateway.heldRun]).
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
@@ -440,26 +416,19 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	var lr *linkRun
 	if s.remote {
-		var id runIdentity
-		if lr, id = g.remoteRun(w, r, g.secretRun(r)); lr == nil {
+		p, _ := runKeyOf(r.Context())
+		if lr = g.heldRun(w, p.key.RunID); lr == nil {
 			return
 		}
-		lr.batch.Lock()
-		defer lr.batch.Unlock()
-		if !lr.admit(w, id) {
-			return
-		}
-	} else {
-		if lr = g.localRun(g.secretRun(r)); lr == nil {
-			invalid(w)
-			return
-		}
-		lr.batch.Lock()
-		defer lr.batch.Unlock()
-		if end, ended := lr.gone(); ended {
-			gone(w, end)
-			return
-		}
+	} else if lr = g.localRun(g.secretRun(r)); lr == nil {
+		invalid(w)
+		return
+	}
+	lr.batch.Lock()
+	defer lr.batch.Unlock()
+	if end, ended := lr.gone(); ended {
+		gone(w, end)
+		return
 	}
 	lr.touch()
 	refused := func(why string) {

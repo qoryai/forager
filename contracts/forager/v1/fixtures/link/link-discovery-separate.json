@@ -1,14 +1,14 @@
 {
   "version": 1,
   "events": {
-    "url": "https://gateway.example:8443/v1/events",
+    "url": "https://gateway.example:8443/qory-link/events",
     "types": [
       "*"
     ],
     "interval_seconds": 30
   },
   "run": {
-    "url": "https://gateway.example:8443/v1/run-configuration"
+    "url": "https://gateway.example:8443/qory-link/run-configuration"
   },
   "proxy": {
     "address": "gateway.example:8443"

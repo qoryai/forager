@@ -21,6 +21,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -43,13 +44,13 @@ type linkRun struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// cred is what the identity it was opened with decides of a run on the one address,
-	// nil for a run of the local link.
-	cred *runCred
+	// remote says the run opened on the one address, by its run key, which names it in
+	// every request of the run; it has no proxy secret and no run secret.
+	remote bool
 
-	// runSecret is the run's secret, which the run answer gives its session alone and
-	// every reload and batch of the run carries; runSecretSum is its SHA-256, by which
-	// the gateway finds the run.
+	// runSecret is the run's secret on the local link, which the run answer gives its
+	// session alone and every reload and batch of the run carries; runSecretSum is its
+	// SHA-256, by which the gateway finds the run.
 	runSecret    secretValue
 	runSecretSum [sha256.Size]byte
 
@@ -100,16 +101,6 @@ type linkRun struct {
 	err    error
 }
 
-// runCred is what the identity it was opened with decides of a run on the gateway's one
-// address.
-type runCred struct {
-	// key is the identity's key, which every request of the run's carries.
-	key string
-	// expires is the latest expiry of an identity presented for the run, under the
-	// run's mu.
-	expires time.Time
-}
-
 // ending is how a run ends at the gateway.
 type ending struct {
 	// reason is the reason of the dev.qory.run.exited the gateway writes, empty for none,
@@ -141,6 +132,18 @@ var sessionGone = ending{code: event.ReasonSessionLost, from: accesskey.FromGate
 // says batch_refused, and its later requests are a 410 batch_refused.
 var batchRefused = ending{reason: event.ReasonBatchRefused, state: stateFailed, code: event.ReasonBatchRefused, from: accesskey.FromGateway, closed: true}
 
+// stoppedBy ends a run with the outcome its starter gave, as the server's end member
+// brings it: its record's dev.qory.run.exited has the outcome's state and reason, and
+// its later requests are a 410 stopped carrying them. An end cancelled with no reason,
+// the run's starter ending it with no outcome, has the reason stopped.
+func stoppedBy(end server.ServerEnd) ending {
+	reason := end.Reason
+	if end.State == event.StateCancelled && reason == "" {
+		reason = event.ReasonStopped
+	}
+	return ending{reason: reason, state: end.State, code: event.ReasonStopped, from: accesskey.FromGateway, closed: true}
+}
+
 // runEnd is how the ending answers the run's later requests.
 func (e ending) runEnd() runEnd {
 	return runEnd{code: e.code, from: e.from, state: e.state, reason: e.reason}
@@ -151,9 +154,10 @@ const stateFailed = event.StateFailed
 
 // reasonWords are the words a person reads of Forager's own reasons of
 // dev.qory.run.exited where a line says how a run ended, those Qory Apiary shows; any
-// other reason is read with spaces for its underscores.
+// other reason is the run's starter's, read with spaces for its underscores.
 var reasonWords = map[string]string{
 	event.ReasonTimeout:      "time limit reached",
+	event.ReasonStopped:      "no outcome given",
 	event.ReasonSessionLost:  "stopped responding",
 	event.ReasonGatewayLost:  "end not recorded",
 	event.ReasonBatchRefused: "events refused",
@@ -172,14 +176,16 @@ func endWords(end runEnd) string {
 	return end.state + ", " + words
 }
 
-// opening is how a run opens: on the local link, or on the one address with the
-// identity of its request.
+// opening is how a run opens: on the local link, or on the one address with the run
+// key of its request.
 type opening struct {
 	// remote says the request came to the gateway's one address, whose runs' proxies
-	// are guarded whatever their wall.
+	// are guarded whatever their wall, and which the gateway attaches at the server.
 	remote bool
-	// id is the run the request is for, on the one address; nil on the local link.
-	id *runIdentity
+	// runKey is the run key of the request on the one address, as it came, which the
+	// attach carries, and key what it verified to; empty on the local link.
+	runKey string
+	key    runkey.Key
 	// request, when not nil, is the context of the session's run request: once it ends,
 	// the session no longer waits for its answer, and the run does not open.
 	request context.Context
@@ -254,13 +260,20 @@ func (g *Gateway) tries(ctx context.Context, deadline time.Time, ask func() erro
 }
 
 // open opens a run for a request the link accepted: with a server, the run's
-// registration, whose answer is its run configuration, the policy in force, the
-// credentials and the tools, the run's proxy under a fresh secret, and its record. On
-// the one address its proxy is guarded whatever its wall. A refusal is an
-// [*accesskey.Refusal]; recorded says the run's record was made, so its id is used from
-// now on.
+// registration, or on the one address its attach, whose answer is its run
+// configuration, the policy in force, the credentials and the tools, the run's proxy,
+// under a fresh secret on the local link, and its record. On the one address its proxy
+// is guarded whatever its wall, and a record of the run whose open never answered its
+// session, of a gateway that stopped as it opened, is removed first, so the run
+// attaches again ([stream.Stream.Reclaim]). A refusal is an [*accesskey.Refusal];
+// recorded says the run's record was made, so its id is used from now on.
 func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, recorded bool, err error) {
 	remote := how.remote
+	if remote {
+		if _, err := g.stream.Reclaim(req.RunID); err != nil {
+			return nil, false, err
+		}
+	}
 	st, err := g.stream.Open(req.RunID)
 	if err != nil {
 		return nil, false, err
@@ -270,10 +283,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	lr = &linkRun{g: g, id: req.RunID, wall: req.Wall, labels: labels, st: st, ctx: ctx, cancel: cancel, seen: map[string]bool{}, done: make(chan struct{})}
-	if id := how.id; id != nil {
-		lr.cred = &runCred{key: id.Key, expires: id.Expires}
-	}
+	lr = &linkRun{g: g, id: req.RunID, wall: req.Wall, labels: labels, remote: remote, st: st, ctx: ctx, cancel: cancel, seen: map[string]bool{}, done: make(chan struct{})}
 	fail := func(err error) (*linkRun, bool, error) {
 		lr.release()
 		err = codeless(err)
@@ -312,25 +322,37 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	var fetched *run.Fetched
 	if g.client != nil {
-		// The registration: built once, so every try sends the same bytes, its time
-		// included, which Qory Apiary answers alike. Its answer is the run's run
-		// configuration: its policy, narrowed by the node's, or the node's own when it
-		// has none, and its variables.
-		reg := server.Registration{
-			Version: 1, RunID: req.RunID, Labels: labels, About: server.ReportedAbout(req.About),
-			ForagerVersion: g.cfg.Version, ContractVersion: server.Revision, IntervalSeconds: g.interval, Events: g.conf.Events.Types,
-			Time: server.RegistrationTime(time.Now()),
-		}
-		body, err := g.registration(reg)
-		if err != nil {
-			return fail(err)
-		}
+		conf, confDigest := g.config()
 		var rc *server.RunConfiguration
 		var digest string
-		regErr := g.tries(ask, how.deadline, func() (err error) {
-			rc, digest, err = g.client.Register(ask, g.conf.Run.URL, body)
-			return err
-		})
+		var regErr error
+		// The record's first line: the registration the server accepted, never posted.
+		var registered map[string]any
+		if remote {
+			rc, digest, registered, regErr = g.attach(ask, conf, req.RunID, how)
+			if registered == nil {
+				return fail(regErr)
+			}
+		} else {
+			// The registration: built once, so every try sends the same bytes, its time
+			// included, which Qory Apiary answers alike. Its answer is the run's run
+			// configuration: its policy, narrowed by the node's, or the node's own when it
+			// has none, and its variables.
+			reg := server.Registration{
+				Version: 1, RunID: req.RunID, Labels: labels, About: server.ReportedAbout(req.About),
+				ForagerVersion: g.cfg.Version, ContractVersion: server.Revision, IntervalSeconds: g.interval, Events: conf.Events.Types,
+				Time: server.RegistrationTime(time.Now()),
+			}
+			body, err := g.registration(reg)
+			if err != nil {
+				return fail(err)
+			}
+			regErr = g.tries(ask, how.deadline, func() (err error) {
+				rc, digest, err = g.client.Register(ask, conf.Run.URL, body)
+				return err
+			})
+			registered = map[string]any{"workspace": conf.Workspaces[0], "node_id": conf.NodeID, "instance_id": g.client.InstanceID, "forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}
+		}
 		// A signed 200 whose run configuration Forager refuses is a registration the
 		// server accepted: the record gets its run.registered, then the run is refused
 		// without a code, so no run.refused is written and nothing of the refusal reaches
@@ -342,12 +364,13 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.mu.Lock()
 		lr.registeredAt = time.Now()
 		lr.mu.Unlock()
-		// The record's first line, the registration the server accepted, never posted.
-		if _, err := st.Registered(map[string]any{"workspace": g.conf.Workspaces[0], "node_id": g.conf.NodeID, "instance_id": g.client.InstanceID, "forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}); err != nil {
+		if _, err := st.Registered(registered); err != nil {
 			return fail(err)
 		}
-		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, req.RunID, g.report)
-		lr.posts = sink.NewServer(g.client, sink.Target{URL: g.conf.Events.URL, Types: g.conf.Events.Types}, st.Dir(), g.report, lr.live.digests)
+		lr.live = newLive(ctx, g.client, conf, confDigest, req.RunID, g.report)
+		lr.live.onConf = g.setConfig
+		lr.posts = sink.New(sink.Config{To: g.client, Target: sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, Spool: st.Dir(), Report: g.report,
+			OnDigests: lr.live.digests, OnServerEnd: lr.serverEnd})
 		lr.live.posts = lr.posts
 		if err := st.Deliver(lr.posts); err != nil {
 			lr.posts.Close(g.base)
@@ -356,7 +379,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if regErr != nil {
 			return fail(regErr)
 		}
-		fetched = &run.Fetched{URL: g.conf.Run.URL, Digest: digest, Document: rc}
+		fetched = &run.Fetched{URL: conf.Run.URL, Digest: digest, Document: rc}
 	}
 	if how.request != nil && how.request.Err() != nil {
 		return fail(how.request.Err())
@@ -413,20 +436,23 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.px.Terminate(ca, r.Uses(), pol.Policy.Egress.Paths, run.ProxyTools(lr.tools))
 		authority = ca.PEM()
 	}
-	secret, err := proxy.NewSecret()
-	if err != nil {
-		return fail(err)
+	if !remote {
+		// On the one address the run key opens the run's proxy, bound to its connection.
+		secret, err := proxy.NewSecret()
+		if err != nil {
+			return fail(err)
+		}
+		lr.secret = newSecretValue(secret)
+		if err := g.proxies.Register(secret, lr.px); err != nil {
+			return fail(err)
+		}
+		// The run's secret, apart from the proxy secret, which reaches the agent's side.
+		runSecret, err := proxy.NewSecret()
+		if err != nil {
+			return fail(err)
+		}
+		lr.runSecret, lr.runSecretSum = newSecretValue(runSecret), sha256.Sum256([]byte(runSecret))
 	}
-	lr.secret = newSecretValue(secret)
-	if err := g.proxies.Register(secret, lr.px); err != nil {
-		return fail(err)
-	}
-	// The run's secret, apart from the proxy secret, which reaches the agent's side.
-	runSecret, err := proxy.NewSecret()
-	if err != nil {
-		return fail(err)
-	}
-	lr.runSecret, lr.runSecretSum = newSecretValue(runSecret), sha256.Sum256([]byte(runSecret))
 	lr.mu.Lock()
 	lr.refresh()
 	lr.opened = true
@@ -511,18 +537,10 @@ func (lr *linkRun) arm() {
 	}
 }
 
-// renew takes an identity presented for the run, of its key: one with a later expiry
-// keeps what the run leaves until then.
-func (lr *linkRun) renew(id runIdentity) {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-	if lr.ended {
-		return
-	}
-	if id.Expires.After(lr.cred.expires) {
-		lr.cred.expires = id.Expires
-	}
-}
+// serverEnd ends the run with the outcome its starter gave, the end member of a signed
+// 2xx toward the server, on the sink's goroutine: the first one ends it, and any later
+// end, or one after the run ended otherwise, is ignored. It never blocks.
+func (lr *linkRun) serverEnd(end server.ServerEnd) { lr.end(stoppedBy(end)) }
 
 // release lets go of what the run holds on the gateway's side: its secret and proxy
 // first, so an ended run's secret is refused at once, even while a reload in flight
@@ -594,11 +612,6 @@ func (lr *linkRun) end(e ending) {
 	if lr.timer != nil {
 		lr.timer.Stop()
 	}
-	var key string
-	var expires time.Time
-	if lr.cred != nil {
-		key, expires = lr.cred.key, lr.cred.expires
-	}
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
@@ -626,24 +639,25 @@ func (lr *linkRun) end(e ending) {
 		}
 		lr.result, lr.err = lr.st.Close(lr.g.base)
 		lr.cancel()
-		if lr.cred != nil {
+		if lr.remote {
 			// Flushed: the gateway lets go of it.
-			lr.g.retire(lr, key, expires)
+			lr.g.retire(lr)
 		}
 	}()
 }
 
 // runAnswerDoc is the run answer as the gateway writes it,
-// contracts/forager/v1/link-run-answer.schema.json.
+// contracts/forager/v1/link-run-answer.schema.json: on the one address without the
+// labels, the proxy secret and the run secret.
 type runAnswerDoc struct {
 	Version              int                        `json:"version"`
 	RunID                string                     `json:"run_id"`
-	Labels               map[string]string          `json:"labels"`
+	Labels               map[string]string          `json:"labels,omitzero"`
 	Policy               json.RawMessage            `json:"policy,omitempty"`
 	Digest               string                     `json:"digest,omitempty"`
 	Variables            map[string]server.Variable `json:"variables,omitempty"`
-	ProxySecret          string                     `json:"proxy_secret"`
-	RunSecret            string                     `json:"run_secret"`
+	ProxySecret          string                     `json:"proxy_secret,omitempty"`
+	RunSecret            string                     `json:"run_secret,omitempty"`
 	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
 	Placeholders         []string                   `json:"placeholders,omitempty"`
 	Reserved             []string                   `json:"reserved,omitempty"`
@@ -685,11 +699,17 @@ func (lr *linkRun) refresh() {
 func (lr *linkRun) runAnswer(authority []byte) []byte {
 	pol := lr.r.Policy()
 	doc, digest := policyDocument(pol)
-	b, _ := json.Marshal(runAnswerDoc{
+	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
 		ProxySecret: lr.secret.reveal(), RunSecret: lr.runSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
-	})
+	}
+	if lr.remote {
+		a.Labels = nil
+	} else if a.Labels == nil {
+		a.Labels = map[string]string{}
+	}
+	b, _ := json.Marshal(a)
 	return b
 }
 

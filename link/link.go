@@ -4,8 +4,10 @@
 // address, the variables that name the run's socket and a tool's socket, the headers
 // the proxy sets on a request it hands to a tool, the value of a placeholder variable,
 // the names of the gateway's link: its preamble, its socket's directory and modes; what
-// a session needs of a gateway on the same machine, [Local]; and the writing and
-// reading of a preamble.
+// a session needs of a gateway on the same machine, [Local]; the writing and reading
+// of a preamble; and the binding of a connection to a separate gateway's one address,
+// its [BindWord] and [BoundWord] lines over the connection's TLS exporter value, and the
+// signature of the gateway's answers there, [Answer].
 package link
 
 import "io/fs"

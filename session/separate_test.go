@@ -9,11 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,14 +26,15 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway"
+	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/sink"
 )
 
 // The runs of this file are a real session.Run behind a separate gateway: a real
-// gateway, gateway.Start, serving its one address on loopback over TLS, and the
-// session's RemoteGateway pointed at it. The gateway answers every request of the
-// contract on its one address with the 401 unauthorized.
+// gateway, gateway.Start, serving its one address on loopback over TLS under a gateway's
+// access key at a server of the test's own, and the session's RemoteGateway pointed at
+// it.
 
 // separate is a gateway serving its one address over TLS, and how a session trusts it.
 type separate struct {
@@ -46,7 +49,7 @@ type separate struct {
 
 // startSeparate starts a gateway on 127.0.0.1 over TLS, under an authority of the test's
 // own, whose certificate names 127.0.0.1 alone, with a policy that allows api.example
-// alone.
+// alone, its access key a gateway's at a server of the test's own.
 func startSeparate(t *testing.T) *separate {
 	t.Helper()
 	return startSeparateBeating(t, time.Second)
@@ -90,7 +93,7 @@ func startSeparateBeating(t *testing.T, heartbeat time.Duration) *separate {
 	}
 	g, err := gateway.Start(context.Background(), gateway.Config{
 		Version: "test", Heartbeat: heartbeat, Dir: s.dir,
-		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile},
+		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, Server: gatewayServer(t),
 		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}},
 		Report: func(l string) {
 			t.Log("the gateway reported:", l)
@@ -106,6 +109,44 @@ func startSeparateBeating(t *testing.T, heartbeat time.Duration) *separate {
 	t.Cleanup(func() { s.close(t) })
 	return s
 }
+
+// gatewayServer is a server of the contract whose discovery lists a gateway's access
+// key, ng_, serving one workspace, and the gateway's server document of it.
+func gatewayServer(t *testing.T) *gateway.Server {
+	t.Helper()
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
+	pinJSON, _ := json.Marshal(pin)
+	var srv *httptest.Server
+	h := &receiver.Handler{
+		Keys: func(id string) (receiver.AccessKey, bool) {
+			return receiver.AccessKey{PublicKey: key.PublicKey()}, id == "ak_f1xt0re00000000g"
+		},
+		Signer: signer,
+		Store:  noStore{},
+		Configuration: func() ([]byte, string) {
+			doc := `{"version":1,"node_id":"ng_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"apiary_public_key":` + string(pinJSON) +
+				`,"events":{"url":"` + srv.URL + `/v1/events","types":["*"]},"run":{"url":"` + srv.URL + `/v1/runs"}}`
+			return []byte(doc), "sha256=" + strings.Repeat("c", 64)
+		},
+	}
+	srv = httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return &gateway.Server{Version: 1, URL: srv.URL, AccessKeyID: "ak_f1xt0re00000000g", ApiaryPublicKey: pin, AccessKey: key, InstanceID: "i_test"}
+}
+
+// noStore is a receiver's store that keeps nothing.
+type noStore struct{}
+
+func (noStore) Seen(string) bool            { return false }
+func (noStore) Append(string, []byte) error { return nil }
 
 // close ends the gateway, which numbers each run's last events.
 func (s *separate) close(t *testing.T) {
@@ -178,44 +219,9 @@ func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 	return r
 }
 
-// refusedRun runs r, which the gateway refuses, and returns the refusal: the gateway's,
-// with its message as the error's text word for word, recorded as dev.qory.run.refused
-// in the session's record alone when the run request was refused, the runtime never
-// started.
-func refusedRun(t *testing.T, r *sepRun) *session.Refusal {
-	t.Helper()
-	res, err := session.Run(context.Background(), r.sp)
-	var ref *session.Refusal
-	if !errors.As(err, &ref) || res != nil {
-		t.Fatalf("a refused run: %v %+v", err, res)
-	}
-	if ref.From != accesskey.FromGateway || ref.Text == "" || err.Error() != ref.Text {
-		t.Errorf("the refusal %#v, its text %q", ref, err.Error())
-	}
-	if _, err := os.Stat(r.envFile); err == nil {
-		t.Error("the runtime started")
-	}
-	return ref
-}
-
 // resendSpec is the resend of a run's directory through s.
 func resendSpec(s *separate, dir string) session.ResendSpec {
 	return session.ResendSpec{Gateway: s.remote(), Dir: dir, ForagerVersion: "test"}
-}
-
-// TestASeparateGatewayRefusesARunItCannotAuthenticate pins a session behind a separate
-// gateway that has no verifier of a request's bearer value on its one address: the
-// session sends none, the gateway's 401 unauthorized is the run's refusal with its text
-// word for word, the runtime never starts, and the gateway opens nothing.
-func TestASeparateGatewayRefusesARunItCannotAuthenticate(t *testing.T) {
-	s := startSeparate(t)
-	ref := refusedRun(t, newSepRun(t, s.remote()))
-	if ref.Code != accesskey.CodeUnauthorized || ref.Status != 401 || ref.Text != "the gateway refused the run: unauthorized" {
-		t.Errorf("the refusal %#v", ref)
-	}
-	if runs := s.runs(); len(runs) != 0 {
-		t.Errorf("the gateway opened %v", runs)
-	}
 }
 
 // TestASessionTrustsTheSeparateGatewayItIsTold pins the trust behind a separate
@@ -229,7 +235,7 @@ func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
 		"the system's roots": {URL: s.url()},
 		"another pin":        {URL: s.url(), CAFile: s.caFile, CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:])},
 	} {
-		// Not the gateway's 401: the session never reaches its contract.
+		// Not a refusal of the gateway's: the session never reaches its contract.
 		var ref *session.Refusal
 		if _, err := session.Run(context.Background(), newSepRun(t, gw).sp); err == nil || errors.As(err, &ref) {
 			t.Errorf("%s: %v", name, err)

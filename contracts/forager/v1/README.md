@@ -743,7 +743,7 @@ The types, one namespace. Forager's own:
 
 | Type | When | Data |
 |---|---|---|
-| `dev.qory.run.registered` | the server accepted the run's registration: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's |
+| `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
 | `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
@@ -804,10 +804,11 @@ Forager session around a runtime opened the run, and the event contains `runtime
 **How a run ends.** Every `dev.qory.run.exited` contains `state`, how the run ended:
 `succeeded`, the run ended well; `failed`, it ended badly; `cancelled`, it was stopped
 before it said how it went. A session's runtime that exits by itself is `succeeded` on
-exit status 0 and `failed` otherwise, a signal included.
+exit status 0 and `failed` otherwise, a signal included. A run its starter ends with an
+outcome has that outcome.
 
-`reason` says why the run ended, when it ended other than by the runtime's own exit. It
-is an open code: a lower-case letter, then
+`reason` says why the run ended, when it ended other than by the runtime's own exit, or
+gives the reason the run's starter gave. It is an open code: a lower-case letter, then
 lower-case letters, digits and `_`, up to 64 characters, `^[a-z][a-z0-9_]{0,63}$`.
 The pattern is anchored at both ends; a receiver in another language anchors to the
 absolute end, such as `\z` (`\Z` in Python's `re`).
@@ -816,21 +817,24 @@ Forager's own codes are reserved: `timeout`, `interrupted`, `stopped`, `session_
 Forager never writes, kept so that records written before still validate: `quiet`,
 `credential_expired`, `credential_check_unreachable`, `credential_check_invalid`,
 `run_ended_at_issuer`, `issuer_unreachable` and `issuer_answer_invalid`. A
-`dev.qory.run.exited` with the old `quiet` contains `quiet_seconds`, and no other does. The
-session records the reason a link `410` carries as given, which may be a code outside
-Forager's own, and a receiver shows a code it does not know as it is. The session writes `timeout` and `interrupted`, the resend of
-a record writes `gateway_lost` (§The server), and the gateway writes `session_lost` and
-`batch_refused`, on a session's run on its link. The state of each of Forager's own endings:
+`dev.qory.run.exited` with the old `quiet` contains `quiet_seconds`, and no other does. Any other code
+is the starter's, carried as given, and a receiver shows a code it does not know as it
+is. A starter's reason that equals a reserved code is dropped, and the run has no
+reason, its outcome kept. The session writes `timeout` and `interrupted`, the resend of
+a record writes `gateway_lost` (§The server), and the gateway writes the others, on a
+session's run on its link. The state of each of Forager's own endings:
 
 | Ending | `state` | `reason` |
 |---|---|---|
+| the run's starter ended the run with an outcome | that outcome | the starter's reason, or none |
+| the run's starter ended the run with no outcome | `cancelled` | `stopped` |
 | the run's time limit was reached, and the session stopped the runtime | `cancelled` | `timeout` |
 | the run was stopped from where it was started (a Ctrl-C) before the session observed the runtime's exit; `exit_code` and `signal` are the runtime's | `cancelled` | `interrupted` |
 | the gateway heard nothing from the session for 3 × its heartbeat interval | `failed` | `session_lost` |
 | the gateway was lost before the run's exit was recorded, because Forager died; written when the record is sent again, `duration_ms` to the last event recorded | `failed` | `gateway_lost` |
 | the gateway refused a batch of the session's (§The gateway's link) | `failed` | `batch_refused` |
 
-On a session's run the session records, in its own record
+`stopped` is written only when the starter gave no outcome. On a session's run the session records, in its own record
 alone, how the gateway's `410` says the run ended: its `state` and `reason`; a `410`
 without a `state`, `run_closed`
 among them, the gateway's `410` to a run that had already ended there, is recorded as
@@ -1593,7 +1597,9 @@ carries no `end`. Forager's client reads `end` only from a signed `2xx`, as
 `batch-answer.schema.json` first: a body the schema refuses, an `end` whose `state` is
 none of the three or whose `reason` is not a code among them, is no end. The server drops
 a reason that is not a code at the outcome, so a valid `end` carries a code or none. A
-`reason` that is one of Forager's reserved codes is dropped, and the state kept.
+`reason` that is one of Forager's reserved codes is dropped, and the state kept. The
+gateway ends the run with the first `end` it reads (§The gateway's link, The end
+member).
 
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
@@ -1705,21 +1711,27 @@ gateway holds the proxy, the policy, the credentials and the access key, and is 
 node toward the server (§The server). The session is the gateway's client by the
 protocol Forager speaks toward the server, on the same paths: discovery, the run
 endpoint, the events endpoint and the `410` close. Two transports carry it, and
-the protocol is the same on both.
+the protocol is the same on both, but for how each end knows the other, the paths, and
+what a run request and its answer carry.
 
 | | The local link | A separate gateway |
 |---|---|---|
 | Where | one machine; `qory` starts the session and the gateway | the gateway `session.gateway.url` names, on a machine of its own |
-| Transport | a Unix socket, `sock`, in a private directory of the gateway's, `qory-link-*` in the system's temporary directory, mode `0700`, the socket mode `0600`; the directory is one of Forager's files (§The wall) | TLS 1.3 alone, on the gateway's one address |
-| The session knows the gateway | the socket's peer is the session's own user, by its uid | the certificate chain, for the host name of `session.gateway.url`, and the pin when one is set |
-| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch | nothing: the gateway answers every request of the link on its one address `401` `unauthorized` (below) |
-| The run's labels | the session's | the session's |
+| Transport | a Unix socket, `sock`, in a private directory of the gateway's, `qory-link-*` in the system's temporary directory, mode `0700`, the socket mode `0600`; the directory is one of Forager's files (§The wall) | TLS 1.3 alone, on the gateway's one address, every connection bound to its TLS (The binding, below) |
+| The session knows the gateway | the socket's peer is the session's own user, by its uid | the certificate chain, for the host name of `session.gateway.url`, and the pin when one is set; and the gateway's `QORY-BOUND` line, a signature over the connection's TLS exporter value under a key of the run key's `gateway_public_key` |
+| The gateway knows the session | `QORY-LINK`, a space, the link secret and a newline, before the first byte of every connection; and `X-Qory-Run-Secret`, the run answer's `run_secret`, on every reload and batch | the run key, `Authorization: Bearer <run key>`, on every request of a bound connection (The run key on the one address, below) |
+| Paths | `/.well-known/qory-configuration`, `/v1/run-configuration` and `/v1/events` | under `/qory-link/`: `/qory-link/configuration`, `/qory-link/run-configuration` and `/qory-link/events` |
+| Answers | unsigned | signed under the gateway's access key, `X-Qory-Signature-Ed25519` (Signed answers, below) |
+| The run's labels and `about` | the session's, in the run request | the starter's registration's; the run request carries none |
+| The run answer's `labels`, `proxy_secret` and `run_secret` | present | absent |
 | `narrowing` | refused | accepted |
 
 `session.gateway.url`, `session.gateway.ca_file`, `session.gateway.certificate_sha256`,
 `gateway.tls.certificate` and `gateway.tls.key` are names of `qory`'s configuration;
-Forager receives their values from the command. No access key is involved on the
-link: the gateway's access key keeps its one role, signing toward the server.
+Forager receives their values from the command. No access key is involved on the local
+link. Behind a separate gateway the gateway's access key, a gateway's, `ng_` (§The
+server, Discovery), signs toward the server, and on the one address it signs the
+binding of every connection and every answer of the link.
 
 **The local link.** The link secret is at least 128 bits from the system's random
 source, made each time the gateway starts, and `qory`, which starts both, hands it to
@@ -1753,18 +1765,146 @@ which this computes from the certificate:
 openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
 ```
 
-The gateway answers every request of the link on its one address, the discovery
-included, with a `401` from `gateway`, the code `unauthorized`,
-`WWW-Authenticate: Bearer` and the message "the gateway refused the run: unauthorized".
-The session sends no `Authorization` there.
 Every URL the link's discovery lists has the origin of `session.gateway.url`, and the
-session refuses a discovery that lists another.
+session refuses a discovery that lists another. The one address is
+`gateway.Config.Listen`, served with ALPN `http/1.1`; it routes every connection by its
+first bytes after the TLS handshake: a connection that opens with the binding is an
+edge's, the session's or its forwarder's, and any other is the relay's (The relay of
+the server's endpoints, below).
+
+**The binding.** The edge's first bytes on a connection are exactly `QORY-BIND` and a
+newline. The gateway answers with one line, `QORY-BOUND`, a space, the fingerprint of
+its access key, a space, the signature and a newline. The fingerprint is
+base64url without padding of the first 16 bytes of the SHA-256 of the raw public key, 22
+characters, as an enrolment code names a key. The signature is 64 bytes of Ed25519 in
+base64url without padding, under the gateway's access key, over three lines joined by a
+line feed, with none after the last:
+
+```
+qory-link-binding-ed25519-v1
+<lower-case hex of the connection's exporter value>
+<fingerprint>
+```
+
+The exporter value is the connection's TLS 1.3 exporter (RFC 8446 §7.5) with the label
+`EXPORTER-qory-link-binding`, an empty context and 32 bytes, which both ends derive
+alike and nobody else can. The edge verifies the line under the key of the run key's
+`gateway_public_key` whose fingerprint it names before it sends the run key, so the run
+key goes only to a holder of the gateway's key on that very connection; a line that does
+not come, names another key or does not verify ends the connection. Then the connection
+carries one of two things: HTTP/1.1, the link, every request with the run key; or
+`QORY-RELAY`, a space, the run key and a newline, then the bytes of the run's proxy
+(Agent traffic, below). The gateway reads the edge's line and its next line within the
+ten seconds of a preamble, each at most 8 KiB, and closes a connection that sends
+neither in time unanswered. The `link` package holds the names and the reading of
+both lines: `link.Binding` derives the exporter value, `link.BoundLine` writes the
+gateway's line and `link.ReadBound` reads and verifies it.
+
+**The run key on the one address.** Every request of the link there carries one
+`Authorization: Bearer <run key>`, the run key of its run (§The server, Through a
+gateway), and the gateway decides it first, before it reads the request's body, in
+this order, from `gateway`:
+
+| # | Status | Code | When |
+|---|---|---|---|
+| 1 | `400` | `run_key_invalid` | no single `Authorization` of the Bearer scheme, or a value that is not a run key that verifies under the server's pin |
+| 2 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
+| 3 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
+| 4 | `409` | `run_key_expired` | past its `attach_by`, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded |
+
+The message of `run_key_invalid` is "the gateway refused the run: run_key_invalid".
+Each `409` is the gateway's own refusal of the attach, decided before it asks the
+server, and its message is the line the server's refusal of the attach gives:
+`attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
+that passes names the request's run: a run request for another `run_id`, or a reload of
+another, is `run_key_invalid`. The gateway takes no `X-Qory-Run-Secret` there.
+
+**Signed answers.** Every answer of the link on a bound connection, a refusal included,
+carries `X-Qory-Signature-Ed25519`: 64 bytes of Ed25519 in base64url without padding,
+under the gateway's access key, over six lines joined by a line feed, with none after
+the last:
+
+1. `qory-link-answer-ed25519-v1`;
+2. the status, three decimal digits;
+3. the lower-case hex SHA-256 of the lower-case hex of the connection's exporter value,
+   the request's method in upper case, its target exactly as sent, the path and then
+   `?` and the query when there is one, and its body for a `POST`, empty for a `GET`,
+   joined by a line feed: what binds the answer to its connection and its request,
+   which carries no signature of its own;
+4. the lower-case hex SHA-256 of the answer's body;
+5. the answer's `X-Qory-Configuration`, or empty when it has none;
+6. the answer's `X-Qory-Run-Configuration`, or empty when it has none.
+
+`link.AnswerRequest` computes line 3, `link.Answer` holds the six lines, and
+`link.SignAnswer` and `link.VerifyAnswer` sign and verify them.
+
+**The paths.** On the one address every path of the link is under `/qory-link/`, so
+none is a path of the server's the relay forwards: the discovery,
+`GET /qory-link/configuration`; the run request, `POST /qory-link/run-configuration`;
+a reload, `GET /qory-link/run-configuration/<run_id>`; and a batch,
+`POST /qory-link/events`. The discovery lists them on the origin the request names in
+its `Host`, the address the client reached, with that same `host:port` as
+`proxy.address`.
+
+**Attach.** Behind a separate gateway the gateway opens a run by attaching it at the
+server (§The server, Through a gateway), not by registering it: on the run request it
+posts the attach, `server.Client.Attach`, signed under its own access key, with the run
+key as it came, its heartbeat interval, the event types of its discovery and its
+version, with the tries of a registration (Tries as a run opens, below). The attach's
+answer is the run's run configuration. A refusal of the attach reaches the session as
+any refusal of the server's, its code, its status and `from: apiary`, its message
+`attach <run.url>/<run_id>: <code> (status <status>)`. The gateway then writes the
+record's first event, `dev.qory.run.registered`: `workspace`, `node_id` and
+`instance_id` of the run key, which name the starter's registration; `forager_version`,
+`events`, `contract_version` and `interval_seconds` of the attach; and `labels` and
+`about` as the attach's answer gives them back, each absent when it has none. It
+delivers the run's events toward the server under its own access key, and fetches a
+reload of the run at the run endpoint, as a direct node's gateway does. An answer whose
+`X-Qory-Configuration` differs from the one in force makes it read its discovery again
+and serve the workspaces that discovery lists, for every run, not only the one whose
+answer said so. A gateway that stopped between the attach and the run answer leaves a
+record that holds the run's `dev.qory.run.registered` alone: the run request that comes
+again removes it, and the gateway attaches the run again, which the server answers the
+same. A run that was open at a gateway that stopped is over: the gateway that starts
+again answers its reloads and batches `410` `run_closed` and its run request `409`
+`run_attached`, and `qory run resend` writes its
+`dev.qory.run.exited` with `gateway_lost` (§The server).
+
+**No local sessions.** A separate gateway serves other machines alone: with `Listen`
+it makes no local link, in memory or on a socket, and no proxy listener on loopback,
+and a session of its own machine that dials it gets "the gateway serves other machines
+on its address, and runs no sessions". `Listen` needs `TLS`, and a server whose access
+key is a gateway's: the gateway refuses to start with an access key whose `node_id` is
+not `ng_`.
+
+**The relay of the server's endpoints.** A connection to the one address that does not
+open with the binding is the relay's: HTTP/1.1, for a keyed machine or a starter whose
+server document holds `via` (§The server, Via). The relay forwards four endpoints alone
+to the origin of the gateway's own server document, with the target, the path and the
+query, unchanged: the enrolment, `POST /.well-known/qory-enrolment`; discovery,
+`GET /.well-known/qory-configuration`; a registration, a `POST` to the path of the
+`run.url` of the gateway's discovery; and an outcome, a `POST` to that path, a slash, a
+run's id and `/outcome`. It drops the fields of one connection (RFC 9110 §7.6.1), asks
+for no compression, and passes the server's answer back byte for byte, its status and
+its fields but those of one connection, so each request's signature and each answer's
+stay the server's. It relays nothing else, the attach above all, and answers none of
+them itself. Its limits, each answered by the relay itself with no body:
+
+| Status | When |
+|---|---|
+| `429` | more than 60 requests a minute from one source address, in bursts of at most 20 |
+| `404` | a path other than the four |
+| `405` | one of the four paths with another method |
+| `413` | a request's body over 16 KiB for the enrolment, 64 KiB for a registration or 4 KiB for an outcome |
+| `502` | the server not reached, or its answer over 1 MiB |
+| `504` | no answer from the server within 10 seconds |
 
 **On the wire.** A request on the link contains `User-Agent` and
 `X-Qory-Contract-Version`, as toward the server, and a batch its `Content-Type` and
 `X-Qory-Delivery`; there is no access key id, instance id, timestamp or signature.
-Answers on the link are unsigned: the transport authenticates them, the socket's peer on
-one machine and TLS on two. Ed25519 signing stays toward the server. A coded refusal is
+Answers on the local link are unsigned: the transport authenticates them, the socket's peer on
+one machine and TLS on two, and behind a separate gateway each is signed besides
+(Signed answers, above). A coded refusal is
 a `link-refusal.schema.json` document, the body of one toward the server with `from`,
 who refused, required, and `message`:
 `{"error": "<code>", "names": ["…"], "message": "…", "from": "gateway"}`. `from` is
@@ -1786,7 +1926,8 @@ control characters, and every other C0 control character, DEL and every C1 contr
 character, U+0080 to U+009F, is refused. It holds no secret and no image reference. Every `410` on the link has this body (The end of a run at the gateway,
 below). A redirect is not followed.
 
-**Discovery.** `GET /.well-known/qory-configuration`, answered with a
+**Discovery.** `GET /.well-known/qory-configuration` on the local link, and
+`GET /qory-link/configuration` behind a separate gateway, answered with a
 `link-discovery.schema.json` document: `version`, `events`, `run` and `proxy`, each
 required, `run` since a run on the link opens with its run request. `events` has `url`
 and `types` as `configuration.schema.json` defines them, and `interval_seconds`,
@@ -1801,16 +1942,18 @@ server. A member Forager does not recognise is ignored.
 
 ```json
 {"version": 1,
- "events": {"url": "https://gateway.example:8443/v1/events", "types": ["*"], "interval_seconds": 30},
- "run": {"url": "https://gateway.example:8443/v1/run-configuration"},
+ "events": {"url": "https://gateway.example:8443/qory-link/events", "types": ["*"], "interval_seconds": 30},
+ "run": {"url": "https://gateway.example:8443/qory-link/run-configuration"},
  "proxy": {"address": "gateway.example:8443"}}
 ```
 
 **Opening a run.** The session opens a run with a `POST` to `run.url`,
 `Content-Type: application/json`, whose body is a `link-run-request.schema.json`
 document. Toward the server the gateway then registers the run with a `POST` of its
-own, the labels and `about` in its body (§The server, The run endpoint); on the link the
-session opens the run with this `POST`, and it contains `about` too.
+own, the labels and `about` in its body (§The server, The run endpoint); on the local
+link the session opens the run with this `POST`, and it contains `about` too. Behind a
+separate gateway the gateway attaches the run instead (Attach, above): the run's labels
+and `about` are the starter's registration's, and the run request carries neither.
 
 ```json
 {"version": 1,
@@ -1827,8 +1970,10 @@ session opens the run with this `POST`, and it contains `about` too.
 - `run_id`, required: the run's id. The session chooses it on both transports (§Sequence),
   a UUID in the canonical lower-case form.
 - `wall`, required: whether the session runs the agent behind a wall.
-- `labels`: the run's labels, as `dev.qory.run.started` contains them.
-- `about`: what the run is about (§What a run is about). It selects no policy.
+- `labels`: the run's labels, as `dev.qory.run.started` contains them; on the local link
+  alone.
+- `about`: what the run is about (§What a run is about). It selects no policy. On the
+  local link alone.
 - `passes`: the names of the variables the run passes a value for, in what it inherits,
   what the harness sets and its variables: names alone, never a value, each in the
   grammar of a variable's name (§Variables): the session leaves out a name outside it,
@@ -1852,14 +1997,18 @@ session opens the run with this `POST`, and it contains `about` too.
   under `enforce` narrows too.
 
 A member the schema does not define is refused, so a narrowing is never dropped
-unread. Every run request opens a run of its own, of its own run id and proxy secret.
-Behind a separate gateway, a run request the gateway does not authenticate is `401`
-`unauthorized` before its body is read, so no body is parsed for a request that is not
-authenticated. The gateway then refuses a run request in this order:
+unread. Every run request opens a run of its own, of its own run id, and on the local
+link of its own proxy secret. Behind a separate gateway the run key is decided before
+the body is read (The run key on the one address, above), so no body is parsed for a
+request without a run key that passes. The gateway then refuses a run request in this
+order:
 
 | Status | Code | When |
 |---|---|---|
 | `400` | `invalid_request` | a body the schema refuses: a `run_id` not in the canonical lower-case form, labels or `about` outside their rules, a member the schema does not define; and a `narrowing` on the local link |
+| `400` | `run_key_invalid` | behind a separate gateway, a `run_id` that is not the run key's |
+| `400` | `invalid_request` | behind a separate gateway, `labels` or `about` in the request |
+| `409` | `run_attached` | behind a separate gateway, a run the gateway holds or is opening, live or ended, or holds a record of; its message `attach <run.url>/<run_id>: run_attached (status 409)` |
 | `409` | `run_id_used` | a `run_id` that already names a run at this gateway, live or ended; no names |
 | `403` | `wall_required` | a run without a wall whose policy selects what needs one, below; the link's code alone |
 | `403` | a code of `refusal.Decides` | the gateway's decision of the run with `passes` and `images`, below: `run_configuration_invalid`, `image_unknown`, `tool_unknown`, `placeholder_conflict` and the like |
@@ -1950,8 +2099,10 @@ document:
 ```
 
 - `run_id`, required: the request's, echoed.
-- `labels`, required: the run's labels as the gateway holds them, the run request's.
-  The session's `dev.qory.run.started` contains exactly these labels.
+- `labels`: the run's labels as the gateway holds them, the run request's, `{}` for
+  none. The session's `dev.qory.run.started` contains exactly these labels. Present on
+  the local link, and absent behind a separate gateway, where the labels are the
+  starter's registration's.
 - `policy`: the policy in force for the run, the one the gateway holds for it narrowed by
   the request's `narrowing`, and `digest`, the hex SHA-256 of its canonical JSON, which
   `dev.qory.run.policy_applied` reports. Each is present with the other; with neither,
@@ -1972,13 +2123,15 @@ document:
   present exactly when the gateway's is, under the rules of
   `events/run.policy_applied.schema.json`. The session's `dev.qory.run.policy_applied`
   is this object with its own `variables` and `harness_hosts` added (Events, below).
-- `proxy_secret`, required: the run's proxy secret (Agent traffic, below), 22 to 256
+- `proxy_secret`: the run's proxy secret (Agent traffic, below), 22 to 256
   characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, which a URL's password and the relay's
-  preamble carry as they are.
-- `run_secret`, required: the run's secret: at least 128 bits from the system's random
+  preamble carry as they are. Present on the local link alone: behind a separate
+  gateway a bound connection opens the run's proxy with the run key.
+- `run_secret`: the run's secret: at least 128 bits from the system's random
   source, made by the gateway for this run and given once, 22 to 256 characters of
   `A-Z`, `a-z`, `0-9`, `_` and `-`. The session sends it in `X-Qory-Run-Secret` on every
-  reload and batch. Compared in constant time, never logged.
+  reload and batch. Compared in constant time, never logged. Present on the local link
+  alone: behind a separate gateway the run key names the run.
 - `certificate_authority`: the certificate of the run's own certificate authority, PEM,
   present when the request's `wall` is true and the gateway reads inside HTTPS for the
   run: for a credential it holds, a tool it starts or a path rule, the policy's or the
@@ -1996,9 +2149,9 @@ own `dev.qory.run.egress` and, when it ends the run, its `dev.qory.run.exited`, 
 reason it ended the run with (The end of a run at the gateway, below), or `gateway_lost`
 when it sends its record again. It numbers an event once, by its id, so a batch the
 session sends again is not numbered twice, and it delivers the stream to the server under
-its access key. The gateway is the node toward the server, so it registers the run and
-writes `dev.qory.run.registered`; the session registers nothing on the link, and a link
-batch holds no `dev.qory.run.registered`.
+its access key. The gateway is the node toward the server, so it registers the run, or
+behind a separate gateway attaches it, and writes `dev.qory.run.registered`; the session
+registers nothing on the link, and a link batch holds no `dev.qory.run.registered`.
 `dev.qory.run.policy_applied` is the session's: the session writes it from the run
 answer's `applied`, and again from the `applied` of a reload answer whose digest
 changed, at the sequence where the new configuration takes effect, adding `variables`
@@ -2014,15 +2167,19 @@ keeps its own file record of its own events, numbered as today (§The record fil
 record is the session's, not the run's stream. The gateway keeps the record of what it
 sent, which `qory run resend` sends again through `gateway.Resend` (§The server, After
 Forager stops unexpectedly). The
-gateway answers a batch as the server does, unsigned: a `2xx` is accepted. A batch is of
-the run whose `run_secret` it carries, checked before its body is read. A batch without
-it, or with one of no such run, is `401` `unauthorized` behind a separate gateway and
-`400` `invalid_request` on the local link, and ends no run, so no run can be probed.
+gateway answers a batch as the server does, unsigned on the local link and signed
+behind a separate gateway: a `2xx` is accepted. A batch is of its run, found before its
+body is read: on the local link the run whose `run_secret` it carries, and a batch
+without it, or with one of no such run, is `400` `invalid_request` and ends no run, so
+no run can be probed; behind a separate gateway the run of its run key, and a batch of a
+run the gateway does not hold is a `410`, of the run's end while the gateway keeps it,
+15 minutes after its record is flushed, and `run_closed` after, or for a run that never
+opened there.
 A batch whose body does not arrive whole, its client gone before the end, is `400`
 `invalid_request` too, and ends no run. Any other `400` `invalid_request` to a batch, one over the size limit or one that does
 not decode among them, ends its run at the gateway: the
 gateway writes `dev.qory.run.exited`, `failed` with `reason: batch_refused`, since it no
-longer accepts the session's stream, refuses the run's proxy secret, and answers the
+longer accepts the session's stream, refuses the run's proxy secret, or behind a separate gateway its run key on a bound connection's `QORY-RELAY`, and answers the
 session's further requests with a `410` `batch_refused` (The end of a run at the
 gateway, below). The session stops the runtime as after a `410` and records
 `dev.qory.run.exited`, `failed` with `reason: batch_refused`, in its own record alone. Anything else but a `2xx`, that `400` or a
@@ -2032,10 +2189,12 @@ A session writes no event the gateway decides. The gateway
 refuses a batch with a `400` `invalid_request`, and numbers nothing of it, when any of
 its events:
 
-- has a `subject` that is not the batch's run, the one whose `run_secret` it carries;
+- has a `subject` that is not the batch's run, the one whose `run_secret` or run key it
+  carries;
 - has a type the gateway writes, `dev.qory.run.registered` or `dev.qory.run.egress`;
 - is a `dev.qory.run.started` whose `opened_by` is not `session`, or whose `labels`
-  differ from the run's labels as the gateway holds them;
+  differ from the run's labels as the gateway holds them, none behind a separate
+  gateway;
   or is a `dev.qory.run.started` when the run already has one with another id: a run
   has at most one;
 - is an event, by an id the gateway has not numbered, after the run's
@@ -2087,7 +2246,7 @@ record again, through `gateway.Resend`, the resend writes `dev.qory.run.exited` 
 `reason: gateway_lost`.
 
 **The end of a run at the gateway.** When the gateway ends a session's run, with
-`session_lost` or `batch_refused`, it writes the run's
+`session_lost`, `batch_refused`, `stopped` or the starter's outcome, it writes the run's
 `dev.qory.run.exited` itself, with the state and the reason of that ending (§The events,
 How a run ends) and `exit_code: -1`, as with `session_lost`: it holds no exit status of
 the runtime's. It numbers that event into the run's stream and delivers it toward the
@@ -2096,16 +2255,28 @@ a `410`. Every `410` on the link is a `link-refusal.schema.json` document, its `
 what ended the run, and its `message` the text the session gives the user; a `410` that
 ends a run carries the `state` and the `reason` of the gateway's `dev.qory.run.exited`
 of it, the reason absent when that event has none:
-`{"error": "<code>", "message": "…", "from": "gateway", "state": "failed", "reason": "session_lost"}`.
+`{"error": "<code>", "message": "…", "from": "gateway", "state": "cancelled", "reason": "stopped"}`.
 `from` is `gateway` on every `410`, since only the gateway ends a run there, and the
 code says why:
 
 | Code | From | Cause |
 |---|---|---|
-| `stopped` | `gateway` | the session reads it and records the `410`'s `state` and `reason`, or `failed` and `stopped` when it carries no `state` |
+| `stopped` | `gateway` | the run's starter ended the run; `state` and `reason` are the starter's outcome and reason, or `cancelled` and `stopped` when it gave no outcome |
 | `session_lost` | `gateway` | the session was silent for 3 × the heartbeat interval (Heartbeats and liveness, above); `failed` and `session_lost` |
 | `batch_refused` | `gateway` | the gateway refused a batch of the session's (Events, above); `failed` and `batch_refused` |
 | `run_closed` | `gateway` | the run had already ended otherwise: after the session's own final event, or when the gateway stops; no `state` |
+
+**The end member.** When the server's signed `2xx` to a batch of the run carries `end`,
+the outcome the run's starter gave (§The server, The end member), the gateway ends the run
+with it, a direct node's gateway and a separate gateway alike: code `stopped`, from
+`gateway`, and the gateway's `dev.qory.run.exited` of it has the outcome's `state` and
+`reason`, and `exit_code: -1`. An `end` `cancelled` with no reason gives the reason
+`stopped`, the starter ending the run with no outcome. The gateway still numbers the
+run's last events and its `dev.qory.run.exited` and delivers them, and ignores any
+later `end`, the first having ended the run. The session's next request is the `410`
+`stopped` with that state and reason, its message "the run has ended: <state>, <words>":
+the reason's words, `no outcome given` for `stopped`, and any other reason with spaces
+for its underscores, "the run has ended: failed, checks failed" for `checks_failed`.
 
 The session stops the runtime as at its time limit, records its own
 `dev.qory.run.exited` with the `410`'s state and reason, and its code as the reason after
@@ -2119,8 +2290,8 @@ the gateway with `session_lost` once the gateway has heard nothing from the sess
 itself stops, `qory run resend` sending the run's record again, through
 `gateway.Resend`, writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
 While the session lives, the run normally ends with its runtime's own exit; the gateway
-can also end it, with `batch_refused` after it refused a batch of the session's, and
-the session records that end (The end of a run at the gateway, above).
+can also end it, with `stopped`, or `batch_refused` after it refused a batch of the
+session's, and the session records that end (The end of a run at the gateway, above).
 
 **Reload.** The run request is one-shot per `run_id`: sent again, it is `run_id_used`,
 unless its session gave up before the run opened (above). A
@@ -2163,8 +2334,8 @@ digest unchanged. Behind a separate gateway, to a refusal with a code of
              "digest": "<hex sha256 of the policy as canonical JSON>", "run_configuration": "sha256=<hex>"}}
 ```
 
-Behind a separate gateway, the reload carries the run's `run_secret`, whose run the
-`run_id` must be, and any other is `401` `unauthorized`, so no run id can be probed. On
+Behind a separate gateway, the reload carries the run key, whose run the `run_id` must
+be, and any other is `400` `run_key_invalid`, so no run id can be probed. On
 the local link the link secret and the run's
 `run_secret` authorise it: `qory` hands the secret to the session alone, of the same
 user, and the reload re-sends no secret of the run but its `run_secret`. A walled agent never reaches the socket, and an
@@ -2172,7 +2343,9 @@ unwalled one is never given the link secret: `qory` hands the session the secret
 memory, never in an environment or a file, so a program the agent starts does not inherit
 it. Without a wall, enforcement is cooperative ([the wall](../../../docs/wall.md)). A
 `run_id` of a run that has ended is a `410`, with the code and the `from` of its end at
-the gateway (above) when it ended there, else `run_closed` from `gateway`; on the local
+the gateway (above) when it ended there, else `run_closed` from `gateway`; behind a
+separate gateway the gateway keeps the end of a run it let go of for 15 minutes after
+its record is flushed, and a run it does not hold is `run_closed` after; on the local
 link an unknown `run_id` or a missing secret is `400` `invalid_request`. Toward the server
 the reload names the run the same way, a signed `GET <run.url>/<run_id>` (§The server,
 The run endpoint).
@@ -2182,17 +2355,16 @@ discovery's `proxy.address`, on loopback on one machine, and between two machine
 TLS 1.3 with the same trust as the link: the system's roots or `session.gateway.ca_file`,
 and the pin when `session.gateway.certificate_sha256` is set. It opens every connection
 with `QORY-RELAY`, a space, the run's proxy secret and a newline, as it does on one
-machine (§Limits). Behind a wall and a separate gateway, the session's forwarder takes
-the relay's connection, which opens with `QORY-RELAY` and a token the session makes for
-the run, and opens the gateway's one address over TLS with `QORY-RELAY`, a space, the
-run's proxy secret and a newline; the agent's view is the same. Without a wall, behind a separate gateway, the agent's proxy URL carries the
-run's proxy secret as its password; the URL's user name is ignored. A proxy request
-to the gateway's one address without a live run's proxy secret as its password is
-answered `407` with `Proxy-Authenticate: Basic realm="qory"` and the body "a live run's
-proxy secret is required as the proxy password", and closed. The run's proxy secret is
-at least 128 bits from the system's random source, made by the gateway for the run; the
-gateway compares it in constant time, never logs it, and refuses it once its run ends,
-and it is sent between machines only inside TLS.
+machine (§Limits). The run's proxy secret is at least 128 bits from the system's random
+source, made by the gateway for the run on the local link; the gateway compares it in
+constant time, never logs it, and refuses it once its run ends, and it never leaves the
+machine. Behind a separate gateway the one address takes a run's agent traffic only on
+a bound connection (The binding, above) whose next line is `QORY-RELAY`, a space, the
+run key and a newline, at most 2048 characters of run key: the bytes after it are the
+run's proxy's, as a connection the proxy secret opens on one machine. A run key the
+gateway refuses (The run key on the one address, above), or one of a run not live
+there, closes the connection unanswered. The session's forwarder opens such a
+connection for each connection of the agent's; the agent's view is the same.
 
 ## The runtime
 
@@ -2672,11 +2844,11 @@ the option experimental.
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
-| `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; a `dev.qory.run.exited` of a session's run, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json` | `batch.schema.json` |
+| `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, and one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state` and `exit_code` |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels, `proxy_secret` and `run_secret`, a reload answer with and without a policy, each with its `applied`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's own code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests, with a code that carries one fingerprint and with one that carries two, the answer, a gateway key's answer, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, each answer's and refusal's signature under the fixture signing key |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json` (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
@@ -2706,8 +2878,9 @@ Public sources this contract was written from, and nothing else:
   `ETag`, §15.3.3, §15.5.2 and §15.5.11 for 202, 401 and 410;
   [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html)
   §3.2 for the absolute-form target a proxy receives;
-  [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750.html) §3 for the
-  `WWW-Authenticate: Bearer` of the `401` on a separate gateway's one address. UUID version 7 from
+  [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750.html) §2.1 for the
+  `Authorization: Bearer` that carries the run key on a separate gateway's one address,
+  and §7.6.1 of RFC 9110 for the fields of one connection the relay drops. UUID version 7 from
   [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html). The JSON Canonicalization
   Scheme of [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html) for the digest of a
   node's policy, `node_policy`.
@@ -2742,7 +2915,8 @@ Public sources this contract was written from, and nothing else:
   for the statement that the transcript format is internal, which is why no descriptor
   reads it.
 - The gateway's link: [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html), TLS 1.3,
-  the only version a separate gateway speaks;
+  the only version a separate gateway speaks, and §7.5 for the exporter the binding
+  signs;
   [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280.html) §4.1.2.7 for the
   SubjectPublicKeyInfo the certificate pin is the SHA-256 of;
   [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648.html) §4 for the standard base64,
@@ -2758,6 +2932,3 @@ Public sources this contract was written from, and nothing else:
   [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers)
   and [best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks),
   the model for the delivery headers and the ten-second answer.
-- The proxy login on a separate gateway's one address:
-  [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) §11.7 with the Basic scheme of
-  [RFC 7617](https://www.rfc-editor.org/rfc/rfc7617.html), and its `407`.
