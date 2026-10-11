@@ -761,8 +761,8 @@ release may change what an existing document does, and says so under Upgrading.
   skew of 300 seconds by the gateway's clock, for a run the gateway holds nothing of,
   not open, not opening, not kept after its end and not recorded, a run key within the
   skew going on as one before `attach_by`, the server deciding its attach; `409`
-  `wrong_gateway`, its `gateway` not the `node_id` the gateway's discovery lists; and `409` `workspace_not_served`, its
-  `workspace` not among the discovery's `workspaces`. Each `409`'s message is the line
+  `wrong_gateway`, its `gateway` not the `node_id` the gateway's discovery lists; and
+  `409` `workspace_not_served`, its `workspace` not among the discovery's `workspaces`. Each `409`'s message is the line
   of the server's refusal of the attach,
   `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
   that passes names the request's run: a run request or a reload of another `run_id` is
