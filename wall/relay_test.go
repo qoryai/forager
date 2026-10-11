@@ -217,16 +217,89 @@ func TestRelayRefusesWithoutOneInsideAddress(t *testing.T) {
 		&net.IPNet{IP: net.ParseIP("fd00::2"), Mask: net.CIDRMask(64, 128)},
 	}
 	for _, subnets := range []string{"", "10.89.0.2", "10.89.0.0/24,", "192.0.2.0/24", "10.0.0.0/8", "10.89.0.0/24,192.0.2.0/24"} {
-		if got, err := insideAddrs(subnets, local); err == nil {
+		if got, _, err := insideAddrs(subnets, local); err == nil {
 			t.Errorf("%q: the relay would listen on %v", subnets, got)
 		}
 	}
 	for subnets, want := range map[string]string{
-		"10.89.0.0/24":           "[10.89.0.2]",
-		"10.89.0.0/24,fd00::/64": "[10.89.0.2 fd00::2]",
+		"10.89.0.0/24":           "[10.89.0.2] [10.89.0.0/24]",
+		"10.89.0.0/24,fd00::/64": "[10.89.0.2 fd00::2] [10.89.0.0/24 fd00::/64]",
 	} {
-		if got, err := insideAddrs(subnets, local); err != nil || fmt.Sprint(got) != want {
-			t.Errorf("%q: %v, %v; want %s", subnets, got, err, want)
+		if got, nets, err := insideAddrs(subnets, local); err != nil || fmt.Sprint(got, " ", nets) != want {
+			t.Errorf("%q: %v %v, %v; want %s", subnets, got, nets, err, want)
 		}
+	}
+}
+
+// TestRelayTakesConnectionsFromItsSubnetsAlone pins that the relay closes a connection
+// whose remote address lies in none of its subnets before it dials the target, and
+// copies one from an address in them.
+func TestRelayTakesConnectionsFromItsSubnetsAlone(t *testing.T) {
+	for _, c := range []struct {
+		subnet string
+		passes bool
+	}{{"10.0.0.0/8", false}, {"127.0.0.0/8", true}} {
+		t.Run(c.subnet, func(t *testing.T) {
+			target, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			dialled := make(chan string, 1)
+			go func() {
+				c, err := target.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				b, _ := io.ReadAll(c)
+				dialled <- string(b)
+			}()
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, subnet, _ := net.ParseCIDR(c.subnet)
+			ctx, cancel := context.WithCancel(context.Background())
+			served := make(chan struct{})
+			go func() {
+				serve(ctx, ln, target.Addr().String(), "", []*net.IPNet{subnet})
+				close(served)
+			}()
+			defer func() {
+				cancel()
+				ln.Close()
+				<-served
+			}()
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			io.WriteString(conn, "hello")
+			conn.(*net.TCPConn).CloseWrite()
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, err = conn.Read(make([]byte, 1))
+			if !c.passes {
+				// Closed with the bytes unread, the connection ends in a reset or an EOF.
+				if ne, ok := err.(net.Error); err == nil || ok && ne.Timeout() {
+					t.Errorf("a connection from outside %s was not closed: %v", c.subnet, err)
+				}
+				select {
+				case s := <-dialled:
+					t.Errorf("the target was dialled for a connection from outside %s and read %q", c.subnet, s)
+				case <-time.After(500 * time.Millisecond):
+				}
+				return
+			}
+			select {
+			case s := <-dialled:
+				if s != "hello" {
+					t.Errorf("the target read %q", s)
+				}
+			case <-time.After(5 * time.Second):
+				t.Errorf("a connection from inside %s never reached the target", c.subnet)
+			}
+		})
 	}
 }

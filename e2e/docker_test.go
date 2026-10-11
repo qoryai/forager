@@ -34,6 +34,7 @@ func TestDockerConforms(t *testing.T) {
 	conform(t, image, "", false)
 	t.Run("the relay runs no health check", relayRunsNoHealthCheck)
 	t.Run("the relay listens on the inside network alone", relayListensInsideAlone)
+	t.Run("the relay takes a connection from the inside network alone", relayTakesInsideAlone)
 }
 
 // TestDockerNestedConforms runs the suite against an image with a Docker of the agent's
@@ -164,10 +165,11 @@ const relaySecret = "walltest-relay-secret"
 // forwards to proxy, a listener of the test's in the gateway's place, and agent is the
 // launch that starts the agent's container.
 type relayRun struct {
-	// relay is the relay's container and outside its ordinary network.
-	relay, outside string
-	proxy          net.Listener
-	agent          wall.Launch
+	// relay is the relay's container, inside the enclosure's network and outside its
+	// ordinary one.
+	relay, inside, outside string
+	proxy                  net.Listener
+	agent                  wall.Launch
 }
 
 // relayEngine is the command the relay's own tests run, QORY_WALL_COMMAND or docker, and
@@ -208,7 +210,7 @@ func startRelay(t *testing.T, command, helper, image string, args ...string) rel
 	if err != nil {
 		t.Fatal(err)
 	}
-	return relayRun{relay: "qory-" + runID + "-relay", outside: "qory-" + runID + "-out", proxy: proxy, agent: agent}
+	return relayRun{relay: "qory-" + runID + "-relay", inside: "qory-" + runID + "-in", outside: "qory-" + runID + "-out", proxy: proxy, agent: agent}
 }
 
 // relayRunsNoHealthCheck starts the relay from an image with a health check and requires
@@ -292,5 +294,62 @@ func relayListensInsideAlone(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("the agent's connection never reached the proxy")
+	}
+}
+
+// relayTakesInsideAlone dials the relay's port on its address inside from a container on
+// the relay's ordinary network, routed there through the relay's address on that network,
+// and requires that the proxy never sees the connection, which the relay's port takes
+// unless the engine drops it on the way.
+func relayTakesInsideAlone(t *testing.T) {
+	command, helper := relayEngine(t)
+	r := startRelay(t, command, helper, busybox)
+	address := func(network string) string {
+		t.Helper()
+		out, err := exec.Command(command, "inspect", "--format",
+			fmt.Sprintf("{{(index .NetworkSettings.Networks %q).IPAddress}}", network), r.relay).CombinedOutput()
+		ip := strings.TrimSpace(string(out))
+		if err != nil || net.ParseIP(ip) == nil {
+			t.Fatalf("the relay's address on %s: %v: %s", network, err, out)
+		}
+		return ip
+	}
+	inside, outside := address(r.inside), address(r.outside)
+	out, err := exec.Command(command, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", r.inside).CombinedOutput()
+	subnets := strings.Fields(string(out))
+	if err != nil || len(subnets) == 0 {
+		t.Fatalf("the inside network's subnets: %v: %s", err, out)
+	}
+
+	accepted := make(chan string, 1)
+	go func() {
+		c, err := r.proxy.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		b, _ := io.ReadAll(c)
+		accepted <- string(b)
+	}()
+	dial := fmt.Sprintf("ip route add %s via %s && if nc -z -w 3 %s 3128; then echo connected; else echo refused; fi && printf hello | nc -w 3 %s 3128; true",
+		subnets[0], outside, inside, inside)
+	out, err = exec.Command(command, "run", "--rm", "--network", r.outside, "--cap-add", "NET_ADMIN", busybox, "sh", "-c", dial).CombinedOutput()
+	if err != nil {
+		t.Fatalf("the dial from the relay's ordinary network: %v: %s", err, out)
+	}
+	// An engine that drops the routed packets leaves the relay's port out of reach, which
+	// keeps the guarantee and tests nothing of the relay's own.
+	switch got := strings.TrimSpace(string(out)); got {
+	case "connected":
+	case "refused":
+		t.Log("the engine dropped the routed dial before it reached the relay")
+	default:
+		t.Fatalf("the dial from the relay's ordinary network: %s", got)
+	}
+	select {
+	case s := <-accepted:
+		t.Errorf("a connection from the relay's ordinary network reached the proxy: %q", s)
+	case <-time.After(3 * time.Second):
 	}
 }
