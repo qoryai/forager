@@ -2679,7 +2679,7 @@ default. Images need a wall: without one the runtime is a process on the machine
 | name | what a policy, or the machine's default, selects it by, in a credential's grammar |
 | reference | the image, pinned by digest where the machine requires the same image every time |
 | runtime | the container runtime the wall starts it under, one the machine's engine has: `sysbox-runc`. Absent is the engine's default |
-| docker | the agent gets nested Docker (§The wall). It needs a runtime that runs one without privileges. Experimental |
+| docker | the agent gets nested Docker (§The wall). It needs a runtime that runs it without privileges. Experimental |
 
 ```yaml
 version: 1
