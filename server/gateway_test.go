@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -662,6 +664,42 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, "https://gateway.example:8443"+server.WellKnown, nil)
 		u, err := tr.Proxy(req)
 		t.Errorf("via's transport has a Proxy, which gives %v, %v for the gateway; want none", u, err)
+	}
+}
+
+// TestViaKeepsItsTrustOverACallersTLSDialing pins that a caller's transport that makes
+// TLS itself cannot switch via's trust off: net/http uses DialTLSContext in place of
+// TLSClientConfig, and here it accepts any certificate, yet under via the system's roots
+// still refuse the test's authority and a pin of another key still refuses the
+// gateway's certificate, while ca_file and the right pin reach it.
+func TestViaKeepsItsTrustOverACallersTLSDialing(t *testing.T) {
+	signer, key := generate(t), generate(t)
+	g := newRelay(t, signer, key)
+	ctx := context.Background()
+	insecure := &http.Transport{DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d := &tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true}}
+		return d.DialContext(ctx, network, addr)
+	}}
+	conn, err := insecure.DialTLSContext(ctx, "tcp", strings.TrimPrefix(g.srv.URL, "https://"))
+	if err != nil {
+		t.Fatalf("the caller's TLS dialing does not reach the test server: %v", err)
+	}
+	conn.Close()
+	other := sha256.Sum256([]byte("another key"))
+	for name, tc := range map[string]struct {
+		via  server.Via
+		pass bool
+	}{
+		"the system roots": {server.Via{URL: g.srv.URL}, false},
+		"another pin":      {server.Via{URL: g.srv.URL, CAFile: g.caFile, CertificateSHA256: base64.StdEncoding.EncodeToString(other[:])}, false},
+		"ca_file and pin":  {server.Via{URL: g.srv.URL, CAFile: g.caFile, CertificateSHA256: g.pin}, true},
+	} {
+		v := tc.via
+		c := &server.Client{Config: &server.Config{Version: 1, URL: "https://qory.example", AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer), Via: &v},
+			Key: key, InstanceID: instance, UserAgent: "qory-forager/test", HTTP: &http.Client{Transport: insecure}}
+		if _, _, err := c.Discover(ctx); (err == nil) != tc.pass {
+			t.Errorf("%s: discovery under a caller's DialTLSContext gave %v; want passed %v", name, err, tc.pass)
+		}
 	}
 }
 
