@@ -77,9 +77,8 @@ around a runtime, as above.
 Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `failed` or
 `cancelled`, stopped before it said how it went. A runtime that exits by itself is
 `succeeded` on 0 and `failed` otherwise. When
-a run ends other than by the runtime's own exit, or its starter gives a reason,
-`dev.qory.run.exited` says why in `reason`: an open code, Forager's own or the starter's,
-carried as given. The session writes `timeout`, `cancelled`, and `interrupted`,
+a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
+`reason`: an open code, Forager's own or one a link `410` carried, as given. The session writes `timeout`, `cancelled`, and `interrupted`,
 `cancelled`, a run stopped from where it was started (a Ctrl-C), and posts them. The
 gateway writes the others: `session_lost`, `failed`, the session was silent;
 `batch_refused`,
@@ -87,8 +86,7 @@ gateway writes the others: `session_lost`, `failed`, the session was silent;
 gateway's link); and sending a record again
 writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are the old names
 `quiet`, `credential_expired`, `credential_check_unreachable` and
-`credential_check_invalid`, which Forager no longer writes: a starter's reason that
-equals one is dropped. When the gateway ends a session's run, the gateway writes
+`credential_check_invalid`, which Forager no longer writes. When the gateway ends a session's run, the gateway writes
 the run's `dev.qory.run.exited`, and answers the session's next request with a `410`, a
 code, and the state and the reason of that end. The session records its own
 `dev.qory.run.exited` in `session.jsonl` alone, with them, and posts nothing more:

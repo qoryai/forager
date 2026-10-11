@@ -151,7 +151,7 @@ const stateFailed = event.StateFailed
 
 // reasonWords are the words a person reads of Forager's own reasons of
 // dev.qory.run.exited where a line says how a run ended, those Qory Apiary shows; any
-// other reason is the run's starter's, read with spaces for its underscores.
+// other reason is read with spaces for its underscores.
 var reasonWords = map[string]string{
 	event.ReasonTimeout:      "time limit reached",
 	event.ReasonSessionLost:  "stopped responding",

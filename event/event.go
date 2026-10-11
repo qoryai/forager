@@ -42,14 +42,14 @@ const (
 const OpenedBySession = "session"
 
 // Forager's own reasons of dev.qory.run.exited, why a run ended other than by the
-// runtime's own exit. A reason is an open code: one of these, or the code the run's
-// starter gave, carried as given. Forager's codes are reserved, and so are the old
+// runtime's own exit. A reason is an open code: one of these, or one a link 410
+// carried, as given. Forager's codes are reserved, and so are the old
 // names quiet, credential_expired, credential_check_unreachable,
 // credential_check_invalid, run_ended_at_issuer, issuer_unreachable and
 // issuer_answer_invalid, which Forager never writes. The session writes timeout,
 // interrupted and run_closed, and in its own record the code of the gateway's 410,
 // batch_refused among them; the resend of a record writes gateway_lost; the gateway
-// writes the others.
+// writes session_lost and batch_refused.
 const (
 	ReasonTimeout = "timeout"
 	// ReasonInterrupted is a session's run stopped from where it was started, cancelled:
@@ -69,8 +69,7 @@ const (
 )
 
 // The states of dev.qory.run.exited, how a run ended: it ended well, it ended badly, or
-// it was stopped before it said how it went. They are the outcomes a run's starter may
-// give too.
+// it was stopped before it said how it went.
 const (
 	StateSucceeded = "succeeded"
 	StateFailed    = "failed"
