@@ -46,10 +46,12 @@ const relaySources = 1 << 16
 const relayInFlight = 64
 
 // The relay's bounds on a request: how long it may take to arrive whole, its body
-// included, and how long its answer may take from then on, the server's wait among it.
+// included; how long its answer may take from then on, the server's wait among it; and
+// the most its request line and fields may hold.
 const (
 	relayReadWait  = 30 * time.Second
 	relayWriteWait = 30 * time.Second
+	relayMaxHeader = 16 << 10
 )
 
 // sourceFields are the fields that name a request's source to the server, which the
@@ -131,7 +133,7 @@ func (g *Gateway) newRelay(addr net.Addr) *relay {
 		client: &http.Client{Transport: t, Timeout: wait, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	// OPTIONS * goes to the handler too, which counts it and answers it 404.
 	rl.http = &http.Server{Handler: rl, ReadHeaderTimeout: link.PreambleWait, ReadTimeout: relayReadWait, WriteTimeout: relayWriteWait,
-		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog()}
+		MaxHeaderBytes: relayMaxHeader, IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog()}
 	go rl.http.Serve(rl.queue)
 	go rl.pruneEvery(relayRefill)
 	return rl

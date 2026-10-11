@@ -87,8 +87,11 @@ type Gateway struct {
 	opens sync.WaitGroup
 	// spent are the runs on the one address that ended and were let go of, by their run
 	// id, each kept for [keepEnded]; each and the delivery hold what they came to, for
-	// Close.
-	spent map[string]spentRun
+	// Close. lapsedErrs are the errors of the first [keepLapsedErrs] spent runs past
+	// their time that came to one, and lapsedMore counts the others.
+	spent      map[string]spentRun
+	lapsedErrs []error
+	lapsedMore int
 
 	closed   chan struct{}
 	delivery Delivery
@@ -433,11 +436,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 		g.closedRun(lr)
 	}
 	g.mu.Lock()
-	for _, sp := range g.spent {
-		if sp.err != nil {
-			errs = append(errs, sp.err)
-		}
-	}
+	errs = append(errs, g.spentErrs()...)
 	g.mu.Unlock()
 	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	if g.svc != nil {

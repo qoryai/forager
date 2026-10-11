@@ -216,7 +216,7 @@ func TestTheOneAddressBoundsTheConnectionsOfASource(t *testing.T) {
 // a source; never a target whose path holds an escaped byte, or a POST with a query,
 // each 404 with nothing sent on; the path it matched; and no more than its requests in
 // flight with the server, one more 503 with no body. Its server reads a request whole
-// within 30 seconds and writes its answer within 30 more.
+// within 30 seconds, writes its answer within 30 more, and takes heads of 16 KiB.
 func TestTheRelaysBoundsOnARequest(t *testing.T) {
 	cfg := gateway.Config{}
 	gateway.SetRelayInFlight(&cfg, 2)
@@ -321,9 +321,14 @@ func TestTheRelaysBoundsOnARequest(t *testing.T) {
 		t.Errorf("a request once the others are answered: %d", status)
 	}
 
+	// A head over 16 KiB is net/http's own 431, sent on to no one.
+	if status, _ := send(fmt.Sprintf("GET %s HTTP/1.1\r\nHost: x\r\nX-Big: %s\r\n\r\n", server.WellKnown, strings.Repeat("a", gateway.RelayMaxHeader+8<<10))); status != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("a head over 16 KiB: %d", status)
+	}
 	_, relay := gateway.ServiceServers(r.g)
-	if relay.ReadTimeout != gateway.RelayReadWait || relay.WriteTimeout != gateway.RelayWriteWait || gateway.RelayReadWait != 30*time.Second || gateway.RelayWriteWait != 30*time.Second {
-		t.Errorf("the relay's server reads for %s and writes for %s", relay.ReadTimeout, relay.WriteTimeout)
+	if relay.ReadTimeout != gateway.RelayReadWait || relay.WriteTimeout != gateway.RelayWriteWait || gateway.RelayReadWait != 30*time.Second || gateway.RelayWriteWait != 30*time.Second ||
+		relay.MaxHeaderBytes != gateway.RelayMaxHeader || gateway.RelayMaxHeader != 16<<10 {
+		t.Errorf("the relay's server reads for %s and writes for %s, heads of %d bytes", relay.ReadTimeout, relay.WriteTimeout, relay.MaxHeaderBytes)
 	}
 }
 

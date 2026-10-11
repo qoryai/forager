@@ -115,4 +115,5 @@ const (
 	EdgeMaxHeader  = edgeMaxHeader
 	RelayReadWait  = relayReadWait
 	RelayWriteWait = relayWriteWait
+	RelayMaxHeader = relayMaxHeader
 )

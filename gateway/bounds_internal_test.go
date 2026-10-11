@@ -188,3 +188,65 @@ func TestRetireLetsGoOfWhatLapsed(t *testing.T) {
 		t.Errorf("a lapsed run asked for is kept: used %v", g.used)
 	}
 }
+
+// TestTheLapsedRunsErrorsAreBounded pins the errors Close gets of the runs the gateway
+// let go of: every one, in the order the runs were let go of, while at most 16 of the
+// lapsed runs came to one; past that the first 16, and a line that counts the others.
+func TestTheLapsedRunsErrorsAreBounded(t *testing.T) {
+	for _, c := range []struct {
+		lapsed int
+		more   string
+	}{
+		{0, ""},
+		{3, ""},
+		{keepLapsedErrs, ""},
+		{keepLapsedErrs + 1, "and 1 more run's record could not be closed"},
+		{keepLapsedErrs + 4, "and 4 more runs' records could not be closed"},
+	} {
+		g := &Gateway{used: map[string]bool{}, runs: map[string]*linkRun{}, spent: map[string]spentRun{}}
+		base := time.Now().Add(-time.Hour)
+		var want []error
+		made := 0
+		add := func(n int) {
+			for range n {
+				id := fmt.Sprintf("lapsed %d", made)
+				err := errors.New(id)
+				if made < keepLapsedErrs {
+					want = append(want, err)
+				}
+				g.used[id], g.spent[id] = true, spentRun{until: base.Add(time.Duration(made) * time.Second), err: err}
+				made++
+			}
+		}
+		// Half lapse at one retire, the rest at the next.
+		add(c.lapsed / 2)
+		kept := errors.New("kept")
+		g.spent["kept"] = spentRun{until: time.Now().Add(time.Minute), err: kept}
+		g.spent["no error"] = spentRun{until: base}
+		first := &linkRun{g: g, id: "first", remote: true, ended: true}
+		g.runs["first"] = first
+		g.retire(first)
+		add(c.lapsed - c.lapsed/2)
+		last := &linkRun{g: g, id: "last", remote: true, ended: true, err: errors.New("last")}
+		g.runs["last"] = last
+		g.retire(last)
+		want = append(want, kept, last.err)
+		got := g.spentErrs()
+		if c.more != "" {
+			want = append(want, errors.New(c.more))
+		}
+		if len(got) != len(want) {
+			t.Errorf("%d lapsed: %q; want %q", c.lapsed, got, want)
+			continue
+		}
+		for i := range got {
+			if got[i].Error() != want[i].Error() {
+				t.Errorf("%d lapsed: %q; want %q", c.lapsed, got, want)
+				break
+			}
+		}
+		if len(g.lapsedErrs) > keepLapsedErrs {
+			t.Errorf("%d lapsed: %d errors kept", c.lapsed, len(g.lapsedErrs))
+		}
+	}
+}

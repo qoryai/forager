@@ -1944,7 +1944,9 @@ A source is the connection's own address, an IPv4 address or an IPv6 /64, never 
 the request carries. The relay lets go of a source's count once it has been idle for
 the 20 seconds its burst takes to come back whole. A connection of the relay reads a
 request whole, its body included, within 30 seconds, and writes its answer within 30
-seconds of the request's head; a connection that misses either is closed.
+seconds of the request's head; a connection that misses either is closed. A request's
+line and fields are within 16 KiB, the 4 KiB net/http allows past that aside: a longer
+head is net/http's own `431`, which counts toward no rate.
 
 **On the wire.** A request on the link contains `User-Agent` and
 `X-Qory-Contract-Version`, as toward the server, and a batch its `Content-Type` and
