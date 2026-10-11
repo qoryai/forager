@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
@@ -9,21 +11,28 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/runkey"
 )
 
-// RemoteTLS is how the session trusts a separate gateway's certificate
-// (contracts/forager/v1/README.md §The gateway's link): the full chain, for the host
-// name of the gateway's URL, against the system's roots, or, when CAFile is set,
-// against the authorities of that file alone; and, when CertificateSHA256 is set, the
-// pin of the certificate's public key besides.
+// RemoteTLS is how a gateway's certificate is trusted: the full chain, for the host name
+// of the gateway's URL, against the system's roots, or, when CAFile is set, against the
+// authorities of that file alone; and, when CertificateSHA256 is set, the pin of the
+// certificate's public key besides. [Via] carries it toward a gateway that relays to the
+// server, and [NewRemoteLink] checks the chain of a separate gateway's certificate with
+// it, the zero RemoteTLS on a run's edge.
 type RemoteTLS struct {
 	// CAFile is a PEM file of the authorities the gateway's certificate chains to. Set,
 	// it replaces the system's roots for this link; empty means the system's roots.
@@ -82,16 +91,33 @@ func (r RemoteTLS) config(host string) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// NewRemoteLink returns the client of a separate gateway's link at gatewayURL, an
-// https URL with a host and, optionally, a port, and no user information, path, query
-// or fragment. Every connection is TLS 1.3 alone, verified as trust says
-// ([RemoteTLS]); no proxy of the environment is used, and no redirect is followed.
+// NewRemoteLink returns the client of the link to the separate gateway runKey names,
+// the run key Qory Apiary answered the run's registration with: its gateway_url is the
+// one address the run key is ever sent to, and its gateway_public_key the keys the
+// gateway must prove it holds. The run key is read as a runner reads one,
+// [runkey.Parse], unverified: an error of the parse is a [*runkey.Error], which names
+// the part that is wrong and never the run key.
 //
-// userAgent and digests are as for [NewLocalLink]. The link's discovery must list
-// URLs of gatewayURL's origin alone, and name as its proxy the gateway's one address,
-// the host and port of gatewayURL, which [Link.DialProxy] reaches.
-func NewRemoteLink(gatewayURL string, trust RemoteTLS, userAgent string, digests func(Digests)) (*Link, error) {
-	u, err := url.Parse(gatewayURL)
+// Every connection is TLS 1.3 alone, its chain checked as trust says ([RemoteTLS]): the
+// zero RemoteTLS checks it against the system's roots for the host name of the
+// gateway's URL. It then opens with the binding exchange (contracts/forager/v1/README.md
+// §The gateway's link): the gateway proves, over the connection's exporter value, that
+// it holds a key the run key names, or the connection is closed and the run key never
+// sent, a [*GatewayKeyError]. Every request of the link carries the run key,
+// Authorization: Bearer, every answer must be signed under a key the run key names for
+// that connection and request, and a proxy connection, [Link.DialProxy], opens with the
+// relay's preamble and the run key. No proxy of the environment is used, HTTP/2 is not
+// offered, and no redirect is followed.
+//
+// userAgent and digests are as for [NewLocalLink]. The link's discovery must list URLs
+// of the gateway's origin under [link.RemotePathPrefix] alone, and name as its proxy
+// the gateway's one address, the host and port of its URL.
+func NewRemoteLink(runKey string, trust RemoteTLS, userAgent string, digests func(Digests)) (*Link, error) {
+	key, err := runkey.Parse(runKey)
+	if err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(key.GatewayURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.Opaque != "" || u.User != nil ||
 		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return nil, errors.New("the gateway's URL is not an https URL of a host and an optional port, with no user information, path, query or fragment")
@@ -104,21 +130,25 @@ func NewRemoteLink(gatewayURL string, trust RemoteTLS, userAgent string, digests
 	if err != nil {
 		return nil, err
 	}
-	origin := "https://" + u.Host
+	g := &remoteGateway{
+		url: "https://" + u.Host, address: net.JoinHostPort(u.Hostname(), port), tls: cfg,
+		keys: slices.Clone(key.GatewayKeys), runKey: runKey,
+	}
 	k := &Link{
-		userAgent: userAgent, origin: origin, name: "the gateway at " + origin, digests: digests,
-		address: net.JoinHostPort(u.Hostname(), port), tls: cfg, runSecret: new(atomic.Pointer[string]),
+		userAgent: userAgent, origin: g.url, name: "the gateway at " + g.url, digests: digests,
+		runID: new(atomic.Pointer[string]), remote: g,
 	}
 	k.http = &http.Client{
 		Timeout: Timeout,
 		Transport: &http.Transport{
-			Proxy:               nil,
-			DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
-			TLSClientConfig:     cfg,
-			TLSHandshakeTimeout: dialTimeout,
-			DisableCompression:  true,
-			MaxIdleConns:        4,
-			IdleConnTimeout:     90 * time.Second,
+			Proxy: nil,
+			DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return g.dial(ctx)
+			},
+			ForceAttemptHTTP2:  false,
+			DisableCompression: true,
+			MaxIdleConns:       4,
+			IdleConnTimeout:    90 * time.Second,
 		},
 		// A 3xx is a status like any other: nothing of the run goes elsewhere.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -126,49 +156,177 @@ func NewRemoteLink(gatewayURL string, trust RemoteTLS, userAgent string, digests
 	return k, nil
 }
 
-// dialTimeout is how long a connection to a separate gateway has to open, its TLS
-// handshake included.
-const dialTimeout = 10 * time.Second
-
-// authorize sets the request's authentication, the one place it is set: once the run
-// is open, X-Qory-Run-Secret, the run's secret.
-func (k *Link) authorize(_ context.Context, h http.Header) error {
-	if s := k.runSecret.Load(); s != nil {
-		h.Set(HeaderRunSecret, *s)
-	}
-	return nil
+// remoteGateway is a separate gateway, as the run key names it: its origin, its one
+// address, the TLS every connection to it is made with, the keys it must prove it
+// holds, and the run key, which every request carries once the connection is bound.
+type remoteGateway struct {
+	url     string
+	address string
+	tls     *tls.Config
+	keys    []accesskey.PublicKey
+	runKey  string
 }
 
-// DialProxy opens one connection to a separate gateway's proxy, its one address, over
-// TLS 1.3 with the link's trust, the handshake done: what the run's agent traffic goes
-// through behind a separate gateway. Nothing is written on it. The local link has no
-// such way: its proxy is on loopback, reached as it is.
-func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
-	if k.tls == nil {
-		return nil, errors.New("the gateway's local link has no proxy over TLS")
+// GatewayKeyError is a separate gateway that failed the run key's pin: on a connection,
+// it did not prove it holds a key the run key names, Unproven, its answer to the
+// binding being missing, of another form, of a fingerprint the run key does not name
+// or with a signature that does not verify; or it answered a request under a key the
+// run key does not name, or with no signature. Before the run starts the run does not
+// start with its text; once it runs, it is no answer, and nothing of it is applied.
+type GatewayKeyError struct {
+	// URL is the gateway's, as the run key names it.
+	URL string
+	// Unproven says the binding failed; false is an answer under another key.
+	Unproven bool
+}
+
+func (e *GatewayKeyError) Error() string {
+	if e.Unproven {
+		return "the gateway at " + e.URL + " could not prove it holds a key the run key names"
 	}
-	d := &tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: k.tls}
+	return "the gateway at " + e.URL + " answered under a key the run key does not name"
+}
+
+// dialTimeout is how long a connection to a separate gateway has to open, its TLS
+// handshake and its binding included.
+const dialTimeout = 10 * time.Second
+
+// boundConn is a connection to a separate gateway past its binding: its exporter value,
+// which the gateway's answers on it are signed over, and the reader the binding's answer
+// was read with, which may hold the first bytes after it.
+type boundConn struct {
+	*tls.Conn
+	r   *bufio.Reader
+	ekm []byte
+}
+
+func (c *boundConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+// dial opens one connection to the gateway: TLS 1.3 with the link's trust, then the
+// binding exchange, within [dialTimeout]. A gateway that does not prove it holds a key
+// the run key names is a [*GatewayKeyError] Unproven, and the connection is closed
+// before the run key is sent; a connection that does not open is the transport's error.
+func (g *remoteGateway) dial(ctx context.Context) (*boundConn, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	c, err := d.DialContext(ctx, "tcp", k.address)
+	d := &tls.Dialer{NetDialer: &net.Dialer{}, Config: g.tls}
+	c, err := d.DialContext(ctx, "tcp", g.address)
 	if err != nil {
-		return nil, fmt.Errorf("the gateway's proxy %s: %w", k.address, err)
+		return nil, err
 	}
+	tc := c.(*tls.Conn)
+	cs := tc.ConnectionState()
+	ekm, err := cs.ExportKeyingMaterial(link.BindingLabel, []byte{}, link.BindingSize)
+	if err != nil {
+		tc.Close()
+		return nil, &GatewayKeyError{URL: g.url, Unproven: true}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		tc.SetDeadline(deadline)
+	}
+	r := bufio.NewReaderSize(tc, link.MaxBoundLine)
+	if _, err := io.WriteString(tc, link.BindLine); err != nil || !g.bound(r, ekm) {
+		tc.Close()
+		return nil, &GatewayKeyError{URL: g.url, Unproven: true}
+	}
+	tc.SetDeadline(time.Time{})
+	return &boundConn{Conn: tc, r: r, ekm: ekm}, nil
+}
+
+// bound reads the gateway's answer to the binding, at most [link.MaxBoundLine] bytes,
+// and reports whether it is [link.BoundWord], a fingerprint of a key the run key names
+// and that key's signature over [link.BindingMessage] for ekm.
+func (g *remoteGateway) bound(r *bufio.Reader, ekm []byte) bool {
+	line, err := r.ReadSlice('\n')
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(string(line), "\n"), " ")
+	if len(parts) != 3 || parts[0] != link.BoundWord {
+		return false
+	}
+	sig, err := base64.RawURLEncoding.Strict().DecodeString(parts[2])
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	for _, k := range g.keys {
+		if k.Fingerprint() == parts[1] {
+			return k.Verify(link.BindingMessage(ekm, parts[1]), sig)
+		}
+	}
+	return false
+}
+
+// signed reports whether the answer a to req, whose body is body, came on a bound
+// connection with exactly one signature, under a key the run key names, over the six
+// lines of a separate gateway's answer: its third the hash of the connection's exporter
+// value and the request, [link.AnswerRequest].
+func (g *remoteGateway) signed(c net.Conn, req *http.Request, body []byte, a *linkAnswer, signatures []string) bool {
+	bc, ok := c.(*boundConn)
+	if !ok || len(signatures) != 1 {
+		return false
+	}
+	answer := accesskey.Answer{
+		Link: true, Status: a.status, Body: a.body,
+		RequestSignature: link.AnswerRequest(bc.ekm, req.Method, req.URL.RequestURI(), body),
+		Configuration:    a.digests.Configuration, RunConfiguration: a.digests.RunConfiguration,
+	}
+	for _, k := range g.keys {
+		if k.VerifyAnswer(answer, signatures[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// authorize sets the request's authentication, the one place it is set: behind a
+// separate gateway, the run key, Authorization: Bearer. The local link sets none: the
+// socket's peer is checked.
+func (k *Link) authorize(h http.Header) {
+	if k.remote != nil {
+		h.Set("Authorization", "Bearer "+k.remote.runKey)
+	}
+}
+
+// DialProxy opens one connection to a separate gateway's proxy, its one address: TLS
+// 1.3 with the link's trust, bound as every connection of the link is, and opened with
+// the relay's preamble and the run key, [link.RelayLine]. What the run's agent traffic
+// goes through behind a separate gateway is written after it. The local link has no
+// such way: its proxy is on loopback, reached as it is.
+func (k *Link) DialProxy(ctx context.Context) (net.Conn, error) {
+	if k.remote == nil {
+		return nil, errors.New("the gateway's local link has no proxy over TLS")
+	}
+	c, err := k.remote.dial(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the gateway's proxy %s: %w", k.remote.address, err)
+	}
+	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
+	if _, err := io.WriteString(c, link.RelayLine(k.remote.runKey)); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("the gateway's proxy %s: the preamble: %w", k.remote.address, err)
+	}
+	c.SetWriteDeadline(time.Time{})
 	return c, nil
 }
 
 // ProxyAddress is a separate gateway's one address, host:port, which its discovery
 // names as its proxy; empty on the local link.
-func (k *Link) ProxyAddress() string { return k.address }
+func (k *Link) ProxyAddress() string {
+	if k.remote == nil {
+		return ""
+	}
+	return k.remote.address
+}
 
 // oneAddress refuses a discovery's proxy address that is not a separate gateway's one
 // address.
 func (k *Link) oneAddress(addr string) error {
-	if k.address == "" {
+	if k.remote == nil {
 		return nil
 	}
 	host, port, err := net.SplitHostPort(addr)
-	want, wantPort, _ := net.SplitHostPort(k.address)
+	want, wantPort, _ := net.SplitHostPort(k.remote.address)
 	if err != nil || !strings.EqualFold(host, want) || port != wantPort {
 		return errors.New("proxy.address is not the gateway's one address, the host and port of its URL")
 	}

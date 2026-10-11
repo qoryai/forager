@@ -2,187 +2,29 @@ package session_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/base64"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/big"
-	"net"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
-	"github.com/qoryai/forager/accesskey"
-	"github.com/qoryai/forager/gateway"
-	"github.com/qoryai/forager/receiver"
+	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/sink"
 )
 
-// The runs of this file are a real session.Run behind a separate gateway: a real
-// gateway, gateway.Start, serving its one address on loopback over TLS under a gateway's
-// access key at a server of the test's own, and the session's RemoteGateway pointed at
-// it.
+// The runs of this file are a real session.Run behind a fake separate gateway,
+// linktest.StartRemoteFake: the session's RemoteGateway is its run key alone, which
+// names the gateway's URL and the key the gateway proves it holds on every connection.
 
-// separate is a gateway serving its one address over TLS, and how a session trusts it.
-type separate struct {
-	g           *gateway.Gateway
-	dir         string
-	caFile, pin string
-	pool        *x509.CertPool
-
-	mu      sync.Mutex
-	reports []string
-}
-
-// startSeparate starts a gateway on 127.0.0.1 over TLS, under an authority of the test's
-// own, whose certificate names 127.0.0.1 alone, with a policy that allows api.example
-// alone, its access key a gateway's at a server of the test's own.
-func startSeparate(t *testing.T) *separate {
-	t.Helper()
-	return startSeparateBeating(t, time.Second)
-}
-
-// startSeparateBeating is startSeparate with the heartbeat interval its discovery
-// announces: the gateway ends a run whose session sends nothing for three.
-func startSeparateBeating(t *testing.T, heartbeat time.Duration) *separate {
-	t.Helper()
-	certDir := t.TempDir()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "separate test authority"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, _ := x509.ParseCertificate(caDER)
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "gateway.example"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames: []string{"gateway.example"}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)}}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, _ := x509.ParseCertificate(der)
-	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
-	s := &separate{dir: t.TempDir(), caFile: filepath.Join(certDir, "ca.pem"), pin: base64.StdEncoding.EncodeToString(sum[:]), pool: x509.NewCertPool()}
-	s.pool.AddCert(ca)
-	certFile, keyFile := filepath.Join(certDir, "gateway.pem"), filepath.Join(certDir, "gateway-key.pem")
-	for file, b := range map[string][]byte{
-		s.caFile: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
-		certFile: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		keyFile:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
-	} {
-		if err := os.WriteFile(file, b, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	g, err := gateway.Start(context.Background(), gateway.Config{
-		Version: "test", Heartbeat: heartbeat, Dir: s.dir,
-		Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, Server: gatewayServer(t),
-		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}},
-		Report: func(l string) {
-			t.Log("the gateway reported:", l)
-			s.mu.Lock()
-			s.reports = append(s.reports, l)
-			s.mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.g = g
-	t.Cleanup(func() { s.close(t) })
-	return s
-}
-
-// gatewayServer is a server of the contract whose discovery lists a gateway's access
-// key, ng_, serving one workspace, and the gateway's server document of it.
-func gatewayServer(t *testing.T) *gateway.Server {
-	t.Helper()
-	key, err := accesskey.Generate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := accesskey.Generate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pin := accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}
-	pinJSON, _ := json.Marshal(pin)
-	var srv *httptest.Server
-	h := &receiver.Handler{
-		Keys: func(id string) (receiver.AccessKey, bool) {
-			return receiver.AccessKey{PublicKey: key.PublicKey()}, id == "ak_f1xt0re00000000g"
-		},
-		Signer: signer,
-		Store:  noStore{},
-		Configuration: func() ([]byte, string) {
-			doc := `{"version":1,"node_id":"ng_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"apiary_public_key":` + string(pinJSON) +
-				`,"events":{"url":"` + srv.URL + `/v1/events","types":["*"]},"run":{"url":"` + srv.URL + `/v1/runs"}}`
-			return []byte(doc), "sha256=" + strings.Repeat("c", 64)
-		},
-	}
-	srv = httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-	return &gateway.Server{Version: 1, URL: srv.URL, AccessKeyID: "ak_f1xt0re00000000g", ApiaryPublicKey: pin, AccessKey: key, InstanceID: "i_test"}
-}
-
-// noStore is a receiver's store that keeps nothing.
-type noStore struct{}
-
-func (noStore) Seen(string) bool            { return false }
-func (noStore) Append(string, []byte) error { return nil }
-
-// close ends the gateway, which numbers each run's last events.
-func (s *separate) close(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := s.g.Close(ctx); err != nil {
-		t.Errorf("the gateway's close: %v", err)
-	}
-}
-
-// url is the gateway's URL, its one address.
-func (s *separate) url() string { return "https://" + s.g.Addr() }
-
-// remote is the session's RemoteGateway of the gateway.
-func (s *separate) remote() session.RemoteGateway {
-	return session.RemoteGateway{URL: s.url(), CAFile: s.caFile, CertificateSHA256: s.pin}
-}
-
-// runs are the runs the gateway holds a record of.
-func (s *separate) runs() []string {
-	entries, _ := os.ReadDir(filepath.Join(s.dir, "runs"))
-	var out []string
-	for _, e := range entries {
-		out = append(out, e.Name())
-	}
-	return out
-}
-
-// deniedURL is a host the gateway's policy does not allow: a request for it reaches
-// the gateway's proxy and is denied there.
-const deniedURL = "http://denied.invalid/a"
-
-// sepRun is a run of the fake runtime behind the gateway: it writes its environment to
-// envFile and asks for deniedURL through its proxy; what the session reported is in
-// reports.
+// sepRun is a run of the fake runtime behind a separate gateway: it writes its
+// environment to envFile and asks for allowedURL through its proxy; what the session
+// reported is in reports.
 type sepRun struct {
 	sp      session.Spec
 	envFile string
@@ -191,6 +33,9 @@ type sepRun struct {
 	mu      sync.Mutex
 	reports []string
 }
+
+// allowedURL is a host the agent asks for through its proxy.
+const allowedURL = "http://api.example/a"
 
 func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 	t.Helper()
@@ -203,7 +48,7 @@ func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 	})
 	r.sp = session.Spec{
 		Command: "/bin/sh", Args: []string{"-c", `env > "$0"; exec "$1"`, r.envFile, os.Args[0]},
-		Env: []string{"FAKE_RUNTIME=1", "FAKE_EXIT=0", "FAKE_DENIED_URL=" + deniedURL, "PATH=" + os.Getenv("PATH")},
+		Env: []string{"FAKE_RUNTIME=1", "FAKE_EXIT=0", "FAKE_ALLOWED_URL=" + allowedURL, "PATH=" + os.Getenv("PATH")},
 		Dir: t.TempDir(), RunsDir: filepath.Join(t.TempDir(), "runs"),
 		Stdin: strings.NewReader(""), Stdout: stdout, Stderr: r.stderr,
 		Gateway: gw, ForagerVersion: "test",
@@ -219,60 +64,169 @@ func newSepRun(t *testing.T, gw session.Gateway) *sepRun {
 	return r
 }
 
-// resendSpec is the resend of a run's directory through s.
-func resendSpec(s *separate, dir string) session.ResendSpec {
-	return session.ResendSpec{Gateway: s.remote(), Dir: dir, ForagerVersion: "test"}
+// started reports whether the runtime started.
+func (r *sepRun) started() bool {
+	_, err := os.Stat(r.envFile)
+	return err == nil
 }
 
-// TestASessionTrustsTheSeparateGatewayItIsTold pins the trust behind a separate
-// gateway at the session: without the gateway's authority, or with a pin of another
-// key, the run does not start, before any request, and the gateway opens nothing; and
-// a RemoteGateway prints by its URL, its CAFile and its pin.
-func TestASessionTrustsTheSeparateGatewayItIsTold(t *testing.T) {
-	s := startSeparate(t)
-	sum := sha256.Sum256([]byte("another key"))
-	for name, gw := range map[string]session.RemoteGateway{
-		"the system's roots": {URL: s.url()},
-		"another pin":        {URL: s.url(), CAFile: s.caFile, CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:])},
-	} {
-		// Not a refusal of the gateway's: the session never reaches its contract.
-		var ref *session.Refusal
-		if _, err := session.Run(context.Background(), newSepRun(t, gw).sp); err == nil || errors.As(err, &ref) {
-			t.Errorf("%s: %v", name, err)
+// TestASessionRunsBehindASeparateGateway pins a run behind a separate gateway by its
+// run key alone: the run is the run key's, every request of the link carries the run
+// key as its bearer, the run request carries no labels and no about, which are the
+// registration's, the agent's traffic reaches the gateway's proxy on a connection
+// opened with QORY-RELAY and the run key, and the run key is in no file of the run
+// directory and not in the agent's environment.
+func TestASessionRunsBehindASeparateGateway(t *testing.T) {
+	g := startRemote(t)
+	g.SetInterval(30)
+	runID := event.NewRunID()
+	key := g.RunKey(t, runID)
+	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	res, err := session.Run(context.Background(), r.sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(res.Dir) != runID || res.State != "succeeded" || res.Undelivered != 0 {
+		t.Errorf("result %+v, want the run %s", res, runID)
+	}
+	if len(g.Bearers()) < 3 {
+		t.Errorf("%d requests", len(g.Bearers()))
+	}
+	for _, b := range g.Bearers() {
+		if b != "Bearer "+key {
+			t.Errorf("a request carried %q", b)
 		}
 	}
-	if runs := s.runs(); len(runs) != 0 {
-		t.Errorf("the gateway opened %v", runs)
+	if reqs := g.Requests(); len(reqs) != 1 || reqs[0].RunID != runID || reqs[0].Labels != nil || reqs[0].About != nil {
+		t.Errorf("the run requests %+v", reqs)
 	}
-	gw := s.remote()
-	want := "session.RemoteGateway{" + s.url() + " ca_file=" + s.caFile + " certificate_sha256=" + s.pin + "}"
+	if want := []string{"QORY-RELAY " + key}; fmt.Sprint(g.Preambles()) != fmt.Sprint(want) {
+		t.Errorf("the proxy's preambles %q", g.Preambles())
+	}
+	if got := g.Proxied(); len(got) != 1 || got[0] != "GET "+allowedURL {
+		t.Errorf("the gateway's proxy saw %q", got)
+	}
+	if started := ofType(events(t, res), "dev.qory.run.started"); len(started) != 1 || data(started[0])["labels"] != nil {
+		t.Errorf("run.started %v", started)
+	}
+	noRunKey(t, res.Dir, key)
+	env, _ := os.ReadFile(r.envFile)
+	if strings.Contains(string(env), key[4:40]) || !strings.Contains(string(env), "HTTP_PROXY=http://127.0.0.1:") {
+		t.Errorf("the agent's environment:\n%s", env)
+	}
+}
+
+// TestARunKeyTheSessionCannotReadIsNoRun pins the run key the session reads, unverified:
+// one it cannot read is the run's error, "QORY_RUN_KEY is not a run key: " and the part
+// that is wrong, word for word; a run id the spec names that is not the run key's is
+// refused; neither makes a request or a run directory.
+func TestARunKeyTheSessionCannotReadIsNoRun(t *testing.T) {
+	g := startRemote(t)
+	key := g.RunKey(t, event.NewRunID())
+	for name, bad := range map[string]string{
+		"none":           "",
+		"not a run key":  "nonsense",
+		"another prefix": "qrx_" + key[4:],
+		"no signature":   key[:strings.LastIndex(key, ".")],
+	} {
+		_, perr := runkey.Parse(bad)
+		var re *runkey.Error
+		if !errors.As(perr, &re) {
+			t.Fatalf("%s: the parse %v", name, perr)
+		}
+		r := newSepRun(t, session.RemoteGateway{RunKey: bad})
+		_, err := session.Run(context.Background(), r.sp)
+		if want := "QORY_RUN_KEY is not a run key: " + re.Reason; err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+		if entries, _ := os.ReadDir(r.sp.RunsDir); len(entries) != 0 || r.started() {
+			t.Errorf("%s: a run directory %v, or the runtime started", name, entries)
+		}
+	}
+	r := newSepRun(t, session.RemoteGateway{RunKey: key})
+	r.sp.RunID = event.NewRunID()
+	if _, err := session.Run(context.Background(), r.sp); err == nil || !strings.HasPrefix(err.Error(), "the run id "+r.sp.RunID+" is not the one QORY_RUN_KEY names, ") {
+		t.Errorf("another run id: %v", err)
+	}
+	if len(g.Bearers()) != 0 || g.Bound() != 0 {
+		t.Error("a run key the session refused reached the gateway")
+	}
+}
+
+// TestAGatewayThatCannotProveItsKeyStartsNoRun pins the binding at the session: a
+// gateway whose answer to QORY-BIND does not prove it holds a key the run key names, by
+// a signature over another connection, a key the run key does not name or no answer, is
+// the run's error word for word, before the run key is sent, and the runtime never
+// starts.
+func TestAGatewayThatCannotProveItsKeyStartsNoRun(t *testing.T) {
+	for name, p := range map[string]linktest.Proof{
+		"another connection's signature":  linktest.ProofBadSignature,
+		"a key the run key does not name": linktest.ProofUnnamedKey,
+		"no answer":                       linktest.ProofNone,
+	} {
+		g := startRemote(t)
+		g.SetProof(p)
+		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		_, err := session.Run(context.Background(), r.sp)
+		if want := "the gateway at " + g.URL() + " could not prove it holds a key the run key names"; err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+		if r.started() || g.Bound() != 0 || len(g.Bearers()) != 0 || len(g.Leaked()) != 0 {
+			t.Errorf("%s: the runtime started, or the gateway was sent %q", name, g.Leaked())
+		}
+	}
+}
+
+// TestAnAnswerUnderAnotherKeyStartsNoRun pins the signature of the gateway's answers at
+// the session: a discovery signed under a key the run key does not name, or not signed,
+// is the run's error word for word, and the runtime never starts.
+func TestAnAnswerUnderAnotherKeyStartsNoRun(t *testing.T) {
+	for _, unsigned := range []bool{false, true} {
+		g := startRemote(t)
+		g.AnswerUnderUnnamedKey(t, unsigned)
+		r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+		_, err := session.Run(context.Background(), r.sp)
+		if want := "the gateway at " + g.URL() + " answered under a key the run key does not name"; err == nil || err.Error() != want {
+			t.Errorf("unsigned %v: %v, want %q", unsigned, err, want)
+		}
+		if r.started() || len(g.Requests()) != 0 {
+			t.Errorf("unsigned %v: the run went on", unsigned)
+		}
+	}
+}
+
+// TestARemoteGatewayPrintsByItsURL pins that a RemoteGateway prints by the URL its run
+// key names, never the run key.
+func TestARemoteGatewayPrintsByItsURL(t *testing.T) {
+	g := linktest.StartRemoteFake(t)
+	key := g.RunKey(t, event.NewRunID())
+	gw := session.RemoteGateway{RunKey: key}
+	want := "session.RemoteGateway{" + g.URL() + "}"
 	for _, out := range []string{fmt.Sprint(gw), fmt.Sprintf("%#v", gw), fmt.Sprintf("%+v", &gw), gw.String()} {
 		if out != want {
 			t.Errorf("printed as %s, want %s", out, want)
 		}
 	}
-	// A URL the session refuses prints by its origin alone, nothing after it or before
-	// its host.
 	for raw, want := range map[string]string{
-		"https://user:pw-of-the-url@gateway.example:8443/path?q=query-of-the-url#fragment-of-the-url": "session.RemoteGateway{https://gateway.example:8443}",
-		"gateway.example/path-of-the-url": "session.RemoteGateway{(not a URL)}",
-		"":                                "session.RemoteGateway{(no URL)}",
+		"":                      "session.RemoteGateway{(no run key)}",
+		"qrk_not-a-run-key.sig": "session.RemoteGateway{(not a run key)}",
 	} {
-		if got := (session.RemoteGateway{URL: raw}).String(); got != want {
+		if got := (session.RemoteGateway{RunKey: raw}).String(); got != want {
 			t.Errorf("%q prints as %s", raw, got)
 		}
 	}
 }
 
 // TestAResendTakesTheSessionsRecordAlone pins what Resend refuses before any request:
-// a directory without session.jsonl, a gateway's
-// record, events.jsonl, which gateway.Resend sends, and a record its session still
-// holds.
+// a directory without session.jsonl, a gateway's record, events.jsonl, which
+// gateway.Resend sends, and a record its session still holds.
 func TestAResendTakesTheSessionsRecordAlone(t *testing.T) {
 	t.Parallel()
-	s := startSeparate(t)
-	dir := filepath.Join(t.TempDir(), "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e71")
-	if _, err := session.Resend(context.Background(), resendSpec(s, dir)); !errors.Is(err, os.ErrNotExist) {
+	g := linktest.StartRemoteFake(t)
+	runID := "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e71"
+	dir := filepath.Join(t.TempDir(), runID)
+	spec := session.ResendSpec{Gateway: session.RemoteGateway{RunKey: g.RunKey(t, runID)}, Dir: dir, ForagerVersion: "test"}
+	if _, err := session.Resend(context.Background(), spec); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("no record: %v", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -281,7 +235,7 @@ func TestAResendTakesTheSessionsRecordAlone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Resend(context.Background(), resendSpec(s, dir)); !errors.Is(err, os.ErrExist) {
+	if _, err := session.Resend(context.Background(), spec); !errors.Is(err, os.ErrExist) {
 		t.Errorf("a gateway's record: %v", err)
 	}
 	if err := os.Remove(filepath.Join(dir, sink.EventsFile)); err != nil {
@@ -298,8 +252,11 @@ func TestAResendTakesTheSessionsRecordAlone(t *testing.T) {
 	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Resend(context.Background(), resendSpec(s, dir)); !errors.Is(err, session.ErrRunning) {
+	if _, err := session.Resend(context.Background(), spec); !errors.Is(err, session.ErrRunning) {
 		t.Errorf("a record its session holds: %v", err)
 	}
 	held.Close()
+	if len(g.Bearers()) != 0 || g.Bound() != 0 {
+		t.Error("a refused resend reached the gateway")
+	}
 }

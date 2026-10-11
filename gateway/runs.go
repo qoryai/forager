@@ -45,14 +45,8 @@ type linkRun struct {
 	cancel context.CancelFunc
 
 	// remote says the run opened on the one address, by its run key, which names it in
-	// every request of the run; it has no proxy secret and no run secret.
+	// every request of the run; it has no proxy secret.
 	remote bool
-
-	// runSecret is the run's secret on the local link, which the run answer gives its
-	// session alone and every reload and batch of the run carries; runSecretSum is its
-	// SHA-256, by which the gateway finds the run.
-	runSecret    secretValue
-	runSecretSum [sha256.Size]byte
 
 	// batch takes one batch of the session's at a time.
 	batch sync.Mutex
@@ -77,8 +71,8 @@ type linkRun struct {
 	// X-Qory-Run-Configuration of every answer for the run.
 	reloadBody   []byte
 	reloadDigest string
-	// answer is the run answer, given once; it holds the proxy secret and the run's
-	// secret, so no print of the run shows it.
+	// answer is the run answer, given once; it holds the proxy secret, so no print of
+	// the run shows it.
 	answer secretValue
 	// last is when the session last asked anything of the run; timer ends the run when
 	// it asks nothing for the gateway's quiet time.
@@ -446,12 +440,6 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		if err := g.proxies.Register(secret, lr.px); err != nil {
 			return fail(err)
 		}
-		// The run's secret, apart from the proxy secret, which reaches the agent's side.
-		runSecret, err := proxy.NewSecret()
-		if err != nil {
-			return fail(err)
-		}
-		lr.runSecret, lr.runSecretSum = newSecretValue(runSecret), sha256.Sum256([]byte(runSecret))
 	}
 	lr.mu.Lock()
 	lr.refresh()
@@ -648,7 +636,7 @@ func (lr *linkRun) end(e ending) {
 
 // runAnswerDoc is the run answer as the gateway writes it,
 // contracts/forager/v1/link-run-answer.schema.json: on the one address without the
-// labels, the proxy secret and the run secret.
+// labels and the proxy secret.
 type runAnswerDoc struct {
 	Version              int                        `json:"version"`
 	RunID                string                     `json:"run_id"`
@@ -657,7 +645,6 @@ type runAnswerDoc struct {
 	Digest               string                     `json:"digest,omitempty"`
 	Variables            map[string]server.Variable `json:"variables,omitempty"`
 	ProxySecret          string                     `json:"proxy_secret,omitempty"`
-	RunSecret            string                     `json:"run_secret,omitempty"`
 	CertificateAuthority string                     `json:"certificate_authority,omitempty"`
 	Placeholders         []string                   `json:"placeholders,omitempty"`
 	Reserved             []string                   `json:"reserved,omitempty"`
@@ -701,7 +688,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 	doc, digest := policyDocument(pol)
 	a := runAnswerDoc{
 		Version: 1, RunID: lr.id, Labels: lr.labels, Policy: doc, Digest: digest, Variables: variables(lr.r.Variables()),
-		ProxySecret: lr.secret.reveal(), RunSecret: lr.runSecret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
+		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
 	if lr.remote {

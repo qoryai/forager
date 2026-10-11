@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
 )
 
@@ -68,6 +70,11 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	}
 	return &cert, nil
 }
+
+// maxRelayRunKey is the longest relay preamble with a run key, its newline included:
+// [link.RelayPreamble], a space, a run key of at most [runkey.MaxLength] characters and
+// a newline.
+const maxRelayRunKey = len(link.RelayPreamble) + 1 + runkey.MaxLength + 1
 
 // maxFirstLine is the bound of what the one address reads of a connection before it
 // knows where it goes: its first line, the binding's or a request line, and on a bound
@@ -181,7 +188,7 @@ func (s *service) route(raw net.Conn) {
 	if !ok {
 		return
 	}
-	if string(line) == link.BindWord+"\n" {
+	if string(line) == link.BindLine {
 		r.Discard(len(line))
 		handed = s.bind(tc, r)
 		return
@@ -196,11 +203,17 @@ func (s *service) route(raw net.Conn) {
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
 // other line is the link's HTTP/1.1. It reports whether c was handed on.
 func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
-	ekm, err := link.Binding(c.ConnectionState())
+	cs := c.ConnectionState()
+	if cs.Version != tls.VersionTLS13 {
+		return false
+	}
+	ekm, err := cs.ExportKeyingMaterial(link.BindingLabel, []byte{}, link.BindingSize)
 	if err != nil {
 		return false
 	}
-	if _, err := io.WriteString(c, link.BoundLine(s.g.cfg.Server.AccessKey, ekm)); err != nil {
+	key := s.g.cfg.Server.AccessKey
+	fp := key.Fingerprint()
+	if _, err := io.WriteString(c, link.BoundLine(fp, base64.RawURLEncoding.EncodeToString(key.Sign(link.BindingMessage(ekm, fp))))); err != nil {
 		return false
 	}
 	line, ok := peekThrough(r, maxFirstLine, lineEnd)
@@ -208,7 +221,7 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
 		return false
 	}
 	if bytes.HasPrefix(line, []byte(link.RelayPreamble+" ")) {
-		if len(line) > link.MaxRelayRunKey {
+		if len(line) > maxRelayRunKey {
 			return false
 		}
 		r.Discard(len(line))
@@ -243,6 +256,15 @@ func peekThrough(r *bufio.Reader, limit int, end func([]byte) int) ([]byte, bool
 		}
 	}
 }
+
+// linkConn reads through the reader its first bytes were read with, which may hold what
+// comes after them.
+type linkConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // boundConn is a bound connection of the link: what its binding read, and its exporter
 // value, which signs every answer on it.
@@ -283,7 +305,13 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 		body := &capturedBody{r: r.Body, post: r.Method == http.MethodPost}
 		r.Body = body
 		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, ekm: ekm, req: r, body: body, header: http.Header{}}
-		defer sw.Flush()
+		defer func() {
+			// A handler that panics has no answer to sign: the connection is closed.
+			if v := recover(); v != nil {
+				panic(v)
+			}
+			sw.Flush()
+		}()
 		value, ok := bearer(r.Header.Values("Authorization"))
 		k, ref := g.admitRunKey(value, ok)
 		if ref != nil {
@@ -331,7 +359,7 @@ func (b *capturedBody) whole() []byte {
 
 // signedWriter holds an answer on a bound connection until it is whole, then writes it
 // with its X-Qory-Signature-Ed25519 under the gateway's key over the six lines of
-// [link.Answer]. Flush writes what it holds, once; whatever is written after is
+// a separate gateway's answer, [accesskey.Answer] with Link set. Flush writes what it holds, once; whatever is written after is
 // dropped.
 type signedWriter struct {
 	w      http.ResponseWriter
@@ -374,15 +402,15 @@ func (s *signedWriter) Flush() {
 	if s.status == 0 {
 		s.status = http.StatusOK
 	}
-	a := link.Answer{
-		Status: s.status, Request: link.AnswerRequest(s.ekm, s.req.Method, s.req.RequestURI, s.body.whole()), Body: s.buf.Bytes(),
+	a := accesskey.Answer{
+		Link: true, Status: s.status, RequestSignature: link.AnswerRequest(s.ekm, s.req.Method, s.req.RequestURI, s.body.whole()), Body: s.buf.Bytes(),
 		Configuration: s.header.Get(server.HeaderConfiguration), RunConfiguration: s.header.Get(server.HeaderRunConfiguration),
 	}
 	h := s.w.Header()
 	for k, v := range s.header {
 		h[k] = v
 	}
-	h.Set(server.HeaderSignature, link.SignAnswer(s.key, a))
+	h.Set(server.HeaderSignature, s.key.SignAnswer(a))
 	s.w.WriteHeader(s.status)
 	s.w.Write(s.buf.Bytes())
 	if f, ok := s.w.(http.Flusher); ok {
@@ -397,7 +425,7 @@ var proxyAddress = regexp.MustCompile(`^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):([1-
 // discoveryOf is the discovery a request of the side is answered with, and its digest:
 // on the local link the one made at the start; on the one address one on the origin
 // the request names in its Host, the gateway's one address the client reached, whose
-// proxy is the same address, and whose paths are under [link.RemotePrefix]. A Host no
+// proxy is the same address, and whose paths are under [link.RemotePathPrefix]. A Host no
 // discovery can name is no discovery.
 func (g *Gateway) discoveryOf(s *side, r *http.Request) ([]byte, string, bool) {
 	if !s.remote {

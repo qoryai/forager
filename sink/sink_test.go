@@ -465,9 +465,6 @@ func (r resigning) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-// linkSecret is the link secret of the link sink's tests.
-const linkSecret = "link-secret-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
-
 // linkGateway is a fake gateway's link whose events endpoint answers each batch with
 // the status answer gives it, and keeps the bodies and when each arrived.
 type linkGateway struct {
@@ -499,7 +496,7 @@ func (g *linkGateway) hits() int {
 // linkSink is a sink posting to the fake gateway's link with the link's short wait.
 func linkSink(t *testing.T, g *linkGateway, c sink.Config) *sink.Server {
 	t.Helper()
-	gw := linktest.Start(t, linkSecret, g)
+	gw := linktest.Start(t, g)
 	k, err := server.NewLocalLink(gw.Local(), "qory-forager/test", nil)
 	if err != nil {
 		t.Fatal(err)

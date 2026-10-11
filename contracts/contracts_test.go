@@ -254,8 +254,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // status, a descriptor with an expression, a link run request
 // without wall, whose run id is not lower-case or whose narrowing holds a member it does
 // not define, that passes a value with a name or whose image has no reference, a link run
-// answer without its proxy secret, its run secret or applied or whose image has no
-// reference, a link reload answer with the proxy secret, the run secret or the certificate
+// answer without applied, with a proxy secret too short or whose image has no
+// reference, a link reload answer with the proxy secret or the certificate
 // authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
 // run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
 // other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,

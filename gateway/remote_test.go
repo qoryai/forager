@@ -223,21 +223,77 @@ func (b *bound) SetWriteDeadline(t time.Time) error { return b.c.SetWriteDeadlin
 func (r *remote) bind(t *testing.T, keys []accesskey.PublicKey) (*bound, error) {
 	t.Helper()
 	c := r.dialTLS(t)
-	ekm, err := link.Binding(c.ConnectionState())
+	ekm, err := binding(c.ConnectionState())
 	if err != nil {
 		c.Close()
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(c, link.BindWord+"\n"); err != nil {
+	if _, err := io.WriteString(c, link.BindLine); err != nil {
 		c.Close()
 		t.Fatal(err)
 	}
 	br := bufio.NewReader(c)
-	if _, err := link.ReadBound(br, ekm, keys); err != nil {
+	if err := readBound(br, ekm, keys); err != nil {
 		c.Close()
 		return nil, err
 	}
 	return &bound{c: c, r: br, ekm: ekm}, nil
+}
+
+// errNotBound is a binding line that does not prove the gateway holds a key the edge
+// pins.
+var errNotBound = errors.New("the gateway did not prove it holds the key")
+
+// binding is the connection's exporter value the binding is over.
+func binding(cs tls.ConnectionState) ([]byte, error) {
+	return cs.ExportKeyingMaterial(link.BindingLabel, []byte{}, link.BindingSize)
+}
+
+// boundLine is the gateway's line of the binding under k for ekm.
+func boundLine(k *accesskey.Key, ekm []byte) string {
+	fp := k.PublicKey().Fingerprint()
+	return link.BoundLine(fp, base64.RawURLEncoding.EncodeToString(k.Sign(link.BindingMessage(ekm, fp))))
+}
+
+// readBound reads the gateway's line of the binding, at most link.MaxBoundLine bytes,
+// as an edge does: errNotBound unless it is BoundWord, the fingerprint of one of keys
+// and that key's signature over the binding's message for ekm.
+func readBound(r *bufio.Reader, ekm []byte, keys []accesskey.PublicKey) error {
+	var line []byte
+	for len(line) < link.MaxBoundLine {
+		c, err := r.ReadByte()
+		if err != nil {
+			return errNotBound
+		}
+		line = append(line, c)
+		if c == '\n' {
+			break
+		}
+	}
+	parts := strings.Split(strings.TrimSuffix(string(line), "\n"), " ")
+	if !bytes.HasSuffix(line, []byte("\n")) || len(parts) != 3 || parts[0] != link.BoundWord {
+		return errNotBound
+	}
+	sig, err := base64.RawURLEncoding.Strict().DecodeString(parts[2])
+	if err != nil {
+		return errNotBound
+	}
+	for _, k := range keys {
+		if k.Fingerprint() == parts[1] && k.Verify(link.BindingMessage(ekm, parts[1]), sig) {
+			return nil
+		}
+	}
+	return errNotBound
+}
+
+// verifyAnswer reports whether sig is a signature of the answer under one of keys.
+func verifyAnswer(keys []accesskey.PublicKey, a accesskey.Answer, sig string) bool {
+	for _, k := range keys {
+		if k.VerifyAnswer(a, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // answer is an answer on a bound connection.
@@ -264,7 +320,7 @@ func (r *remote) do(t *testing.T, runKey, method, path string, body []byte) answ
 
 // do sends one request on b with the run key as its bearer value, none when empty, on
 // the origin gateway.example:8443, and returns its answer, whose signature it checks
-// under the gateway's key over the six lines of link.Answer.
+// under the gateway's key over the six lines of a separate gateway's answer.
 func (b *bound) do(t *testing.T, runKey, method, path string, body []byte) answer {
 	t.Helper()
 	var rd io.Reader
@@ -297,9 +353,9 @@ func (b *bound) do(t *testing.T, runKey, method, path string, body []byte) answe
 	if method != http.MethodPost {
 		sent = nil
 	}
-	a := link.Answer{Status: resp.StatusCode, Request: link.AnswerRequest(b.ekm, method, req.URL.RequestURI(), sent), Body: got,
+	a := accesskey.Answer{Link: true, Status: resp.StatusCode, RequestSignature: link.AnswerRequest(b.ekm, method, req.URL.RequestURI(), sent), Body: got,
 		Configuration: resp.Header.Get(server.HeaderConfiguration), RunConfiguration: resp.Header.Get(server.HeaderRunConfiguration)}
-	if !link.VerifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
+	if !verifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
 		t.Errorf("%s %s: the answer %d %s is not signed under the gateway's key for its request", method, path, resp.StatusCode, got)
 	}
 	return answer{status: resp.StatusCode, header: resp.Header, body: got}
@@ -462,7 +518,7 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 func TestASeparateGatewayRunsNoSessions(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	l := r.g.LocalLink()
-	if l.Socket != "" || l.Proxy != "" || l.Secret != "" {
+	if l.Socket != "" || l.Proxy != "" {
 		t.Errorf("the local link of a separate gateway: socket %q, proxy %q", l.Socket, l.Proxy)
 	}
 	if _, err := l.DialContext(context.Background()); err == nil || err.Error() != "the gateway serves other machines on its address, and runs no sessions" {
@@ -535,11 +591,11 @@ func fakeGateway(t *testing.T, line func(ekm []byte) string) (addr string, pool 
 				if tc.Handshake() != nil {
 					return
 				}
-				b := make([]byte, len(link.BindWord)+1)
+				b := make([]byte, len(link.BindLine))
 				if _, err := io.ReadFull(tc, b); err != nil {
 					return
 				}
-				ekm, _ := link.Binding(tc.ConnectionState())
+				ekm, _ := binding(tc.ConnectionState())
 				io.WriteString(tc, line(ekm))
 				io.Copy(io.Discard, tc)
 			}()
@@ -568,18 +624,18 @@ func TestTheBinding(t *testing.T) {
 		t.Fatalf("the discovery: %d %s", a.status, a.body)
 	}
 	other := mustGenerate()
-	if _, err := r.bind(t, []accesskey.PublicKey{other.PublicKey()}); !errors.Is(err, link.ErrNotBound) {
+	if _, err := r.bind(t, []accesskey.PublicKey{other.PublicKey()}); !errors.Is(err, errNotBound) {
 		t.Errorf("an edge that pins another key: %v", err)
 	}
 	// The answer's signature is over its own request: another connection's exporter
 	// value, method, target or body is not it.
 	for name, req := range map[string]string{
-		"another exporter value": link.AnswerRequest(bytes.Repeat([]byte{7}, link.BindingLength), http.MethodGet, "/qory-link/configuration", nil),
+		"another exporter value": link.AnswerRequest(bytes.Repeat([]byte{7}, link.BindingSize), http.MethodGet, "/qory-link/configuration", nil),
 		"another target":         link.AnswerRequest(b.ekm, http.MethodGet, "/qory-link/configuration?x=1", nil),
 		"another method":         link.AnswerRequest(b.ekm, http.MethodPost, "/qory-link/configuration", nil),
 	} {
-		ans := link.Answer{Status: a.status, Request: req, Body: a.body, Configuration: a.header.Get(server.HeaderConfiguration), RunConfiguration: a.header.Get(server.HeaderRunConfiguration)}
-		if link.VerifyAnswer(gatewayKeys(), ans, a.header.Get(server.HeaderSignature)) {
+		ans := accesskey.Answer{Link: true, Status: a.status, RequestSignature: req, Body: a.body, Configuration: a.header.Get(server.HeaderConfiguration), RunConfiguration: a.header.Get(server.HeaderRunConfiguration)}
+		if verifyAnswer(gatewayKeys(), ans, a.header.Get(server.HeaderSignature)) {
 			t.Errorf("the answer verifies over %s", name)
 		}
 	}
@@ -587,15 +643,15 @@ func TestTheBinding(t *testing.T) {
 	fp := testAccessKey.PublicKey().Fingerprint()
 	for name, line := range map[string]func(ekm []byte) string{
 		"another connection's exporter value": func([]byte) string {
-			return link.BoundLine(testAccessKey, bytes.Repeat([]byte{1}, link.BindingLength))
+			return boundLine(testAccessKey, bytes.Repeat([]byte{1}, link.BindingSize))
 		},
 		"another key in the gateway's fingerprint": func(ekm []byte) string {
 			sig := other.Sign(link.BindingMessage(ekm, fp))
 			return link.BoundWord + " " + fp + " " + base64.RawURLEncoding.EncodeToString(sig) + "\n"
 		},
-		"another key's line": func(ekm []byte) string { return link.BoundLine(other, ekm) },
+		"another key's line": func(ekm []byte) string { return boundLine(other, ekm) },
 		"a signature cut short": func(ekm []byte) string {
-			l := link.BoundLine(testAccessKey, ekm)
+			l := boundLine(testAccessKey, ekm)
 			return l[:len(l)-10] + "\n"
 		},
 		"no signature": func([]byte) string { return link.BoundWord + " " + fp + "\n" },
@@ -610,12 +666,12 @@ func TestTheBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.SetDeadline(time.Now().Add(5 * time.Second))
-		ekm, _ := link.Binding(c.ConnectionState())
-		io.WriteString(c, link.BindWord+"\n")
+		ekm, _ := binding(c.ConnectionState())
+		io.WriteString(c, link.BindLine)
 		if name == "nothing" {
 			c.CloseWrite()
 		}
-		if _, err := link.ReadBound(bufio.NewReader(c), ekm, gatewayKeys()); !errors.Is(err, link.ErrNotBound) {
+		if err := readBound(bufio.NewReader(c), ekm, gatewayKeys()); !errors.Is(err, errNotBound) {
 			t.Errorf("%s: %v; want ErrNotBound", name, err)
 		}
 		c.Close()
@@ -673,8 +729,8 @@ func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(b) != "ok" {
 		t.Errorf("the relay of the run: %d %q", resp.StatusCode, b)
 	}
-	if e.a.ProxySecret != "" || e.a.RunSecret != "" {
-		t.Error("the run answer gives a secret")
+	if e.a.ProxySecret != "" {
+		t.Error("the run answer gives a proxy secret")
 	}
 }
 
@@ -727,8 +783,8 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		}
 		got, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		a := link.Answer{Status: resp.StatusCode, Request: link.AnswerRequest(b.ekm, method, path, nil), Body: got, Configuration: resp.Header.Get(server.HeaderConfiguration)}
-		if !link.VerifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
+		a := accesskey.Answer{Link: true, Status: resp.StatusCode, RequestSignature: link.AnswerRequest(b.ekm, method, path, nil), Body: got, Configuration: resp.Header.Get(server.HeaderConfiguration)}
+		if !verifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
 			t.Errorf("%s %s: an unsigned refusal", method, path)
 		}
 		return answer{status: resp.StatusCode, header: resp.Header, body: got}

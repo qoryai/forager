@@ -46,24 +46,12 @@ func PrintedCopy(g *Gateway, format string) string {
 	return fmt.Sprintf(format, reflect.ValueOf(g).Elem())
 }
 
-// PrintedSecret is the gateway's link secret, as its own type holds it, printed with
-// format.
-func PrintedSecret(g *Gateway, format string) string { return fmt.Sprintf(format, g.secret) }
-
 // Held counts what g holds of its runs: the runs, and what the ended ones it let go of
 // left, each for KeepEnded.
 func Held(g *Gateway) (runs, spent int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return len(g.runs), len(g.spent)
-}
-
-// SecretsIndexed counts the run secrets g knows a run by: its live runs', its ended
-// ones', and those its spent runs left until they lapse.
-func SecretsIndexed(g *Gateway) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return len(g.bySecret)
 }
 
 // SetOpened sets what is called once a run on the one address opened.

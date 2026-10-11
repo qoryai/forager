@@ -40,7 +40,7 @@ func TestARunWithoutAGatewayIsNone(t *testing.T) {
 		t.Errorf("a run without a gateway: %v", err)
 	}
 	sp = spec(t)
-	sp.Gateway = session.LocalGateway(link.Local{Socket: filepath.Join(t.TempDir(), "sock"), Secret: "a-link-secret-of-the-test"})
+	sp.Gateway = session.LocalGateway(link.Local{Socket: filepath.Join(t.TempDir(), "sock")})
 	if _, err := session.Run(context.Background(), sp); err == nil {
 		t.Error("a run whose gateway is gone started")
 	}
@@ -49,11 +49,11 @@ func TestARunWithoutAGatewayIsNone(t *testing.T) {
 	}
 }
 
-// TestTheGatewayPrintsNoSecret pins that a Gateway is printed by its socket alone.
-func TestTheGatewayPrintsNoSecret(t *testing.T) {
-	g := session.LocalGateway(link.Local{Socket: "/tmp/qory-link-x/sock", Secret: "the-link-secret-of-the-test"})
+// TestTheGatewayPrintsBySocket pins that a Gateway is printed by its socket.
+func TestTheGatewayPrintsBySocket(t *testing.T) {
+	g := session.LocalGateway(link.Local{Socket: "/tmp/qory-link-x/sock"})
 	for _, s := range []string{g.String(), g.GoString()} {
-		if strings.Contains(s, "the-link-secret") || !strings.Contains(s, "/tmp/qory-link-x/sock") {
+		if !strings.Contains(s, "/tmp/qory-link-x/sock") {
 			t.Errorf("printed as %q", s)
 		}
 	}

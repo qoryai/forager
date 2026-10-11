@@ -17,7 +17,7 @@ import (
 	"github.com/qoryai/forager/sink"
 )
 
-// Paths of the link on the one address, each under [link.RemotePrefix], as the
+// Paths of the link on the one address, each under [link.RemotePathPrefix], as the
 // discovery there lists them.
 const (
 	remoteRunPath    = "/qory-link/run-configuration"

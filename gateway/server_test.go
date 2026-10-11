@@ -410,7 +410,7 @@ func tunnel(t *testing.T, addr, secret, target string) net.Conn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	io.WriteString(c, link.Preamble(link.RelayPreamble, secret))
+	io.WriteString(c, link.RelayLine(secret))
 	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
 	if err != nil {

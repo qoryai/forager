@@ -10,6 +10,5 @@
     "allow": [],
     "source": "none"
   },
-  "proxy_secret": "fixture-proxy-secret-0000000000000000000002",
-  "run_secret": "fixture-run-secret-000000000000000000000002"
+  "proxy_secret": "fixture-proxy-secret-0000000000000000000002"
 }

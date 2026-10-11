@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -178,7 +176,6 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	g.runs[lr.id] = lr
-	g.indexSecret(lr)
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
@@ -187,9 +184,6 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, answer.reveal())
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
 	if r.Context().Err() != nil {
 		// The answer is not sent whole before the handler returns: a session that has
 		// gone now never has it.
@@ -214,7 +208,6 @@ func (g *Gateway) discard(lr *linkRun) {
 		lr.discarded = true
 		if g.runs[lr.id] == lr {
 			delete(g.runs, lr.id)
-			delete(g.bySecret, lr.runSecretSum)
 		}
 	}
 	lr.mu.Unlock()
@@ -313,44 +306,11 @@ func (g *Gateway) answerHeaders(s *side, w http.ResponseWriter, r *http.Request,
 	w.Header().Set(server.HeaderRunConfiguration, runDigest)
 }
 
-// indexSecret makes the session's run lr findable by its run secret. Called with g.mu
-// held, as the run enters the runs.
-func (g *Gateway) indexSecret(lr *linkRun) {
-	if lr.runSecret == nil {
-		return
-	}
-	if g.bySecret == nil {
-		g.bySecret = map[[sha256.Size]byte]string{}
-	}
-	g.bySecret[lr.runSecretSum] = lr.id
-}
-
-// secretRun is the run id of the session's run on the local link whose run secret the
-// request carries in X-Qory-Run-Secret, live or ended; empty when it carries none, more
-// than one, or one of no run here. The secret's SHA-256 picks the one candidate, which is
-// compared in full in constant time. The secret is never logged or reported.
-func (g *Gateway) secretRun(r *http.Request) string {
-	values := r.Header.Values(server.HeaderRunSecret)
-	if len(values) != 1 {
-		return ""
-	}
-	presented := []byte(values[0])
-	sum := sha256.Sum256(presented)
-	g.mu.Lock()
-	runID, ok := g.bySecret[sum]
-	lr := g.runs[runID]
-	g.mu.Unlock()
-	if !ok || lr == nil || subtle.ConstantTimeCompare([]byte(lr.runSecret.reveal()), presented) != 1 {
-		return ""
-	}
-	return runID
-}
-
-// pathRun is the run id of a reload's path, pathID, when the request carries that run's
-// secret; empty otherwise, an empty pathID among them, which is no run's.
-func (g *Gateway) pathRun(r *http.Request, pathID string) string {
-	if runID := g.secretRun(r); runID != "" && runID == pathID {
-		return runID
+// batchRun is the run id a batch names, the one value of its X-Qory-Run-Id; empty when
+// it carries none or more than one.
+func batchRun(r *http.Request) string {
+	if values := r.Header.Values(server.HeaderRunID); len(values) == 1 {
+		return values[0]
 	}
 	return ""
 }
@@ -367,9 +327,8 @@ func (g *Gateway) localRun(runID string) *linkRun {
 }
 
 // reload answers a GET of a run's configuration by its run id: the reload answer as it
-// stands, 410 for a run that ended at the gateway. On the local link the request
-// carries the run's secret, and a run id this gateway holds no run of, or a request
-// without that run's secret, is 400 invalid_request. On the one address the run id is
+// stands, 410 for a run that ended at the gateway. On the local link a run id this
+// gateway holds no run of is 400 invalid_request. On the one address the run id is
 // the run key's, any other 400 run_key_invalid, and a run the gateway does not hold a
 // 410 ([Gateway.heldRun]).
 func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
@@ -383,7 +342,7 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 		if lr = g.heldRun(w, runID); lr == nil {
 			return
 		}
-	} else if lr = g.localRun(g.pathRun(r, runID)); lr == nil {
+	} else if lr = g.localRun(runID); lr == nil {
 		invalid(w)
 		return
 	}
@@ -405,9 +364,9 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 // batch answers one link batch of its run: 202 when its events are numbered; 410 for
 // a run that ended at the gateway; 400 invalid_request for one the link refuses, which
 // ends the run, failed: its record says batch_refused, and the session's later requests
-// are a 410 batch_refused. The run is found before the body is read: on the local link
-// by the run's secret the batch carries, and a batch without one, or with one of no run
-// here, is 400 invalid_request, which ends no run; on the one address by its run key,
+// are a 410 batch_refused. Every event's subject must be that run's. The run is found
+// before the body is read: on the local link by its X-Qory-Run-Id, and a batch that names no run, or one of no run here, is 400
+// invalid_request, which ends no run; on the one address by its run key,
 // and a run the gateway does not hold is a 410 ([Gateway.heldRun]).
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
@@ -420,7 +379,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		if lr = g.heldRun(w, p.key.RunID); lr == nil {
 			return
 		}
-	} else if lr = g.localRun(g.secretRun(r)); lr == nil {
+	} else if lr = g.localRun(batchRun(r)); lr == nil {
 		invalid(w)
 		return
 	}

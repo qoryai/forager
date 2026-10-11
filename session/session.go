@@ -85,7 +85,8 @@ type Spec struct {
 	// [RemoteGateway] on a machine of its own: it holds the run's proxy, its policy, its
 	// credentials and its tools, decides the run's policy and image, numbers the run's
 	// events and is the node toward the server. The session speaks to it alone, over its
-	// link. A run needs one.
+	// link. A run needs one. A RemoteGateway's run key that the session cannot read is
+	// no run: "QORY_RUN_KEY is not a run key: " and the part that is wrong.
 	Gateway Gateway
 	// Wall, when not nil, encloses the runtime: the command is started inside an
 	// enclosure whose only route out leads to the gateway's proxy, in the image the
@@ -132,15 +133,18 @@ type Spec struct {
 	Forwarder []string
 	// ForagerVersion is reported in the events.
 	ForagerVersion string
-	// RunID is the run's id when a parent already made one; empty means a new one. It is
-	// a UUID in the canonical lower-case form, because it is the events' subject and names
-	// the run directory; anything else is refused.
+	// RunID is the run's id when a parent already made one; empty means a new one, or
+	// behind a RemoteGateway the one its run key names. It is a UUID in the canonical
+	// lower-case form, because it is the events' subject and names the run directory;
+	// anything else is refused, and so is one that is not the run key's behind a
+	// RemoteGateway.
 	RunID string
 	// Labels are the caller's own names for the run, its key in a queue, a repository, an
 	// issue: sent on the run request, so the gateway asks the server for the run's policy
 	// by them, and reported in run.started, as the gateway's run answer holds them, and
 	// no other event. Forager reads nothing into them. At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and dash, a
-	// value at most 256 bytes.
+	// value at most 256 bytes. Behind a RemoteGateway the run's labels are its
+	// starter's registration's: Labels are neither sent nor reported.
 	Labels map[string]string
 	// About is what the run is about, as the caller passed it: the kind of run, a title,
 	// the subjects it works on and details. It is sent on the run request and reported in
@@ -149,6 +153,8 @@ type Spec struct {
 	// the gateway is contacted. Nil, or an About whose every member is empty, is left
 	// out. An empty Kind, Title or Subjects counts as absent and is left out of the
 	// event. Details is shown to every reader of the run, so it never holds a secret.
+	// Behind a RemoteGateway what the run is about is its starter's registration's:
+	// About is neither sent nor reported.
 	About *About
 	// Timeout is how long the runtime may run; zero means no limit. At the limit the
 	// runtime is stopped the way the context ending stops it, and run.exited carries
@@ -346,6 +352,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Behind a separate gateway the run is the run key's, read before anything else.
+	var keyRunID string
+	if remote != nil {
+		key, err := remote.key()
+		if err != nil {
+			return nil, err
+		}
+		keyRunID = key.RunID
+	}
 	// runCtx ends when the run is closed from outside, a 410 on the link or the
 	// gateway's 400 to a batch: the start stops, or the runtime is stopped as at its
 	// time limit.
@@ -369,10 +384,18 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	runID := spec.RunID
-	if runID == "" {
+	switch {
+	case runID == "" && keyRunID != "":
+		runID = keyRunID
+	case runID == "":
 		runID = event.NewRunID()
-	} else if err := CheckRunID(runID); err != nil {
-		return nil, err
+	default:
+		if err := CheckRunID(runID); err != nil {
+			return nil, err
+		}
+		if keyRunID != "" && runID != keyRunID {
+			return nil, fmt.Errorf("the run id %s is not the one QORY_RUN_KEY names, %s", runID, keyRunID)
+		}
 	}
 	if err := CheckAbout(spec.About); err != nil {
 		return nil, err
@@ -562,7 +585,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		return quit(err)
 	}
-	req := server.LinkRunRequest{RunID: runID, Wall: spec.Wall != nil, Labels: spec.Labels, About: server.ReportedAbout(spec.About), Passes: passes(spec)}
+	req := server.LinkRunRequest{RunID: runID, Wall: spec.Wall != nil, Passes: passes(spec)}
+	if remote == nil {
+		// Behind a separate gateway the labels and what the run is about are the
+		// starter's registration's.
+		req.Labels, req.About = spec.Labels, server.ReportedAbout(spec.About)
+	}
 	if spec.Wall != nil {
 		req.Images = linkImages(spec)
 	}
@@ -588,19 +616,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	mu.Lock()
 	sinks = append(sinks, posts)
 	mu.Unlock()
-	if remote != nil {
-		// Behind a separate gateway the run directory keeps the run's secret from now on,
-		// so a resend reaches the run, even after a session that was killed; it goes at
-		// the end, after the wall is removed, when the record owes the gateway nothing.
-		if err := writeRunSecret(dir, answer.RunSecret); err != nil {
-			return fail(err)
-		}
-		defer func() {
-			if !owes(dir, sink.Target{URL: disc.Events.URL, Types: disc.Events.Types}) {
-				removeRunSecret(dir)
-			}
-		}()
-	}
 	// What the gateway decided the run with, which the session applies and decides
 	// none of again: the image, the placeholders, the names it sets, the variables, the
 	// authority and the members of policy_applied it decides.
@@ -642,15 +657,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The wall comes before the forwarder, because it says where the forwarder must
 	// listen, and goes after everything else, because the forwarder outlives the last
 	// connection.
-	// The proxy secret opens every connection to the gateway's proxy, written by the
-	// forwarder or by the wall's relay: one no preamble carries is no run.
-	if err := link.CheckSecret(answer.ProxySecret); err != nil {
-		return fail(fmt.Errorf("the gateway's proxy secret: %w", err))
+	// On one machine the proxy secret opens every connection to the gateway's proxy,
+	// written by the forwarder or by the wall's relay: one no preamble carries is no run.
+	// Behind a separate gateway the run key opens them, and the answer gives no proxy
+	// secret.
+	if remote == nil {
+		if err := link.CheckSecret(answer.ProxySecret); err != nil {
+			return fail(fmt.Errorf("the gateway's proxy secret: %w", err))
+		}
 	}
 	var enclosure wall.Enclosure
 	// relayToken is what the wall's relay opens every connection with: the run's proxy
 	// secret on one machine; behind a separate gateway a secret of this run's forwarder
-	// alone, which the forwarder replaces with the proxy secret inside TLS.
+	// alone, which the forwarder takes off before it opens the gateway's proxy with the
+	// run key inside TLS.
 	bind, secret, relayToken := link.Loopback, answer.ProxySecret, answer.ProxySecret
 	if spec.Wall != nil {
 		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
@@ -676,16 +696,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	case spec.Wall != nil:
 		// Behind a wall and a separate gateway: the relay opens every connection with the
 		// hop secret, and the forwarder, which checks it, opens the connection to the
-		// gateway over TLS with the run's proxy secret.
+		// gateway over TLS, bound, with the run key.
 		if relayToken, err = newHopSecret(); err != nil {
 			return fail(err)
 		}
-		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, secret: answer.ProxySecret, hop: relayToken})
+		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, hop: relayToken})
 	default:
-		// Without a wall, behind a separate gateway: the agent's proxy URL carries the
-		// run's proxy secret as its password, as the contract has it, and the forwarder
-		// on loopback carries each connection to the gateway inside TLS.
-		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, password: answer.ProxySecret})
+		// Without a wall, behind a separate gateway: the forwarder on loopback carries
+		// each connection to the gateway inside TLS, bound, opened with the run key; the
+		// agent's proxy URL holds no secret.
+		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy})
 	}
 	if err != nil {
 		return fail(err)
@@ -792,11 +812,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			started["docker"] = true
 		}
 	}
-	// The labels are the run's as the gateway holds them.
-	if len(answer.Labels) > 0 {
+	// The labels are the run's as the gateway holds them. Behind a separate gateway
+	// neither they nor what the run is about are the session's: the starter's
+	// registration holds them.
+	if len(answer.Labels) > 0 && remote == nil {
 		started["labels"] = answer.Labels
 	}
-	if about := server.ReportedAbout(spec.About); about != nil {
+	if about := server.ReportedAbout(spec.About); about != nil && remote == nil {
 		started["about"] = about
 	}
 	write(event.RunStarted, started)
