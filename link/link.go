@@ -3,9 +3,9 @@
 // point a program at the proxy, the preamble of the wall's relay, the proxy's loopback
 // address, the variables that name the run's socket and a tool's socket, the headers
 // the proxy sets on a request it hands to a tool, the value of a placeholder variable,
-// the names of the gateway's link: its preamble, its socket's directory and modes, and
-// the scheme a run credential is presented in; what a session needs of a gateway on the
-// same machine, [Local]; and the writing and reading of a preamble.
+// the names of the gateway's link: its preamble, its socket's directory and modes; what
+// a session needs of a gateway on the same machine, [Local]; and the writing and
+// reading of a preamble.
 package link
 
 import "io/fs"
@@ -87,9 +87,3 @@ const (
 	LinkDirMode    fs.FileMode = 0o700
 	LinkSocketMode fs.FileMode = 0o600
 )
-
-// BearerScheme is the scheme of the Authorization header every request of the session
-// to a separate gateway carries, Authorization: Bearer and the run credential, in the
-// syntax of RFC 6750 §2.1. The run credential is never logged, recorded or sent
-// anywhere but to the gateway.
-const BearerScheme = "Bearer"

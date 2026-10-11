@@ -10,14 +10,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
-	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -44,8 +41,8 @@ func secretHeaders(own string) map[string][]string {
 // member, never holds it.
 func TestTheRunAnswerGivesARunSecret(t *testing.T) {
 	h := start(t, gateway.Config{})
-	s := startVerifying(t, gateway.Config{}, nil, 0)
-	cred := credentialFor("rk-0001")
+	s := startService(t, gateway.Config{}, false)
+	cred := goodBearer
 	a, b := h.open(server.LinkRunRequest{}), h.open(server.LinkRunRequest{})
 	c, _ := s.openWith(t, cred, server.LinkRunRequest{})
 	d, _ := s.openWith(t, cred, server.LinkRunRequest{})
@@ -59,7 +56,7 @@ func TestTheRunAnswerGivesARunSecret(t *testing.T) {
 	if _, err := h.linkOf(a.RunID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", a.RunID); err != nil {
 		t.Errorf("the reload on the local link: %v", err)
 	}
-	r := &sessionRun{s: s, credential: cred, a: c}
+	r := &sessionRun{s: s, value: cred, a: c}
 	if status, body := r.reload(t, cred, c.RunID); status != http.StatusOK || bytes.Contains(body, []byte("run_secret")) || bytes.Contains(body, []byte(c.RunSecret)) {
 		t.Errorf("the reload on the one address: %d", status)
 	}
@@ -139,10 +136,10 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// remoteRequest sends a reload or a batch on the one address with the run credential,
+// remoteRequest sends a reload or a batch on the one address with the bearer value,
 // none when empty, and the run secret header given, none for nil, and returns the
 // status, the WWW-Authenticate and the body.
-func remoteRequest(t *testing.T, s *service, credential, method, path, body string, secret []string) (int, string, string) {
+func remoteRequest(t *testing.T, s *service, value, method, path, body string, secret []string) (int, string, string) {
 	t.Helper()
 	req, err := http.NewRequest(method, s.url(path), strings.NewReader(body))
 	if err != nil {
@@ -156,7 +153,7 @@ func remoteRequest(t *testing.T, s *service, credential, method, path, body stri
 		// Set, so the client adds none of its own.
 		req.Header[server.HeaderRunSecret] = []string{}
 	}
-	resp, err := s.client(credential).Do(req)
+	resp, err := s.client(value).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,24 +165,24 @@ func remoteRequest(t *testing.T, s *service, credential, method, path, body stri
 // TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone pins the run secret on the
 // one address, follow-up 10: a reload or a batch without the run's secret, with an
 // empty one, one of no run, the run's own twice, or the run's own with another run
-// key's run credential or none, and a reload with a sibling run's of the same run key,
-// or with the run's own and no run id in the path, gets the same 401
-// run_credential_refused, body and header alike, so no run can be probed; neither the
+// key's bearer value or none, and a reload with a sibling run's of the same key, or
+// with the run's own and no run id in the path, gets the same 401 unauthorized, body
+// and header alike, so no run can be probed; neither the
 // run nor its sibling is ended, and each goes on with its own secret.
 func TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
-	s := startVerifying(t, gateway.Config{}, nil, 0)
-	cred, otherKey := credentialFor("rk-0001"), credentialFor("rk-0002")
+	s := startService(t, gateway.Config{}, false)
+	cred, otherKey := goodBearer, otherBearer
 	a := s.openSession(t, cred, server.LinkRunRequest{})
 	sibling := s.openSession(t, cred, server.LinkRunRequest{})
 	s.openSession(t, otherKey, server.LinkRunRequest{})
 	beat := string(mustJSON(t, []map[string]any{heartbeat(a.a.RunID)}))
 	type try struct {
-		credential string
-		secret     []string
+		value  string
+		secret []string
 	}
 	cases := map[string]try{
-		"another run key's run credential":     {otherKey, []string{a.a.RunSecret}},
-		"no run credential and the run secret": {"", []string{a.a.RunSecret}},
+		"another key's bearer value":         {otherKey, []string{a.a.RunSecret}},
+		"no bearer value and the run secret": {"", []string{a.a.RunSecret}},
 	}
 	for name, secret := range secretHeaders(a.a.RunSecret) {
 		cases[name] = try{cred, secret}
@@ -196,12 +193,12 @@ func TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
 			{http.MethodGet, "/v1/run-configuration/" + a.a.RunID, ""},
 			{http.MethodPost, "/v1/events", beat},
 		} {
-			status, auth, body := remoteRequest(t, s, c.credential, req.method, req.path, req.body, c.secret)
+			status, auth, body := remoteRequest(t, s, c.value, req.method, req.path, req.body, c.secret)
 			got := fmt.Sprintf("%d %s %s", status, auth, body)
 			if first == "" {
 				first = got
 			}
-			if status != http.StatusUnauthorized || refusalOf([]byte(body))["error"] != "run_credential_refused" || got != first {
+			if status != http.StatusUnauthorized || refusalOf([]byte(body))["error"] != "unauthorized" || got != first {
 				t.Errorf("%s %s with %s: %s, want %s", req.method, req.path, name, got, first)
 			}
 		}
@@ -235,8 +232,8 @@ func TestTheOneAddressTakesARequestOfARunWithItsRunSecretAlone(t *testing.T) {
 // its events name goes on. A batch whose body never arrives whole ends no run.
 func TestABatchTheLinkRefusesEndsTheRunOfItsSecret(t *testing.T) {
 	h := start(t, gateway.Config{})
-	s := startVerifying(t, gateway.Config{}, nil, 0)
-	cred := credentialFor("rk-0001")
+	s := startService(t, gateway.Config{}, false)
+	cred := goodBearer
 	// Each batch, by the why the gateway reports, given the run its events name.
 	batches := []struct {
 		name, why string
@@ -314,193 +311,81 @@ type answered struct {
 	body   []byte
 }
 
-// ofRun sends a reload and a batch of the run on the one address with the run
-// credential and the run secret header given, none for nil, and returns each one's
+// ofRun sends a reload and a batch of the run on the one address with the bearer value
+// and the run secret header given, none for nil, and returns each one's
 // status and body, by name.
-func ofRun(t *testing.T, s *service, credential, runID string, secret []string) map[string]answered {
+func ofRun(t *testing.T, s *service, value, runID string, secret []string) map[string]answered {
 	t.Helper()
 	out := map[string]answered{}
 	beat := string(mustJSON(t, []map[string]any{heartbeat(runID)}))
-	status, _, body := remoteRequest(t, s, credential, http.MethodGet, "/v1/run-configuration/"+runID, "", secret)
+	status, _, body := remoteRequest(t, s, value, http.MethodGet, "/v1/run-configuration/"+runID, "", secret)
 	out["a reload"] = answered{status, []byte(body)}
-	status, _, body = remoteRequest(t, s, credential, http.MethodPost, "/v1/events", beat, secret)
+	status, _, body = remoteRequest(t, s, value, http.MethodPost, "/v1/events", beat, secret)
 	out["a batch"] = answered{status, []byte(body)}
 	return out
 }
 
-// refusedAll checks that each of a reload and a batch got the 401
-// run_credential_refused.
+// refusedAll checks that each of a reload and a batch got the 401 unauthorized.
 func refusedAll(t *testing.T, what string, got map[string]answered) {
 	t.Helper()
 	for name, g := range got {
-		if g.status != http.StatusUnauthorized || refusalOf(g.body)["error"] != "run_credential_refused" {
+		if g.status != http.StatusUnauthorized || refusalOf(g.body)["error"] != "unauthorized" {
 			t.Errorf("%s, %s: %d %s", what, name, g.status, g.body)
 		}
 	}
 }
 
-// TestAnExpiredRunCredentialFindsItsEndedRunByItsRunSecret pins a run credential whose
-// exp has passed, under an issuer with no leeway, against the run secret: with the
-// secret of its run that has ended, a reload and a batch get that end's 410,
-// credential_expired; with no secret, one of no run, or a live run's of its run key,
-// and of the live run with its own, they get the 401.
-func TestAnExpiredRunCredentialFindsItsEndedRunByItsRunSecret(t *testing.T) {
-	issuers := realIssuers(t, false)
-	none := runcredential.Duration(0)
-	issuers[0].Leeway = &none
-	s := startVerifying(t, gateway.Config{RunCredentials: issuers, Policy: enforce127}, nil, 0)
-	short := mint(issuerKey(), "rk-0001", time.Now().Add(1500*time.Millisecond), nil)
-	ended := s.openSession(t, short, server.LinkRunRequest{})
-	laterExp := time.Now().Add(1500 * time.Millisecond)
-	later := mint(issuerKey(), "rk-0001", laterExp, nil)
-	live := s.openSession(t, later, server.LinkRunRequest{})
-	long := mint(issuerKey(), "rk-0001", time.Now().Add(time.Hour), nil)
-	s.secrets = append(s.secrets, long)
-	if status, body := live.post(t, long, heartbeat(live.a.RunID)); status != http.StatusAccepted {
-		t.Fatalf("a refreshed run credential of the live run: %d %s", status, body)
-	}
-	eventually(t, "credential_expired", func() bool {
-		rec := s.record(ended.a.RunID)
-		return rec[len(rec)-1].Type == event.RunExited
-	})
-	time.Sleep(time.Until(laterExp.Add(time.Second)))
-	for name, g := range ofRun(t, s, short, ended.a.RunID, []string{ended.a.RunSecret}) {
-		gone(t, name+" with the run's secret", g.status, g.body, "credential_expired")
-	}
-	for name, secret := range map[string][]string{
-		"no run secret":          nil,
-		"a run secret of no run": {anotherSecret},
-		"the live run's secret":  {live.a.RunSecret},
-	} {
-		refusedAll(t, "the ended run with "+name, ofRun(t, s, short, ended.a.RunID, secret))
-	}
-	refusedAll(t, "the live run with its own secret", ofRun(t, s, later, live.a.RunID, []string{live.a.RunSecret}))
-	if status, body := live.reload(t, long, live.a.RunID); status != http.StatusOK {
-		t.Errorf("the live run after: %d %s", status, body)
-	}
-}
-
-// TestAnExpiredRunCredentialOfAnotherRunKeyReachesNoSpentRun pins the run key of the
-// expired path, under an issuer with no leeway: with the run secret of a run the gateway
-// let go of, an expired run credential of its run key gets its 410, and one of another
-// run key the 401.
-func TestAnExpiredRunCredentialOfAnotherRunKeyReachesNoSpentRun(t *testing.T) {
-	issuers := realIssuers(t, false)
-	none := runcredential.Duration(0)
-	issuers[0].Leeway = &none
-	s := startVerifying(t, gateway.Config{RunCredentials: issuers, Policy: enforce127}, nil, 0)
-	cred := credentialFor("rk-0001")
-	r := s.openSession(t, cred, server.LinkRunRequest{})
-	if status, b := r.post(t, cred, exited(r.a.RunID)); status != http.StatusAccepted {
-		t.Fatalf("the run.exited: %d %s", status, b)
-	}
-	eventually(t, "the run let go of", func() bool {
-		runs, _, spent, _ := gateway.Held(s.g)
-		return runs == 0 && spent == 1
-	})
-	expired := func(runKey string) string {
-		c := mint(issuerKey(), runKey, time.Now().Add(-2*time.Second), map[string]any{"iat": time.Now().Add(-time.Minute).Unix()})
-		s.secrets = append(s.secrets, c)
-		return c
-	}
-	for name, g := range ofRun(t, s, expired("rk-0001"), r.a.RunID, []string{r.a.RunSecret}) {
-		if g.status != http.StatusGone || refusalOf(g.body)["from"] != "gateway" {
-			t.Errorf("%s with an expired run credential of the run key: %d %s", name, g.status, g.body)
-		}
-	}
-	refusedAll(t, "an expired run credential of another run key", ofRun(t, s, expired("rk-0002"), r.a.RunID, []string{r.a.RunSecret}))
-}
-
 // TestASpentRunIsFoundByItsRunSecretUntilItLapses pins a run that ended and was let go
-// of: with its run secret and a run credential of its run key, a reload and a batch get
-// its 410 until what it left lapses, and the 401 after; with a wrong secret, the 401
-// throughout. Once it lapses, the gateway knows its secret no more.
+// of: with its run secret and a bearer value of its key, a reload and a batch get its
+// 410 until the identity it was opened with expires, and the 401 after; with a wrong
+// secret, or a value of another key, the 401 throughout. Once it lapses, the gateway
+// knows its secret no more.
 func TestASpentRunIsFoundByItsRunSecretUntilItLapses(t *testing.T) {
-	cfg := gateway.Config{Policy: enforce127}
-	gateway.SetKeepSpent(&cfg, time.Millisecond)
-	s := startVerifying(t, cfg, nil, 0)
-	exp := time.Unix(time.Now().Add(4*time.Second).Unix(), 0)
-	short := mint(issuerKey(), "rk-0001", exp, nil)
+	s := startService(t, gateway.Config{Policy: enforce127}, false)
+	exp := time.Now().Add(4 * time.Second)
+	short := "short.bearer-value.0001"
+	s.v.allow(short, "rk-0001", exp)
+	s.secrets = append(s.secrets, short)
 	r := s.openSession(t, short, server.LinkRunRequest{})
 	if status, b := r.post(t, short, exited(r.a.RunID)); status != http.StatusAccepted {
 		t.Fatalf("the run.exited: %d %s", status, b)
 	}
 	eventually(t, "the run let go of", func() bool {
-		runs, _, spent, _ := gateway.Held(s.g)
+		runs, spent := gateway.Held(s.g)
 		return runs == 0 && spent == 1
 	})
 	if n := gateway.SecretsIndexed(s.g); n != 1 {
 		t.Errorf("the spent run: %d run secrets known, want 1", n)
 	}
-	long := credentialFor("rk-0001")
-	s.secrets = append(s.secrets, long)
-	for name, g := range ofRun(t, s, long, r.a.RunID, []string{r.a.RunSecret}) {
+	for name, g := range ofRun(t, s, goodBearer, r.a.RunID, []string{r.a.RunSecret}) {
 		if g.status != http.StatusGone || refusalOf(g.body)["from"] != "gateway" {
 			t.Errorf("%s of the spent run with its secret: %d %s", name, g.status, g.body)
 		}
 	}
+	refusedAll(t, "the spent run with a value of another key", ofRun(t, s, otherBearer, r.a.RunID, []string{r.a.RunSecret}))
 	if time.Now().After(exp) {
 		t.Fatal("the spent run lapsed before it was asked of")
 	}
 	for name, secret := range map[string][]string{"no run secret": nil, "a run secret of no run": {anotherSecret}} {
-		refusedAll(t, "the spent run with "+name, ofRun(t, s, long, r.a.RunID, secret))
+		refusedAll(t, "the spent run with "+name, ofRun(t, s, goodBearer, r.a.RunID, secret))
 	}
 	time.Sleep(time.Until(exp) + 100*time.Millisecond)
-	refusedAll(t, "the lapsed run with its secret", ofRun(t, s, long, r.a.RunID, []string{r.a.RunSecret}))
+	refusedAll(t, "the lapsed run with its secret", ofRun(t, s, goodBearer, r.a.RunID, []string{r.a.RunSecret}))
 	if n := gateway.SecretsIndexed(s.g); n != 0 {
 		t.Errorf("the lapsed run: %d run secrets known, want 0", n)
 	}
 }
 
-// TestAHeldRunKeysRunIsRefusedWithItsRunSecret pins the run secret against the hold
-// after the issuer's end of a run of the run key: a reload or a batch of a live run of
-// the key with a wrong secret gets the 401, and its run credential, presented, holds
-// the key to its exp; with the run's own secret, the run ends, stopped,
-// and the request gets its 410.
-func TestAHeldRunKeysRunIsRefusedWithItsRunSecret(t *testing.T) {
-	in := &introspection{}
-	var ahead atomic.Int64
-	cfg := gateway.Config{Policy: enforce127}
-	gateway.SetClock(&cfg, func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) })
-	s := startVerifying(t, cfg, in, 0)
-	now := time.Now()
-	first := mint(issuerKey(), "rk-0001", now.Add(time.Hour), nil)
-	later := mint(issuerKey(), "rk-0001", now.Add(3*time.Hour), nil)
-	probe := mint(issuerKey(), "rk-0001", now.Add(2*time.Hour+30*time.Minute), nil)
-	s.secrets = append(s.secrets, first, later, probe)
-	ended := s.openSession(t, first, server.LinkRunRequest{})
-	held := s.openSession(t, first, server.LinkRunRequest{})
-	in.end(first)
-	status, body := ended.reload(t, first, ended.a.RunID)
-	gone(t, "the issuer's end", status, body, "stopped")
-	for name, secret := range secretHeaders(held.a.RunSecret) {
-		refusedAll(t, "the held run key's live run with "+name, ofRun(t, s, later, held.a.RunID, secret))
-	}
-	// Past first's exp and its leeway, later's exp, presented with the wrong secrets,
-	// still holds the run key; the probe's own exp is earlier, so it extends nothing.
-	ahead.Store(int64(2*time.Hour + 10*time.Minute))
-	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusUnauthorized {
-		t.Errorf("a run request of the held run key: %d %s", status, body)
-	}
-	for name, g := range ofRun(t, s, later, held.a.RunID, []string{held.a.RunSecret}) {
-		gone(t, name+" of the live run with its secret", g.status, g.body, "stopped")
-	}
-	ahead.Store(int64(3*time.Hour + 10*time.Minute))
-	if status, body := s.tryOpenWith(t, probe, server.LinkRunRequest{}); status != http.StatusOK {
-		t.Errorf("past the latest exp held: %d %s", status, body)
-	}
-}
-
 // TestARestartedGatewayKnowsNoRunSecretOfBefore pins a restart on the same directory:
 // the gateway keeps no run secret, so a reload or a batch of a run from before, with
-// its run credential and its run secret, gets the 401, and a new run opens.
+// its bearer value and its run secret, gets the 401, and a new run opens.
 func TestARestartedGatewayKnowsNoRunSecretOfBefore(t *testing.T) {
 	dir := t.TempDir()
-	cred := credentialFor("rk-0001")
-	before := startVerifying(t, gateway.Config{Dir: dir}, nil, 0)
+	cred := goodBearer
+	before := startService(t, gateway.Config{Dir: dir}, false)
 	r := before.openSession(t, cred, server.LinkRunRequest{})
 	before.close()
-	s := startVerifying(t, gateway.Config{Dir: dir}, nil, 0)
+	s := startService(t, gateway.Config{Dir: dir}, false)
 	s.secrets = append(s.secrets, cred, r.a.RunSecret, r.a.ProxySecret)
 	refusedAll(t, "a run from before with its secret", ofRun(t, s, cred, r.a.RunID, []string{r.a.RunSecret}))
 	if n := gateway.SecretsIndexed(s.g); n != 0 {

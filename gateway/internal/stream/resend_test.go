@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
-	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/receiver"
 	"github.com/qoryai/forager/server"
@@ -113,38 +112,6 @@ func TestResendWritesGatewayLost(t *testing.T) {
 	}
 	if again := readRecord(t, dir); len(again) != 4 {
 		t.Errorf("again: %v", types(again))
-	}
-}
-
-// TestResendWritesGatewayLostOfARunAGatewayOpened pins the completion of the record of
-// a run a gateway opened, with no process: gateway_lost, failed, with no exit_code,
-// valid under run.exited.schema.json.
-func TestResendWritesGatewayLostOfARunAGatewayOpened(t *testing.T) {
-	s := New(Config{Dir: t.TempDir()})
-	r, _ := s.Open(event.NewRunID())
-	r.Registered(map[string]any{})
-	r.Emit(event.RunStarted, map[string]any{"opened_by": event.OpenedByGateway, "forager_version": "test"})
-	r.Emit(event.RunHeartbeat, map[string]any{"elapsed_seconds": 1, "interval_seconds": 1})
-	r.Close(context.Background())
-	registrationAccepted(t, r.Dir())
-	res, err := Resend(context.Background(), ResendConfig{Dir: r.Dir()})
-	if err != nil || !res.Closed {
-		t.Fatalf("%+v, %v", res, err)
-	}
-	rec := readRecord(t, r.Dir())
-	last := rec[len(rec)-1]
-	data, _ := last.Data.(map[string]any)
-	if last.Type != event.RunExited || data["reason"] != event.ReasonGatewayLost || data["state"] != "failed" || len(data) != 3 {
-		t.Errorf("the record ends %+v", last)
-	}
-	schema, err := contracts.Compile("events/run.exited.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := json.Marshal(data)
-	doc, _ := contracts.Decode("exited.json", b)
-	if err := schema.Validate(doc); err != nil {
-		t.Error(err)
 	}
 }
 

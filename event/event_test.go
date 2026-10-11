@@ -42,17 +42,16 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	}
 }
 
-// TestReasonsAndOpenersAreTheContracts pins the constants of run.started's opened_by and
-// credential to the enums of their schema, in the schema's order, and Forager's reasons
-// of run.exited to its open code: each matches the reason's pattern and is named in its
-// description among the reserved codes, beside the three old names Forager never writes.
+// TestReasonsAndOpenersAreTheContracts pins the constant of run.started's opened_by to
+// the enum of its schema, and Forager's reasons of run.exited to its open code: each
+// matches the reason's pattern and is named in its description among the reserved
+// codes, beside the old names Forager never writes.
 func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	for _, c := range []struct {
 		schema, member string
 		want           []string
 	}{
-		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession, event.OpenedByGateway}},
-		{"events/run.started.schema.json", "credential", []string{event.CredentialStarter, event.CredentialNone}},
+		{"events/run.started.schema.json", "opened_by", []string{event.OpenedBySession}},
 	} {
 		doc, err := contracts.Document(c.schema)
 		if err != nil {
@@ -74,8 +73,8 @@ func TestReasonsAndOpenersAreTheContracts(t *testing.T) {
 	pattern := regexp.MustCompile(reason["pattern"].(string))
 	description := reason["description"].(string)
 	for _, code := range []string{event.ReasonTimeout, event.ReasonInterrupted, event.ReasonRunClosed, event.ReasonGatewayLost,
-		event.ReasonSessionLost, event.ReasonQuiet, event.ReasonCredentialExpired, event.ReasonStopped,
-		event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid,
+		event.ReasonSessionLost, event.ReasonStopped, event.ReasonBatchRefused,
+		"quiet", "credential_expired", "credential_check_unreachable", "credential_check_invalid",
 		"run_ended_at_issuer", "issuer_unreachable", "issuer_answer_invalid"} {
 		if !pattern.MatchString(code) {
 			t.Errorf("run.exited's reason pattern refuses %s", code)
@@ -125,9 +124,8 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 			t.Errorf("%q is reserved", code)
 		}
 	}
-	// A session's batch may carry timeout and interrupted, its own; the starter's outcome
-	// answer none.
-	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}, "link-outcome-answer.schema.json": nil} {
+	// A session's batch may carry timeout and interrupted, its own.
+	for name, allowed := range map[string][]string{"link-batch.schema.json": {event.ReasonTimeout, event.ReasonInterrupted}} {
 		doc, err := contracts.Document(name)
 		if err != nil {
 			t.Fatal(err)

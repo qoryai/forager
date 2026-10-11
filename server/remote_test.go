@@ -34,12 +34,8 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// The run credentials of the tests: no real ones, in the syntax of a Bearer token.
-const (
-	credential  = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAxIn0.Y3JlZGVudGlhbC1vbmU"
-	refreshed   = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAxIn0.Y3JlZGVudGlhbC10d28"
-	remoteRunID = runID
-)
+// remoteRunID is the run of the tests behind a separate gateway.
+const remoteRunID = runID
 
 // authority is a certificate authority of a test's own, and the PEM file of its
 // certificate.
@@ -154,14 +150,9 @@ func (g *remoteGateway) seen() (auths, agents []string, bodies [][]byte) {
 	return append([]string(nil), g.auths...), append([]string(nil), g.agents...), append([][]byte(nil), g.bodies...)
 }
 
-// fixed is a run credential that does not change.
-func fixed(c string) func(context.Context) (string, error) {
-	return func(context.Context) (string, error) { return c, nil }
-}
-
-func remoteLink(t *testing.T, url string, trust server.RemoteTLS, cred func(context.Context) (string, error)) *server.Link {
+func remoteLink(t *testing.T, url string, trust server.RemoteTLS) *server.Link {
 	t.Helper()
-	k, err := server.NewRemoteLink(url, trust, cred, userAgent, nil)
+	k, err := server.NewRemoteLink(url, trust, userAgent, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,20 +162,13 @@ func remoteLink(t *testing.T, url string, trust server.RemoteTLS, cred func(cont
 
 // TestTheRemoteLinkSpeaksTheContractOverTLS pins one run's requests behind a separate
 // gateway: discovery, the run request with its narrowing, the reload and a batch, each
-// over TLS 1.3 with the run credential as Authorization: Bearer, asked for before each
-// request so a refreshed one is sent from then on, and the reload and the batch with the
-// run answer's run secret besides; no proxy of the environment is used.
+// over TLS 1.3 with no Authorization, and the reload and the batch with the run
+// answer's run secret; no proxy of the environment is used.
 func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	g := startRemote(t, nil)
-	var current atomic.Value
-	current.Store(credential)
-	var asked atomic.Int32
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, func(context.Context) (string, error) {
-		asked.Add(1)
-		return current.Load().(string), nil
-	})
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 	ctx := context.Background()
 	d, err := k.Discover(ctx)
 	if err != nil {
@@ -197,7 +181,6 @@ func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 	if _, err := k.OpenRun(ctx, d.Run.URL, server.LinkRunRequest{RunID: remoteRunID, Labels: map[string]string{"forge": "example-forge"}, Narrowing: narrowing}); err != nil {
 		t.Fatal(err)
 	}
-	current.Store(refreshed)
 	if _, err := k.Reload(ctx, d.Run.URL, remoteRunID); err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +188,8 @@ func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 		t.Fatalf("the batch: %+v %v", dl, err)
 	}
 	auths, agents, bodies := g.seen()
-	want := []string{"Bearer " + credential, "Bearer " + credential, "Bearer " + refreshed, "Bearer " + refreshed}
-	if fmt.Sprint(auths) != fmt.Sprint(want) || asked.Load() != 4 {
-		t.Errorf("Authorization %v, the credential asked for %d times", auths, asked.Load())
+	if want := []string{"", "", "", ""}; fmt.Sprint(auths) != fmt.Sprint(want) {
+		t.Errorf("Authorization %q, want none", auths)
 	}
 	g.mu.Lock()
 	secrets := slices.Clone(g.secrets)
@@ -227,7 +209,7 @@ func TestTheRemoteLinkSpeaksTheContractOverTLS(t *testing.T) {
 
 // TestTheRemoteLinkTakesAnHTTPSURLAlone pins what NewRemoteLink refuses before it
 // sends anything: a URL that is not https, or that has user information, a path, a
-// query or a fragment; no run credential; a CAFile that is missing or holds no
+// query or a fragment; a CAFile that is missing or holds no
 // certificate; and a pin that is not 32 bytes in standard base64 with padding.
 func TestTheRemoteLinkTakesAnHTTPSURLAlone(t *testing.T) {
 	ca := newAuthority(t, "refusals")
@@ -238,29 +220,27 @@ func TestTheRemoteLinkTakesAnHTTPSURLAlone(t *testing.T) {
 	for name, c := range map[string]struct {
 		url   string
 		trust server.RemoteTLS
-		cred  func(context.Context) (string, error)
 	}{
-		"http":               {"http://gateway.example:8443", server.RemoteTLS{}, fixed(credential)},
-		"user information":   {"https://user:secret-of-the-url@gateway.example", server.RemoteTLS{}, fixed(credential)},
-		"a path":             {"https://gateway.example/qory", server.RemoteTLS{}, fixed(credential)},
-		"a query":            {"https://gateway.example/?a=1", server.RemoteTLS{}, fixed(credential)},
-		"a fragment":         {"https://gateway.example/#a", server.RemoteTLS{}, fixed(credential)},
-		"no host":            {"https:///", server.RemoteTLS{}, fixed(credential)},
-		"no credential":      {ok, server.RemoteTLS{}, nil},
-		"a missing CA file":  {ok, server.RemoteTLS{CAFile: filepath.Join(t.TempDir(), "none.pem")}, fixed(credential)},
-		"a CA file not PEM":  {ok, server.RemoteTLS{CAFile: notPEM}, fixed(credential)},
-		"a hex pin":          {ok, server.RemoteTLS{CAFile: ca.file, CertificateSHA256: fmt.Sprintf("%x", sum)}, fixed(credential)},
-		"a pin unpadded":     {ok, server.RemoteTLS{CertificateSHA256: base64.RawStdEncoding.EncodeToString(sum[:])}, fixed(credential)},
-		"a pin of base64url": {ok, server.RemoteTLS{CertificateSHA256: strings.NewReplacer("+", "-", "/", "_").Replace(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 32)))}, fixed(credential)},
-		"a short pin":        {ok, server.RemoteTLS{CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:16])}, fixed(credential)},
+		"http":               {"http://gateway.example:8443", server.RemoteTLS{}},
+		"user information":   {"https://user:secret-of-the-url@gateway.example", server.RemoteTLS{}},
+		"a path":             {"https://gateway.example/qory", server.RemoteTLS{}},
+		"a query":            {"https://gateway.example/?a=1", server.RemoteTLS{}},
+		"a fragment":         {"https://gateway.example/#a", server.RemoteTLS{}},
+		"no host":            {"https:///", server.RemoteTLS{}},
+		"a missing CA file":  {ok, server.RemoteTLS{CAFile: filepath.Join(t.TempDir(), "none.pem")}},
+		"a CA file not PEM":  {ok, server.RemoteTLS{CAFile: notPEM}},
+		"a hex pin":          {ok, server.RemoteTLS{CAFile: ca.file, CertificateSHA256: fmt.Sprintf("%x", sum)}},
+		"a pin unpadded":     {ok, server.RemoteTLS{CertificateSHA256: base64.RawStdEncoding.EncodeToString(sum[:])}},
+		"a pin of base64url": {ok, server.RemoteTLS{CertificateSHA256: strings.NewReplacer("+", "-", "/", "_").Replace(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 32)))}},
+		"a short pin":        {ok, server.RemoteTLS{CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:16])}},
 	} {
-		if _, err := server.NewRemoteLink(c.url, c.trust, c.cred, userAgent, nil); err == nil {
+		if _, err := server.NewRemoteLink(c.url, c.trust, userAgent, nil); err == nil {
 			t.Errorf("%s: a link", name)
 		} else if strings.Contains(err.Error(), "secret-of-the-url") {
 			t.Errorf("%s: the error quotes the URL: %v", name, err)
 		}
 	}
-	if _, err := server.NewRemoteLink("https://gateway.example", server.RemoteTLS{CAFile: ca.file, CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:])}, fixed(credential), userAgent, nil); err != nil {
+	if _, err := server.NewRemoteLink("https://gateway.example", server.RemoteTLS{CAFile: ca.file, CertificateSHA256: base64.StdEncoding.EncodeToString(sum[:])}, userAgent, nil); err != nil {
 		t.Errorf("a URL without a port: %v", err)
 	}
 }
@@ -273,7 +253,7 @@ func TestTheRemoteLinksCAFileReplacesTheSystemsRoots(t *testing.T) {
 	g := startRemote(t, nil)
 	other := newAuthority(t, "another-authority")
 	for name, ca := range map[string]string{"the system's roots": "", "another authority": other.file} {
-		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: ca}, fixed(credential))
+		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: ca})
 		_, err := k.Discover(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "certificate") {
 			t.Errorf("%s: %v", name, err)
@@ -282,7 +262,7 @@ func TestTheRemoteLinksCAFileReplacesTheSystemsRoots(t *testing.T) {
 	if n := g.hits.Load(); n != 0 {
 		t.Errorf("an untrusted gateway was sent %d requests", n)
 	}
-	if _, err := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential)).Discover(context.Background()); err != nil {
+	if _, err := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}).Discover(context.Background()); err != nil {
 		t.Errorf("the gateway's own authority: %v", err)
 	}
 }
@@ -292,7 +272,7 @@ func TestTheRemoteLinksCAFileReplacesTheSystemsRoots(t *testing.T) {
 func TestTheRemoteLinkChecksTheHostName(t *testing.T) {
 	g := startRemote(t, nil)
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(g.url(), "https://"))
-	k := remoteLink(t, "https://localhost:"+port, server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+	k := remoteLink(t, "https://localhost:"+port, server.RemoteTLS{CAFile: g.ca.file})
 	if _, err := k.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "localhost") {
 		t.Errorf("another host name: %v", err)
 	}
@@ -305,7 +285,7 @@ func TestTheRemoteLinkChecksTheHostName(t *testing.T) {
 // TLS 1.2 is sent nothing, its proxy as its contract.
 func TestTheRemoteLinkRefusesTLS12(t *testing.T) {
 	g := startRemote(t, &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12})
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 	if _, err := k.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Errorf("TLS 1.2: %v", err)
 	}
@@ -323,7 +303,7 @@ func TestTheRemoteLinkRefusesTLS12(t *testing.T) {
 // trusted all the same.
 func TestTheRemoteLinkChecksThePin(t *testing.T) {
 	g := startRemote(t, nil)
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: g.pin}, fixed(credential))
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: g.pin})
 	if _, err := k.Discover(context.Background()); err != nil {
 		t.Errorf("the gateway's own key: %v", err)
 	}
@@ -337,7 +317,7 @@ func TestTheRemoteLinkChecksThePin(t *testing.T) {
 	c.Close()
 	hits := g.hits.Load()
 	_, other := g.ca.issue(t)
-	k = remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: other}, fixed(credential))
+	k = remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: other})
 	if _, err := k.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "pin") {
 		t.Errorf("another key: %v", err)
 	}
@@ -362,9 +342,8 @@ func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 		names  []string
 		text   string
 	}{
-		{401, "run_credential_refused", nil, "the gateway refused this run credential"},
-		{403, "target_differs_from_credential", []string{"labels.repository=example-namespace/project"}, "this checkout is example-forge/other, and the run credential is for example-forge/example-namespace/project"},
-		{403, "differs_from_credential", []string{"about.details.requester=requester"}, "about.details.requester differs from the run credential's"},
+		{401, "unauthorized", nil, "the gateway refused the run: unauthorized"},
+		{403, "placeholder_conflict", []string{"GIT_TOKEN"}, "the run passes a value for the placeholder GIT_TOKEN"},
 	} {
 		g := startRemote(t, nil)
 		g.refusal = func(w http.ResponseWriter, r *http.Request) bool {
@@ -378,7 +357,7 @@ func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 			answer(w, c.status, `{"error":"`+c.code+`"`+names+`,"message":"`+c.text+`","from":"gateway"}`)
 			return true
 		}
-		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 		_, err := k.OpenRun(context.Background(), g.url()+"/v1/run-configuration", server.LinkRunRequest{RunID: remoteRunID})
 		var r *accesskey.Refusal
 		if !errors.As(err, &r) || r.Code != c.code || r.Status != c.status || r.From != accesskey.FromGateway || fmt.Sprint(r.Names) != fmt.Sprint(c.names) || err.Error() != c.text {
@@ -393,7 +372,7 @@ func TestTheRemoteLinkPassesTheGatewaysRefusalsOn(t *testing.T) {
 }
 
 // TestARemoteDiscoveryOffTheGatewayIsRefused pins that a separate gateway's discovery
-// lists URLs of its own origin alone, so the run credential goes to it alone, and its
+// lists URLs of its own origin alone, so nothing of the run goes elsewhere, and its
 // one address as the proxy; and that a request to a URL of another origin is never
 // sent.
 func TestARemoteDiscoveryOffTheGatewayIsRefused(t *testing.T) {
@@ -416,14 +395,14 @@ func TestARemoteDiscoveryOffTheGatewayIsRefused(t *testing.T) {
 			answer(w, 200, doc("https://"+r.Host, r.Host))
 			return true
 		}
-		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 		var de *server.DocumentError
 		if _, err := k.Discover(context.Background()); !errors.As(err, &de) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	g := startRemote(t, nil)
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 	for _, u := range []string{"https://elsewhere.example/v1/run", "http://" + strings.TrimPrefix(g.url(), "https://") + "/v1/run"} {
 		if _, err := k.OpenRun(context.Background(), u, server.LinkRunRequest{RunID: remoteRunID}); err == nil {
 			t.Errorf("a run request to %s was sent", u)
@@ -438,7 +417,7 @@ func TestARemoteDiscoveryOffTheGatewayIsRefused(t *testing.T) {
 }
 
 // TestTheRemoteLinkFollowsNoRedirect pins that a redirect is a status like any other:
-// the run credential goes nowhere it points.
+// nothing of the run goes where it points.
 func TestTheRemoteLinkFollowsNoRedirect(t *testing.T) {
 	g := startRemote(t, nil)
 	var elsewhere atomic.Int32
@@ -450,7 +429,7 @@ func TestTheRemoteLinkFollowsNoRedirect(t *testing.T) {
 		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
 		return true
 	}
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, fixed(credential))
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file})
 	if _, err := k.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 307") {
 		t.Errorf("a redirect: %v", err)
 	}
@@ -459,34 +438,16 @@ func TestTheRemoteLinkFollowsNoRedirect(t *testing.T) {
 	}
 }
 
-// TestTheRemoteLinkNeverShowsTheCredential pins that a run credential is in no error,
-// print or log of the link: a credential that fails, or is not a Bearer token, sends
-// nothing, and the error says why without it.
-func TestTheRemoteLinkNeverShowsTheCredential(t *testing.T) {
+// TestTheRemoteLinkNeverShowsTheRunSecret pins that the run's secret is in no print or
+// log of the link, which shows its URL.
+func TestTheRemoteLinkNeverShowsTheRunSecret(t *testing.T) {
 	g := startRemote(t, nil)
-	for name, cred := range map[string]func(context.Context) (string, error){
-		"a failure":       func(context.Context) (string, error) { return "", errors.New("the run credential file is gone") },
-		"a line break":    fixed(credential + "\r\nX-Other: " + refreshed),
-		"a space":         fixed(credential + " " + refreshed),
-		"no credential":   fixed(""),
-		"a quote":         fixed(`"` + credential + `"`),
-		"a control":       fixed(credential + "\x00"),
-		"a padded middle": fixed(credential[:10] + "=" + refreshed),
-	} {
-		k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file}, cred)
-		_, err := k.Discover(context.Background())
-		if err == nil || strings.Contains(err.Error(), credential[20:]) || strings.Contains(err.Error(), refreshed[20:]) {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	if g.hits.Load() != 0 {
-		t.Error("a request without a good run credential was sent")
-	}
-	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: g.pin}, fixed(credential))
+	k := remoteLink(t, g.url(), server.RemoteTLS{CAFile: g.ca.file, CertificateSHA256: g.pin})
+	k.UseRunSecret(runSecret)
 	var b bytes.Buffer
 	slog.New(slog.NewJSONHandler(&b, nil)).Info("link", "link", k)
 	for _, out := range []string{fmt.Sprint(k), fmt.Sprintf("%+v", k), fmt.Sprintf("%#v", k), k.String(), b.String()} {
-		if strings.Contains(out, credential) || !strings.Contains(out, g.url()) {
+		if strings.Contains(out, runSecret) || !strings.Contains(out, g.url()) {
 			t.Errorf("printed as %s", out)
 		}
 	}

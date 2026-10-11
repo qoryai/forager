@@ -28,13 +28,12 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: an address
-// with no issuer of run credentials, a certificate with no address, a heartbeat the
-// discovery cannot announce, no place for the records.
+// TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a
+// certificate with no address, a heartbeat the discovery cannot announce, no place for
+// the records.
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
-		"an address without issuers":  {Dir: dir, Listen: "127.0.0.1:0"},
 		"a certificate":               {Dir: dir, TLS: &gateway.TLS{}},
 		"a heartbeat of a part":       {Dir: dir, Heartbeat: 1500 * time.Millisecond},
 		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
@@ -543,10 +542,13 @@ func TestBatchesTheLinkRefuses(t *testing.T) {
 	if d := h.post(started(a.RunID, map[string]string{"repository": "other"})); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 		t.Errorf("other labels: %+v", d)
 	}
-	// A run.started that says an issuer gave the local link's run its credential.
+	// A run.started with the credential member of before, which its schema no longer
+	// has.
 	b := h.open(server.LinkRunRequest{Labels: labels})
-	if d := h.post(issuerStarted(b.RunID, labels)); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
-		t.Errorf("an issuer's credential on the local link: %+v", d)
+	old := started(b.RunID, labels)
+	old["data"].(map[string]any)["credential"] = "none"
+	if d := h.post(old); d.Status != http.StatusBadRequest || d.End != "batch_refused" {
+		t.Errorf("a run.started with a credential: %+v", d)
 	}
 	if d := h.close(); !d.RunClosed || d.ClosedReason != "batch_refused" || d.State != "failed" || d.Reason != "batch_refused" {
 		t.Errorf("delivery %+v", d)

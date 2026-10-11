@@ -103,54 +103,27 @@ the gateway could not open for a reason without a code.
 
 ## A separate gateway
 
-A gateway serves the sessions of other machines, and clients with no session, on one
-address of its own, beside its local link. Its `gateway.Config` sets it:
+A gateway serves the sessions of other machines on one address of its own, beside its
+local link. Its `gateway.Config` sets it:
 
 - `Listen`, the one address, `host:port`. Empty means the local link alone. Every
   connection is routed by its first bytes, after the TLS handshake: `QORY-RELAY` and a
   run's proxy secret go to that run's proxy; a proxy request, `CONNECT` or an
-  absolute-form target, to the proxy of the run its `Proxy-Authorization` names; any
-  other request to the contract, where every request carries
-  `Authorization: Bearer <run credential>`
+  absolute-form target, to the proxy of the live run whose proxy secret its Basic
+  password is; any other request to the contract
   ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)). The
   proxy of every run served there is guarded, wall or none. `Gateway.Addr` is this
   address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
-- `RunCredentials`, the run starters whose run credentials open a run there, required with
-  `Listen` ([run credentials](gateway-run-credentials.md)). A run's labels and
-  `about.details` are its run credential's. The gateway tracks run keys and does not
-  require them to be unique; each period of activity is a run.
-- `Runs.Quiet`, how long a run with no session lasts with no connection: 30 minutes when
-  zero.
-- `Dir` is required with `Listen`: the gateway keeps its own certificate authority there,
-  `authority/ca.pem`, which the machines of the clients with no session trust, and the
-  run keys it refuses after the starter's end, `ended-run-keys.json`, so a restart refuses
-  them too.
 
-A run of the one address ends as a local run does, and also at its run credential's
-`exp` with no fresher one, `credential_expired`, and when the starter's introspection
-endpoint no longer holds the run credential active, or the starter ended another run of
-the same run key so, `stopped`; when the run credential could not be checked, the
-introspection endpoint unreachable after the gateway's tries,
-`credential_check_unreachable`, or its answer not valid, `credential_check_invalid`,
-neither of which holds the run key. A starter that answers with an outcome,
-`qory_outcome` and `qory_reason`, ends the run with that state and reason in place of
-`cancelled` and `stopped`. The gateway writes its `dev.qory.run.exited`, with the state
-and the reason of that end; a session's later requests get the `410` with that code,
-`stopped` for every end of the starter's, and that state and reason. `Close` returns
-a `Delivery`: `RunClosed` and `ClosedReason`, the code of that `410`, of the first run
-that ended so, and `State` and `Reason`, those of the gateway's `dev.qory.run.exited`.
-A run with no session also ends after `Runs.Quiet` with no connection, `quiet`. After `stopped`, the gateway refuses every request of a
-run of the run key until the latest `exp` of the run credentials of the key the gateway
-still holds, and of any presented during the hold, plus `runcredential.MaxLeeway`, 5
-minutes.
+The gateway answers every request of the contract on the one address, the discovery
+included, with a `401` `unauthorized` from `gateway`, "the gateway refused the run:
+unauthorized".
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
-read or that do not match, `TLS` without `Listen`, `Listen` without `RunCredentials`
-or `Dir`, and with `Listen` a `Dir` it cannot create a file in, "the ended run keys:
-<directory> cannot be written: <error>".
+read or that do not match, and `TLS` without `Listen`.
 
 ### The session behind a separate gateway
 
@@ -165,10 +138,6 @@ res, err := session.Run(ctx, session.Spec{
 		URL:               "https://gateway.example:8443", // its one address
 		CAFile:            caFile,                          // empty: the system's roots
 		CertificateSHA256: pin,                             // empty: no pin
-		Credential: func(context.Context) (string, error) { // asked before every request
-			b, err := os.ReadFile(runCredentialFile)
-			return strings.TrimSpace(string(b)), err
-		},
 	},
 })
 ```
@@ -181,19 +150,10 @@ res, err := session.Run(ctx, session.Spec{
   SubjectPublicKeyInfo in standard base64 with padding, it accepts only a certificate
   with that key, and still checks its chain. No proxy of the environment is used, and no
   redirect is followed.
-- `Credential` returns the run credential. Every request on the link carries it as
-  `Authorization: Bearer <run credential>`, and the session asks for it before each
-  request, so a run credential its starter refreshes in a file is sent from then on. Its
-  error is the request's, and must not hold the run credential. A `RemoteGateway`
-  without `Credential` is no run. The run credential is never printed, logged,
-  recorded or contained in an error: a `session.RemoteGateway` prints as its URL, its
-  `CAFile` and its pin. Every reload and batch also carries `X-Qory-Run-Secret`, the
-  run answer's `run_secret`, which names the run.
-- The run credential's file must not sit in a directory a walled run mounts, and an
-  unwalled agent's environment must not carry it. Keeping it out of both is the
-  caller's job. As a backstop, the session leaves `QORY_RUN_CREDENTIAL_SECRET` out of the
-  agent's environment, walled or not, whatever brought it, as it does the access key's
-  variables.
+- The session sends no `Authorization`, so the gateway refuses the run with its `401`
+  `unauthorized` (above). A `session.RemoteGateway` prints as its URL, its `CAFile` and
+  its pin. Every reload and batch also carries `X-Qory-Run-Secret`, the run answer's
+  `run_secret`, which names the run.
 - No access key is involved, and the gateway holds no files on the session's machine, so
   none of its files are checked against a walled run's mounts, and it reserves no
   variables there.
@@ -206,21 +166,19 @@ res, err := session.Run(ctx, session.Spec{
 - The discovery must list URLs of the gateway's origin alone, and name the gateway's one
   address, the URL's host and port, as its proxy; the loopback check of the local link
   does not apply. The run request carries the spec's `Labels`, `forge` and `repository`
-  among them, and `About`. The run's labels are the run credential's, and the run
-  request carries no narrowing: `Spec` has none.
+  among them, and `About`; the run's labels are the run request's. The run request
+  carries no narrowing: `Spec` has none.
 - The gateway's refusals return a `*session.Refusal` as on one machine, its `Error` the
-  refusal's `message`: `run_credential_refused`, a `401` that may come to discovery as
-  well, before anything is recorded; `target_differs_from_credential` and
-  `differs_from_credential`, whose names are `<member>=<the run credential's value>`;
-  and `run_id_used`. A refusal of the run request is recorded in the session's record
-  alone.
+  refusal's `message`: `unauthorized`, the `401`, which comes at the discovery, before
+  anything is recorded; and `run_id_used`. A refusal of the run request is recorded in
+  the session's record alone.
 - Agent traffic goes to the gateway's one address over TLS, with the link's trust,
   through the session's forwarder. Without a wall, the agent's proxy URL is the
   forwarder on loopback with the run's proxy secret as its password,
   `http://qory:<proxy secret>@127.0.0.1:<port>`, as the contract has it: the agent's
   environment holds the proxy secret, and every program the agent starts can read it,
-  and print it into the run's output. It is the run's alone, refused once the run ends,
-  and never the run credential. Behind a wall, the proxy secret stays in the session's
+  and print it into the run's output. It is the run's alone, refused once the run ends.
+  Behind a wall, the proxy secret stays in the session's
   memory: see [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway).
 
 ### Sending the session's record again
@@ -260,23 +218,20 @@ res, err := session.Resend(ctx, session.ResendSpec{
   `run_closed` among them, those of the `dev.qory.run.exited` in `session.jsonl`; both
   empty when neither says.
 - The `dev.qory.run.exited` the session posted, with the state and the reason of the
-  runtime's exit or of the starter's outcome, is sent again like any other event. The
+  runtime's exit, is sent again like any other event. The
   one the session records after the gateway ended the run is in its record alone, and
   is never sent: `delivered.log` says `stopped` before it is written, whether the `410`
   answered a batch or a reload.
-- The refusals of the run credential are a `*session.Refusal` from `gateway`, with the
-  events left under `undelivered/`: `run_credential_refused`, the `401`, which an
-  expired run credential gets at the discovery; `target_differs_from_credential` and
-  `differs_from_credential`, the `403` of a run credential that differs from the run's.
+- The gateway's `401` `unauthorized`, at the discovery or at a batch, is a
+  `*session.Refusal` from `gateway`, with the events left under `undelivered/`.
 - Every batch carries the run's `run_secret` from the run directory's `run-secret`,
   which is removed once nothing is owed: everything accepted, the gateway's `410`, or
   nothing owed from the start; it is kept after a refusal or a failure to send. Without
   the file, the batches get the `401`.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
-- After a gateway restarts, it holds no run of the run credential: the session's
-  undelivered events get the `401`, and stay in the run directory, and the gateway's own
-  resend, `gateway.Resend`, completes the run `gateway_lost`.
+- After a gateway restarts, it holds no run of before: the gateway's own resend,
+  `gateway.Resend`, completes the run `gateway_lost`.
 
 ## The runtime
 
@@ -329,8 +284,7 @@ A program that needs code of its own implements the interface.
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).
 - `Labels` and `About` go to the gateway in the run request. `dev.qory.run.started` has
-  the labels the gateway answers with, and in `about.details` the details the gateway
-  decides, such as those a run credential's claims set.
+  the labels the gateway answers with, and `About` as the caller passed it.
 - The variables come from several sources, and for each name the highest wins. See
   [variables](server.md#variables).
   - `LaunchFixed` is the values the harness computes itself. They win over every source
@@ -358,39 +312,26 @@ A program that needs code of its own implements the interface.
 - `ExitCode` and `Signal`, the runtime's, whatever the run's state.
 - `State` and `Reason`, the state and the reason of the session's
   `dev.qory.run.exited`, how the run ended:
-  - When the runtime exits by itself behind a separate gateway, the session asks the
-    gateway once, before it writes `dev.qory.run.exited`, how the run's starter says the
-    run ended, and waits at most about 10 seconds. An outcome sets `State` and `Reason`,
-    such as `failed` and `checks_failed` for a runtime that exited 0; the reason is
-    empty when the starter gave none, and a reason that is one of Forager's reserved
-    codes, or not a code, is dropped alone, the starter's state kept. The heartbeats go
-    on while the session waits. Once the runtime has exited, a context that ends cuts
-    neither the ask nor the record short: the answer still decides, the session still
-    writes and posts `dev.qory.run.exited`, and `Run` returns after them, within their
-    bounds. The gateway closing the run still ends the ask.
-  - With no outcome, an answer of `{}`, one that is not valid, a refusal or no answer
-    in time, the runtime's exit decides: `succeeded` on 0, `failed` otherwise, with no
-    reason, and nothing is added to the record. On the local link there is no starter to
-    ask: the session asks nothing and does not wait.
+  - When the runtime exits by itself, its exit decides: `succeeded` on 0, `failed`
+    otherwise, with no reason.
   - At `Timeout`, `cancelled` and `timeout`, with `TimedOut`, when the session's stop
-    signal reached the runtime at the limit before its exit was observed; nothing is
-    asked. A runtime that exited by itself before that signal is decided by its exit.
+    signal reached the runtime at the limit before its exit was observed. A runtime that
+    exited by itself before that signal is decided by its exit.
   - When the run was stopped from where it was started, a Ctrl-C or a signal to the
-    caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`;
-    nothing is asked. `ExitCode` and `Signal` are the runtime's, whatever they are.
+    caller, which ends the context, `cancelled` and `interrupted`, with `Cancelled`.
+    `ExitCode` and `Signal` are the runtime's, whatever they are.
   - A runtime that exits 0 at the session's stop, at the context's end or at the
     limit, has exited 0: `Run` records its `dev.qory.run.exited` and returns its
     `Result`, with no error.
   - When the gateway closed the run, `RunClosed`, the state and the reason its `410`
     says, such as `cancelled` and `no_longer_needed`; `batch_refused` as the reason after
     a refused batch; and `failed` with the code as the reason for an end that carries
-    no state, `run_closed` among them. Nothing is asked.
+    no state, `run_closed` among them.
 - `Cancelled` when the run's context had ended at the moment the session observed the
   runtime's exit, whatever the exit status or the signal, and whoever stopped the
   runtime: the session at the context's end, or the runtime itself at a Ctrl-C that
   reached both. In a race it is whichever the session saw first. A context that ends
-  after the exit, while the gateway is asked for the outcome or the sinks close, leaves
-  it false, as do the time limit, which is `TimedOut`, a run the gateway closed before
+  after the exit, while the sinks close, leaves it false, as do the time limit, which is `TimedOut`, a run the gateway closed before
   the context ended, which is `RunClosed`, and a signal from elsewhere while the
   context lasts: `Cancelled` is never true with `TimedOut` or with `RunClosed`. On
   pipes, the exit is observed when the runtime's standard output and standard error
@@ -400,12 +341,9 @@ A program that needs code of its own implements the interface.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
-  gateway's `410`, unchanged: `run_closed`,
-  `credential_expired` or `stopped`, `credential_check_unreachable` and
-  `credential_check_invalid` when its run credential could not be checked, the
-  introspection endpoint unreachable or its answer not valid, `session_lost` when it heard nothing
-  from the session for 3 heartbeat intervals, and `batch_refused` when it refused a
-  batch of the session's. The runtime was stopped as at its time limit. A server's
+  gateway's `410`, unchanged: `run_closed`, `stopped`, `session_lost` when it heard
+  nothing from the session for 3 heartbeat intervals, and `batch_refused` when it
+  refused a batch of the session's. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
 
@@ -433,17 +371,10 @@ with `e2e` to check them together.
     It is a worked example of the contract's receiving rules.
   - `policy/`, `refusal/`, `event/`, `sink/`, `server/` (the client of the contract) and
     `program/`.
-  - `runcredential/`: the run credential the run's starter gives a run: the
-    configuration of the starters a gateway accepts and its checks, the verifier of a run credential (its
-    serialisation, header, signature, claims and scope), the mapping of its claims to the
-    run's labels and `about.details`, the client of a starter's introspection endpoint,
-    and the run keys a gateway refuses, kept in its state directory. See
-    [run credentials](gateway-run-credentials.md).
   - `link/`: the names the parts agree on: the proxy variables, the relay preamble, the
     loopback address, the variables that name the run's socket and a tool's socket, the
     headers the proxy sets for a tool, the placeholder value, and the names of the
-    gateway's link: its preamble `QORY-LINK`, the `Bearer` scheme a run credential is
-    presented in, and the prefix `qory-link-` of its socket's directory, the socket's
+    gateway's link: its preamble `QORY-LINK`, and the prefix `qory-link-` of its socket's directory, the socket's
     name and the modes of both.
   - `internal/`: `jcs`, and `importrules`, the test of the rules below.
 - `session/`: the session.

@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,128 +23,46 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/link"
-	"github.com/qoryai/forager/refusal"
-	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
-// runIdentity is the run a run credential is for, as the verifier makes it from the
-// credential's verified claims through the issuer's mapping.
+// runIdentity is the run a request on the gateway's one address is for, as the
+// gateway's [runAuth] decides it from the request's bearer value.
 type runIdentity struct {
-	// Issuer is the issuer whose key verified the run credential, the claim iss.
-	Issuer string
-	// RunKey is the run key, the claim sub.
-	RunKey string
-	// Labels are the run's labels, forge, repository and run_key, the credential's alone.
-	Labels map[string]string
-	// Details are the keys of about.details the credential decides.
-	Details map[string]string
-	// Expires is the credential's exp.
+	// Key names the run: every request of a run opened with it carries one of the same
+	// key.
+	Key string
+	// Expires is the latest the identity is accepted: what an ended run opened with it
+	// left is kept until then.
 	Expires time.Time
-
-	// active, when not nil, asks the starter's introspection endpoint whether the run
-	// credential is still active, as [runIdentity.checkActive] answers: from the answer
-	// it keeps for cache, or now, past it; nil for an issuer without one. It holds the run
-	// credential, which it never shows.
-	active func(ctx context.Context, now bool) error
-	cache  time.Duration
 }
 
-// runAuth decides the run credential of every request of the contract on the gateway's
-// one address, [Config.Listen]. The gateway hands it the credential of the request's
+// runAuth decides the bearer value of every request of the contract on the gateway's
+// one address, [Config.Listen]. The gateway hands it the value of the request's
 // Authorization: Bearer, and never the header itself.
 type runAuth interface {
-	// authenticate returns the run the credential is for, or an error that refuses it.
-	// The error is never answered, logged or reported: every refusal is the same 401
-	// run_credential_refused.
-	authenticate(ctx context.Context, credential string) (runIdentity, error)
+	// authenticate returns the run the value is for, or an error that refuses it. The
+	// error is never answered, logged or reported: every refusal is the same 401
+	// unauthorized.
+	authenticate(ctx context.Context, value string) (runIdentity, error)
 }
 
-// proxyLogin decides the proxy login of a connection to the gateway's one address
-// whose first request is a proxy's, CONNECT or an absolute-form target, and that
-// carries no live run's proxy secret: a client with no session, whose run credential
-// is the login's password.
-type proxyLogin interface {
-	// login returns the proxy of the run whose run credential authorization carries,
-	// authorization being the Proxy-Authorization value as the client sent it, for the
-	// connection whose first request is first: its head, with no body. The proxy is one
-	// proxy.New made, and guarded; track, when not nil, is handed the connection before
-	// the proxy is, and returns the connection the proxy serves, which tells the run
-	// when it closes. [errUnserved] answers 500: the login was accepted and no run could
-	// serve it. [errNotOpened] answers the 503 that says to try again, and an
-	// [*openRefused] the 403 with its text. Any other error refuses the connection with
-	// 407; it is never answered, logged or reported. ctx ends when the connection's time
-	// to open is up.
-	login(ctx context.Context, authorization string, first *http.Request) (px *proxy.Proxy, track func(net.Conn) net.Conn, err error)
-}
+// errUnauthorized is a bearer value the gateway refuses.
+var errUnauthorized = errors.New("the gateway refused the request: unauthorized")
 
-// errUnserved is a proxy login accepted for a run that could not serve it: no run
-// opened, or the gateway is closing.
-var errUnserved = errors.New("no run could serve the connection")
-
-// errNotOpened is a run of a client with no session that failed to open with a failure
-// that may pass, or one with neither a code nor a status of Qory Apiary's: the
-// connection gets the 503 of [proxyNotOpened], and the next one opens anew.
-var errNotOpened = errors.New("the gateway could not open the run")
-
-// openRefused is a run of a client with no session that did not open, refused for a
-// reason that does not pass: the connection gets a 403 with the text.
-type openRefused struct{ text string }
-
-func (e *openRefused) Error() string { return e.text }
-
-// answer is the 403 of the refusal, its text the body.
-func (e *openRefused) answer() string {
-	return "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(e.text)) + "\r\nConnection: close\r\n\r\n" + e.text
-}
-
-// The texts of a run the gateway could not open because its run credential could not
-// be checked, the introspection endpoint giving no answer, or none that is valid: the
-// message of a session's 503 and 502, and the body of a client's 403.
-const (
-	issuerUnreachableText   = "the run did not start: its run credential could not be checked; try again"
-	issuerAnswerInvalidText = "the run did not start: its run credential could not be checked"
-)
-
-// refuseAll is the seam of a gateway that verifies no run credential yet: it refuses
-// every one, so nothing opens on the one address without a verifier.
+// refuseAll is the gateway's [runAuth] without a verifier: it refuses every bearer
+// value, so nothing opens on the one address.
 type refuseAll struct{}
 
 func (refuseAll) authenticate(context.Context, string) (runIdentity, error) {
-	return runIdentity{}, runcredential.ErrRefused
-}
-
-func (refuseAll) login(context.Context, string, *http.Request) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
-	return nil, nil, runcredential.ErrRefused
+	return runIdentity{}, errUnauthorized
 }
 
 // identityKey is the key of a request's [runIdentity] in its context.
 type identityKey struct{}
 
-// expiredKey is the key of the [runIdentity] of a request whose run credential's exp
-// has passed, in its context: the run it was for, which the request learns the end of
-// and is never served.
-type expiredKey struct{}
-
-// expiredOf is the run of an expired run credential a reload or a batch carried.
-func expiredOf(ctx context.Context) (runIdentity, bool) {
-	id, ok := ctx.Value(expiredKey{}).(runIdentity)
-	return id, ok
-}
-
-// expiredAuth is a [runAuth] that also verifies a run credential whose exp has passed.
-type expiredAuth interface {
-	authenticateExpired(credential string) (runIdentity, error)
-}
-
-// answersAnEnd reports whether a request is one that a run which has ended answers with
-// its end, the 410: a reload or a batch.
-func answersAnEnd(r *http.Request) bool {
-	return (r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, runPath+"/")) || (r.Method == http.MethodPost && r.URL.Path == eventsPath)
-}
-
-// identityOf is the run of the run credential a request on the one address carried,
-// when it came there.
+// identityOf is the run of the bearer value a request on the one address carried, when
+// it came there.
 func identityOf(ctx context.Context) (runIdentity, bool) {
 	id, ok := ctx.Value(identityKey{}).(runIdentity)
 	return id, ok
@@ -164,17 +81,10 @@ type side struct {
 // localSide is the local link's.
 var localSide = &side{}
 
-// authorityPath is where in the gateway's directory its own certificate authority is
-// kept.
-func authorityPath(dir string) string { return filepath.Join(dir, "authority", "ca.pem") }
-
 // checkService refuses a config whose one address cannot be served, before anything
 // starts, and returns the certificate it serves, nil for none. It never reads the key's
 // content into an error.
 func checkService(cfg *Config) (*tls.Certificate, error) {
-	if cfg.Runs.Quiet < 0 {
-		return nil, fmt.Errorf("the quiet time of a run with no session, %s, is negative", cfg.Runs.Quiet)
-	}
 	if cfg.Listen == "" {
 		if cfg.TLS != nil {
 			return nil, errors.New("the gateway has a certificate and no address to serve it on")
@@ -190,12 +100,6 @@ func checkService(cfg *Config) (*tls.Certificate, error) {
 	}
 	if cfg.TLS == nil && !loopbackHost(host) {
 		return nil, fmt.Errorf("the gateway's address %s is not loopback, so it needs TLS: a certificate and its key", cfg.Listen)
-	}
-	if len(cfg.RunCredentials) == 0 {
-		return nil, errors.New("the gateway's address opens runs for run credentials alone, and no run starter is configured under run_credentials")
-	}
-	if cfg.Dir == "" {
-		return nil, errors.New("the gateway's address needs the gateway's directory, where its own certificate authority is kept")
 	}
 	if cfg.TLS == nil {
 		return nil, nil
@@ -232,28 +136,20 @@ const (
 // open between requests: the session's client keeps one as long.
 const serviceIdle = 90 * time.Second
 
-// proxyRefusedText is what a client with no session reads of a 407, the same for every
-// failure of its login.
-const proxyRefusedText = "a valid run credential is required as the proxy password"
+// proxyRefusedText is what a proxy request reads of a 407, the same for every failure
+// of its login.
+const proxyRefusedText = "a live run's proxy secret is required as the proxy password"
 
 // proxyRefused is the answer to a proxy request whose login no run accepts.
 var proxyRefused = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"qory\"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(proxyRefusedText)) + "\r\nConnection: close\r\n\r\n" + proxyRefusedText
-
-// proxyNotOpenedText is what a client with no session reads when its run failed to
-// open without a refusal's code.
-const proxyNotOpenedText = "the gateway could not open the run; try again"
-
-// proxyNotOpened is the answer to a proxy request whose run failed to open without a
-// refusal's code: nothing spent, so the client may try again.
-var proxyNotOpened = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + strconv.Itoa(len(proxyNotOpenedText)) + "\r\nConnection: close\r\n\r\n" + proxyNotOpenedText
 
 // proxyUnserved is the answer to a proxy request accepted for a run whose proxy the
 // gateway may not serve another machine with.
 const proxyUnserved = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 // service is the gateway's one address: every connection is routed by its first bytes,
-// after the TLS handshake when there is TLS, to the relay's run, the proxy of a run
-// whose login it carries, or the contract.
+// after the TLS handshake when there is TLS, to the relay's run, the proxy of the run
+// whose proxy secret its login carries, or the contract.
 type service struct {
 	g     *Gateway
 	ln    net.Listener
@@ -326,7 +222,7 @@ func (s *service) accept() {
 // route reads c's first bytes within [link.PreambleWait], the TLS handshake among
 // them, and hands c on: a first line of [link.RelayPreamble] to the shared proxy's
 // runs, guarded ones alone; a proxy request, CONNECT or an absolute-form target, to the
-// proxy of the run its login names; anything else to the contract. What it read is
+// proxy of the run whose proxy secret its login carries; anything else to the contract. What it read is
 // read again by whoever it hands c to. A connection that sends nothing it can route in
 // time is closed unanswered.
 func (s *service) route(raw net.Conn) {
@@ -369,7 +265,7 @@ func (s *service) route(raw net.Conn) {
 		s.g.proxies.Serve(&linkConn{Conn: c, r: r}, true)
 		handed = true
 	case proxyForm(line):
-		handed = s.proxyRequest(c, r, deadline)
+		handed = s.proxyRequest(c, r)
 	default:
 		c.SetDeadline(time.Time{})
 		handed = s.queue.deliver(&linkConn{Conn: c, r: r})
@@ -418,10 +314,9 @@ func proxyForm(line []byte) bool {
 
 // proxyRequest hands c, whose first request is a proxy's, to the proxy of the run its
 // login names: a live run's proxy secret as the password of its Proxy-Authorization, a
-// session's run without a wall, or else a run credential the proxy login accepts. A
-// connection without either is answered 407 with Proxy-Authenticate, and closed. It
-// reports whether c was handed on.
-func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) bool {
+// session's run without a wall. A connection without one is answered 407 with
+// Proxy-Authenticate, and closed. It reports whether c was handed on.
+func (s *service) proxyRequest(c net.Conn, r *bufio.Reader) bool {
 	head, ok := peekThrough(r, maxProxyHead, headEnd)
 	if !ok {
 		return false
@@ -430,19 +325,9 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 	if err != nil {
 		return false
 	}
-	first.Body = http.NoBody
-	px, track, err := s.login(first, deadline)
+	px := s.login(first)
 	if px == nil {
-		var refused *openRefused
-		if errors.As(err, &refused) {
-			answerAndLinger(c, refused.answer())
-		} else if errors.Is(err, errNotOpened) {
-			answerAndLinger(c, proxyNotOpened)
-		} else if errors.Is(err, errUnserved) {
-			answerAndLinger(c, proxyUnserved)
-		} else {
-			answerAndLinger(c, proxyRefused)
-		}
+		answerAndLinger(c, proxyRefused)
 		return false
 	}
 	if !px.Guarded() {
@@ -452,11 +337,7 @@ func (s *service) proxyRequest(c net.Conn, r *bufio.Reader, deadline time.Time) 
 		return false
 	}
 	c.SetDeadline(time.Time{})
-	var served net.Conn = &linkConn{Conn: c, r: r}
-	if track != nil {
-		served = track(served)
-	}
-	px.ServeConn(served)
+	px.ServeConn(&linkConn{Conn: c, r: r})
 	return true
 }
 
@@ -488,26 +369,18 @@ func answerAndLinger(c net.Conn, answer string) {
 	io.Copy(io.Discard, io.LimitReader(c, lingerBytes))
 }
 
-// login is the proxy of the run a proxy request's login names, and what tracks the
-// connection for it; nil and the refusal when none: [errUnserved], [errNotOpened], an
-// [*openRefused], or anything else for 407.
-func (s *service) login(first *http.Request, deadline time.Time) (*proxy.Proxy, func(net.Conn) net.Conn, error) {
+// login is the proxy of the live run whose proxy secret a proxy request's login carries
+// as its password; nil when none.
+func (s *service) login(first *http.Request) *proxy.Proxy {
 	values := first.Header.Values("Proxy-Authorization")
 	if len(values) != 1 {
-		return nil, nil, runcredential.ErrRefused
+		return nil
 	}
-	if password, ok := basicPassword(values[0]); ok {
-		if px := s.g.proxies.Lookup(password, true); px != nil {
-			return px, nil, nil
-		}
+	password, ok := basicPassword(values[0])
+	if !ok {
+		return nil
 	}
-	ctx, cancel := context.WithDeadline(s.g.base, deadline)
-	defer cancel()
-	px, track, err := s.g.login.login(ctx, values[0], first)
-	if err != nil {
-		return nil, nil, err
-	}
-	return px, track, nil
+	return s.g.proxies.Lookup(password, true)
 }
 
 // basicPassword is the password of a Proxy-Authorization value of the Basic scheme
@@ -525,11 +398,11 @@ func basicPassword(value string) (string, bool) {
 	return password, ok
 }
 
-// b64token is the credential of an Authorization of the Bearer scheme, RFC 6750 §2.1.
+// b64token is the value of an Authorization of the Bearer scheme, RFC 6750 §2.1.
 var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
 
-// bearer is the credential of a request's Authorization values: one, of the Bearer
-// scheme, in its syntax.
+// bearer is the value of a request's Authorization values: one, of the Bearer scheme,
+// in its syntax.
 func bearer(values []string) (string, bool) {
 	if len(values) != 1 {
 		return "", false
@@ -538,50 +411,39 @@ func bearer(values []string) (string, bool) {
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return "", false
 	}
-	credential := strings.TrimLeft(rest, " ")
-	return credential, b64token.MatchString(credential)
+	value := strings.TrimLeft(rest, " ")
+	return value, b64token.MatchString(value)
 }
 
-// serviceHandler is the contract on the one address: every request's run credential
-// decided first, a request without one or with one refused answered 401
-// run_credential_refused with WWW-Authenticate: Bearer; then the link's handler, with
-// the run's identity in the request's context and no Authorization left on it.
+// serviceHandler is the contract on the one address: every request's bearer value
+// decided first, a request without one or with one refused answered 401 unauthorized
+// with WWW-Authenticate: Bearer; then the link's handler, with the run's identity in the
+// request's context and no Authorization left on it.
 func (g *Gateway) serviceHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		credential, ok := bearer(r.Header.Values("Authorization"))
+		value, ok := bearer(r.Header.Values("Authorization"))
 		if !ok {
-			refuseCredential(w)
+			refuseUnauthorized(w)
 			return
 		}
-		key := any(identityKey{})
-		id, err := g.auth.authenticate(r.Context(), credential)
+		id, err := g.auth.authenticate(r.Context(), value)
 		if err != nil {
-			// A run credential whose exp has passed reaches a reload or a batch alone,
-			// which answer it with the end of its run, and nothing else.
-			late, ok := g.auth.(expiredAuth)
-			if !ok || !answersAnEnd(r) {
-				refuseCredential(w)
-				return
-			}
-			if id, err = late.authenticateExpired(credential); err != nil {
-				refuseCredential(w)
-				return
-			}
-			key = expiredKey{}
+			refuseUnauthorized(w)
+			return
 		}
-		r = r.WithContext(context.WithValue(r.Context(), key, id))
+		r = r.WithContext(context.WithValue(r.Context(), identityKey{}, id))
 		r.Header = r.Header.Clone()
 		r.Header.Del("Authorization")
 		next.ServeHTTP(w, r)
 	})
 }
 
-// refuseCredential answers a request whose run credential is refused, or missing: 401
-// run_credential_refused, with no names and nothing of why.
-func refuseCredential(w http.ResponseWriter) {
+// refuseUnauthorized answers a request whose bearer value is refused, or missing: 401
+// unauthorized, with no names and nothing of why.
+func refuseUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	refuse(w, http.StatusUnauthorized, refusal.RunCredentialRefused, nil, accesskey.FromGateway, runcredential.ErrRefused.Error())
+	refuse(w, http.StatusUnauthorized, accesskey.CodeUnauthorized, nil, accesskey.FromGateway, gatewayText(accesskey.CodeUnauthorized))
 }
 
 // proxyAddress is the shape of the discovery's proxy.address,

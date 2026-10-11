@@ -90,11 +90,11 @@ func TestEverySchemaCompiles(t *testing.T) {
 }
 
 // TestDocumentFixturesValidate pins that every policy, server, configuration, run
-// registration, run configuration, run credentials, attach answer, outcome and batch
-// answer fixture passes its schema, the run credentials of the known answers included.
+// registration, run configuration, attach answer, outcome and batch answer fixture
+// passes its schema.
 func TestDocumentFixturesValidate(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
-		"run-registration.schema.json", "run-configuration.schema.json", "run-credentials.schema.json",
+		"run-registration.schema.json", "run-configuration.schema.json",
 		"run-attach-answer.schema.json", "run-outcome.schema.json", "batch-answer.schema.json")
 	dirs := map[string]string{
 		"fixtures/run-attach-answer": "run-attach-answer.schema.json",
@@ -105,17 +105,6 @@ func TestDocumentFixturesValidate(t *testing.T) {
 		"fixtures/configuration":     "configuration.schema.json",
 		"fixtures/run-registration":  "run-registration.schema.json",
 		"fixtures/run-configuration": "run-configuration.schema.json",
-		"fixtures/run-credentials":   "run-credentials.schema.json",
-	}
-	for _, f := range []string{"one-key.json", "two-keys.json"} {
-		f = "fixtures/known-answers/run-credentials/" + f
-		doc, err := contracts.Document(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s["run-credentials.schema.json"].Validate(doc); err != nil {
-			t.Errorf("%s: %v", f, err)
-		}
 	}
 	for dir, schema := range dirs {
 		for _, f := range files(t, dir) {
@@ -136,7 +125,6 @@ const (
 	linkRunRequest = "link-run-request.schema.json"
 	linkRunAnswer  = "link-run-answer.schema.json"
 	linkReload     = "link-reload-answer.schema.json"
-	linkOutcome    = "link-outcome-answer.schema.json"
 	linkBatch      = "link-batch.schema.json"
 	linkRefusal    = "link-refusal.schema.json"
 )
@@ -162,14 +150,13 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // wall, the names it passes and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, image, applied and certificate
 // authority, one with a wall and an image but no certificate authority, one without a
-// wall and one without a policy, a reload answer with and without a policy, an outcome
-// answer with an outcome and a reason, with an outcome alone and with none, a batch of a
+// wall and one without a policy, a reload answer with and without a policy, a batch of a
 // session's events without sequence, a batch of a run.refused with a session's own code,
 // a batch of a run.exited with timeout, and refusals from the gateway, two internal ones
 // among them, one whose message spans lines, two 410s with the state and the reason of
 // the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
-	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal)
+	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
 	seen := map[string]bool{}
 	for _, f := range files(t, "fixtures/link") {
 		kind := namedSchema(s, f)
@@ -247,8 +234,8 @@ func TestLinkBatchRefusedCodesAreTheSessions(t *testing.T) {
 }
 
 // beyondLinkSchema marks a refused fixture under fixtures/invalid whose rule only the
-// gateway checks, which its schema accepts: a session's dev.qory.run.exited with no
-// outcome answer whose state is not the runtime's exit's, cancelled with no reason or
+// gateway checks, which its schema accepts: a session's dev.qory.run.exited whose state
+// is not the runtime's exit's, cancelled with no reason or
 // succeeded with an exit status other than 0.
 const beyondLinkSchema = "-beyond-schema-"
 
@@ -260,7 +247,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // run.registered, a run registration with a member it does not define, with an interval over
 // 300 seconds or with a time that is not UTC in whole seconds, a run.registered whose
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
-// with an unknown one, opened by a session without its command or by a gateway with one,
+// with an unknown one, or opened by a session without its command,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no
 // quiet_seconds or with quiet_seconds and another reason, a run.refused with a code outside the list and no
@@ -269,17 +256,14 @@ const beyondLinkSchema = "-beyond-schema-"
 // not define, that passes a value with a name or whose image has no reference, a link run
 // answer without its proxy secret, its run secret or applied or whose image has no
 // reference, a link reload answer with the proxy secret, the run secret or the certificate
-// authority or whose applied holds variables, a link outcome answer with a reason and no
-// state or with a state other than the three, a link batch whose event carries a sequence, that holds a
-// run.registered or a run.egress, a run.started a gateway opened, a run.exited with one of Forager's reasons
-// other than timeout or with timeout and a state other than cancelled, or a run.refused with a gateway's code, run_closed, another code of the
+// authority or whose applied holds variables, a link batch whose event carries a sequence, that holds a
+// run.registered or a run.egress, a run.started opened by a gateway, a run.exited with one of Forager's reasons
+// other than timeout, its old names among them, or with timeout and a state other than cancelled, or a run.refused with a gateway's code,
+// its old codes among them, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// workspaces or has no heartbeat interval or proxy, a link refusal without from, with a control
+// workspaces or has no heartbeat interval or proxy, and a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
-// other than the three, and run credentials
-// with alg none or HS256, without an audience, with a label of claims and no join, a key
-// without its file, a plain http issuer, a run_key from a claim other than sub, or a
-// member the schema does not define. A fixture whose name holds -beyond-schema- breaks a
+// other than the three. A fixture whose name holds -beyond-schema- breaks a
 // rule only the gateway checks, and passes its schema. The longest schema name the file name starts with is
 // the schema, so run-configuration-variable-value-not-string is held to the run
 // configuration and not to a schema named run.
@@ -287,8 +271,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
 		"run-registration.schema.json", "run-configuration.schema.json", "event.schema.json", "batch.schema.json",
 		"descriptor.schema.json", "record.schema.json", "enrolment.schema.json",
-		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkOutcome, linkBatch, linkRefusal,
-		"run-credentials.schema.json", "run-key.schema.json", "run-registration-answer.schema.json",
+		linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal,
+		"run-key.schema.json", "run-registration-answer.schema.json",
 		"run-attach.schema.json", "run-attach-answer.schema.json", "run-outcome.schema.json",
 		"run-outcome-answer.schema.json", "batch-answer.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
@@ -327,10 +311,8 @@ func TestInvalidFixturesAreRefused(t *testing.T) {
 // names the same run in source and subject, the run starts with run.registered, the
 // gateway's record of the server's accepted registration, or with run.started, and
 // ends with run.exited, and output.log is the concatenation of the run.log chunks. What
-// the schema cannot state, since run.exited does not contain opened_by, is pinned here: a
-// session's run.exited contains exit_code, and a run a gateway opened has no process, so
-// its run.exited contains none and neither output nor a resize is recorded. Every
-// run.exited contains state, which the schema requires.
+// the schema does not require is pinned here: every run.exited Forager writes contains
+// exit_code, beside state, which the schema requires.
 func TestRecordedRunValidates(t *testing.T) {
 	s := compile(t, "event.schema.json")
 	runs, err := fs.ReadDir(contracts.FS, "fixtures/run")
@@ -352,7 +334,6 @@ func TestRecordedRunValidates(t *testing.T) {
 			t.Fatalf("%s: no events", dir)
 		}
 		var log []byte
-		openedBy := ""
 		for i, e := range events {
 			if err := s["event.schema.json"].Validate(e); err != nil {
 				t.Errorf("%s: line %d: %v", dir, i+1, err)
@@ -366,20 +347,14 @@ func TestRecordedRunValidates(t *testing.T) {
 				t.Errorf("%s: line %d: subject %v and source %v do not name the directory",
 					dir, i+1, m["subject"], m["source"])
 			}
-			typ, _ := m["type"].(string)
-			d, _ := m["data"].(map[string]any)
-			switch {
-			case typ == "dev.qory.run.started":
-				openedBy, _ = d["opened_by"].(string)
-			case typ == "dev.qory.run.exited":
+			if m["type"] == "dev.qory.run.exited" {
+				d, _ := m["data"].(map[string]any)
 				_, state := d["state"]
 				_, code := d["exit_code"]
-				if want := openedBy == "session"; !state || code != want {
-					t.Errorf("%s: line %d: a run opened by %q exits with state %v and exit_code %v",
-						dir, i+1, openedBy, d["state"], d["exit_code"])
+				if !state || !code {
+					t.Errorf("%s: line %d: a run exits with state %v and exit_code %v",
+						dir, i+1, d["state"], d["exit_code"])
 				}
-			case openedBy == "gateway" && (typ == "dev.qory.run.log" || typ == "dev.qory.run.resized"):
-				t.Errorf("%s: line %d: %s in a run a gateway opened, which has no process", dir, i+1, typ)
 			}
 			if m["type"] == "dev.qory.run.log" {
 				chunk, err := base64Decode(m["data"].(map[string]any)["bytes"].(string))

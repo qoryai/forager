@@ -21,11 +21,11 @@
       "type": "boolean"
     },
     "labels": {
-      "description": "The run's labels, as dev.qory.run.started contains them. On the local link they are the run's. Behind a separate gateway the run's labels come from the run credential alone: forge and repository must equal the credential's, else target_differs_from_credential; another label the mapping sets must equal the credential's, else differs_from_credential; a label the mapping does not set is ignored. Each such refusal names every member that differs as <member>=<the run credential's value>, such as labels.repository=example-namespace/project.",
+      "description": "The run's labels, as dev.qory.run.started contains them: the run's.",
       "$ref": "events/run.started.schema.json#/properties/labels"
     },
     "about": {
-      "description": "What the run is about, as dev.qory.run.started contains it. It selects no policy. Behind a separate gateway a key of details the mapping sets must equal the credential's, else differs_from_credential.",
+      "description": "What the run is about, as dev.qory.run.started contains it. It selects no policy.",
       "$ref": "events/run.started.schema.json#/properties/about"
     },
     "passes": {

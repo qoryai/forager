@@ -2,14 +2,13 @@ package proxy
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 )
 
 // TestAnAuthorityKeepsABoundedCacheOfLeaves pins the bound on an authority's
 // certificates: at most leafCap hosts' are kept, the least recently used going first, a
 // host asked for again is the same certificate while it is kept, and one that went is
-// made again: a run's authority and a gateway's own, kept in its directory, alike.
+// made again.
 func TestAnAuthorityKeepsABoundedCacheOfLeaves(t *testing.T) {
 	defer func(n int) { leafCap = n }(leafCap)
 	leafCap = 3
@@ -17,13 +16,7 @@ func TestAnAuthorityKeepsABoundedCacheOfLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err := OpenCA(filepath.Join(t.TempDir(), "authority", "ca.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, ca := range map[string]*CA{"a run's": run, "the gateway's own": stored} {
-		t.Run(name, func(t *testing.T) { boundedLeaves(t, ca) })
-	}
+	boundedLeaves(t, run)
 }
 
 // boundedLeaves checks ca's cache of leaves, under a leafCap of 3.

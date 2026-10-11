@@ -49,7 +49,7 @@ state toward the gateway beside them:
   the session's sequence, and `stopped` when the gateway ended the run.
 - `undelivered/`: the session's batches the gateway did not accept, when there are any.
 
-Neither holds the run credential. `session.Resend` sends the gateway what they say it
+`session.Resend` sends the gateway what they say it
 still lacks ([sending the session's record again](go.md#sending-the-sessions-record-again)).
 
 A run behind a wall is recorded the same way. See [the wall](wall.md).
@@ -71,43 +71,29 @@ Forager heartbeats while the session runs: the session sends one every interval 
 gateway's discovery announces, `gateway.Config.Heartbeat`, and the gateway ends a run
 whose session sends nothing for three. The exit status of a run is the runtime's.
 
-`dev.qory.run.started` says what opened the run, in `opened_by`: `session` for a run
-around a runtime, as above, or `gateway` for a run a gateway opened on a run credential,
-with no session. A run a gateway opened has no process, so its `dev.qory.run.started`
-names no runtime, command or host, and its `dev.qory.run.exited` contains no exit status.
-Its `credential` says where the run's credential came from: `starter`, the run's starter
-gave the run its run credential, for a session's run behind a separate gateway and every
-run a gateway opened; `none` for a run on the local link. The gateway decides it and
-refuses a session's batch whose `dev.qory.run.started` says otherwise.
+`dev.qory.run.started` says what opened the run, in `opened_by`: `session`, a session
+around a runtime, as above.
 
 Every `dev.qory.run.exited` says how the run ended in `state`: `succeeded`, `failed` or
 `cancelled`, stopped before it said how it went. A runtime that exits by itself is
-`succeeded` on 0 and `failed` otherwise, unless the run's starter gives an outcome. When
-a run ends other than by the runtime's own exit, or its starter gives a reason,
-`dev.qory.run.exited` says why in `reason`: an open code, Forager's own or the starter's,
-carried as given. The session writes `timeout`, `cancelled`, and `interrupted`,
+`succeeded` on 0 and `failed` otherwise. When
+a run ends other than by the runtime's own exit, `dev.qory.run.exited` says why in
+`reason`: an open code, Forager's own or one a link `410` carried, as given. The session writes `timeout`, `cancelled`, and `interrupted`,
 `cancelled`, a run stopped from where it was started (a Ctrl-C), and posts them. The
 gateway writes the others: `session_lost`, `failed`, the session was silent;
 `batch_refused`,
 `failed`, the gateway refused a batch of the session's (see the contract's §The
-gateway's link); `quiet`, `cancelled`;
-`credential_expired`, `cancelled`; `stopped`, `cancelled`, the starter ended the run
-and gave no outcome, or the starter's own outcome and reason when it gave one;
-`credential_check_unreachable`, `failed`, the run credential could not be checked since
-the introspection endpoint could not be reached after the gateway's tries;
-`credential_check_invalid`, `failed`, it gave no valid answer; and sending a record again
-writes `gateway_lost`, `failed`. Forager's codes are reserved, so a starter's reason
-that equals one is dropped. When the gateway ends a session's run, the gateway writes
+gateway's link); and sending a record again
+writes `gateway_lost`, `failed`. Forager's codes are reserved, and so are the old names
+`quiet`, `credential_expired`, `credential_check_unreachable` and
+`credential_check_invalid`, which Forager no longer writes. When the gateway ends a session's run, the gateway writes
 the run's `dev.qory.run.exited`, and answers the session's next request with a `410`, a
 code, and the state and the reason of that end. The session records its own
 `dev.qory.run.exited` in `session.jsonl` alone, with them, and posts nothing more:
-`credential_expired`, `stopped`, `credential_check_unreachable`,
-`credential_check_invalid`, `run_closed`, `session_lost` or `batch_refused` as the
-gateway ended the run. A refusal of the run request with a
+`stopped`, `run_closed`, `session_lost` or `batch_refused` as the gateway ended the
+run. A refusal of the run request with a
 code other than `wall_required` is recorded the same way: the session records
-`dev.qory.run.refused` in its own record alone, since the gateway opened no run;
-`credential_check_unreachable`, the gateway's `503`, and `credential_check_invalid`, its `502`, among
-them. A code of the server's comes with its status, and is recorded as the server sent
+`dev.qory.run.refused` in its own record alone, since the gateway opened no run. A code of the server's comes with its status, and is recorded as the server sent
 it, `not_found` among them, and one the contract does not list yet too. A run the gateway could not open for a reason
 without a code, a `5xx` `internal`, is recorded nowhere: the run returns the error the
 gateway's message says. The contract describes each.
