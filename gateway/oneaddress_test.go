@@ -169,7 +169,7 @@ func (s *service) relayTunnel(t *testing.T, secret, host string) net.Conn {
 	t.Helper()
 	c := s.dial(t)
 	c.SetDeadline(time.Now().Add(10 * time.Second))
-	io.WriteString(c, link.Preamble(link.RelayPreamble, secret)+"CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
+	io.WriteString(c, link.RelayLine(secret)+"CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
 	r := bufio.NewReader(c)
 	resp, err := http.ReadResponse(r, nil)
 	if err != nil || resp.StatusCode != http.StatusOK || r.Buffered() > 0 {
@@ -446,10 +446,6 @@ func TestAGatewayLetsGoOfEndedRuns(t *testing.T) {
 		runs, spent := gateway.Held(s.g)
 		return runs == 0 && spent == 1
 	})
-	// Of the run secrets, only the last run's is known still.
-	if n := gateway.SecretsIndexed(s.g); n != 1 {
-		t.Errorf("%d run secrets known, want the last run's alone", n)
-	}
 }
 
 // TestARefusedProxyRequestIsAnsweredInFull pins the 407 of a client that sends a body

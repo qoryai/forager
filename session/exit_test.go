@@ -1,9 +1,11 @@
 package session_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,22 +15,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/sink"
 )
 
+// startRemote starts a fake separate gateway whose certificate the session trusts, until
+// the test ends.
+func startRemote(t *testing.T) *linktest.Fake {
+	t.Helper()
+	g := linktest.StartRemoteFake(t)
+	t.Cleanup(session.TrustRemote(g.URL(), g.CAFile()))
+	return g
+}
+
 // remoteSpec is a spec whose runtime exits by itself with the status exit, behind a
-// fake separate gateway, and the gateway; what the session reported is in reports.
+// fake separate gateway by a run key of its for a run of its own, and the gateway; what
+// the session reported is in reports.
 func remoteSpec(t *testing.T, exit int) (session.Spec, *linktest.Fake, func() []string) {
 	t.Helper()
 	sp, _ := specGateway(t)
 	sp.Forwarder = nil
 	sp.Command, sp.Args = "/bin/sh", []string{"-c", fmt.Sprintf("exit %d", exit)}
-	g := linktest.StartRemoteFake(t)
+	g := startRemote(t)
 	g.SetInterval(30)
-	sp.Gateway = session.RemoteGateway{URL: g.URL(), CAFile: g.CAFile()}
+	sp.Gateway = session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())}
 	var mu sync.Mutex
 	var reports []string
 	sp.Report = func(l string) {
@@ -58,8 +71,9 @@ func exitedOf(t *testing.T, res *session.Result, g *linktest.Fake) (own, posted 
 }
 
 // undeliveredRun runs a session behind a fake separate gateway whose runtime exits 3,
-// and which takes no batch after the run's start: run.exited is among what the record still owes. It returns the spec
-// of its resend, and the gateway.
+// and which takes no batch after the run's start: run.exited is among what the record
+// still owes. It returns the spec of its resend, with the run's run key, and the
+// gateway.
 func undeliveredRun(t *testing.T) (session.ResendSpec, *linktest.Fake) {
 	t.Helper()
 	sp, g, _ := remoteSpec(t, 3)
@@ -76,8 +90,7 @@ func undeliveredRun(t *testing.T) (session.ResendSpec, *linktest.Fake) {
 	if res.State != "failed" || res.Reason != "" || res.ExitCode != 3 || res.Undelivered == 0 {
 		t.Fatalf("result %+v", res)
 	}
-	// The record owes: the run directory keeps the run secret for the resend.
-	keptRunSecret(t, res.Dir)
+	noRunKey(t, res.Dir, sp.Gateway.(session.RemoteGateway).RunKey)
 	return session.ResendSpec{Gateway: sp.Gateway.(session.RemoteGateway), Dir: res.Dir, ForagerVersion: "test"}, g
 }
 
@@ -86,7 +99,7 @@ func undeliveredRun(t *testing.T) (session.ResendSpec, *linktest.Fake) {
 // that ends the run says how it ended, as the session records it; a 410 run_closed,
 // which says only that the run had ended otherwise, leaves it to the record's own
 // run.exited; and a gateway that takes the record gets run.exited again, which says
-// how the run ended. Either way the run secret, kept while the record owed, is gone.
+// how the run ended. Every request carries the run key, which no file holds.
 func TestAResendSaysHowTheRunEnded(t *testing.T) {
 	for name, c := range map[string]struct {
 		reply         *linktest.Reply
@@ -104,8 +117,12 @@ func TestAResendSaysHowTheRunEnded(t *testing.T) {
 			if err != nil || got.RunClosed != (c.closed != "") || got.ClosedReason != c.closed || got.State != c.state || got.Reason != c.reason {
 				t.Errorf("the resend %+v %v, want closed %q, %s %q", got, err, c.closed, c.state, c.reason)
 			}
-			// Nothing more is owed: the gateway ended the run or took everything.
-			noRunSecret(t, name, resend.Dir)
+			for _, b := range g.Bearers() {
+				if b != "Bearer "+resend.Gateway.RunKey {
+					t.Errorf("a request carried %q", b)
+				}
+			}
+			noRunKey(t, resend.Dir, resend.Gateway.RunKey)
 			if c.closed != "" {
 				return
 			}
@@ -142,7 +159,7 @@ func TestAResendOfARunAReloadEndedSendsNothing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !res.RunClosed || res.ClosedReason != "stopped" {
+			if !res.RunClosed || res.ClosedReason != "stopped" || res.State != end.Body.(map[string]any)["state"] || res.Reason != reasonOf(end) {
 				t.Fatalf("result %+v", res)
 			}
 			accepted, stopped, err := sink.Delivered(res.Dir)
@@ -154,9 +171,9 @@ func TestAResendOfARunAReloadEndedSendsNothing(t *testing.T) {
 					t.Fatalf("the gateway did not take %v", e)
 				}
 			}
-			// A gateway no request could reach: a resend that asked anything would fail.
-			nowhere := session.RemoteGateway{URL: "https://127.0.0.1:1", CAFile: g.CAFile()}
-			got, err := session.Resend(context.Background(), session.ResendSpec{Gateway: nowhere, Dir: res.Dir, ForagerVersion: "test"})
+			// A gateway no request could reach, and no run key: a resend that asked
+			// anything would fail.
+			got, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, ForagerVersion: "test"})
 			if err != nil || got != (session.ResendResult{}) {
 				t.Errorf("the resend %+v %v", got, err)
 			}
@@ -231,9 +248,91 @@ func TestAResendOfARunRefusedAtOpenSendsNothing(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, sink.DeliveredFile)); err == nil {
 		t.Fatal("a run refused at open has a delivered.log")
 	}
-	// A gateway no request could reach: a resend that asked anything would fail.
-	nowhere := session.ResendSpec{Gateway: session.RemoteGateway{URL: "https://127.0.0.1:1", CAFile: g.CAFile()}, Dir: dir, ForagerVersion: "test"}
+	// No run key: a resend that asked anything would fail.
+	nowhere := session.ResendSpec{Dir: dir, ForagerVersion: "test"}
 	if got, err := session.Resend(context.Background(), nowhere); err != nil || got != (session.ResendResult{NotOpened: true}) {
 		t.Errorf("the resend %+v %v", got, err)
+	}
+}
+
+// reasonOf is the reason of a 410's body, empty for none.
+func reasonOf(r *linktest.Reply) string {
+	reason, _ := r.Body.(map[string]any)["reason"].(string)
+	return reason
+}
+
+// noRunKey fails the test if a file of the run directory holds the run key, or any part
+// of it.
+func noRunKey(t *testing.T, dir, runKey string) {
+	t.Helper()
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if b, _ := os.ReadFile(p); bytes.Contains(b, []byte(runKey[4:40])) {
+			t.Errorf("%s holds the run key", p)
+		}
+		return nil
+	})
+}
+
+// TestAResendNeedsTheRunKey pins the run key of a resend that owes: without one the
+// resend says so, and with one it cannot read, or one of another run, it says that,
+// each before any request; and the 401 unauthorized of a gateway that does not take the
+// run key stops the resend with that refusal, what was not accepted under undelivered/.
+func TestAResendNeedsTheRunKey(t *testing.T) {
+	resend, g := undeliveredRun(t)
+	before := len(g.Bearers())
+	key := resend.Gateway.RunKey
+	for name, c := range map[string]struct {
+		key, want string
+	}{
+		"no run key":       {"", "resend " + resend.Dir + ": the run key is needed to send to its gateway; set QORY_RUN_KEY"},
+		"not a run key":    {"qrk_not-a-run-key", "QORY_RUN_KEY is not a run key: "},
+		"another run's":    {g.RunKey(t, event.NewRunID()), "resend " + resend.Dir + ": QORY_RUN_KEY names the run "},
+		"its wrong prefix": {"qrx_" + key[4:], "QORY_RUN_KEY is not a run key: "},
+	} {
+		sp := resend
+		sp.Gateway = session.RemoteGateway{RunKey: c.key}
+		_, err := session.Resend(context.Background(), sp)
+		if err == nil || !strings.HasPrefix(err.Error(), c.want) || (c.key == "" && err.Error() != c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if len(g.Bearers()) != before {
+		t.Error("a resend without its run key made a request")
+	}
+	g.OnBatch(func([]map[string]any) linktest.Reply {
+		return linktest.Reply{Status: 401, Body: map[string]any{"error": "unauthorized", "from": "gateway", "message": "the gateway refused the run: unauthorized"}}
+	})
+	got, err := session.Resend(context.Background(), resend)
+	var ref *session.Refusal
+	if !errors.As(err, &ref) || ref.Code != "unauthorized" || ref.From != "gateway" || err.Error() != "the gateway refused the run: unauthorized" {
+		t.Errorf("a 401: %+v %v", got, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(resend.Dir, sink.UndeliveredDir)); len(entries) == 0 {
+		t.Error("nothing is under undelivered/ after the 401")
+	}
+}
+
+// TestBehindGatewayTellsTheRecordsApart pins BehindGateway: a directory with the
+// session's record and no run stream is a session's behind a separate gateway; one
+// with the stream, or without the session's record, is not.
+func TestBehindGatewayTellsTheRecordsApart(t *testing.T) {
+	dir := t.TempDir()
+	check := func(what string, want bool) {
+		t.Helper()
+		if got, err := session.BehindGateway(dir); err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", what, got, err, want)
+		}
+	}
+	check("an empty directory", false)
+	os.WriteFile(filepath.Join(dir, sink.SessionFile), nil, 0o600)
+	check("the session's record alone", true)
+	os.WriteFile(filepath.Join(dir, sink.EventsFile), nil, 0o600)
+	check("with the run's stream", false)
+	check2, err := session.BehindGateway(filepath.Join(dir, "none"))
+	if check2 || err != nil {
+		t.Errorf("a directory that does not exist: %v %v", check2, err)
 	}
 }

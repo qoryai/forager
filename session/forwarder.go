@@ -23,14 +23,14 @@ const dialWait = 10 * time.Second
 // relay's preamble and the run's proxy secret first; behind a wall the wall's relay
 // writes the preamble itself, and the forwarder passes on what arrives as it is.
 //
-// Behind a separate gateway it reaches the gateway's one address over TLS, with the
-// link's trust: behind a wall, every connection must first open with the relay's
-// preamble and the hop secret the session gave the wall's relay, which the forwarder
-// replaces with the run's proxy secret inside TLS; without a wall, the agent's proxy URL
-// carries the proxy secret as its password, which reaches the gateway inside TLS.
+// Behind a separate gateway it reaches the gateway's one address over TLS, each
+// connection bound to a key the run key names and opened with the relay's preamble and
+// the run key, which the link's proxy dial writes: behind a wall, every connection must
+// first open with the relay's preamble and the hop secret the session gave the wall's
+// relay, which the forwarder takes off; without a wall, it passes on what arrives.
 //
-// The secrets are held in memory alone: never in a file or a report, and in an
-// environment only as an unwalled agent's proxy URL behind a separate gateway.
+// The secrets are held in memory alone: never in a file, a report or an agent's
+// environment.
 type forwarder struct {
 	ln  net.Listener
 	way forwarding
@@ -47,7 +47,8 @@ type forwarder struct {
 
 // forwarding is where a forwarder sends what it accepts, and with which secrets.
 type forwarding struct {
-	// dial opens one connection to the gateway's proxy.
+	// dial opens one connection to the gateway's proxy: behind a separate gateway, bound
+	// and opened with the run key.
 	dial func(context.Context) (net.Conn, error)
 	// secret, when set, is written in the relay's preamble at the start of every
 	// connection to the proxy.
@@ -56,8 +57,6 @@ type forwarding struct {
 	// relay's preamble, before anything reaches the proxy; the preamble is not passed
 	// on.
 	hop string
-	// password, when set, is the password of the proxy URL [forwarder.Env] gives.
-	password string
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
@@ -74,7 +73,7 @@ func listenForwarder(addr, target, secret string) (*forwarder, error) {
 // listenForwarding listens on addr, host:port, and forwards each connection the way
 // says.
 func listenForwarding(addr string, way forwarding) (*forwarder, error) {
-	for _, s := range []string{way.secret, way.hop, way.password} {
+	for _, s := range []string{way.secret, way.hop} {
 		if s == "" {
 			continue
 		}
@@ -96,25 +95,16 @@ func listenForwarding(addr string, way forwarding) (*forwarder, error) {
 // Addr is the address the forwarder listens on, host:port with the port it got.
 func (f *forwarder) Addr() string { return f.ln.Addr().String() }
 
-// Env is the variables that point a program at the forwarder: its address, and the
-// password of the proxy URL when it has one.
+// Env is the variables that point a program at the forwarder: its address.
 func (f *forwarder) Env() []string {
 	u := url.URL{Scheme: "http", Host: f.Addr()}
-	if f.way.password != "" {
-		// The user name is ignored; the password is the run's proxy secret.
-		u.User = url.UserPassword(proxyUser, f.way.password)
-	}
 	return link.ProxyEnv(u.String())
 }
 
-// proxyUser is the user name of an unwalled agent's proxy URL behind a separate
-// gateway, which the gateway ignores.
-const proxyUser = "qory"
-
 // newHopSecret makes the secret the wall's relay opens every connection to the
 // forwarder with behind a separate gateway: 32 bytes from crypto/rand, base64url
-// without padding. It is good for this run's forwarder alone, so the run's proxy
-// secret is in no file of the wall's.
+// without padding. It is good for this run's forwarder alone, so the run key is in no
+// file of the wall's.
 func newHopSecret() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -185,7 +175,7 @@ func (f *forwarder) serve(c net.Conn) {
 	defer f.untrack(up)
 	if f.way.secret != "" {
 		up.SetWriteDeadline(time.Now().Add(link.PreambleWait))
-		if _, err := io.WriteString(up, link.Preamble(link.RelayPreamble, f.way.secret)); err != nil {
+		if _, err := io.WriteString(up, link.RelayLine(f.way.secret)); err != nil {
 			return
 		}
 		up.SetWriteDeadline(time.Time{})

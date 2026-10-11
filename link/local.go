@@ -14,11 +14,8 @@ import (
 const ToolDirPrefix = "qory-tool-"
 
 // Local is what a session needs of a gateway on the same machine, the local link: the
-// gateway hands it to whoever starts the session.
-//
-// Its Secret is never printed: every verb of the fmt package, String, GoString, a value
-// logged with log/slog and its JSON show it as [redacted], so a Local can be logged
-// whole.
+// gateway hands it to whoever starts the session. It holds no secret: the socket's mode
+// and its peer's uid authenticate both ends.
 //
 // A gateway in this process hands out a Local that reaches it in memory, [Local.InMemory]:
 // [Local.DialContext] then never touches the socket's path, which another process of the
@@ -28,10 +25,6 @@ type Local struct {
 	// Socket is the path of the gateway's link socket, [LinkSocketName] in a private
 	// directory that begins with [LinkDirPrefix].
 	Socket string
-	// Secret is the link secret, which opens every connection to Socket after
-	// [LinkPreamble]. It is never logged and never set in an environment, the agent's,
-	// a tool's or the session's own.
-	Secret string
 	// Proxy is the gateway's proxy address on loopback, host:port. Every connection to
 	// it opens with [RelayPreamble] and the run's proxy secret.
 	Proxy string
@@ -61,10 +54,10 @@ func (l Local) InMemory(dial func(context.Context) (net.Conn, error)) Local {
 // IsInMemory reports whether l reaches its gateway in memory, [Local.InMemory].
 func (l Local) IsInMemory() bool { return l.dial != nil }
 
-// DialContext opens one connection to the gateway's link, before its preamble: in
-// memory when l has that way, else to the Unix socket at Socket. A connection to the
-// socket is a *net.UnixConn, whose peer the caller checks before it writes the secret;
-// one in memory is the gateway's in this process.
+// DialContext opens one connection to the gateway's link: in memory when l has that
+// way, else to the Unix socket at Socket. A connection to the socket is a
+// *net.UnixConn, whose peer the caller checks before it sends anything; one in memory
+// is the gateway's in this process.
 func (l Local) DialContext(ctx context.Context) (net.Conn, error) {
 	if l.dial != nil {
 		return l.dial(ctx)
@@ -87,57 +80,49 @@ type File struct {
 	Kept bool
 }
 
-// redacted is what Local's Secret is shown as when it is set.
-const redacted = "[redacted]"
-
-// shown is Local without its methods and with its Secret redacted, which fmt prints
-// the way it prints any struct.
+// shown is Local without its methods and without its way in memory, which fmt prints
+// the way it prints any struct, so a Local prints the same whichever way it reaches its
+// gateway.
 type shown struct {
 	Socket   string
-	Secret   string
 	Proxy    string
 	Files    []File
 	Reserved []string
 }
 
 func (l Local) shown() shown {
-	s := shown{Socket: l.Socket, Secret: l.Secret, Proxy: l.Proxy, Files: l.Files, Reserved: l.Reserved}
-	if s.Secret != "" {
-		s.Secret = redacted
-	}
-	return s
+	return shown{Socket: l.Socket, Proxy: l.Proxy, Files: l.Files, Reserved: l.Reserved}
 }
 
-// Format prints l as fmt prints a struct, under every verb and flag, with its Secret
-// redacted.
+// Format prints l as fmt prints a struct, under every verb and flag, without its way
+// in memory.
 func (l Local) Format(f fmt.State, verb rune) {
 	s := l.shown()
 	if verb == 'v' && f.Flag('#') {
-		fmt.Fprintf(f, "link.Local{Socket:%#v, Secret:%#v, Proxy:%#v, Files:%#v, Reserved:%#v}",
-			s.Socket, s.Secret, s.Proxy, s.Files, s.Reserved)
+		fmt.Fprintf(f, "link.Local{Socket:%#v, Proxy:%#v, Files:%#v, Reserved:%#v}",
+			s.Socket, s.Proxy, s.Files, s.Reserved)
 		return
 	}
 	fmt.Fprintf(f, fmt.FormatString(f, verb), s)
 }
 
-// String is l as %v prints it, its Secret redacted.
+// String is l as %v prints it.
 func (l Local) String() string { return fmt.Sprintf("%v", l) }
 
-// GoString is l as %#v prints it, its Secret redacted.
+// GoString is l as %#v prints it.
 func (l Local) GoString() string { return fmt.Sprintf("%#v", l) }
 
-// LogValue is l as log/slog logs it, its Secret redacted.
+// LogValue is l as log/slog logs it.
 func (l Local) LogValue() slog.Value {
 	s := l.shown()
 	return slog.GroupValue(
 		slog.String("socket", s.Socket),
-		slog.String("secret", s.Secret),
 		slog.String("proxy", s.Proxy),
 		slog.Any("files", s.Files),
 		slog.Any("reserved", s.Reserved),
 	)
 }
 
-// MarshalJSON is l as encoding/json writes a struct, its Secret redacted. A Local is
-// never handed on as JSON; this is for a log or a dump that writes it so.
+// MarshalJSON is l as encoding/json writes a struct, without its way in memory. A
+// Local is never handed on as JSON; this is for a log or a dump that writes it so.
 func (l Local) MarshalJSON() ([]byte, error) { return json.Marshal(l.shown()) }

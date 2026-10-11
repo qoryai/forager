@@ -48,8 +48,8 @@ func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 }
 
 // TestTheLocalLink pins the link: a private directory and a socket of the user's
-// alone, the discovery on it, and a connection that opens without the secret closed
-// unanswered.
+// alone, the discovery on it, and a connection of the user's answered as it speaks
+// HTTP from its first byte, with no preamble.
 func TestTheLocalLink(t *testing.T) {
 	h := start(t, gateway.Config{Heartbeat: 5 * time.Second})
 	l := h.g.LocalLink()
@@ -63,7 +63,7 @@ func TestTheLocalLink(t *testing.T) {
 	if fi, err := os.Lstat(l.Socket); err != nil || fi.Mode().Perm() != link.LinkSocketMode {
 		t.Errorf("the socket: %v %v", fi.Mode(), err)
 	}
-	if len(l.Secret) < 22 || l.Proxy != h.g.Addr() || !slices.Contains(l.Files, link.File{Path: dir, What: "the gateway's link directory", Kept: true}) || !slices.Contains(l.Files, link.File{Path: h.dir, What: "the gateway's directory", Kept: true}) {
+	if l.Proxy != h.g.Addr() || !slices.Contains(l.Files, link.File{Path: dir, What: "the gateway's link directory", Kept: true}) || !slices.Contains(l.Files, link.File{Path: h.dir, What: "the gateway's directory", Kept: true}) {
 		t.Errorf("local %+v", l)
 	}
 	d, err := h.link.Discover(context.Background())
@@ -74,11 +74,13 @@ func TestTheLocalLink(t *testing.T) {
 		d.Run.URL != "http://localhost/v1/run-configuration" || d.Proxy == nil || d.Proxy.Address != h.g.Addr() {
 		t.Errorf("discovery %+v", d)
 	}
-	for name, open := range map[string]string{
-		"a wrong secret": "QORY-LINK " + strings.Repeat("x", len(l.Secret)) + "\nGET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n",
-		"no preamble":    "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n" + strings.Repeat("\r\n", 40),
-	} {
-		closedUnanswered(t, l.Socket, name, open)
+	resp, err := raw(t, l).Get(server.LocalOrigin + server.WellKnown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("plain HTTP on the socket: %d", resp.StatusCode)
 	}
 	h.close()
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -87,15 +89,15 @@ func TestTheLocalLink(t *testing.T) {
 }
 
 // TestTheLinkRefusesAnotherUsersPeer pins the link's first check: a peer that is not
-// the gateway's user, by the uid the kernel recorded, is closed unanswered, even with
-// the right preamble and secret.
+// the gateway's user, by the uid the kernel recorded, is closed unanswered before
+// anything of it is read.
 func TestTheLinkRefusesAnotherUsersPeer(t *testing.T) {
 	cfg := gateway.Config{}
 	gateway.SetLinkUID(&cfg, os.Getuid()+1)
 	h := start(t, cfg)
 	l := h.g.LocalLink()
-	closedUnanswered(t, l.Socket, "another user's peer", link.Preamble(link.LinkPreamble, l.Secret)+"GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
-	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket, Secret: l.Secret}, accesskey.UserAgent("test"), nil)
+	closedUnanswered(t, l.Socket, "another user's peer", "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n")
+	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket}, accesskey.UserAgent("test"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +113,7 @@ func TestTheLinkRefusesAnotherUsersPeer(t *testing.T) {
 
 // TestASessionInThisProcessReachesTheGatewayInMemory pins the way to the gateway on one
 // machine: the client a session makes of g.LocalLink() reaches the gateway in memory,
-// with the same preamble and HTTP/1.1, and never by the socket's path. With the socket
+// with the same HTTP/1.1, and never by the socket's path. With the socket
 // gone, or another listener at its path, the session's runs go on, and that listener
 // receives no byte; a client of the socket alone reaches the gateway at its socket.
 func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
@@ -120,7 +122,7 @@ func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
 	if !l.IsInMemory() {
 		t.Fatal("the gateway's Local has no way in memory")
 	}
-	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket, Secret: l.Secret}, accesskey.UserAgent("test"), nil)
+	bySocket, err := server.NewLocalLink(link.Local{Socket: l.Socket}, accesskey.UserAgent("test"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,17 +168,21 @@ func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.Close()
-	again.UseRunSecret(a.RunSecret)
 	if _, err := again.Discover(context.Background()); err != nil {
 		t.Fatalf("with another listener at the socket's path: %v", err)
 	}
+	// Batches of the run on fresh connections in memory, as the run's session posts
+	// them, naming the run.
+	inMemory := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return l.DialContext(ctx) }}}
+	named := http.Header{server.HeaderRunID: {a.RunID}, server.HeaderDelivery: {event.NewID()}}
 	b, _ := json.Marshal([]map[string]any{started(a.RunID, nil), applied(a.RunID, a.Applied)})
-	if d, err := again.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), b, ""); err != nil || !d.Accepted() {
-		t.Fatalf("a batch with another listener at the socket's path: %+v %v", d, err)
+	if status, got := rawPostWith(t, inMemory, "/v1/events", server.ContentType, string(b), named); status != http.StatusAccepted {
+		t.Fatalf("a batch with another listener at the socket's path: %d %s", status, got)
 	}
+	named.Set(server.HeaderDelivery, event.NewID())
 	b, _ = json.Marshal([]map[string]any{exited(a.RunID)})
-	if d, err := again.Deliver(context.Background(), server.LocalOrigin+"/v1/events", event.NewID(), b, ""); err != nil || !d.Accepted() {
-		t.Fatalf("the run's end: %+v %v", d, err)
+	if status, got := rawPostWith(t, inMemory, "/v1/events", server.ContentType, string(b), named); status != http.StatusAccepted {
+		t.Fatalf("the run's end: %d %s", status, got)
 	}
 	h.close()
 	stranger.Close()
@@ -190,11 +196,12 @@ func TestASessionInThisProcessReachesTheGatewayInMemory(t *testing.T) {
 	}
 }
 
-// TestAGatewayNeverPrintsItsSecret pins that a Gateway shows its link secret under no
-// verb, method or slog handler.
+// TestAGatewayNeverPrintsItsSecret pins that a Gateway shows a live run's proxy secret
+// under no verb, method or slog handler.
 func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
 	h := start(t, gateway.Config{})
-	secret := h.g.LocalLink().Secret
+	a := h.open(server.LinkRunRequest{})
+	secret := a.ProxySecret
 	var outs []string
 	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
 		outs = append(outs, fmt.Sprintf(format, h.g))
@@ -214,17 +221,11 @@ func TestAGatewayNeverPrintsItsSecret(t *testing.T) {
 		}
 	}
 	// A copy of the Gateway, *g, whose print methods are on the pointer, prints its
-	// fields: neither the link secret nor a live run's proxy secret is among what they
-	// show, under a verb that reprints what a field points to either.
-	a := h.open(server.LinkRunRequest{})
+	// fields: a live run's proxy secret is not among what they show, under a verb that
+	// reprints what a field points to either.
 	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
-		if out := gateway.PrintedCopy(h.g, format); strings.Contains(out, secret) || strings.Contains(out, a.ProxySecret) || !strings.Contains(out, "secret") && format == "%+v" {
+		if out := gateway.PrintedCopy(h.g, format); strings.Contains(out, secret) {
 			t.Errorf("a copy printed with %s: %s", format, out)
-		}
-	}
-	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
-		if out := gateway.PrintedSecret(h.g, format); out != "[redacted]" {
-			t.Errorf("the secret's own type printed with %s: %s", format, out)
 		}
 	}
 }
@@ -783,7 +784,7 @@ func TestALinkWithNoSocket(t *testing.T) {
 	if got := links(); len(got) != 0 {
 		t.Errorf("link directories %v", got)
 	}
-	if !strings.Contains(h.g.String(), "in memory") || strings.Contains(h.g.String(), l.Secret) {
+	if !strings.Contains(h.g.String(), "in memory") {
 		t.Errorf("printed %s", h.g)
 	}
 	a := h.open(server.LinkRunRequest{})
@@ -793,7 +794,7 @@ func TestALinkWithNoSocket(t *testing.T) {
 	if d := h.post(exited(a.RunID)); !d.Accepted() {
 		t.Fatalf("the run's end: %+v", d)
 	}
-	if _, err := server.NewLocalLink(link.Local{Secret: l.Secret}, accesskey.UserAgent("test"), nil); err == nil {
+	if _, err := server.NewLocalLink(link.Local{}, accesskey.UserAgent("test"), nil); err == nil {
 		t.Error("a Local with neither a socket nor a way in memory")
 	}
 

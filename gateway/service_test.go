@@ -172,14 +172,12 @@ func (s *service) dial(t *testing.T) net.Conn {
 	return c
 }
 
-// bearerTransport sets a bearer value on every request, and, as a session does, the
-// run secret of a run runSecret knows on its reloads and batches: the run of a reload's
-// path, and of a batch's first event. A request that sets X-Qory-Run-Secret itself keeps
-// its own.
+// bearerTransport sets a bearer value on every request, and, as a session does,
+// X-Qory-Run-Id on its batches: the run of a batch's first event. A request that sets
+// X-Qory-Run-Id itself keeps its own.
 type bearerTransport struct {
-	value     string
-	runSecret func(runID string) string
-	next      http.RoundTripper
+	value string
+	next  http.RoundTripper
 }
 
 func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -187,22 +185,15 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if b.value != "" {
 		r.Header.Set("Authorization", "Bearer "+b.value)
 	}
-	if _, set := r.Header[server.HeaderRunSecret]; !set && b.runSecret != nil {
-		var runID string
-		switch {
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/run-configuration/"):
-			runID = strings.TrimPrefix(r.URL.Path, "/v1/run-configuration/")
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/events" && r.Body != nil:
-			body, err := io.ReadAll(r.Body)
-			r.Body.Close()
-			if err != nil {
-				return nil, err
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			runID = subjectOf(body)
+	if _, set := r.Header[server.HeaderRunID]; !set && r.Method == http.MethodPost && r.URL.Path == "/v1/events" && r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			return nil, err
 		}
-		if rs := b.runSecret(runID); rs != "" {
-			r.Header.Set(server.HeaderRunSecret, rs)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if runID := subjectOf(body); runID != "" {
+			r.Header.Set(server.HeaderRunID, runID)
 		}
 	}
 	return b.next.RoundTrip(r)
@@ -210,9 +201,9 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // client is a session's client of the contract on the one address, a plain net/http
 // client trusting the gateway's certificate, with the bearer value on every request
-// and the run secret of each run the test opened on its reloads and batches.
+// and the run of each batch in X-Qory-Run-Id.
 func (s *service) client(value string) *http.Client {
-	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{value: value, runSecret: s.runSecretOf, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
+	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{value: value, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
@@ -300,7 +291,7 @@ func (s *service) relayOver(secret string) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			if _, err := io.WriteString(c, link.Preamble(link.RelayPreamble, secret)); err != nil {
+			if _, err := io.WriteString(c, link.RelayLine(secret)); err != nil {
 				c.Close()
 				return nil, err
 			}
@@ -756,19 +747,19 @@ func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
 		}
 		c.Close()
 		for name, open := range map[string]string{
-			"a relay of no run":  link.Preamble(link.RelayPreamble, strings.Repeat("x", 43)) + "GET http://127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
-			"a line over bound":  strings.Repeat("G", 9<<10),
-			"a head over bound":  "CONNECT 127.0.0.1:1 HTTP/1.1\r\n" + strings.Repeat("X-Fill: "+strings.Repeat("y", 1000)+"\r\n", 70),
-			"the local preamble": link.Preamble(link.LinkPreamble, s.g.LocalLink().Secret) + "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n",
+			"a relay of no run":          link.RelayLine(strings.Repeat("x", 43)) + "GET http://127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+			"a line over bound":          strings.Repeat("G", 9<<10),
+			"a head over bound":          "CONNECT 127.0.0.1:1 HTTP/1.1\r\n" + strings.Repeat("X-Fill: "+strings.Repeat("y", 1000)+"\r\n", 70),
+			"the local link's discovery": "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: localhost\r\n\r\n",
 		} {
 			c := s.dial(t)
 			c.SetDeadline(time.Now().Add(5 * time.Second))
 			io.WriteString(c, open)
 			b, _ := io.ReadAll(c)
 			c.Close()
-			if name == "the local preamble" {
-				// The contract's server reads it as a request line it refuses: the
-				// link's secret opens nothing on the one address.
+			if name == "the local link's discovery" {
+				// The contract's server reads it as a request it refuses: what the
+				// local link takes opens nothing on the one address.
 				if bytes.Contains(b, []byte("200 OK")) {
 					t.Errorf("plain %v: %s: %q", plain, name, b)
 				}

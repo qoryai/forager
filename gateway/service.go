@@ -68,6 +68,15 @@ func identityOf(ctx context.Context) (runIdentity, bool) {
 	return id, ok
 }
 
+// linkConn reads through the reader its first bytes were read with, which may hold what
+// comes after them.
+type linkConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
 // side is the way a request of the contract reached the gateway: its local link, or
 // its one address.
 type side struct {

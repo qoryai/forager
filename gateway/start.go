@@ -2,9 +2,7 @@ package gateway
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -64,7 +62,6 @@ type Gateway struct {
 	cancel context.CancelFunc
 
 	dir     string
-	secret  secretValue
 	ln      net.Listener
 	link    *linkListener
 	http    *http.Server
@@ -91,9 +88,6 @@ type Gateway struct {
 	// the delivery hold what they came to, for Close.
 	spent     map[string]spentRun
 	spentErrs []error
-	// bySecret are the run ids of the session's runs, live, ended or spent, by the
-	// SHA-256 of their run secret.
-	bySecret map[[sha256.Size]byte]string
 
 	closed   chan struct{}
 	delivery Delivery
@@ -182,11 +176,6 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			g.cancel()
 		}
 	}()
-	secret, err := newSecret()
-	if err != nil {
-		return nil, err
-	}
-	g.secret = newSecretValue(secret)
 	if !cfg.NoLinkSocket {
 		if err := g.listenLink(); err != nil {
 			return nil, err
@@ -220,7 +209,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.uid != nil {
 		uid = *cfg.uid
 	}
-	g.link = newLinkListener(g.ln, secret, uid)
+	g.link = newLinkListener(g.ln, uid)
 	if cfg.Listen != "" {
 		if g.svc, err = g.startService(cert); err != nil {
 			g.link.Close()
@@ -268,16 +257,6 @@ func (g *Gateway) socket() string {
 	return filepath.Join(g.dir, link.LinkSocketName)
 }
 
-// newSecret makes the link secret: 32 bytes from the system's random source, in
-// base64url without padding.
-func newSecret() (string, error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b[:]), nil
-}
-
 // newClient is the signed client of the server document s.
 func newClient(s *Server, version string) (*server.Client, error) {
 	b, _ := json.Marshal(s)
@@ -301,12 +280,12 @@ func (g *Gateway) Addr() string {
 // LocalLink is what a session in this process needs of the gateway: the way to its link
 // in memory, which a session's client takes in place of the socket, so no other process
 // can stand in for the gateway at the socket's path; the link's socket, for a session
-// in another process, empty with [Config.NoLinkSocket], and its secret; the proxy's address, the gateway's own files,
-// which a walled run must not mount, and the names a walled run must not pass.
+// in another process, empty with [Config.NoLinkSocket]; the proxy's address, the
+// gateway's own files, which a walled run must not mount, and the names a walled run
+// must not pass.
 func (g *Gateway) LocalLink() link.Local {
 	return link.Local{
 		Socket:   g.socket(),
-		Secret:   g.secret.reveal(),
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
 		Reserved: g.reserved(),

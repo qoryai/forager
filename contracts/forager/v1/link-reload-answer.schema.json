@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-reload-answer.schema.json",
   "title": "Link reload answer",
-  "description": "What a gateway returns on its link for a GET of a run's configuration by its run id, the reload, a 200, application/json, unsigned: the link's transport authenticates it. The policy in force for the run, its digest, the run's variables, placeholders, reserved names and image, the policy_applied members the gateway decides, and nothing of the run's secrets: the proxy secret and the certificate authority are given once, in the run answer. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link for a GET of a run's configuration by its run id, the reload, a 200, application/json: on the local link unsigned, the socket's peer authenticated by its uid; behind a separate gateway signed under a key the run key names, over the connection and the request (README §The gateway's link). The policy in force for the run, its digest, the run's variables, placeholders, reserved names and image, the policy_applied members the gateway decides, and nothing of the run's secrets: the proxy secret and the certificate authority are given once, in the run answer. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "applied"],
@@ -29,7 +29,6 @@
     },
     "applied": {"$ref": "link-run-answer.schema.json#/properties/applied"},
     "proxy_secret": false,
-    "run_secret": false,
     "certificate_authority": false
   }
 }

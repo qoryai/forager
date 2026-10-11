@@ -105,8 +105,8 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 
 	for name, what := range map[string]string{
 		"no preamble":         "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n",
-		"another hop":         link.Preamble(link.RelayPreamble, other) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n",
-		"a prefix of the hop": link.Preamble(link.RelayPreamble, hop[:len(hop)-1]),
+		"another hop":         link.RelayLine(other) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n",
+		"a prefix of the hop": link.RelayLine(hop[:len(hop)-1]),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if closed, answer := send(t, what); !closed || answer != "" {
@@ -120,10 +120,10 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 		t.Fatalf("the proxy got %d connections, %q, before any hop", opened, received)
 	}
 
-	if closed, _ := send(t, link.Preamble(link.RelayPreamble, hop)+"CONNECT api.example:443 HTTP/1.1\r\n\r\n"); !closed {
+	if closed, _ := send(t, link.RelayLine(hop)+"CONNECT api.example:443 HTTP/1.1\r\n\r\n"); !closed {
 		t.Error("the forwarder kept the relay's connection open after its end")
 	}
-	want := link.Preamble(link.RelayPreamble, secret) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"
+	want := link.RelayLine(secret) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		opened, received := up.seen()

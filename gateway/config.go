@@ -41,7 +41,7 @@ type Config struct {
 	// output this way.
 	Events io.Writer
 	// Report receives one line per thing the gateway reports to its user; nil means
-	// Stderr. It never receives the link secret, a proxy secret, an access key or an
+	// Stderr. It never receives a proxy secret, an access key, a run key or an
 	// image reference.
 	Report func(string)
 	// Heartbeat is the interval the link's discovery announces, and each run's

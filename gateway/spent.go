@@ -1,9 +1,6 @@
 package gateway
 
-import (
-	"crypto/sha256"
-	"time"
-)
+import "time"
 
 // spentRun is what a run on the one address leaves once it has ended and its record is
 // flushed: how a later request of the run is answered, until the identity it was opened
@@ -12,8 +9,6 @@ type spentRun struct {
 	key   string
 	end   runEnd
 	until time.Time
-	// secretSum is the SHA-256 of the run's secret, which still names it.
-	secretSum [sha256.Size]byte
 }
 
 // retire lets go of a run on the one address that has ended and its record flushed: the
@@ -32,11 +27,10 @@ func (g *Gateway) retire(lr *linkRun, key string, exp time.Time) {
 	for id, sp := range g.spent {
 		if !now.Before(sp.until) {
 			delete(g.spent, id)
-			delete(g.bySecret, sp.secretSum)
 		}
 	}
 	delete(g.runs, lr.id)
-	g.spent[lr.id] = spentRun{key: key, end: end, until: exp, secretSum: lr.runSecretSum}
+	g.spent[lr.id] = spentRun{key: key, end: end, until: exp}
 	g.delivery.Undelivered += lr.result.Undelivered
 	g.closedRun(lr)
 	if lr.err != nil {
@@ -51,7 +45,6 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 	sp, ok := g.spent[runID]
 	if ok && !time.Now().Before(sp.until) {
 		delete(g.spent, runID)
-		delete(g.bySecret, sp.secretSum)
 		return spentRun{}, false
 	}
 	return sp, ok

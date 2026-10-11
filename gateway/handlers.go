@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -156,7 +154,6 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	g.runs[lr.id] = lr
-	g.indexSecret(lr)
 	g.mu.Unlock()
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
@@ -189,7 +186,6 @@ func (g *Gateway) discard(lr *linkRun) {
 		lr.discarded = true
 		if g.runs[lr.id] == lr {
 			delete(g.runs, lr.id)
-			delete(g.bySecret, lr.runSecretSum)
 		}
 	}
 	lr.mu.Unlock()
@@ -288,59 +284,17 @@ func (g *Gateway) answerHeaders(s *side, w http.ResponseWriter, r *http.Request,
 	w.Header().Set(server.HeaderRunConfiguration, runDigest)
 }
 
-// indexSecret makes the session's run lr findable by its run secret. Called with g.mu
-// held, as the run enters the runs.
-func (g *Gateway) indexSecret(lr *linkRun) {
-	if lr.runSecret == nil {
-		return
-	}
-	if g.bySecret == nil {
-		g.bySecret = map[[sha256.Size]byte]string{}
-	}
-	g.bySecret[lr.runSecretSum] = lr.id
-}
-
-// secretRun is the run id of the session's run whose run secret the request carries in
-// X-Qory-Run-Secret, live, ended or let go of; empty when it carries none, more than one,
-// or one of no run here. The secret's SHA-256 picks the one candidate, which is compared
-// in constant time, in full for a run the gateway still holds. The secret is never
-// logged or reported.
-func (g *Gateway) secretRun(r *http.Request) string {
-	values := r.Header.Values(server.HeaderRunSecret)
-	if len(values) != 1 {
-		return ""
-	}
-	presented := []byte(values[0])
-	sum := sha256.Sum256(presented)
-	g.mu.Lock()
-	runID, ok := g.bySecret[sum]
-	lr, sp := g.runs[runID], g.spent[runID]
-	g.mu.Unlock()
-	switch {
-	case !ok:
-		return ""
-	case lr != nil:
-		ok = subtle.ConstantTimeCompare([]byte(lr.runSecret.reveal()), presented) == 1
-	default:
-		ok = subtle.ConstantTimeCompare(sp.secretSum[:], sum[:]) == 1
-	}
-	if !ok {
-		return ""
-	}
-	return runID
-}
-
-// pathRun is the run id of a reload's path, pathID, when the request carries that run's
-// secret; empty otherwise, an empty pathID among them, which is no run's.
-func (g *Gateway) pathRun(r *http.Request, pathID string) string {
-	if runID := g.secretRun(r); runID != "" && runID == pathID {
-		return runID
+// batchRun is the run id a batch names, the one value of its X-Qory-Run-Id; empty when
+// it carries none or more than one.
+func batchRun(r *http.Request) string {
+	if values := r.Header.Values(server.HeaderRunID); len(values) == 1 {
+		return values[0]
 	}
 	return ""
 }
 
-// localRun is the run of the local link a request names, nil for none: a run of the
-// one address is not the local link's.
+// localRun is the run of the local link a request names, nil for none, an empty runID
+// among them: a run of the one address is not the local link's.
 func (g *Gateway) localRun(runID string) *linkRun {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -350,12 +304,11 @@ func (g *Gateway) localRun(runID string) *linkRun {
 	return nil
 }
 
-// remoteRun is the session's run of runID, the run whose run secret the request
-// carries, live or ended, when the bearer value a request on the one address carried is
-// of its key; nil when there is none to go on with, an empty runID among them: the 410
-// answered for a run of the key that the gateway has let go of, and otherwise the 401
-// unauthorized, so no run is reached but the one of the identity's key whose secret the
-// request carries.
+// remoteRun is the session's run of runID, the run the request names, live or ended,
+// when the bearer value a request on the one address carried is of its key; nil when
+// there is none to go on with, an empty runID among them: the 410 answered for a run of
+// the key that the gateway has let go of, and otherwise the 401 unauthorized, so no run
+// is reached but one of the identity's key.
 func (g *Gateway) remoteRun(w http.ResponseWriter, r *http.Request, runID string) (*linkRun, runIdentity) {
 	id, ok := identityOf(r.Context())
 	if !ok {
@@ -390,23 +343,22 @@ func (lr *linkRun) admit(w http.ResponseWriter, id runIdentity) bool {
 	return true
 }
 
-// reload answers a GET of a run's configuration by its run id, with the run's secret:
-// the reload answer as it stands, 410 for a run that ended at the gateway; on the local
-// link 400 invalid_request for a run id this gateway holds no run of, or a request
-// without that run's secret, and on the one address 401 unauthorized for either, or a
-// run id that is not of the identity's key.
+// reload answers a GET of a run's configuration by its run id: the reload answer as it
+// stands, 410 for a run that ended at the gateway; on the local link 400
+// invalid_request for a run id this gateway holds no run of, and on the one address 401
+// unauthorized for it, or a run id that is not of the identity's key.
 func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID string) {
 	var lr *linkRun
 	if s.remote {
 		var id runIdentity
-		if lr, id = g.remoteRun(w, r, g.pathRun(r, runID)); lr == nil {
+		if lr, id = g.remoteRun(w, r, runID); lr == nil {
 			return
 		}
 		if !lr.admit(w, id) {
 			return
 		}
 	} else {
-		if lr = g.localRun(g.pathRun(r, runID)); lr == nil {
+		if lr = g.localRun(runID); lr == nil {
 			invalid(w)
 			return
 		}
@@ -426,13 +378,13 @@ func (g *Gateway) reload(s *side, w http.ResponseWriter, r *http.Request, runID 
 	w.Write(body)
 }
 
-// batch answers one link batch of the run whose secret it carries: 202 when its events
+// batch answers one link batch of the run its X-Qory-Run-Id names: 202 when its events
 // are numbered; 410 for a run that ended at the gateway; 400 invalid_request for one
 // the link refuses, which ends the run, failed: its record says batch_refused, and the
-// session's later requests are a 410 batch_refused. The run is found before the body is
-// read: a batch without a run's secret, or with one of no run here, is 400
-// invalid_request on the local link, and on the one address, as one whose run is not of
-// the identity's key, 401 unauthorized; neither ends a run.
+// session's later requests are a 410 batch_refused. Every event's subject must be that
+// run's. The run is found before the body is read: a batch that names no run, or one of
+// no run here, is 400 invalid_request on the local link, and on the one address, as one
+// whose run is not of the identity's key, 401 unauthorized; neither ends a run.
 func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	if !mediaType(r, server.ContentType) {
 		w.WriteHeader(http.StatusUnsupportedMediaType)
@@ -441,7 +393,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 	var lr *linkRun
 	if s.remote {
 		var id runIdentity
-		if lr, id = g.remoteRun(w, r, g.secretRun(r)); lr == nil {
+		if lr, id = g.remoteRun(w, r, batchRun(r)); lr == nil {
 			return
 		}
 		lr.batch.Lock()
@@ -450,7 +402,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if lr = g.localRun(g.secretRun(r)); lr == nil {
+		if lr = g.localRun(batchRun(r)); lr == nil {
 			invalid(w)
 			return
 		}

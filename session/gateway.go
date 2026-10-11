@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"slices"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/runkey"
 	"github.com/qoryai/forager/server"
 )
 
@@ -19,7 +19,7 @@ import (
 // [LocalGateway] makes one on this machine; a [RemoteGateway] is a separate gateway, on
 // a machine of its own. A nil Gateway is none, and no run.
 //
-// A Gateway never prints the link secret: fmt and log/slog show it by its socket or its
+// A Gateway never prints the run key: fmt and log/slog show it by its socket or its
 // URL.
 type Gateway interface {
 	fmt.Stringer
@@ -34,9 +34,8 @@ type localGateway struct {
 }
 
 // LocalGateway is the gateway on this machine, by its local link as the gateway hands
-// it out: the socket, the link secret, which stays in this process's memory and is
-// never set in an environment or written to a file, the gateway's own files, which a
-// walled run must not mount, and the names it sets for a run.
+// it out: the socket, or the way to it in this process's memory, the gateway's own
+// files, which a walled run must not mount, and the names it sets for a run.
 func LocalGateway(l link.Local) Gateway {
 	l.Files, l.Reserved = slices.Clone(l.Files), slices.Clone(l.Reserved)
 	return localGateway{local: l}
@@ -44,70 +43,79 @@ func LocalGateway(l link.Local) Gateway {
 
 func (localGateway) gateway() {}
 
-// String names the gateway by its link's socket, never its secret.
+// String names the gateway by its link's socket.
 func (g localGateway) String() string { return "session.Gateway{" + g.local.Socket + "}" }
 
 // Format prints g as String does, under every verb and flag.
 func (g localGateway) Format(f fmt.State, _ rune) { io.WriteString(f, g.String()) }
 
-// GoString is g as %#v prints it, never its secret.
+// GoString is g as %#v prints it.
 func (g localGateway) GoString() string { return g.String() }
 
-// LogValue is g as log/slog logs it, never its secret.
+// LogValue is g as log/slog logs it.
 func (g localGateway) LogValue() slog.Value { return slog.StringValue(g.String()) }
 
 // RemoteGateway is a separate gateway, on a machine of its own, which the run reaches
 // over TLS 1.3 on the gateway's one address (contracts/forager/v1/README.md §The
-// gateway's link). The session verifies the gateway's certificate chain for the host
-// name of URL, against the system's roots or CAFile's authorities, and its public key
-// against CertificateSHA256 when it is set. It holds no access key: the gateway's signs
-// toward the server.
+// gateway's link), as the run key names it. The session reads the run key as a runner
+// does, unverified, [runkey.Parse], and takes of it the run's id, the gateway's URL,
+// the one address the run key is ever sent to, and the gateway's keys. It checks the
+// certificate chain of the gateway for the host name of that URL against the system's
+// roots, and every connection is bound to a key the run key names before the run key
+// is sent; every answer of the gateway must be signed under one. It holds no access key:
+// the gateway's signs toward the server.
 //
-// fmt and log/slog show a RemoteGateway by its URL, its CAFile and its pin alone.
+// The session reads no environment: the caller passes the run key, from QORY_RUN_KEY.
+// It is never written to a file, set in an agent's environment or printed: fmt and
+// log/slog show a RemoteGateway by its gateway's URL alone.
 type RemoteGateway struct {
-	// URL is the gateway's, https and a host with an optional port, and no user
-	// information, path, query or fragment: https://gateway.example:8443.
-	URL string
-	// CAFile is a PEM file of the authorities the gateway's certificate chains to, which
-	// replace the system's roots for this gateway; empty means the system's roots.
-	CAFile string
-	// CertificateSHA256 is the SHA-256 of the gateway certificate's public key, its DER
-	// SubjectPublicKeyInfo, in standard base64 with padding, 44 characters ending in =;
-	// empty means no pin.
-	CertificateSHA256 string
+	// RunKey is the run key Qory Apiary answered the run's registration with: qrk_,
+	// its payload and its signature.
+	RunKey string
 }
 
 func (RemoteGateway) gateway() {}
 
-// link is the client of the gateway's link a run and a resend speak to it through:
-// TLS 1.3 to its one address, verified as the gateway says. version is Forager's, in
-// the User-Agent; digests is as [server.NewRemoteLink] takes it.
-func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*server.Link, error) {
-	return server.NewRemoteLink(g.URL, server.RemoteTLS{CAFile: g.CAFile, CertificateSHA256: g.CertificateSHA256},
-		accesskey.UserAgent(version), digests)
+// key reads the run key, as a runner does: an unreadable one is an error that names the
+// part that is wrong, never the run key.
+func (g *RemoteGateway) key() (runkey.Key, error) {
+	k, err := runkey.Parse(g.RunKey)
+	if err != nil {
+		var re *runkey.Error
+		if errors.As(err, &re) {
+			return runkey.Key{}, errors.New("QORY_RUN_KEY is not a run key: " + re.Reason)
+		}
+		return runkey.Key{}, errors.New("QORY_RUN_KEY is not a run key")
+	}
+	return k, nil
 }
 
-// String names the gateway by its URL's origin, without user information, a path, a
-// query or a fragment, its CAFile and its pin.
+// remoteTrust is how the session checks the certificate chain of the separate gateway
+// at a URL: the system's roots, the zero RemoteTLS. A test sets another.
+var remoteTrust = func(string) server.RemoteTLS { return server.RemoteTLS{} }
+
+// link is the client of the gateway's link a run and a resend speak to it through:
+// TLS 1.3 to its one address, bound to a key the run key names. version is Forager's,
+// in the User-Agent; digests is as [server.NewRemoteLink] takes it.
+func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*server.Link, error) {
+	k, err := g.key()
+	if err != nil {
+		return nil, err
+	}
+	return server.NewRemoteLink(g.RunKey, remoteTrust(k.GatewayURL), accesskey.UserAgent(version), digests)
+}
+
+// String names the gateway by the URL its run key names, never the run key: "(no run
+// key)" for none, and "(not a run key)" for one the session cannot read.
 func (g RemoteGateway) String() string {
-	shown := "(no URL)"
-	if g.URL != "" {
-		// The origin alone: user information, a path, a query or a fragment, which
-		// the gateway's URL never has, could hold what is not to be printed.
-		if u, err := url.Parse(g.URL); err == nil && u.Scheme != "" && u.Host != "" {
-			shown = u.Scheme + "://" + u.Host
-		} else {
-			shown = "(not a URL)"
+	shown := "(no run key)"
+	if g.RunKey != "" {
+		shown = "(not a run key)"
+		if k, err := runkey.Parse(g.RunKey); err == nil {
+			shown = k.GatewayURL
 		}
 	}
-	s := "session.RemoteGateway{" + shown
-	if g.CAFile != "" {
-		s += " ca_file=" + g.CAFile
-	}
-	if g.CertificateSHA256 != "" {
-		s += " certificate_sha256=" + g.CertificateSHA256
-	}
-	return s + "}"
+	return "session.RemoteGateway{" + shown + "}"
 }
 
 // Format prints g as String does, under every verb and flag.
