@@ -1215,16 +1215,9 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 	before.g.Close(ctx)
 	cancel()
 	// The partial run's record as a gateway that stopped as it opened leaves it: its
-	// first line alone.
-	file := filepath.Join(dir, "runs", partial, "events.jsonl")
-	b, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, append(bytes.SplitN(b, []byte("\n"), 2)[0], '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.Remove(filepath.Join(dir, "runs", partial, "delivered.log"))
+	// first line alone, and no mark that it was answered.
+	firstLineAlone(t, dir, partial)
+	os.Remove(filepath.Join(dir, "runs", partial, "answered"))
 	attaches := len(c.attached())
 
 	r := startRemote(t, c, gateway.Config{Dir: dir})
@@ -1244,6 +1237,69 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 		t.Errorf("a batch of the run live before: %d %s", got.status, got.body)
 	}
 	refused(t, "a run request of the run live before", r.tryOpen(t, liveKey, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(live, "run_attached"))
+}
+
+// firstLineAlone leaves the record of a run in the gateway directory dir as a gateway
+// that stopped without ending the run leaves it: its first line alone, and nothing
+// delivered.
+func firstLineAlone(t *testing.T, dir, runID string) {
+	t.Helper()
+	file := filepath.Join(dir, "runs", runID, "events.jsonl")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, append(bytes.SplitN(b, []byte("\n"), 2)[0], '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "runs", runID, "delivered.log"))
+}
+
+// TestAGatewayRestartedAfterTheAnswerKeepsTheRun pins the mark of an answered run
+// request behind a separate gateway: a gateway that stopped after it answered a run's
+// run request, the run's record holding its dev.qory.run.registered alone, keeps the
+// record when it starts again, and the run request that comes again is a 409
+// run_attached, with no second attach. A run whose record cannot be marked answered is
+// let go of, a 500 internal saying why, and the run request that comes again opens it.
+func TestAGatewayRestartedAfterTheAnswerKeepsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	c := gatewayControl(t)
+	before := startRemote(t, c, gateway.Config{Dir: dir})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	if a := before.tryOpen(t, key, server.LinkRunRequest{}); a.status != http.StatusOK {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	before.g.Close(ctx)
+	cancel()
+	firstLineAlone(t, dir, runID)
+
+	r := startRemote(t, c, gateway.Config{Dir: dir})
+	refused(t, "the run request again", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(c.attached()); n != 1 {
+		t.Errorf("%d attaches; want the one before the restart", n)
+	}
+	if rec := r.record(runID); len(rec) != 1 || rec[0].Type != event.RunRegistered {
+		t.Errorf("the run's record %v", types(rec))
+	}
+
+	unmarked := event.NewRunID()
+	mark := filepath.Join(dir, "runs", unmarked, "answered")
+	var once sync.Once
+	cfg := gateway.Config{Dir: dir}
+	gateway.SetOpened(&cfg, func() { once.Do(func() { os.WriteFile(mark, nil, 0o644) }) })
+	r.g.Close(context.Background())
+	m := startRemote(t, c, cfg)
+	unmarkedKey := runKeyFor(t, unmarked, nil)
+	refused(t, "a run whose record cannot be marked", m.tryOpen(t, unmarkedKey, server.LinkRunRequest{}), http.StatusInternalServerError, "internal", "gateway",
+		fmt.Sprintf("run %s: marking its record answered: open %s: file exists", unmarked, mark))
+	if runs, _ := gateway.Held(m.g); runs != 0 {
+		t.Errorf("%d runs held", runs)
+	}
+	if e := m.open(t, unmarkedKey, server.LinkRunRequest{}); e.a.RunID != unmarked {
+		t.Errorf("the run opened again is %s", e.a.RunID)
+	}
 }
 
 // TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun pins D4 behind a separate gateway:

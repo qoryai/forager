@@ -562,14 +562,42 @@ func (r *Run) Close(ctx context.Context) (Result, error) {
 	return r.result, errors.Join(errs...)
 }
 
+// answeredFile is the mark in a run's record directory that the gateway answered the
+// run's first run request ([Run.MarkAnswered]).
+const answeredFile = "answered"
+
+// MarkAnswered marks the run's record answered, before the gateway answers the run's
+// first run request: it creates the empty file answered in the run's record directory,
+// which must not exist yet, and syncs it and the directory, so a gateway that starts
+// again keeps the record ([Stream.Reclaim]). A closed run is [ErrClosed].
+func (r *Run) MarkAnswered() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return ErrClosed
+	}
+	f, err := os.OpenFile(filepath.Join(r.dir, answeredFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	d, err := os.Open(r.dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
 // Discard closes the run's stream as [Run.Close] does, then removes what the stream
-// wrote under the run's record directory, events.jsonl, the delivery state and its
-// lock, and the directory itself when nothing else is left in it, so the run id opens
-// again: a run that never opened.
+// wrote under the run's record directory, events.jsonl, the delivery state, the mark
+// that it was answered and its lock, and the directory itself when nothing else is left
+// in it, so the run id opens again: a run that never opened.
 func (r *Run) Discard(ctx context.Context) error {
 	_, err := r.Close(ctx)
 	errs := []error{err}
-	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, lockFile} {
+	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir, answeredFile, lockFile} {
 		errs = append(errs, os.RemoveAll(filepath.Join(r.dir, name)))
 	}
 	// Left in place when it holds anything else, a session's own files on one machine.
@@ -578,11 +606,12 @@ func (r *Run) Discard(ctx context.Context) error {
 }
 
 // Reclaim removes the record of a run whose open never answered its session, so its
-// run id opens again: a record whose lock is free and whose events.jsonl holds at most
-// the run's dev.qory.run.registered, which is never posted. It reads the record under
-// its lock, so what it judges is what it removes. It removes what [Run.Discard]
-// removes, and reports whether it did; a record that holds anything more, one another
-// holds, and no record at all are left as they are.
+// run id opens again: a record whose lock is free, that is not marked answered
+// ([Run.MarkAnswered]) and whose events.jsonl holds at most the run's
+// dev.qory.run.registered, which is never posted. It reads the record under its lock,
+// so what it judges is what it removes. It removes what [Run.Discard] removes, and
+// reports whether it did; a record marked answered, one that holds anything more, one
+// another holds, and no record at all are left as they are.
 func (s *Stream) Reclaim(runID string) (bool, error) {
 	if err := checkRunID(runID); err != nil {
 		return false, err
@@ -607,6 +636,9 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 		return false, err
 	}
 	defer unlock()
+	if _, err := os.Stat(filepath.Join(dir, answeredFile)); !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
 	b, err := os.ReadFile(filepath.Join(dir, sink.EventsFile))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

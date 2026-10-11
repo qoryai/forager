@@ -66,7 +66,8 @@ func mediaType(r *http.Request, want string) bool {
 // for a run id that is not the run key's, 400 invalid_request for labels or about, which
 // are the starter's registration's, and 409 run_attached for a run the gateway holds,
 // is opening or has a record of; 409 run_id_used for a run id that already names a run here; the run's
-// refusal when it does not open; else the run answer.
+// refusal when it does not open; else the run answer, on the one address once the run's
+// record is marked answered, and a 500 internal of a run let go of when it cannot be.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	deadline := g.openDeadline()
 	if !mediaType(r, server.LinkContentType) {
@@ -180,6 +181,15 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 	lr.mu.Lock()
 	answer, digest := lr.answer, lr.reloadDigest
 	lr.mu.Unlock()
+	if s.remote {
+		// The record is marked answered before the answer goes, so a gateway that starts
+		// again keeps it, and the run request that comes again is run_attached.
+		if err := lr.st.MarkAnswered(); err != nil {
+			g.discard(lr)
+			refuseOpen(w, fmt.Errorf("run %s: marking its record answered: %w", req.RunID, err))
+			return
+		}
+	}
 	g.answerHeaders(s, w, r, digest)
 	w.Header().Set("Content-Type", server.LinkContentType)
 	w.WriteHeader(http.StatusOK)
