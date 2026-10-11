@@ -1,0 +1,9 @@
+# certificate_sha256 is standard base64 with padding, 44 characters ending in =.
+version: 1
+url: https://qory.example
+access_key_id: ak_f1xt0re000000000
+apiary_public_key:
+  - {alg: ed25519, public_key: rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc}
+via:
+  url: https://gateway.example:8443
+  certificate_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
