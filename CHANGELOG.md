@@ -1019,6 +1019,8 @@ release may change what an existing document does, and says so under Upgrading.
   own stops the run when the wall writes the agent's docker configuration there, which
   it does whenever the run sets no `DOCKER_CONFIG` or an empty one. `wall.Nest` followed
   it before.
+- A wall with a Docker of the agent's own needs the docker command and Docker Engine 28
+  or later; another engine is refused before anything is made.
 
 #### Added
 
@@ -1068,6 +1070,8 @@ release may change what an existing document does, and says so under Upgrading.
   the mount that holds it, and is bound at its own path, writable, only when no mount
   holds it. `wall.Docker` binds `Launch.Mounts` and passes `Launch.Dir` as `--workdir`,
   and refuses a launch whose `Dir` no mount's path holds.
+- With a Docker of the agent's own, the wall's inside network has an IPv6 subnet in
+  Docker's isolated gateway mode, and its relay listens on its address in it.
 
 #### Fixed
 
