@@ -286,6 +286,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(m)
 	w.Header().Set(server.HeaderConfiguration, conf)
 	w.Header().Set(server.HeaderRunConfiguration, digest)
+	w.Header().Set("ETag", `"`+digest+`"`)
 	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
 	w.Write(body)
 }

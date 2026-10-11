@@ -95,7 +95,7 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	run, digest := a.run, a.digest
 	a.mu.Unlock()
-	status, out, withRun := http.StatusOK, []byte(nil), true
+	status, out, withRun, attach := http.StatusOK, []byte(nil), true, false
 	switch rest, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/"); {
 	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
 		out, withRun = doc, false
@@ -104,6 +104,7 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(run, &m)
 		m["labels"] = json.RawMessage(`{"repository":"example-namespace/project"}`)
 		out, _ = json.Marshal(m)
+		attach = true
 		a.mu.Lock()
 		a.attaches++
 		a.mu.Unlock()
@@ -125,6 +126,9 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	if withRun {
 		answer.RunConfiguration = digest
 		w.Header().Set(server.HeaderRunConfiguration, digest)
+	}
+	if attach {
+		w.Header().Set("ETag", `"`+digest+`"`)
 	}
 	if out != nil {
 		w.Header().Set("Content-Type", "application/json")

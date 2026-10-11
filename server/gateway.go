@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,11 +128,16 @@ func (a RegistrationAnswer) LogValue() slog.Value {
 	)
 }
 
+// MarshalJSON is a as encoding/json writes a struct, with its RunKey redacted, for a
+// log or a dump that writes it so. Reading one back is as encoding/json reads a struct.
+func (a RegistrationAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
+
 // RegisterThroughGateway posts a run's registration through a gateway, body, the bytes
 // of a [GatewayRegistration], to the run endpoint runURL, and returns the server's
 // answer. The answer is a signed 200 with a run-registration-answer.schema.json
 // document whose run id is the body's and whose run key reads, unverified, as one of
-// that run ([runkey.Parse]): anything else of a signed 200 is a [*DocumentError]. A 401
+// that run ([runkey.Parse]), and with neither an X-Qory-Run-Configuration nor an ETag
+// header: anything else of a signed 200 is a [*DocumentError]. A 401
 // is unauthorized, an answer that does not verify answer_unsigned, and a signed refusal
 // its code, each an [*accesskey.Refusal]: among them node_is_direct, the server's
 // answer when the access key's node or node pool reports directly, no_default_gateway,
@@ -155,6 +161,9 @@ func (c *Client) RegisterThroughGateway(ctx context.Context, runURL string, body
 	}
 	if err := a.notOK(what); err != nil {
 		return nil, err
+	}
+	if len(a.header.Values(HeaderRunConfiguration)) > 0 || len(a.header.Values("ETag")) > 0 {
+		return nil, &DocumentError{"registration answer", runURL, errors.New("the answer carries X-Qory-Run-Configuration or ETag; a registration through a gateway carries no run configuration")}
 	}
 	var ans RegistrationAnswer
 	if err := readAnswer("run-registration-answer.schema.json", a.body, &ans); err != nil {
@@ -244,7 +253,10 @@ func (a Attach) Body() ([]byte, error) {
 	if a.ForagerVersion == "" {
 		return nil, errors.New("the attach: forager_version is empty")
 	}
-	return json.Marshal(a)
+	// wireAttach is an Attach without its methods, which encoding/json writes with its
+	// run key.
+	type wireAttach Attach
+	return json.Marshal(wireAttach(a))
 }
 
 // shownAttach is an Attach without its methods, which fmt prints the way it prints any
@@ -289,6 +301,11 @@ func (a Attach) LogValue() slog.Value {
 	)
 }
 
+// MarshalJSON is a as encoding/json writes a struct, with its RunKey redacted, for a
+// log or a dump that writes it so; [Attach.Body] is the attach's bytes. Reading one
+// back is as encoding/json reads a struct.
+func (a Attach) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
+
 // AttachAnswer is the server's signed 200 to an attach, run-attach-answer.schema.json:
 // the run's run configuration, as a direct registration's answer carries it, and the
 // labels and what the run is about, as the starter's registration gave them,
@@ -303,8 +320,9 @@ type AttachAnswer struct {
 // <runURL>/<runID>/attach, signed by the gateway's own access key, and returns the
 // server's answer with its digest of the run configuration. The answer is a signed
 // 200, a run-attach-answer.schema.json document with the X-Qory-Run-Configuration
-// header: a run configuration Forager refuses, labels or an about the contract refuses,
-// or a digest header missing or misshapen, is a [*DocumentError]. A 401 is
+// header and one ETag, that digest in quotes: a run configuration Forager refuses,
+// labels or an about the contract refuses, a digest header missing or misshapen, or an
+// ETag that is not the digest in quotes, is a [*DocumentError]. A 401 is
 // unauthorized, an answer that does not verify answer_unsigned, and a signed refusal
 // its code, each an [*accesskey.Refusal]: not_a_gateway, run_key_invalid,
 // run_key_expired, wrong_gateway, workspace_not_served and run_attached among them. A
@@ -329,6 +347,9 @@ func (c *Client) Attach(ctx context.Context, runURL, runID string, body []byte) 
 	rc, digest, err := runConfigurationOf(a, u)
 	if err != nil {
 		return nil, "", err
+	}
+	if etag := a.header.Values("ETag"); len(etag) != 1 || etag[0] != strconv.Quote(digest) {
+		return nil, "", &DocumentError{"attach answer", u, errors.New("the ETag header is not the X-Qory-Run-Configuration digest in quotes")}
 	}
 	var more struct {
 		Labels map[string]string `json:"labels"`
