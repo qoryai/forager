@@ -7,12 +7,15 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,11 +54,18 @@ type forwarder struct {
 	ctx  context.Context
 	stop context.CancelFunc
 
-	mu     sync.Mutex
-	conns  map[net.Conn]struct{}
-	closed bool
-	wg     sync.WaitGroup
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+	// waiting are the accepted connections yet to show the hop or the password, the
+	// one that has waited longest first; at most [maxWaiting].
+	waiting []net.Conn
+	closed  bool
+	wg      sync.WaitGroup
 }
+
+// maxWaiting is the most connections a forwarder holds at once that are yet to show
+// the hop or the password; one more closes the one that has waited longest.
+const maxWaiting = 128
 
 // forwarding is where a forwarder sends what it accepts, and with which secrets.
 type forwarding struct {
@@ -158,6 +168,9 @@ func (f *forwarder) accept() {
 			c.Close()
 			return
 		}
+		if f.way.hop != "" || f.way.password != "" {
+			f.await(c)
+		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
@@ -178,11 +191,41 @@ func (f *forwarder) track(c net.Conn) bool {
 	return true
 }
 
+// untrack takes a connection off the list, and off the waiting list, and closes it.
 func (f *forwarder) untrack(c net.Conn) {
 	f.mu.Lock()
 	delete(f.conns, c)
+	f.admitLocked(c)
 	f.mu.Unlock()
 	c.Close()
+}
+
+// await lists c as yet to show the hop or the password, closing the connection that has
+// waited longest when [maxWaiting] already wait.
+func (f *forwarder) await(c net.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.waiting) == maxWaiting {
+		f.waiting[0].Close()
+		f.waiting = slices.Delete(f.waiting, 0, 1)
+	}
+	f.waiting = append(f.waiting, c)
+}
+
+// admit takes c off the waiting list, once it has shown the hop or the password, and
+// reports whether it was on it: false once a newer connection has closed it.
+func (f *forwarder) admit(c net.Conn) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.admitLocked(c)
+}
+
+func (f *forwarder) admitLocked(c net.Conn) bool {
+	i := slices.Index(f.waiting, c)
+	if i >= 0 {
+		f.waiting = slices.Delete(f.waiting, i, i+1)
+	}
+	return i >= 0
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
@@ -195,6 +238,9 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		if f.way.password == "" && !f.admit(c) {
+			return
+		}
 	}
 	var src io.Reader = c
 	// plain is the one plain request of a connection the password let in.
@@ -211,6 +257,15 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		if !f.admit(c) {
+			return
+		}
+		if err := checkRequestLine(head); err != nil {
+			// A request line the check refuses gets a 400 here, and nothing of it
+			// reaches the proxy.
+			badRequest(c, err)
+			return
+		}
 		if connectHead(head) {
 			// The tunnel goes on as it is; a proxy that refuses it closes the connection
 			// rather than reading a second request.
@@ -280,19 +335,25 @@ func pipe(c, up net.Conn, fromAgent, fromProxy io.Reader, closeUp bool) {
 // Proxy-Authorization, never reaches the proxy. The proxy's side is not half closed,
 // which would end the request at a proxy that reads on; an agent that goes away, or
 // ends its side, while the reply is awaited closes it instead. A request that asks for
-// an upgrade the proxy answers with 101 makes the connection a tunnel.
+// an upgrade the proxy answers with 101 makes the connection a tunnel; an agent that
+// sends anything after it, or ends its side, before the proxy's reply is read gets no
+// reply: the connection closes, as it does when the reply's head runs past
+// [maxReplyHead] bytes.
 func passPlain(c, up net.Conn, p *proxied) {
 	if p.upgrade {
 		if err := p.req.WriteProxy(up); err != nil {
 			return
 		}
+		// WriteProxy has read the request's body: whatever the agent sends now is early.
 		stop := watchAgent(c, p.from, up, false)
-		r := bufio.NewReader(up)
+		head := &io.LimitedReader{R: up, N: maxReplyHead}
+		r := bufio.NewReader(head)
 		resp, err := http.ReadResponse(r, p.req)
-		stop()
-		if err != nil {
+		if early := stop(); early || err != nil {
 			return
 		}
+		// The bound is the head's alone: the tunnel, or the reply's body, has none.
+		head.N = math.MaxInt64
 		if resp.StatusCode == http.StatusSwitchingProtocols {
 			if err := writeResponseHead(c, resp); err != nil {
 				return
@@ -326,31 +387,31 @@ func passPlain(c, up net.Conn, p *proxied) {
 
 // watchAgent closes up when the agent's connection c, read through from, ends or fails,
 // until stop is called. With discard, what the agent sends meanwhile is read and
-// dropped; without it, the watch ends at the first byte the agent sends, which stays
-// in from.
-func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func()) {
-	var stopped atomic.Bool
+// dropped; without it, the first byte the agent sends closes up as the end does. stop
+// reports whether the watch closed up, or, without discard, whether from holds a byte
+// of the agent's.
+func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func() bool) {
+	var stopped, closed atomic.Bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for {
-			if _, err := from.Peek(1); err != nil {
+			if _, err := from.Peek(1); err != nil || !discard {
 				if !stopped.Load() {
 					up.Close()
+					closed.Store(true)
 				}
-				return
-			}
-			if !discard {
 				return
 			}
 			from.Discard(from.Buffered())
 		}
 	}()
-	return func() {
+	return func() bool {
 		stopped.Store(true)
 		c.SetReadDeadline(time.Now())
 		<-done
 		c.SetReadDeadline(time.Time{})
+		return closed.Load() || !discard && from.Buffered() > 0
 	}
 }
 
@@ -363,6 +424,10 @@ func writeResponseHead(w io.Writer, resp *http.Response) error {
 	_, err := w.Write(b.Bytes())
 	return err
 }
+
+// maxReplyHead is the most bytes of the proxy's reply to an upgrade the forwarder reads
+// for the reply's head.
+const maxReplyHead = 64 << 10
 
 // maxProxyLine is the longest line of the first request's head the forwarder reads,
 // maxProxyLines the most lines, and maxProxyHead the most bytes of the whole head.
@@ -406,6 +471,49 @@ func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Read
 		return nil, nil, false
 	}
 	return out.Bytes(), r, true
+}
+
+// The texts of the forwarder's 400 to a request line it refuses. The origin-form and
+// CONNECT texts are the gateway's proxy's own.
+var (
+	errAbsoluteForm  = errors.New("the proxy takes an absolute-form request target")
+	errConnectTarget = errors.New("CONNECT takes host:port")
+	errVersion       = errors.New("the proxy takes HTTP/1.0 or HTTP/1.1")
+)
+
+// checkRequestLine checks the request line of head, a request's head: a method, a
+// target and HTTP/1.0 or HTTP/1.1, each after a single space; for a CONNECT, a target
+// of host:port, its port from 1 to 65535, with no path, user or query ('/', '@', '?'
+// or '#'); for any other method, a CONNECT in other case among them, an absolute-form
+// target, with a scheme and a host. Its error is the text of the forwarder's 400.
+func checkRequestLine(head []byte) error {
+	line, _, _ := bytes.Cut(head, []byte("\n"))
+	method, rest, ok1 := strings.Cut(string(bytes.TrimSuffix(line, []byte("\r"))), " ")
+	target, version, ok2 := strings.Cut(rest, " ")
+	if !ok1 || !ok2 || version != "HTTP/1.0" && version != "HTTP/1.1" {
+		return errVersion
+	}
+	if method == http.MethodConnect {
+		_, portText, err := net.SplitHostPort(target)
+		port, perr := strconv.Atoi(portText)
+		if err != nil || perr != nil || port < 1 || port > 65535 || strings.ContainsAny(target, "/@?#") {
+			return errConnectTarget
+		}
+		return nil
+	}
+	if u, err := url.ParseRequestURI(target); err != nil || u.Scheme == "" || u.Host == "" {
+		return errAbsoluteForm
+	}
+	return nil
+}
+
+// badRequest answers the agent's connection c with a 400 whose body is err's text and
+// a newline, as plain text, and Connection: close.
+func badRequest(c net.Conn, err error) {
+	body := err.Error() + "\n"
+	c.SetWriteDeadline(time.Now().Add(link.PreambleWait))
+	fmt.Fprintf(c, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: %d\r\n"+
+		"Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\n\r\n%s", len(body), body)
 }
 
 // connectHead reports whether head, a request's head, is a CONNECT's.
