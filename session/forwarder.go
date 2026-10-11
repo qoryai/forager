@@ -212,17 +212,20 @@ func (f *forwarder) await(c net.Conn) {
 	f.waiting = append(f.waiting, c)
 }
 
-// admit takes c off the waiting list, once it has shown the hop or the password.
-func (f *forwarder) admit(c net.Conn) {
+// admit takes c off the waiting list, once it has shown the hop or the password, and
+// reports whether it was on it: false once a newer connection has closed it.
+func (f *forwarder) admit(c net.Conn) bool {
 	f.mu.Lock()
-	f.admitLocked(c)
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	return f.admitLocked(c)
 }
 
-func (f *forwarder) admitLocked(c net.Conn) {
-	if i := slices.Index(f.waiting, c); i >= 0 {
+func (f *forwarder) admitLocked(c net.Conn) bool {
+	i := slices.Index(f.waiting, c)
+	if i >= 0 {
 		f.waiting = slices.Delete(f.waiting, i, i+1)
 	}
+	return i >= 0
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
@@ -235,8 +238,8 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
-		if f.way.password == "" {
-			f.admit(c)
+		if f.way.password == "" && !f.admit(c) {
+			return
 		}
 	}
 	var src io.Reader = c
@@ -254,7 +257,9 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
-		f.admit(c)
+		if !f.admit(c) {
+			return
+		}
 		if err := checkRequestLine(head); err != nil {
 			// A request line the check refuses gets a 400 here, and nothing of it
 			// reaches the proxy.

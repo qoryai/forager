@@ -949,6 +949,55 @@ func TestTheUnwalledForwarderBoundsTheConnectionsWaiting(t *testing.T) {
 	}
 }
 
+// TestTheForwarderDropsAConnectionClosedWhileItWaited pins a connection a newer one
+// closed while it waited, off the waiting list by the time it shows the password or
+// the hop: it goes no further, and nothing of it reaches the proxy, not even a
+// connection.
+func TestTheForwarderDropsAConnectionClosedWhileItWaited(t *testing.T) {
+	const (
+		password = "forwarder-password-0123456789abcdefghijklmn"
+		hop      = "hop-secret-0123456789abcdefghijklmnopqrstuv"
+	)
+	login := "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyUser+":"+password)) + "\r\n"
+	for name, r := range map[string]struct {
+		way  forwarding
+		sent string
+	}{
+		"the password": {forwarding{password: password}, "GET http://api.example/ HTTP/1.1\r\nHost: api.example\r\n" + login + "\r\n"},
+		"the hop":      {forwarding{hop: hop}, link.RelayLine(hop) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up := startUpstream(t)
+			var d net.Dialer
+			r.way.dial = func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", up.ln.Addr().String()) }
+			f, err := listenForwarding("127.0.0.1:0", r.way)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			// The connection is served without being on the waiting list, as one a newer
+			// connection took off it is.
+			agent, c := net.Pipe()
+			defer agent.Close()
+			go io.WriteString(agent, r.sent)
+			served := make(chan struct{})
+			go func() {
+				f.serve(c)
+				close(served)
+			}()
+			select {
+			case <-served:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the connection went on")
+			}
+			time.Sleep(200 * time.Millisecond)
+			if opened, received := up.seen(); opened != 0 || len(received) != 0 {
+				t.Errorf("the proxy got %d connections, %q", opened, received)
+			}
+		})
+	}
+}
+
 // TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
 // never comes: once the agent closes its connection, the forwarder closes the proxy's
 // soon after, rather than at the run's end.
