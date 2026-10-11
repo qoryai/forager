@@ -886,6 +886,67 @@ func TestTheUnwalledForwarderChecksTheRequestLine(t *testing.T) {
 	}
 }
 
+// TestTheUnwalledForwarderBoundsTheConnectionsWaiting pins the connections yet to show
+// the password: with as many as the forwarder holds waiting, one more that shows it is
+// served, and the connection that has waited longest is closed, while the others wait
+// on.
+func TestTheUnwalledForwarderBoundsTheConnectionsWaiting(t *testing.T) {
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			up := startProxyStandIn(t, secret, nil)
+			f, login := unwalledForwarder(t, up.Addr().String(), secret)
+			waiting := func() int {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				return len(f.waiting)
+			}
+			silent := make([]net.Conn, maxWaiting)
+			for i := range silent {
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				silent[i] = c
+				// One at a time, so the forwarder holds them in the order they came.
+				for deadline := time.Now().Add(5 * time.Second); waiting() != i+1; time.Sleep(time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("%d connections waiting, want %d", waiting(), i+1)
+					}
+				}
+			}
+
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			io.WriteString(c, "GET http://api.example/served HTTP/1.1\r\nHost: api.example\r\n"+login+"\r\n")
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+			if err != nil {
+				t.Fatalf("the connection past the bound got no answer: %v", err)
+			}
+			if b, _ := io.ReadAll(resp.Body); resp.StatusCode != 200 || string(b) != "ok 0" {
+				t.Errorf("the connection past the bound got %d %q", resp.StatusCode, b)
+			}
+
+			silent[0].SetReadDeadline(time.Now().Add(2 * time.Second))
+			var ne net.Error
+			if _, err := silent[0].Read(make([]byte, 1)); err == nil || errors.As(err, &ne) && ne.Timeout() {
+				t.Errorf("the connection that waited longest was not closed: %v", err)
+			}
+			silent[1].SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			if _, err := silent[1].Read(make([]byte, 1)); !errors.As(err, &ne) || !ne.Timeout() {
+				t.Errorf("the connection that came next was closed: %v", err)
+			}
+			if n := waiting(); n != maxWaiting-1 {
+				t.Errorf("%d connections waiting, want %d", n, maxWaiting-1)
+			}
+		})
+	}
+}
+
 // TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
 // never comes: once the agent closes its connection, the forwarder closes the proxy's
 // soon after, rather than at the run's end.

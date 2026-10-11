@@ -54,11 +54,18 @@ type forwarder struct {
 	ctx  context.Context
 	stop context.CancelFunc
 
-	mu     sync.Mutex
-	conns  map[net.Conn]struct{}
-	closed bool
-	wg     sync.WaitGroup
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+	// waiting are the accepted connections yet to show the hop or the password, the
+	// one that has waited longest first; at most [maxWaiting].
+	waiting []net.Conn
+	closed  bool
+	wg      sync.WaitGroup
 }
+
+// maxWaiting is the most connections a forwarder holds at once that are yet to show
+// the hop or the password; one more closes the one that has waited longest.
+const maxWaiting = 128
 
 // forwarding is where a forwarder sends what it accepts, and with which secrets.
 type forwarding struct {
@@ -161,6 +168,9 @@ func (f *forwarder) accept() {
 			c.Close()
 			return
 		}
+		if f.way.hop != "" || f.way.password != "" {
+			f.await(c)
+		}
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
@@ -181,11 +191,38 @@ func (f *forwarder) track(c net.Conn) bool {
 	return true
 }
 
+// untrack takes a connection off the list, and off the waiting list, and closes it.
 func (f *forwarder) untrack(c net.Conn) {
 	f.mu.Lock()
 	delete(f.conns, c)
+	f.admitLocked(c)
 	f.mu.Unlock()
 	c.Close()
+}
+
+// await lists c as yet to show the hop or the password, closing the connection that has
+// waited longest when [maxWaiting] already wait.
+func (f *forwarder) await(c net.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.waiting) == maxWaiting {
+		f.waiting[0].Close()
+		f.waiting = slices.Delete(f.waiting, 0, 1)
+	}
+	f.waiting = append(f.waiting, c)
+}
+
+// admit takes c off the waiting list, once it has shown the hop or the password.
+func (f *forwarder) admit(c net.Conn) {
+	f.mu.Lock()
+	f.admitLocked(c)
+	f.mu.Unlock()
+}
+
+func (f *forwarder) admitLocked(c net.Conn) {
+	if i := slices.Index(f.waiting, c); i >= 0 {
+		f.waiting = slices.Delete(f.waiting, i, i+1)
+	}
 }
 
 // serve copies one connection to the proxy and back, each direction until its end,
@@ -198,6 +235,9 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		if f.way.password == "" {
+			f.admit(c)
+		}
 	}
 	var src io.Reader = c
 	// plain is the one plain request of a connection the password let in.
@@ -214,6 +254,7 @@ func (f *forwarder) serve(c net.Conn) {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
+		f.admit(c)
 		if err := checkRequestLine(head); err != nil {
 			// A request line the proxy refuses gets the proxy's 400 here, and nothing of
 			// it reaches the proxy.
