@@ -1102,9 +1102,8 @@ release may change what an existing document does, and says so under Upgrading.
   relay's user, where it could read the run's proxy secret from the relay's environment
   and reach what the relay reaches. `wall.Docker` now creates the relay and the agent's
   container with `--no-healthcheck`.
-- Without a Docker of the agent's own, `wall.Docker` creates the inside network with no
-  IPv6 subnet, and the agent's container starts with no IPv6 address but loopback's
-  `::1`.
+- Without nested Docker, `wall.Docker` creates the inside network with no IPv6 subnet,
+  and the agent's container starts with no IPv6 address but loopback's `::1`.
 - The relay listened on every address of its container, so whatever reached its address
   on its ordinary network, another container of the engine or a process of the machine,
   had its connections forwarded to the proxy opened with the run's proxy secret. The

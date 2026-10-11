@@ -63,7 +63,7 @@ func (n neighbours) problem() string {
 	slices.Sort(others)
 	switch {
 	case len(others) > 0:
-		return fmt.Sprintf("on %s, %v answered, which are neither the enclosure's own nor the relay at %s", n.Link, others, n.Relay)
+		return fmt.Sprintf("on %s, %v answered, which are neither the enclosure's addresses nor the relay at %s", n.Link, others, n.Relay)
 	case len(relay) == 0:
 		return fmt.Sprintf("on %s, the relay at %s did not answer; answered: %v", n.Link, n.Relay, n.Answered)
 	case len(n.Connected) > 0:

@@ -57,7 +57,7 @@ func TestDockerNestedConforms(t *testing.T) {
 	version := strings.TrimSpace(string(out))
 	major, _, _ := strings.Cut(version, ".")
 	if n, convErr := strconv.Atoi(major); err != nil || convErr != nil || n < 28 {
-		e2e.Skip(t, fmt.Sprintf("a Docker of the agent's own needs Docker Engine 28 or later; %s gives %q: %v", command, version, err))
+		e2e.Skip(t, fmt.Sprintf("nested Docker needs Docker Engine 28 or later; %s gives %q: %v", command, version, err))
 	}
 	image := os.Getenv("QORY_WALL_NESTED_IMAGE")
 	if image == "" {
@@ -479,7 +479,7 @@ func insideHasNoIPv6(t *testing.T, command, helper, image string) {
 	})
 }
 
-// insideHasIsolatedIPv6 requires, with a Docker of the agent's own, that the inside
+// insideHasIsolatedIPv6 requires, with nested Docker, that the inside
 // network has an IPv6 subnet in the isolated gateway mode; that on the engine's host
 // the network's bridge has IPv6 off and no IPv6 address; that the relay listens on IPv6
 // at its address in the subnet alone, where it is reached from the inside network and

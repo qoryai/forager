@@ -117,7 +117,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Show the engine's version
-        # A Docker of the agent's own needs Docker Engine 28 or later.
+        # Nested Docker needs Docker Engine 28 or later.
         run: docker version
 
       - name: Log in to ghcr.io
@@ -190,7 +190,7 @@ jobs:
           fi
 
       - name: Show the engine's version
-        # A Docker of the agent's own needs Docker Engine 28 or later.
+        # Nested Docker needs Docker Engine 28 or later.
         run: docker version
 
       - name: Log in to ghcr.io

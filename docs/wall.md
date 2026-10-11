@@ -74,7 +74,7 @@ wall:
 
 You need:
 
-- the `docker` command, with an engine behind it; for a Docker of the agent's own,
+- the `docker` command, with an engine behind it; for [nested Docker](#nested-docker),
   Docker Engine 28 or later;
 - [`qory`](https://github.com/qoryai/qory) 0.7.0 or later;
 - an image of yours that contains the runtime and your toolchain. The wall builds none.

@@ -460,7 +460,7 @@ func TestDockerNestedCommandLine(t *testing.T) {
 }
 
 // TestDockerGivesANestAnIsolatedIPv6Subnet pins the inside network of an enclosure with
-// a Docker of the agent's own: created with an IPv6 subnet in the isolated gateway mode,
+// nested Docker: created with an IPv6 subnet in the isolated gateway mode,
 // with the bridge's IPv4 address inhibited as for any image; the relay listening in both
 // of its subnets and taking no router advertisement; and the agent's container started
 // without the sysctl that turns IPv6 off for any image.
@@ -495,19 +495,19 @@ func TestDockerGivesANestAnIsolatedIPv6Subnet(t *testing.T) {
 	}
 }
 
-// TestDockerRefusesAnEngineANestCannotHave pins that a Docker of the agent's own is
-// refused before anything is made without the docker command and Docker Engine 28 or
-// later, with the refusal's words; an engine at the floor or later is taken.
+// TestDockerRefusesAnEngineANestCannotHave pins that nested Docker is refused before
+// anything is made without the docker command and Docker Engine 28 or later, with the
+// refusal's words; an engine at the floor or later is taken.
 func TestDockerRefusesAnEngineANestCannotHave(t *testing.T) {
 	for name, c := range map[string]struct {
 		command, version, fail, want string
 	}{
-		"podman":          {command: "podman", want: "wall docker: a Docker of the agent's own needs the docker command and Docker Engine 28 or later, not podman"},
-		"nerdctl by path": {command: "/usr/local/bin/nerdctl", want: "wall docker: a Docker of the agent's own needs the docker command and Docker Engine 28 or later, not nerdctl"},
-		"27.5.1":          {version: "27.5.1\n", want: "wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine is 27.5.1"},
-		"26.1.4":          {version: "26.1.4\n", want: "wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine is 26.1.4"},
-		"empty":           {version: "\n", want: "wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
-		"garbage":         {version: "not a version\n", want: "wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
+		"podman":          {command: "podman", want: "wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not podman"},
+		"nerdctl by path": {command: "/usr/local/bin/nerdctl", want: "wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not nerdctl"},
+		"27.5.1":          {version: "27.5.1\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine is 27.5.1"},
+		"26.1.4":          {version: "26.1.4\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine is 26.1.4"},
+		"empty":           {version: "\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
+		"garbage":         {version: "not a version\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
 		"no engine":       {fail: " version ", want: "wall docker: docker version: exit status 1: Error response from daemon: told to fail"},
 	} {
 		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, version: c.version, fail: c.fail}
@@ -535,8 +535,8 @@ func TestDockerRefusesAnEngineANestCannotHave(t *testing.T) {
 }
 
 // TestDockerRefusesANestWhoseNetworkGotNoIPv6Subnet pins that an inside network the
-// engine gave no IPv6 subnet is refused for a Docker of the agent's own, and that what
-// was made is removed.
+// engine gave no IPv6 subnet is refused for nested Docker, and that what was made is
+// removed.
 func TestDockerRefusesANestWhoseNetworkGotNoIPv6Subnet(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, noIPv6: true}
 	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}

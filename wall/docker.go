@@ -256,9 +256,9 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	//
 	// The inside network's bridge gets no address of the host's, so the network's
 	// gateway is not the engine's host. For any image the network is created with no
-	// IPv6 subnet, whatever the daemon's default. With a Docker of the agent's own it is
-	// created with an IPv6 subnet, the engine's choice, in the isolated gateway mode,
-	// where the bridge has IPv6 off and no address.
+	// IPv6 subnet, whatever the daemon's default. With nested Docker it is created with
+	// an IPv6 subnet, the engine's choice, in the isolated gateway mode, where the bridge
+	// has IPv6 off and no address.
 	create := []string{"network", "create", "--internal"}
 	if req.Docker {
 		create = append(create, "--ipv6", "--opt", "com.docker.network.bridge.gateway_mode_ipv6=isolated")
@@ -307,7 +307,7 @@ func ipv6Subnet(s string) bool {
 }
 
 // nestFloor is the first major version of Docker Engine whose bridge networks take
-// the isolated gateway mode, which a Docker of the agent's own needs.
+// the isolated gateway mode, which nested Docker needs.
 const nestFloor = 28
 
 // engineVersion is the format that makes docker version print the version of the
@@ -316,12 +316,12 @@ const engineVersion = `{{range .Server.Components}}{{if eq .Name "Engine"}}{{.Ve
 
 var engineVersionShape = regexp.MustCompile(`^([0-9]+)\.[0-9]+(\.[0-9]+)?([-+~][0-9A-Za-z.+~-]*)?$`)
 
-// nestEngine refuses an engine that cannot give a Docker of the agent's own its inside
-// network: a command other than docker, or a Docker Engine before [nestFloor]. It
-// runs before anything is made.
+// nestEngine refuses an engine that cannot give nested Docker its inside network: a
+// command other than docker, or a Docker Engine before [nestFloor]. It runs before
+// anything is made.
 func (e *dockerEnclosure) nestEngine(ctx context.Context) error {
 	if name := e.d.Name(); name != "docker" {
-		return fmt.Errorf("wall docker: a Docker of the agent's own needs the docker command and Docker Engine 28 or later, not %s", name)
+		return fmt.Errorf("wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not %s", name)
 	}
 	out, err := e.sys.run(ctx, []string{e.command(), "version", "--format", engineVersion}, e.env)
 	if err != nil {
@@ -333,10 +333,10 @@ func (e *dockerEnclosure) nestEngine(ctx context.Context) error {
 	version := string(bytes.TrimSpace(out))
 	m := engineVersionShape.FindStringSubmatch(version)
 	if m == nil {
-		return errors.New("wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine gave no Docker Engine version")
+		return errors.New("wall docker: nested Docker needs Docker Engine 28 or later; the engine gave no Docker Engine version")
 	}
 	if major, err := strconv.Atoi(m[1]); err != nil || major < nestFloor {
-		return fmt.Errorf("wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine is %s", version)
+		return fmt.Errorf("wall docker: nested Docker needs Docker Engine 28 or later; the engine is %s", version)
 	}
 	return nil
 }
@@ -512,9 +512,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		// For any image the agent's container starts with no IPv6 address but
 		// loopback's: on the inside network, which has no IPv6 subnet, the engine leaves
 		// its interface without IPv6, and IPv6 is off by default for an interface made
-		// later. Loopback, there before, keeps ::1, which tools dial localhost by. With a
-		// Docker of the agent's own its interface has an address in the inside network's
-		// IPv6 subnet, and the enclosure's root sets the enclosure's own sysctls.
+		// later. Loopback, there before, keeps ::1, which tools dial localhost by. With
+		// nested Docker its interface has an address in the inside network's IPv6
+		// subnet, and the enclosure's root sets the enclosure's own sysctls.
 		run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
 	}
 	run = append(run, limits...)
