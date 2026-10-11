@@ -346,14 +346,28 @@ func TestRefusalsAtTheStartPassOn(t *testing.T) {
 	}
 }
 
-// TestAGatewayKeyWithoutAnAddressRegistersNoWorkspace pins a gateway started with a
-// gateway's access key, whose discovery has no workspaces, and no address: a run on its
-// local link registers directly, and the server's refusal reaches the session, from
-// apiary, with no workspace to take from discovery.
-func TestAGatewayKeyWithoutAnAddressRegistersNoWorkspace(t *testing.T) {
+// TestADiscoveryWithoutWorkspacesRegistersNoWorkspace pins a gateway without an address
+// whose discovery, read again since an answer carried another digest, is a gateway
+// key's, with no workspaces: a run on its local link registers directly, and the
+// server's refusal reaches the session, from apiary, with no workspace to take from
+// discovery.
+func TestADiscoveryWithoutWorkspacesRegistersNoWorkspace(t *testing.T) {
 	c := newControl(t)
-	c.asGateway()
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
 	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{})
+	if d := h.post(started(a.RunID, nil), applied(a.RunID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	// The pass that reads discovery again fetches the run configuration after it, so a
+	// fetch past this count says the gateway holds the new document.
+	fetched := c.fetches.Load()
+	c.asGateway()
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
+	eventually(t, "discovery read again", func() bool {
+		h.post(heartbeat(a.RunID))
+		return c.fetches.Load() > fetched
+	})
 	c.limit.Store(true)
 	_, err := h.tryOpen(server.LinkRunRequest{})
 	var r *accesskey.Refusal

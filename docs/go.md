@@ -183,7 +183,10 @@ without a `Server`, "the gateway's address <address> needs a server and a gatewa
 access key: the gateway attaches each run there", certificate and key files it cannot
 read or that do not match, and `TLS` without `Listen`; and once discovery is read, an
 access key that is not a gateway's, "the access key's node <node id> is not a gateway,
-ng_: the gateway's address <address> needs a gateway's access key".
+ng_: the gateway's address <address> needs a gateway's access key". Without `Listen`,
+once discovery is read, it refuses a gateway's access key, "the access key's node
+<node id> is a gateway, ng_: a gateway without an address needs a node's access key,
+nd_ or np_".
 
 ### The session behind a separate gateway
 

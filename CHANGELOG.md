@@ -899,6 +899,9 @@ release may change what an existing document does, and says so under Upgrading.
   and key files it cannot read or that do not match; and, once discovery is read, an
   access key whose node is not a gateway's, "the access key's node <node id> is not a
   gateway, ng_: the gateway's address <address> needs a gateway's access key".
+- `gateway.Start` refuses a gateway's access key without an address: the access key's
+  node <node id> is a gateway, ng_: a gateway without an address needs a node's access
+  key, nd_ or np_.
 - The discovery on the one address, `GET /qory-link/configuration`, lists every URL on
   the origin the session reached, by its `Host`, under `/qory-link/`, and
   `proxy.address` that same address.

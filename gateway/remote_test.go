@@ -470,8 +470,8 @@ func validDocument(t *testing.T, schemaName string, b []byte) {
 // TestStartRefusesAnAddressItCannotServe pins Start's checks of the one address: an
 // address that is not host:port, one without TLS, one without a server, TLS files it
 // cannot read or that do not match, TLS without an address, each before anything
-// starts, its error never holding the key; and an access key that is not a gateway's,
-// once discovery is read.
+// starts, its error never holding the key; and once discovery is read, an access key
+// that is not a gateway's with an address, and a gateway's without one.
 func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 	dir := t.TempDir()
 	c := gatewayControl(t)
@@ -519,6 +519,15 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 	_, err := gateway.Start(context.Background(), gateway.Config{Dir: dir, Listen: "127.0.0.1:0", TLS: tlsOf(certFile, keyFile), Server: node.server()})
 	if want := "the access key's node " + testNode + " is not a gateway, ng_: the gateway's address 127.0.0.1:0 needs a gateway's access key"; err == nil || err.Error() != want {
 		t.Errorf("a node's key: %v; want %q", err, want)
+	}
+	// A gateway's access key serves no local link: before anything is served, the
+	// gateway without an address refuses it.
+	g, err := gateway.Start(context.Background(), gateway.Config{Dir: dir, Server: gatewayControl(t).server()})
+	if want := "the access key's node " + testGateway + " is a gateway, ng_: a gateway without an address needs a node's access key, nd_ or np_"; err == nil || err.Error() != want || g != nil {
+		if g != nil {
+			g.Close(context.Background())
+		}
+		t.Errorf("a gateway's key without an address: %v; want %q", err, want)
 	}
 }
 
