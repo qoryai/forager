@@ -1006,6 +1006,9 @@ release may change what an existing document does, and says so under Upgrading.
   event as it is, with no error.
 - Of a policy's path rules, the one for the most specific host pattern that matches
   applies: an exact host before a wildcard, a longer suffix before a shorter.
+- `gateway.Policy.Under` keeps each side's path rules apart, as beside a server's
+  policy: a request to a host either side holds to paths matches an entry of each side
+  that lists it, whatever the sides' modes.
 
 ### Wall
 

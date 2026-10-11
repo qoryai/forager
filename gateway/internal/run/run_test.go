@@ -681,7 +681,7 @@ func TestTheNodesPathsBesideAServersPolicy(t *testing.T) {
 		t.Errorf("the node's paths without a wall: %v", err)
 	}
 	r := open(t, run.Config{RunID: runID, Node: node, Wall: true, Fetched: fetched})
-	if !maps.EqualFunc(r.NodePaths(), node.Egress.Paths, slices.Equal) || !r.NeedsCA() {
+	if sides := r.NodePaths(); len(sides) != 1 || !maps.EqualFunc(sides[0], node.Egress.Paths, slices.Equal) || !r.NeedsCA() {
 		t.Errorf("node paths %v, authority %v", r.NodePaths(), r.NeedsCA())
 	}
 	// Without a server the node's policy is the run's, paths and all, and none is
