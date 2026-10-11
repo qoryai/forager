@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"errors"
 	"io"
@@ -20,26 +21,32 @@ import (
 )
 
 // The relay's limits: requests a minute from one source, an IPv4 address or an IPv6
-// /64 ([sourceKey]), and the burst of them; the most of a request's body it takes for
-// each endpoint; the most of an answer it passes back; and how long it waits for the
-// server.
+// /64 ([addressSource]), and the burst of them; requests a minute from one IPv6 /48, and
+// the burst of them; the most of a request's body it takes for each endpoint; the most
+// of an answer it passes back; and how long it waits for the server.
 const (
-	relayPerMinute = 60
-	relayBurst     = 20
-	relayEnrolment = 16 << 10
-	relayRegister  = 64 << 10
-	relayOutcome   = 4 << 10
-	relayMaxAnswer = 1 << 20
-	enrolmentPath  = "/.well-known/qory-enrolment"
+	relayPerMinute      = 60
+	relayBurst          = 20
+	relayBlockPerMinute = 240
+	relayBlockBurst     = 80
+	relayEnrolment      = 16 << 10
+	relayRegister       = 64 << 10
+	relayOutcome        = 4 << 10
+	relayMaxAnswer      = 1 << 20
+	enrolmentPath       = "/.well-known/qory-enrolment"
 )
 
-// relayRefill is how long a source's bucket takes to fill from empty: one idle as long
-// is full, and the relay lets go of it, every relayRefill.
+// relayRefill is how long a source's bucket takes to fill from empty, and a /48's as
+// long: one idle as long is full, and the relay lets go of it, every relayRefill.
 const relayRefill = time.Minute * relayBurst / relayPerMinute
 
-// relaySources is the most sources the relay follows at once: a new one past it is
-// 429 until buckets are let go of.
+// relaySources is the most sources the relay follows at once: a new one past it lets go
+// of the one idle longest.
 const relaySources = 1 << 16
+
+// relayBlockSources is the most sources of one IPv6 /48 the relay follows at once: a new
+// one past it lets go of the one of that /48 idle longest.
+const relayBlockSources = 256
 
 // relayInFlight is the most requests the relay has with the server at once: one more is
 // 503.
@@ -104,14 +111,41 @@ type relay struct {
 	done  chan struct{}
 
 	mu      sync.Mutex
-	sources map[string]*bucket
+	sources map[string]*relaySource
+	blocks  map[string]*relayBlock
+	// idle holds every source followed, the one idle longest first.
+	idle list.List
 }
 
-// bucket is the requests one source address may still make: left, refilled at
-// [relayPerMinute] a minute up to [relayBurst], as of at.
+// bucket is the requests a source, or a /48, may still make: left, as of at.
 type bucket struct {
 	left float64
 	at   time.Time
+}
+
+// refill is b as of now, refilled at perMinute a minute up to burst.
+func (b *bucket) refill(perMinute, burst float64, now time.Time) {
+	b.left = min(burst, b.left+now.Sub(b.at).Minutes()*perMinute)
+	b.at = now
+}
+
+// relaySource is a source the relay follows: its bucket, refilled at [relayPerMinute]
+// a minute up to [relayBurst]; its /48's, nil for an IPv4 address; and its places
+// among the sources followed and among its /48's.
+type relaySource struct {
+	bucket
+	key           string
+	block         *relayBlock
+	idle, inBlock *list.Element
+}
+
+// relayBlock is an IPv6 /48 the relay follows while it follows a source of it: its
+// bucket, refilled at [relayBlockPerMinute] a minute up to [relayBlockBurst], and its
+// sources followed, the one idle longest first.
+type relayBlock struct {
+	bucket
+	key     string
+	sources list.List
 }
 
 // newRelay is the relay to the server of the gateway's server document.
@@ -128,7 +162,7 @@ func (g *Gateway) newRelay(addr net.Addr) *relay {
 	if g.cfg.relayInFlight != 0 {
 		inFlight = g.cfg.relayInFlight
 	}
-	rl := &relay{g: g, origin: origin, queue: newConnQueue(addr), sources: map[string]*bucket{}, wait: wait,
+	rl := &relay{g: g, origin: origin, queue: newConnQueue(addr), sources: map[string]*relaySource{}, blocks: map[string]*relayBlock{}, wait: wait,
 		slots: make(chan struct{}, inFlight), done: make(chan struct{}),
 		client: &http.Client{Transport: t, Timeout: wait, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	// OPTIONS * goes to the handler too, which counts it and answers it 404.
@@ -169,38 +203,81 @@ func (rl *relay) pruneEvery(d time.Duration) {
 	}
 }
 
-// prune lets go of every bucket idle for [relayRefill] or more as of now: full again,
-// it is the one a new source gets.
+// prune lets go of every source idle for [relayRefill] or more as of now, and of a /48
+// with none of its sources left: full again, its bucket is the one a new source gets.
 func (rl *relay) prune(now time.Time) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	for s, b := range rl.sources {
-		if now.Sub(b.at) >= relayRefill {
-			delete(rl.sources, s)
+	for e := rl.idle.Front(); e != nil; e = rl.idle.Front() {
+		src := e.Value.(*relaySource)
+		if now.Sub(src.at) < relayRefill {
+			return
 		}
+		rl.forget(src)
 	}
 }
 
-// allow takes one request of the source from its bucket, and reports whether there was
-// one. A source new to the relay while it follows [relaySources] has none.
-func (rl *relay) allow(source string, now time.Time) bool {
+// allow takes one request of the source s from its bucket and from its /48's, and
+// reports whether both had one. A source new to the relay while it follows
+// [relaySources] lets go of the one idle longest, and one new to a /48 of which it
+// follows [relayBlockSources] lets go of the one of that /48 idle longest.
+func (rl *relay) allow(s connSource, now time.Time) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	b := rl.sources[source]
-	if b == nil {
-		if len(rl.sources) >= relaySources {
-			return false
-		}
-		b = &bucket{left: relayBurst, at: now}
-		rl.sources[source] = b
+	src := rl.sources[s.key]
+	if src == nil {
+		src = rl.follow(s, now)
 	}
-	b.left = min(relayBurst, b.left+now.Sub(b.at).Minutes()*relayPerMinute)
-	b.at = now
-	if b.left < 1 {
+	rl.idle.MoveToBack(src.idle)
+	src.refill(relayPerMinute, relayBurst, now)
+	blk := src.block
+	if blk != nil {
+		blk.sources.MoveToBack(src.inBlock)
+		blk.refill(relayBlockPerMinute, relayBlockBurst, now)
+	}
+	if src.left < 1 || blk != nil && blk.left < 1 {
 		return false
 	}
-	b.left--
+	src.left--
+	if blk != nil {
+		blk.left--
+	}
 	return true
+}
+
+// follow is the source s, new to the relay, followed from now with full buckets, its
+// /48's kept when the relay follows it.
+func (rl *relay) follow(s connSource, now time.Time) *relaySource {
+	if len(rl.sources) >= relaySources {
+		rl.forget(rl.idle.Front().Value.(*relaySource))
+	}
+	src := &relaySource{bucket: bucket{left: relayBurst, at: now}, key: s.key}
+	if s.block != "" {
+		blk := rl.blocks[s.block]
+		if blk == nil {
+			blk = &relayBlock{bucket: bucket{left: relayBlockBurst, at: now}, key: s.block}
+			rl.blocks[s.block] = blk
+		} else if blk.sources.Len() >= relayBlockSources {
+			rl.forget(blk.sources.Front().Value.(*relaySource))
+		}
+		src.block = blk
+		src.inBlock = blk.sources.PushBack(src)
+	}
+	src.idle = rl.idle.PushBack(src)
+	rl.sources[s.key] = src
+	return src
+}
+
+// forget lets go of src, and of its /48 once none of its sources is left.
+func (rl *relay) forget(src *relaySource) {
+	delete(rl.sources, src.key)
+	rl.idle.Remove(src.idle)
+	if blk := src.block; blk != nil {
+		blk.sources.Remove(src.inBlock)
+		if blk.sources.Len() == 0 {
+			delete(rl.blocks, blk.key)
+		}
+	}
 }
 
 // limit is the most of a request's body the relay takes for its method and path, and
@@ -232,12 +309,12 @@ func (rl *relay) limit(method, path string) (int, int) {
 	return max, 0
 }
 
-// ServeHTTP relays one request, in order: past its source's rate, or a source new to a
-// relay that follows [relaySources], 429; a method or a target the relay does not
-// relay, 405 or 404, an escaped path and a query on a POST among the latter; a body over
-// its endpoint's bound, 413; [relayInFlight] requests with the server already, 503; the
-// server unreached, 502, or not answering within [relayWait], 504; an answer over
-// [relayMaxAnswer], 502. Each of these is the relay's own answer, with no body.
+// ServeHTTP relays one request, in order: past its source's rate, or its IPv6 /48's,
+// 429; a method or a target the relay does not relay, 405 or 404, an escaped path and a
+// query on a POST among the latter; a body over its endpoint's bound, 413;
+// [relayInFlight] requests with the server already, 503; the server unreached, 502, or
+// not answering within [relayWait], 504; an answer over [relayMaxAnswer], 502. Each of
+// these is the relay's own answer, with no body.
 // Otherwise the server's answer, its status, its fields but those of one connection,
 // and its body as it came.
 func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {

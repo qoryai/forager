@@ -148,3 +148,11 @@ func PendingConns(g *Gateway) int {
 	defer g.svc.conns.mu.Unlock()
 	return g.svc.conns.total
 }
+
+// WaitingConns counts the connections g's one address holds whose run key it has not
+// admitted and no run key has vouched for: those it may close for a newer one.
+func WaitingConns(g *Gateway) int {
+	g.svc.conns.mu.Lock()
+	defer g.svc.conns.mu.Unlock()
+	return g.svc.conns.waiting.Len()
+}
