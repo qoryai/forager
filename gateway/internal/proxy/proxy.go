@@ -559,6 +559,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.Outcome, d.Status = Connected, resp.StatusCode
 	p.observe(d)
 	defer resp.Body.Close()
+	// The request went upstream without its Upgrade, so a 101 answers no upgrade it
+	// asked for: the host's connection is closed, and the client's after a 502.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		w.Header().Set("Connection", "close")
+		http.Error(w, "upstream: the host answered 101 Switching Protocols to a request that asked for no upgrade", http.StatusBadGateway)
+		return
+	}
 	for k, vs := range resp.Header {
 		for _, v := range vs {
 			w.Header().Add(k, v)
