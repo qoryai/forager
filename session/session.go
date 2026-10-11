@@ -1098,8 +1098,7 @@ func environment(base []string, sets ...[]string) []string {
 			out = append(out, kv)
 		}
 	}
-	out = slices.DeleteFunc(append(out, extra...), func(kv string) bool { return strings.HasPrefix(kv, EnvRunKey+"=") })
-	return accesskey.WithoutVariables(out)
+	return accesskey.WithoutVariables(append(out, extra...))
 }
 
 // heartbeat emits run.heartbeat every interval, its elapsed seconds counted from

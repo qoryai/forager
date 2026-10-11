@@ -92,7 +92,10 @@ For each run the session, over the gateway's link:
 
 On the local link every batch names its run in `X-Qory-Run-Id`; the link carries no
 secret, since the session and the gateway check that the socket's peer is their own
-user.
+user. That uid is the whole of the local link's trust: a process of the same user that
+reaches the socket can post a batch into a local run whose id it knows, fetch the run's
+configuration again, or end the run. `gateway.Start` with `gateway.Config.NoLinkSocket`
+serves no socket, only the link in memory, to a session in the gateway's own process.
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 On the local link every connection to the proxy opens with the relay's preamble and the

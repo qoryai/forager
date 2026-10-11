@@ -441,7 +441,8 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 	// The docker CLI that starts the agent's container runs without the access key's
-	// variables, as every other command of the run's, and reaches the engine recorded.
+	// variables and the run key's, as every other command of the run's, and reaches
+	// the engine recorded.
 	cli := accesskey.WithoutVariables(os.Environ())
 	if e.env != nil {
 		cli = withSelection(cli, e.env)
@@ -765,8 +766,8 @@ func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 }
 
 // hostCommand is a command of the machine's the wall runs, the docker CLI say, with
-// Forager's environment without the access key's variables, which neither the CLI
-// nor a credential helper it starts receives.
+// Forager's environment without the access key's variables and the run key's, which
+// neither the CLI nor a credential helper it starts receives.
 func hostCommand(ctx context.Context, argv []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = accesskey.WithoutVariables(os.Environ())

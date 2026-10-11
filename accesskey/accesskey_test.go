@@ -1095,3 +1095,25 @@ func TestReadRefusalIsApiarys(t *testing.T) {
 		t.Errorf("Error() with a Text = %q", got)
 	}
 }
+
+// TestWithoutVariablesTakesOutForagersOwn pins the environment a program Forager starts
+// receives: the access key's variables and the run key's are taken out, and every
+// other variable is kept as it was, in its order.
+func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		accesskey.EnvSecret + "=qak_not-a-real-one",
+		accesskey.EnvID + "=ak_f1xt0re000000000",
+		accesskey.EnvPin + "=[]",
+		accesskey.EnvRunKey + "=qrk_not-a-real-one.sig",
+		"QORY_RUN_KEY_OTHER=kept",
+		"HOME=/home/user",
+	}
+	got := accesskey.WithoutVariables(env)
+	if want := []string{"PATH=/usr/bin", "QORY_RUN_KEY_OTHER=kept", "HOME=/home/user"}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if accesskey.EnvRunKey != "QORY_RUN_KEY" {
+		t.Errorf("EnvRunKey is %q", accesskey.EnvRunKey)
+	}
+}

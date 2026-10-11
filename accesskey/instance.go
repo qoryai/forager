@@ -77,13 +77,17 @@ const (
 	EnvPin    = "QORY_APIARY_PUBLIC_KEY"
 )
 
+// EnvRunKey is the variable a runner passes a run's run key in. Like the access key's
+// variables it is Forager's alone: no program Forager starts on the machine receives it.
+const EnvRunKey = "QORY_RUN_KEY"
+
 // WithoutVariables returns an environment, NAME=value entries, without [EnvSecret],
-// [EnvID] and [EnvPin]: the environment a program Forager starts receives.
+// [EnvID], [EnvPin] and [EnvRunKey]: the environment a program Forager starts receives.
 func WithoutVariables(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if name != EnvSecret && name != EnvID && name != EnvPin {
+		if name != EnvSecret && name != EnvID && name != EnvPin && name != EnvRunKey {
 			out = append(out, kv)
 		}
 	}

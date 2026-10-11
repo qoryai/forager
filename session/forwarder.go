@@ -232,26 +232,28 @@ func (f *forwarder) serve(c net.Conn) {
 // gateway has to send its first request's head, as long as a preamble has.
 var proxyHeadWait = link.PreambleWait
 
-// maxProxyHead is the longest line of the first request's head the forwarder reads,
-// and maxProxyLines the most lines.
+// maxProxyLine is the longest line of the first request's head the forwarder reads,
+// maxProxyLines the most lines, and maxProxyHead the most bytes of the whole head.
 const (
-	maxProxyHead  = 8 << 10
+	maxProxyLine  = 8 << 10
 	maxProxyLines = 100
+	maxProxyHead  = 16 << 10
 )
 
 // readProxyLogin reads the head of the first request of a connection, up to its empty
 // line, and reports whether it carries exactly one Proxy-Authorization, Basic, whose
 // password is password, compared in constant time; the user name is ignored. It
 // returns the head without that header, and the reader that holds what follows it. A
-// head with a line longer than [maxProxyHead] bytes or more than [maxProxyLines] lines
-// is refused.
+// head with a line longer than [maxProxyLine] bytes, more than [maxProxyLines] lines or
+// more than [maxProxyHead] bytes in all is refused.
 func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Reader, ok bool) {
-	r := bufio.NewReaderSize(c, maxProxyHead)
+	r := bufio.NewReaderSize(c, maxProxyLine)
 	var out bytes.Buffer
-	logins := 0
+	logins, size := 0, 0
 	for i := 0; ; i++ {
 		line, err := r.ReadSlice('\n')
-		if err != nil || i == maxProxyLines {
+		size += len(line)
+		if err != nil || i == maxProxyLines || size > maxProxyHead {
 			return nil, nil, false
 		}
 		if i > 0 {
