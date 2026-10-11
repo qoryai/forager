@@ -17,7 +17,12 @@ jobs:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
     container:
-      image: public.ecr.aws/docker/library/golang:1.27
+      # Docker Hub's official golang:1.27, copied by digest to qoryai's public package,
+      # and pulled with the job's token.
+      image: ghcr.io/qoryai/ci-images:golang-1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Install node for the JavaScript actions
         # checkout@v7 runs on node 24; the image has none.
@@ -115,6 +120,13 @@ jobs:
         # A Docker of the agent's own needs Docker Engine 28 or later.
         run: docker version
 
+      - name: Log in to ghcr.io
+        # The suite's busybox is a copy of Docker Hub's, by digest, in qoryai's public
+        # package; the machine's engine pulls it with the job's token.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -180,6 +192,15 @@ jobs:
       - name: Show the engine's version
         # A Docker of the agent's own needs Docker Engine 28 or later.
         run: docker version
+
+      - name: Log in to ghcr.io
+        # The suite's busybox and docker:dind are copies of Docker Hub's, by digest, in
+        # qoryai's public package; the machine's engine pulls them with the job's token.
+        # The Docker inside the enclosure is not logged in: anything it pulls, it pulls
+        # without one.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Run the suite against Docker, with a Docker inside
         # QORY_WALL_REQUIRE turns a skip into a failure, as in the wall job.
