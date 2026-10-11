@@ -1004,6 +1004,8 @@ release may change what an existing document does, and says so under Upgrading.
   `dev.qory.run.registered` or a `delivered.log` is sent. With no server, the resend
   completes every record as any other, without a word, and leaves one that holds no
   event as it is, with no error.
+- Of a policy's path rules, the one for the most specific host pattern that matches
+  applies: an exact host before a wildcard, a longer suffix before a shorter.
 
 ### Wall
 

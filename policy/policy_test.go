@@ -465,3 +465,48 @@ func TestCanonicalIsTheRFC8785Digest(t *testing.T) {
 		t.Errorf("JSON %s, YAML %s, want %s", js.Canonical, yaml.Canonical, want)
 	}
 }
+
+// TestHostPathsTakesTheMostSpecificEntry pins which entry of a policy's path rules
+// holds a host several entries match: the host's name itself before any "*." entry,
+// and of "*." entries the one with the longest suffix, whatever order a map is read
+// in; an empty list is held as no path; and a host no entry matches is held by none.
+func TestHostPathsTakesTheMostSpecificEntry(t *testing.T) {
+	paths := map[string][]string{
+		"example":         {"/apex/*"},
+		"*.example":       {"/v1/*"},
+		"api.example":     {"/v2/*"},
+		"*.api.example":   {"/v3/*"},
+		"*.b.api.example": {"/v4/*"},
+		"closed.example":  {},
+		"10.0.0.1":        {"/ip/*"},
+		"*.0.0.1":         {"/never/*"},
+	}
+	for range 200 {
+		for _, tc := range []struct{ host, entry, rule string }{
+			{"api.example", "api.example", "/v2/*"},
+			{"API.Example.", "api.example", "/v2/*"},
+			{"example", "example", "/apex/*"},
+			{"other.example", "*.example", "/v1/*"},
+			{"a.api.example", "*.api.example", "/v3/*"},
+			{"a.b.api.example", "*.b.api.example", "/v4/*"},
+			{"b.api.example", "*.api.example", "/v3/*"},
+			{"10.0.0.1", "10.0.0.1", "/ip/*"},
+		} {
+			entry, rules, ok := policy.HostPaths(paths, tc.host)
+			if !ok || entry != tc.entry || len(rules) != 1 || rules[0] != tc.rule {
+				t.Fatalf("%s: held by %q %v %v, want %q", tc.host, entry, rules, ok, tc.entry)
+			}
+		}
+		if entry, rules, ok := policy.HostPaths(paths, "closed.example"); !ok || entry != "closed.example" || rules == nil || len(rules) != 0 {
+			t.Fatalf("closed.example: held by %q %v %v", entry, rules, ok)
+		}
+		for _, host := range []string{"example.org", "10.0.0.2", "0.0.1"} {
+			if entry, _, ok := policy.HostPaths(paths, host); ok {
+				t.Fatalf("%s: held by %q", host, entry)
+			}
+		}
+	}
+	if _, _, ok := policy.HostPaths(nil, "api.example"); ok {
+		t.Error("no rules hold a host")
+	}
+}

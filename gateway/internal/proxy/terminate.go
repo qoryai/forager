@@ -167,15 +167,13 @@ func (t *terminator) credentialName(host string) string {
 }
 
 // rules are the path rules for the host of each side that lists it: the policy's, then
-// the node's. A request must match an entry of each.
+// the node's. Of each side, the entry [policy.HostPaths] picks holds the host. A request
+// must match an entry of each.
 func (t *terminator) rules(host string) [][]string {
 	var out [][]string
 	for _, side := range []map[string][]string{t.paths, t.node} {
-		for pattern, rules := range side {
-			if _, ok := policy.Match([]string{pattern}, host); ok {
-				out = append(out, rules)
-				break
-			}
+		if _, rules, ok := policy.HostPaths(side, host); ok {
+			out = append(out, rules)
 		}
 	}
 	return out
