@@ -1176,11 +1176,13 @@ are not all of one run, included; `401` for a GET's timestamp, or a registration
 `time`, outside ±300 seconds; then each endpoint's checks. The events endpoint's checks,
 in order: for a run the server holds, a batch from a key outside the one node its
 batches are accepted from, a signed `409` `wrong_gateway` or `wrong_node` (After the
-attach, below); for a run behind a gateway, a signed `410` `workspace_not_served`, with
-no digest headers, when the gateway that attached it may no longer serve the run's
-workspace, decided as at the attach; then `410` for an event of a run the server wants
-nothing more of, a delivery already accepted included; then deduplication, so a batch
-whose delivery id or event ids the server already accepted gets the same `2xx` again.
+attach, below); for a run behind a gateway, then the run's organisation and workspace,
+as a key of them would be: `401` while either is out of use; then, for a run behind a
+gateway, a signed `410` `workspace_not_served`, with no digest headers, when the
+gateway that attached it may no longer serve the run's workspace, decided as at the
+attach; then `410` for an event of a run the server wants nothing more of, a delivery
+already accepted included; then deduplication, so a batch whose delivery id or event
+ids the server already accepted gets the same `2xx` again.
 The run endpoint's checks, for a registration, in order: the same
 bytes under any active key of the node or node pool that registered the run get the
 stored answer again, the same run key included, so a key replaced while the run waits
@@ -1525,9 +1527,11 @@ live from another instance of that node, is a signed `409` `wrong_gateway`; for 
 run, the node or node pool that registered it, under any of its active keys, and a batch
 from another node's key is a signed `409` `wrong_node`. A reload from any other key is
 `404` in both cases, and so is one from another instance of the gateway node. The
-organisation of the gateway's key is checked at batches, heartbeats and reloads, and the
-run's organisation at batches, each as every key's is. A run's workspace, node and
-instance come from its registration, never from the gateway's instance id. Once the run
+organisation of the gateway's key is checked at batches, heartbeats and reloads, as
+every key's is; the run's organisation and workspace are checked at batches once the
+sender is (the events endpoint's checks, above), with the refusal a key of them would
+get. A run's workspace, node and instance come from its registration, never from the
+gateway's instance id. Once the run
 is not live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or the run no
 longer held, a batch from any instance of the attaching gateway node, under any of its
 active keys, gets the answer the attaching instance would: a resend after a restart or a
