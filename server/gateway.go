@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,7 +136,8 @@ func (a RegistrationAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(
 // of a [GatewayRegistration], to the run endpoint runURL, and returns the server's
 // answer. The answer is a signed 200 with a run-registration-answer.schema.json
 // document whose run id is the body's and whose run key reads, unverified, as one of
-// that run ([runkey.Parse]): anything else of a signed 200 is a [*DocumentError]. A 401
+// that run ([runkey.Parse]), and with neither an X-Qory-Run-Configuration nor an ETag
+// header: anything else of a signed 200 is a [*DocumentError]. A 401
 // is unauthorized, an answer that does not verify answer_unsigned, and a signed refusal
 // its code, each an [*accesskey.Refusal]: among them node_is_direct, the server's
 // answer when the access key's node or node pool reports directly, no_default_gateway,
@@ -159,6 +161,9 @@ func (c *Client) RegisterThroughGateway(ctx context.Context, runURL string, body
 	}
 	if err := a.notOK(what); err != nil {
 		return nil, err
+	}
+	if len(a.header.Values(HeaderRunConfiguration)) > 0 || len(a.header.Values("ETag")) > 0 {
+		return nil, &DocumentError{"registration answer", runURL, errors.New("the answer carries X-Qory-Run-Configuration or ETag; a registration through a gateway carries no run configuration")}
 	}
 	var ans RegistrationAnswer
 	if err := readAnswer("run-registration-answer.schema.json", a.body, &ans); err != nil {
@@ -315,8 +320,9 @@ type AttachAnswer struct {
 // <runURL>/<runID>/attach, signed by the gateway's own access key, and returns the
 // server's answer with its digest of the run configuration. The answer is a signed
 // 200, a run-attach-answer.schema.json document with the X-Qory-Run-Configuration
-// header: a run configuration Forager refuses, labels or an about the contract refuses,
-// or a digest header missing or misshapen, is a [*DocumentError]. A 401 is
+// header and one ETag, that digest in quotes: a run configuration Forager refuses,
+// labels or an about the contract refuses, a digest header missing or misshapen, or an
+// ETag that is not the digest in quotes, is a [*DocumentError]. A 401 is
 // unauthorized, an answer that does not verify answer_unsigned, and a signed refusal
 // its code, each an [*accesskey.Refusal]: not_a_gateway, run_key_invalid,
 // run_key_expired, wrong_gateway, workspace_not_served and run_attached among them. A
@@ -341,6 +347,9 @@ func (c *Client) Attach(ctx context.Context, runURL, runID string, body []byte) 
 	rc, digest, err := runConfigurationOf(a, u)
 	if err != nil {
 		return nil, "", err
+	}
+	if etag := a.header.Values("ETag"); len(etag) != 1 || etag[0] != strconv.Quote(digest) {
+		return nil, "", &DocumentError{"attach answer", u, errors.New("the ETag header is not the X-Qory-Run-Configuration digest in quotes")}
 	}
 	var more struct {
 		Labels map[string]string `json:"labels"`

@@ -99,6 +99,9 @@ func TestTheKnownAnswersOfARunThroughAGateway(t *testing.T) {
 			if a.Lines[5] != "" {
 				w.Header().Set(server.HeaderRunConfiguration, a.Lines[5])
 			}
+			if strings.HasSuffix(r.RequestURI, "/attach") {
+				w.Header().Set("ETag", `"`+a.Lines[5]+`"`)
+			}
 			w.Header().Set(server.HeaderSignature, a.Signature)
 			w.Write(fixture(t, a.Body))
 			return
@@ -263,7 +266,8 @@ func TestAGatewayRegistrationsBody(t *testing.T) {
 // signed 410 is ErrNotAccepted; a 401 is unauthorized; an unsigned 200 is
 // answer_unsigned; and a signed 200 whose run id is not the registration's, whose run
 // key is of another run or is no run key, or that the schema refuses, is a
-// DocumentError whose message never contains the run key.
+// DocumentError whose message never contains the run key, as is one that carries
+// X-Qory-Run-Configuration or ETag.
 func TestRegisterThroughGatewayRefusals(t *testing.T) {
 	a := newApiary(t)
 	c := a.client()
@@ -304,6 +308,18 @@ func TestRegisterThroughGatewayRefusals(t *testing.T) {
 	if ans, err := c.RegisterThroughGateway(ctx, a.runURL(), body); err != nil || ans.RunKey != rk {
 		t.Errorf("signed 200: %+v, %v", ans, err)
 	}
+	for name, h := range map[string]http.Header{
+		"a run-configuration digest": {server.HeaderRunConfiguration: {"sha256=" + strings.Repeat("2", 64)}},
+		"an ETag":                    {"Etag": {`"sha256=` + strings.Repeat("2", 64) + `"`}},
+	} {
+		a.answer = func(*http.Request, []byte) (int, http.Header, string) {
+			return 200, h, `{"version":1,"run_id":"` + gatewayRunID + `","run_key":"` + rk + `"}`
+		}
+		_, err := c.RegisterThroughGateway(ctx, a.runURL(), body)
+		if want := "registration answer " + a.runURL() + ": the answer carries X-Qory-Run-Configuration or ETag; a registration through a gateway carries no run configuration"; !errors.As(err, new(*server.DocumentError)) || err.Error() != want {
+			t.Errorf("a signed 200 with %s: %v; want %s", name, err, want)
+		}
+	}
 	other := "0192f0c1-7d4e-7a2b-8c3d-000000000000"
 	for name, doc := range map[string]string{
 		"another run id":       `{"version":1,"run_id":"` + other + `","run_key":"` + runKeyOf(t, other) + `"}`,
@@ -330,8 +346,9 @@ func TestRegisterThroughGatewayRefusals(t *testing.T) {
 // signed 200 is the run configuration with its digest and the registration's labels and
 // about, each absent when the answer has none; each of attach's own signed refusals is
 // its code, its message "attach <run.url>/<run_id>: <code> (status <status>)"; a
-// signed 410 is ErrNotAccepted; and a 200 without its digest header, or with labels the
-// contract refuses, is a DocumentError.
+// signed 410 is ErrNotAccepted; and a 200 without its digest header, without one ETag
+// that is the digest in quotes, or with labels the contract refuses, is a
+// DocumentError.
 func TestAttach(t *testing.T) {
 	a := newApiary(t)
 	c := a.client()
@@ -344,11 +361,13 @@ func TestAttach(t *testing.T) {
 	digest := "sha256=" + strings.Repeat("2", 64)
 	doc := `{"version":1}`
 	withDigest := true
+	etag := []string{`"` + digest + `"`}
 	a.answer = func(r *http.Request, _ []byte) (int, http.Header, string) {
 		h := http.Header{}
 		if withDigest {
 			h.Set(server.HeaderRunConfiguration, digest)
 		}
+		h["Etag"] = etag
 		return 200, h, doc
 	}
 	ans, got, err := c.Attach(ctx, a.runURL(), gatewayRunID, body)
@@ -370,7 +389,21 @@ func TestAttach(t *testing.T) {
 			t.Errorf("%s: %v; want a DocumentError", bad, err)
 		}
 	}
-	doc, withDigest = `{"version":1}`, false
+	doc = `{"version":1}`
+	for name, e := range map[string][]string{
+		"no ETag":                nil,
+		"an ETag without quotes": {digest},
+		"two ETags":              {`"` + digest + `"`, `"` + digest + `"`},
+		"another digest's ETag":  {`"sha256=` + strings.Repeat("3", 64) + `"`},
+		"a weak ETag":            {`W/"` + digest + `"`},
+	} {
+		etag = e
+		_, _, err := c.Attach(ctx, a.runURL(), gatewayRunID, body)
+		if want := "attach answer " + a.runURL() + "/" + gatewayRunID + "/attach: the ETag header is not the X-Qory-Run-Configuration digest in quotes"; !errors.As(err, new(*server.DocumentError)) || err.Error() != want {
+			t.Errorf("%s: %v; want %s", name, err, want)
+		}
+	}
+	withDigest = false
 	if _, _, err := c.Attach(ctx, a.runURL(), gatewayRunID, body); !errors.As(err, new(*server.DocumentError)) {
 		t.Errorf("no digest: %v; want a DocumentError", err)
 	}
