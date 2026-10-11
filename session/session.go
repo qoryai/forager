@@ -697,15 +697,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// Behind a wall and a separate gateway: the relay opens every connection with the
 		// hop secret, and the forwarder, which checks it, opens the connection to the
 		// gateway over TLS, bound, with the run key.
-		if relayToken, err = newHopSecret(); err != nil {
+		if relayToken, err = newForwarderSecret(); err != nil {
 			return fail(err)
 		}
 		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, hop: relayToken})
 	default:
-		// Without a wall, behind a separate gateway: the forwarder on loopback carries
-		// each connection to the gateway inside TLS, bound, opened with the run key; the
-		// agent's proxy URL holds no secret.
-		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy})
+		// Without a wall, behind a separate gateway: the forwarder on loopback takes a
+		// connection only with the password of the agent's proxy URL, a secret of its own
+		// for this run, and carries it to the gateway inside TLS, bound, opened with the
+		// run key.
+		var password string
+		if password, err = newForwarderSecret(); err != nil {
+			return fail(err)
+		}
+		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, password: password})
 	}
 	if err != nil {
 		return fail(err)
