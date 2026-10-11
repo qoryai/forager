@@ -424,10 +424,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// narrows: a narrowing opens none of this machine's addresses.
 		lr.px.Guard(r.GuardNames())
 	}
-	// The node's path rules, beside a server's: fixed for the run, so a reload that
-	// brings a server's policy is narrowed by them as the start is.
-	if paths := r.NodePaths(); paths != nil {
-		lr.px.NodePaths(paths)
+	// The node's path rules, beside a server's, and those put beside the node's policy:
+	// fixed for the run, so a reload that brings a server's policy is narrowed by them
+	// as the start is.
+	if sides := r.NodePaths(); len(sides) > 0 {
+		lr.px.NodePaths(sides...)
 	}
 	var authority []byte
 	if r.NeedsCA() {

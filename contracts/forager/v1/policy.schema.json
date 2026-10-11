@@ -41,7 +41,7 @@
           }
         },
         "paths": {
-          "description": "The paths the session may request on a host, by host in allow's grammar. A host listed here is one the proxy terminates TLS for, behind a wall, because a path is inside the connection: a request whose path no entry matches is denied under enforce and recorded either way, and a host not listed is reached on every path. A path is compared as the server reads it, case and all; a request whose path could be read two ways is denied.",
+          "description": "The paths the session may request on a host, by host in allow's grammar. A host several entries cover is held to the most specific one: its name itself, else the *. entry with the longest suffix. A host listed here is one the proxy terminates TLS for, behind a wall, because a path is inside the connection: a request whose path no entry matches is denied under enforce and recorded either way, and a host not listed is reached on every path. A path is compared as the server reads it, case and all; a request whose path could be read two ways is denied.",
           "type": "object",
           "propertyNames": {"pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
           "additionalProperties": {

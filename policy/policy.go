@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"slices"
 	"strings"
@@ -315,6 +316,32 @@ func Match(entries []string, host string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// HostPaths returns the entry of a policy's path rules, by host in the allow list's
+// grammar, that holds host, its paths, and whether one does. An entry matches as
+// [Match] matches it, and of several that match the most specific holds the host: its
+// name itself, else the "*." entry with the longest suffix. The entry decides the
+// host's paths whole; entries are never merged. Keys are unique and, as the schema has
+// them, lower-case, so no two match equally. Every lookup of a host's path rules goes
+// through here.
+func HostPaths(paths map[string][]string, host string) (entry string, rules []string, ok bool) {
+	best := -1
+	for key, r := range paths {
+		if _, match := Match([]string{key}, host); !match {
+			continue
+		}
+		// A "*." entry matches by its suffix, so its length ranks it; the host's name
+		// itself ranks above every one of them.
+		rank := len(key)
+		if !strings.HasPrefix(key, "*.") {
+			rank = math.MaxInt
+		}
+		if rank > best {
+			best, entry, rules, ok = rank, key, r, true
+		}
+	}
+	return entry, rules, ok
 }
 
 // String names the mode for messages.

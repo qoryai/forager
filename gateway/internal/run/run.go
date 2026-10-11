@@ -91,8 +91,10 @@ type Run struct {
 	labels map[string]string
 	defs   []credential.Definition
 	tools  []tool.Definition
-	// node is the node's policy, nil when the run has none.
-	node *policy.Loaded
+	// node is the node's policy, nil when the run has none, and beside the sides of
+	// path rules [Policy.Under] put beside it, which no document holds.
+	node   *policy.Loaded
+	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
 	// img is the image it resolved to, fixed too.
 	start  *policy.Loaded
@@ -118,9 +120,9 @@ type Run struct {
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
 // node's policy, the server's run configuration narrowed by it, or none, mode observe.
 // A run without a wall refuses a policy that selects credentials or tools or has path
-// rules, the node's beside a server's included, and one that selects an image, a
-// [*refusal.NeedsWall]. Behind a
-// wall the policy's image is resolved among [Config.Images]: a definition that cannot be
+// rules, the node's beside a server's and a ceiling's the node's policy was put under
+// included, and one that selects an image, a [*refusal.NeedsWall]. Behind a wall the
+// policy's image is resolved among [Config.Images]: a definition that cannot be
 // one, a name defined twice and a name the machine does not define, image_unknown, are
 // no run.
 func Decide(cfg Config) (*Run, error) {
@@ -143,7 +145,11 @@ func Decide(cfg Config) (*Run, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := CheckBeside(cfg.Node); err != nil {
+			return nil, err
+		}
 		r.node, pol = node, node
+		r.beside = cfg.Node.Egress.beside
 	}
 	if cfg.Fetched == nil {
 		r.guard = GuardNames(pol, cfg.Narrowing)
@@ -161,7 +167,7 @@ func Decide(cfg Config) (*Run, error) {
 		r.runDigest = pol.RunConfiguration
 	}
 	if !cfg.Wall {
-		if err := needsWall(pol); err != nil {
+		if err := needsWall(pol, len(r.beside) > 0); err != nil {
 			return nil, err
 		}
 	}
@@ -177,9 +183,9 @@ func Decide(cfg Config) (*Run, error) {
 }
 
 // needsWall refuses what a policy selects that needs a wall, a [*refusal.NeedsWall]
-// naming it: credentials, tools and path rules, the node's beside a server's included,
-// and an image.
-func needsWall(pol *policy.Loaded) error {
+// naming it: credentials, tools and path rules, the node's beside a server's and the
+// sides beside the node's policy, beside, included, and an image.
+func needsWall(pol *policy.Loaded, beside bool) error {
 	var names []string
 	if len(pol.Policy.Credentials) > 0 {
 		names = append(names, "credentials")
@@ -187,7 +193,7 @@ func needsWall(pol *policy.Loaded) error {
 	if len(pol.Policy.Tools) > 0 {
 		names = append(names, "tools")
 	}
-	if len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 {
+	if len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || beside {
 		names = append(names, "paths")
 	}
 	if pol.Policy.Image != "" {
@@ -218,7 +224,7 @@ func (r *Run) Hold(ctx context.Context) error {
 	r.mu.Unlock()
 	r.chosen = chosen
 	pol := r.start
-	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || (r.cfg.Wall && r.server)
+	r.terminates = len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || nodePaths(pol) > 0 || len(r.beside) > 0 || (r.cfg.Wall && r.server)
 	return nil
 }
 
@@ -283,14 +289,16 @@ func (r *Run) RunConfiguration() string {
 // to its end.
 func (r *Run) Variables() map[string]string { return maps.Clone(r.served) }
 
-// NodePaths are the node's path rules the proxy holds beside a server's policy, fixed
-// for the run so a reload that brings a server's policy is narrowed by them as the
-// start is; nil without a server or without a node's policy.
-func (r *Run) NodePaths() map[string][]string {
-	if r.node == nil || !r.server {
-		return nil
+// NodePaths are the sides of path rules the proxy holds beside the policy's, fixed for
+// the run so a reload that brings a server's policy is narrowed by them as the start
+// is: the node's policy's beside a server's, then the sides [Policy.Under] put beside
+// the node's policy, with a server or without. Nil when there are none.
+func (r *Run) NodePaths() []map[string][]string {
+	var out []map[string][]string
+	if r.node != nil && r.server && len(r.node.Policy.Egress.Paths) > 0 {
+		out = append(out, r.node.Policy.Egress.Paths)
 	}
-	return r.node.Policy.Egress.Paths
+	return append(out, r.beside...)
 }
 
 // Held are the credentials the run holds now.

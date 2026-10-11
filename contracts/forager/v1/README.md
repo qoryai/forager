@@ -325,7 +325,7 @@ egress:
 | `egress.mode` | `observe`: every connection is recorded, and only a host `deny` covers is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
-| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
+| `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy contains no reference and defines no image (§Images) |
@@ -862,9 +862,11 @@ the source of the policy it narrows, `config` or `fetched`, with that policy's `
 present when the run has both a fetched policy and a policy the command passes, contains
 its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785 serialisation of
 that `policy.schema.json` document, and its `paths`, when it has any, so the record
-shows both sides of every path rule. `variables` lists the run's variables by name,
-never a value: each with the source whose value the run applies and the values that
-lost, with their sources and why (§Variables, the record of the variables).
+shows the path rules of the server's policy and of the node's; path rules a caller adds
+with `gateway.Policy.Under` show only through `terminated`. `variables` lists the run's
+variables by name, never a value: each with the source whose value the run applies and
+the values that lost, with their sources and why (§Variables, the record of the
+variables).
 `dev.qory.run.egress` records what becomes of the connection in `outcome`: `connected`,
 the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, not dialled,
 because the policy or the wall's guard denied it, or closed by a reload. An event that

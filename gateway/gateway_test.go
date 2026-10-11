@@ -30,7 +30,8 @@ import (
 
 // TestStartRefusesWhatItDoesNotServe pins the checks before anything starts: a
 // certificate with no address, a heartbeat the discovery cannot announce, no place for
-// the records.
+// the records, a policy the schema refuses, the path rules a ceiling puts beside it
+// included.
 func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 	dir := t.TempDir()
 	for name, cfg := range map[string]gateway.Config{
@@ -39,6 +40,8 @@ func TestStartRefusesWhatItDoesNotServe(t *testing.T) {
 		"a heartbeat over the bound":  {Dir: dir, Heartbeat: 301 * time.Second},
 		"no directory":                {},
 		"a policy the schema refuses": {Dir: dir, Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "everything"}}},
+		"a ceiling's paths the schema refuses": {Dir: dir, Policy: (&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example"}}}).Under(
+			&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Paths: map[string][]string{"api.example.": {"/v1/*"}}}})},
 	} {
 		if g, err := gateway.Start(context.Background(), cfg); err == nil {
 			g.Close(context.Background())
