@@ -912,6 +912,9 @@ compose keeps it out of git:
 - `settings.json`: the runtime's settings with Forager's hooks added, when hooks
   are installed.
 - `undelivered/`: the batches the server has not accepted, when there are any.
+- `answered`: behind a separate gateway, an empty file the gateway writes before it
+  answers a run request; a gateway that starts again keeps a record that holds it, and
+  the run request that comes again is `409` `run_attached`.
 
 The gateway writes `events.jsonl`, with its `delivered.log` and `undelivered/` (§The
 server, After Forager stops unexpectedly); the session writes `session.jsonl`, its own
@@ -1496,12 +1499,12 @@ with the same refusal. Then the attach's own, in order:
 |---|---|---|---|
 | a | `409` signed | `not_a_gateway` | the signing key is not a gateway's |
 | b | `400` signed | `run_key_invalid` | the run key does not verify, or its `run_id` is not the path's |
-| 1 | `200` signed | — | the same gateway node, under any of its active keys, attaching the same live run again gets the stored answer, kept by gateway node and run id, not by the bytes |
+| 1 | `200` signed | — | the same gateway node, under any of its active keys and with the same signed `X-Qory-Instance-Id`, attaching the same live run again gets the stored answer, kept by gateway node, instance id and run id, not by the bytes |
 | 2 | `410` signed | any or none | the run has ended: its `dev.qory.run.exited` arrived, an outcome ended it, or it was lost after the attach |
 | 3 | `409` signed | `run_key_expired` | past `attach_by`, never attached |
 | 4 | `409` signed | `wrong_gateway` | the run key names another gateway node |
 | 5 | `409` signed | `workspace_not_served` | the gateway does not serve the run's workspace |
-| 6 | `409` signed | `run_attached` | another gateway node has attached the run |
+| 6 | `409` signed | `run_attached` | another gateway node, or another instance of the same node, has attached the run |
 
 Forager's client builds the body with `server.Attach`, whose `Body` sets `time` from the
 clock when it is left empty, and posts it with `Client.Attach`, which returns the run
@@ -1510,17 +1513,22 @@ configuration with its digest, the labels and `about`; a refusal reads
 
 **After the attach.** A run's reloads, batches and heartbeats are accepted from the
 active keys of one node alone, so replacing a key keeps working: for a run behind a
-gateway, the gateway node that attached it, under any of its active keys and its own
-instance id, and a batch from any other key, the node pool's own among them, is a signed
-`409` `wrong_gateway`; for a direct run, the node or node pool that registered it, under
-any of its active keys, and a batch from another node's key is a signed `409`
-`wrong_node`. A reload from any other key is `404` in both cases. The organisation of
-the gateway's key is checked at batches, heartbeats and reloads, and the run's
-organisation at batches, each as every key's is. A run's workspace, node and instance
-come from its registration, never from the gateway's instance id. Events after the end
-are accepted from the attaching gateway node: a resend after a restart or a loss. A run
-that never attached is never opened. Heartbeats are `dev.qory.run.heartbeat` events in
-batches, as on a direct run.
+gateway, the gateway node that attached it, under any of its active keys: its reloads
+from the attaching instance alone, and its batches and heartbeats from it too while the
+run is live; a batch from any other key, the node pool's own among them, or while the
+run is live from another instance of that node, is a signed `409` `wrong_gateway`; for a
+direct run, the node or node pool that registered it, under any of its active keys, and
+a batch from another node's key is a signed `409` `wrong_node`. A reload from any other
+key is `404` in both cases, and so is one from another instance of the gateway node. The
+organisation of the gateway's key is checked at batches, heartbeats and reloads, and the
+run's organisation at batches, each as every key's is. A run's workspace, node and
+instance come from its registration, never from the gateway's instance id. Once the run
+is not live, its `dev.qory.run.exited` accepted, its heartbeats gone quiet or the run no
+longer held, a batch from any instance of the attaching gateway node, under any of its
+active keys, gets the answer the attaching instance would: a resend after a restart or a
+loss. Until then, an outcome alone doesn't change who may send: a batch from another
+instance is still refused. A run that never attached is never opened. Heartbeats are
+`dev.qory.run.heartbeat` events in batches, as on a direct run.
 
 **The outcome.** The run's starter says how the run ended with a signed
 `POST <run.url>/<run_id>/outcome`, `Content-Type: application/json`, signed by any active
@@ -1866,8 +1874,10 @@ at most 8 KiB, and closes a connection that sends neither in time unanswered. Un
 connection's run key is admitted, on its first request of the link answered for its
 live run (a run request, a reload or a batch answered `2xx`) or in its relay preamble
 of a live run, it counts against three bounds: at most 4096 such connections at once, 64 of
-one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48; one more is closed
-as it is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
+one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48. One more closes the
+oldest such connection whose run key has not verified, of its source when that is full,
+else of its /48, else of all, and is taken; when none can be closed, it is closed as it
+is accepted, unanswered. An admitted connection counts against none of them. On a bound connection a
 request of the link arrives whole, its body included, within 60 seconds, and its
 request line and fields within 16 KiB, the 4 KiB net/http allows past that aside: a
 longer head is net/http's own `431`, unsigned. The run
@@ -1896,7 +1906,8 @@ the refusal's signature covers, up to 64 KiB within 10 seconds, answers with
 unanswered. No request without a run key the gateway takes keeps a connection open,
 `OPTIONS *` among them. An answer other than a `2xx` to a request whose run key
 passes, a `409` or a `410` among them, carries `Connection: close` too, and the gateway
-closes the connection after it.
+closes the connection after it. A request answered other than `2xx` whose body does not
+come whole within 10 seconds of the answer closes the connection unanswered.
 
 Rows 2 to 4 are in the order the server decides an attach's refusals in. The message
 of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is the gateway's own refusal of the attach, decided before it asks the
@@ -1925,12 +1936,14 @@ delivers the run's events toward the server under its own access key, and fetche
 reload of the run at the run endpoint, as a direct node's gateway does. An answer whose
 `X-Qory-Configuration` differs from the one in force makes it read its discovery again
 and serve the workspaces that discovery lists, for every run, not only the one whose
-answer said so. A gateway that stopped between the attach and the run answer leaves a
-record that holds the run's `dev.qory.run.registered` alone: the run request that comes
-again removes it, and the gateway attaches the run again, which the server answers the
-same. An attach that fails, the server's refusal or no answer, leaves nothing of the
-run at the gateway: the run request that comes again, with the same run key, asks for
-the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
+answer said so. A gateway that stopped between the attach and marking the run's record
+`answered` (The record files) leaves a record that holds the run's
+`dev.qory.run.registered` alone: the run request that comes again removes it, and the
+gateway attaches the run again, which the server answers the same; one that stopped
+after it keeps the record, and the run request that comes again is `409`
+`run_attached`. An attach that fails, the server's refusal or no answer, leaves nothing
+of the run at the gateway: the run request that comes again, with the same run key, asks
+for the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
 again answers its reloads and batches `410` `run_closed` and its run request `409`
 `run_attached`, and `qory run resend` writes its
 `dev.qory.run.exited` with `gateway_lost` (§The server).
@@ -1960,7 +1973,7 @@ them itself. Its limits, each answered by the relay itself with no body, in this
 
 | Status | When |
 |---|---|
-| `429` | more than 60 requests a minute from one source, in bursts of at most 20; or a source new to the relay while it follows 65,536 |
+| `429` | more than 60 requests a minute from one source, in bursts of at most 20, or more than 240 a minute from one IPv6 /48, in bursts of at most 80. The relay follows at most 65,536 sources; a new one past that lets go of the one idle longest. Of one IPv6 /48 it follows at most 256 sources; a new one past that lets go of that /48's source idle longest. |
 | `404` | a path other than the four |
 | `405` | one of the four paths, its escapes decoded, with another method |
 | `404` | one of the four paths with its method, but a path with an escaped byte (`%2F` and the like) or a query on a `POST` |
@@ -2481,9 +2494,14 @@ one `Proxy-Authorization`, Basic, the user name ignored, compared in constant ti
 forwarder takes the header off, passes the request on with `Connection: close`, passes
 on nothing the agent sends after a plain request, and closes the connection at the end
 of its reply; a plain request that asks for an upgrade goes on with
-`Connection: Upgrade` instead, and a `101` reply makes the connection a tunnel. It
-closes a connection without the password unanswered before anything reaches the
-gateway. The run key reaches neither the agent's
+`Connection: Upgrade` instead, and a `101` reply makes the connection a tunnel. It reads
+the proxy's reply head to an upgrade up to 64 KiB. It closes the connection at the first
+byte the agent sends before the reply to an upgrade. It closes a connection without the
+password unanswered before anything reaches the gateway. At most 128 connections at once
+wait to show the password or the hop line; one more closes the one that has waited
+longest. A process of the agent's own user can read the agent's environment, and the
+password in its proxy URL with it, so the password keeps out the machine's other users,
+not the agent's own: the same user is trusted, as on the local link. The run key reaches neither the agent's
 environment, from which the session takes `QORY_RUN_KEY` out whatever the agent
 inherits, nor any file, and the agent's view is the same as on one machine.
 The gateway takes the bytes after that line as the run's proxy's, as a connection the

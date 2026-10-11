@@ -632,6 +632,393 @@ func TestTheUnwalledForwarderPassesAnUpgrade(t *testing.T) {
 	}
 }
 
+// heldUpgrade is a stand-in for the gateway's proxy that reads one request's head, after
+// the relay's preamble when there is one, and holds its reply: it reports on head when
+// the head has come, and on ended when the forwarder has closed the connection, before
+// or after the reply. With answer, it writes a 101 once wait has passed, then echoes.
+func heldUpgrade(t *testing.T, wait time.Duration, answer bool) (addr string, head, ended <-chan struct{}) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	h, e := make(chan struct{}), make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if line == "\r\n" {
+				break
+			}
+		}
+		close(h)
+		read := make(chan struct{})
+		go func() {
+			io.Copy(io.Discard, r)
+			close(e)
+			close(read)
+		}()
+		if answer {
+			time.Sleep(wait)
+			io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+		}
+		select {
+		case <-read:
+		case <-time.After(10 * time.Second):
+		}
+	}()
+	return ln.Addr().String(), h, e
+}
+
+// TestTheUnwalledForwarderRefusesBytesBeforeTheUpgrade pins a plain request that asks
+// for an upgrade, whose agent sends a byte before the proxy's reply: the forwarder
+// closes the proxy's connection and the agent's, which gets no 101 and no tunnel, and
+// an agent that sends a byte and leaves has the proxy's connection closed at once,
+// rather than when the reply comes.
+func TestTheUnwalledForwarderRefusesBytesBeforeTheUpgrade(t *testing.T) {
+	const upgrade = "GET http://tool.example/ws HTTP/1.1\r\nHost: tool.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			t.Run("an early byte", func(t *testing.T) {
+				addr, _, ended := heldUpgrade(t, 300*time.Millisecond, true)
+				f, login := unwalledForwarder(t, addr, secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\nearly")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				b, err := io.ReadAll(c)
+				var ne net.Error
+				if len(b) != 0 || errors.As(err, &ne) && ne.Timeout() {
+					t.Errorf("an agent that sent a byte before the reply got %q, %v; want the end and nothing", b, err)
+				}
+				select {
+				case <-ended:
+				case <-time.After(2 * time.Second):
+					t.Error("the proxy's connection outlived the agent's")
+				}
+			})
+			t.Run("a byte and the end", func(t *testing.T) {
+				addr, head, ended := heldUpgrade(t, 0, false)
+				f, login := unwalledForwarder(t, addr, secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				select {
+				case <-head:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the request did not reach the proxy")
+				}
+				time.Sleep(100 * time.Millisecond)
+				io.WriteString(c, "x")
+				time.Sleep(100 * time.Millisecond)
+				c.Close()
+				select {
+				case <-ended:
+				case <-time.After(2 * time.Second):
+					t.Error("the proxy's connection outlived the agent's")
+				}
+			})
+		})
+	}
+}
+
+// TestTheUnwalledForwarderBoundsTheUpgradesReplyHead pins the head of the proxy's
+// reply to an upgrade: one longer than the forwarder reads closes the agent's
+// connection with no reply, a short 101 followed by a tunnel longer than that bound
+// passes the tunnel whole, and so does another answer, its head within the bound, with
+// a body longer than it.
+func TestTheUnwalledForwarderBoundsTheUpgradesReplyHead(t *testing.T) {
+	const upgrade = "GET http://tool.example/ws HTTP/1.1\r\nHost: tool.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+	const switching = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+	// replying reads a request's head, after the relay's preamble when there is one,
+	// writes reply and ends its side.
+	replying := func(t *testing.T, reply string) string {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+			r := bufio.NewReader(c)
+			for {
+				line, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if line == "\r\n" {
+					break
+				}
+			}
+			io.WriteString(c, reply)
+			c.(*net.TCPConn).CloseWrite()
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			io.Copy(io.Discard, r)
+		}()
+		return ln.Addr().String()
+	}
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			t.Run("a head too long", func(t *testing.T) {
+				pad := strings.Repeat("X-Pad: "+strings.Repeat("a", 1015)+"\r\n", 70)
+				f, login := unwalledForwarder(t, replying(t, switching+pad+"\r\n"), secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				b, err := io.ReadAll(c)
+				var ne net.Error
+				if len(b) != 0 || errors.As(err, &ne) && ne.Timeout() {
+					t.Errorf("a reply head of %d bytes got the agent %.200q, %v; want the end and nothing", len(switching)+len(pad)+2, b, err)
+				}
+			})
+			t.Run("a long body", func(t *testing.T) {
+				pad := strings.Repeat("X-Pad: "+strings.Repeat("a", 1015)+"\r\n", 60)
+				body := strings.Repeat("b", 1<<20)
+				reply := fmt.Sprintf("HTTP/1.1 400 Bad Request\r\n%sContent-Length: %d\r\n\r\n%s", pad, len(body), body)
+				f, login := unwalledForwarder(t, replying(t, reply), secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+				if err != nil || resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("the refused upgrade got %v, %v", resp, err)
+				}
+				if b, err := io.ReadAll(resp.Body); err != nil || string(b) != body {
+					t.Errorf("the answer's body passed %d bytes, %v; want %d", len(b), err, len(body))
+				}
+			})
+			t.Run("a long tunnel", func(t *testing.T) {
+				tunnel := strings.Repeat("t", 1<<20)
+				f, login := unwalledForwarder(t, replying(t, switching+"\r\n"+tunnel), secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				r := bufio.NewReader(c)
+				resp, err := http.ReadResponse(r, nil)
+				if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+					t.Fatalf("the upgrade got %v, %v", resp, err)
+				}
+				if b, err := io.ReadAll(r); err != nil || string(b) != tunnel {
+					t.Errorf("the tunnel passed %d bytes, %v; want %d", len(b), err, len(tunnel))
+				}
+			})
+		})
+	}
+}
+
+// TestTheUnwalledForwarderChecksTheRequestLine pins the request line of an unwalled
+// agent's request, checked once the password is: origin-form, a version other than
+// HTTP/1.0 or HTTP/1.1, a CONNECT whose target is not host:port, or another method
+// whose target is not absolute-form gets a 400, with its text and Connection: close,
+// and the end, and nothing of it reaches the proxy, not even a connection; an https://
+// absolute-form request reaches it. The origin-form and CONNECT texts are the gateway's
+// proxy's own.
+func TestTheUnwalledForwarderChecksTheRequestLine(t *testing.T) {
+	const (
+		absolute = "the proxy takes an absolute-form request target"
+		connect  = "CONNECT takes host:port"
+		version  = "the proxy takes HTTP/1.0 or HTTP/1.1"
+	)
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			up := startProxyStandIn(t, secret, nil)
+			f, login := unwalledForwarder(t, up.Addr().String(), secret)
+			send := func(t *testing.T, head string) (*http.Response, string) {
+				t.Helper()
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, head+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				r := bufio.NewReader(c)
+				resp, err := http.ReadResponse(r, nil)
+				if err != nil {
+					t.Fatalf("no answer: %v", err)
+				}
+				b, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("the answer's body: %v", err)
+				}
+				if rest, err := io.ReadAll(r); len(rest) != 0 || err != nil {
+					t.Errorf("after the answer, %q, %v; want the end", rest, err)
+				}
+				return resp, string(b)
+			}
+			for _, r := range []struct{ name, head, text string }{
+				{"origin-form", "GET /x HTTP/1.1\r\nHost: api.example\r\n", absolute},
+				{"HTTP/2.0", "GET http://api.example/ HTTP/2.0\r\nHost: api.example\r\n", version},
+				{"no version", "GET http://api.example/\r\nHost: api.example\r\n", version},
+				{"CONNECT /x", "CONNECT /x HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT with a path", "CONNECT api.example:443/x HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT with a user", "CONNECT user@api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n", connect},
+				{"CONNECT to port 0", "CONNECT api.example:0 HTTP/1.1\r\nHost: api.example:0\r\n", connect},
+				{"lowercase connect", "connect api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n", absolute},
+			} {
+				t.Run(r.name, func(t *testing.T) {
+					resp, body := send(t, r.head)
+					if resp.StatusCode != http.StatusBadRequest || !resp.Close || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || body != r.text+"\n" {
+						t.Errorf("got %d %q, close %v, %q; want 400 %q with Connection: close", resp.StatusCode, body, resp.Close, resp.Header.Get("Content-Type"), r.text)
+					}
+				})
+			}
+			time.Sleep(200 * time.Millisecond)
+			if raw, requests := up.seen(); len(raw) != 0 || len(requests) != 0 {
+				t.Fatalf("the proxy got %q, %q, from request lines it refuses", raw, requests)
+			}
+			if resp, body := send(t, "GET https://api.example/ HTTP/1.1\r\nHost: api.example\r\n"); resp.StatusCode != 200 || body != "ok 0" {
+				t.Errorf("an https:// request got %d %q", resp.StatusCode, body)
+			}
+			if _, requests := up.seen(); !slices.Equal(requests, []string{"GET https://api.example/ "}) {
+				t.Errorf("the proxy got %q", requests)
+			}
+		})
+	}
+}
+
+// TestTheUnwalledForwarderBoundsTheConnectionsWaiting pins the connections yet to show
+// the password: with as many as the forwarder holds waiting, one more that shows it is
+// served, and the connection that has waited longest is closed, while the others wait
+// on.
+func TestTheUnwalledForwarderBoundsTheConnectionsWaiting(t *testing.T) {
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			up := startProxyStandIn(t, secret, nil)
+			f, login := unwalledForwarder(t, up.Addr().String(), secret)
+			waiting := func() int {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				return len(f.waiting)
+			}
+			silent := make([]net.Conn, maxWaiting)
+			for i := range silent {
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				silent[i] = c
+				// One at a time, so the forwarder holds them in the order they came.
+				for deadline := time.Now().Add(5 * time.Second); waiting() != i+1; time.Sleep(time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("%d connections waiting, want %d", waiting(), i+1)
+					}
+				}
+			}
+
+			c, err := net.Dial("tcp", f.Addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			io.WriteString(c, "GET http://api.example/served HTTP/1.1\r\nHost: api.example\r\n"+login+"\r\n")
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+			if err != nil {
+				t.Fatalf("the connection past the bound got no answer: %v", err)
+			}
+			if b, _ := io.ReadAll(resp.Body); resp.StatusCode != 200 || string(b) != "ok 0" {
+				t.Errorf("the connection past the bound got %d %q", resp.StatusCode, b)
+			}
+
+			silent[0].SetReadDeadline(time.Now().Add(2 * time.Second))
+			var ne net.Error
+			if _, err := silent[0].Read(make([]byte, 1)); err == nil || errors.As(err, &ne) && ne.Timeout() {
+				t.Errorf("the connection that waited longest was not closed: %v", err)
+			}
+			silent[1].SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			if _, err := silent[1].Read(make([]byte, 1)); !errors.As(err, &ne) || !ne.Timeout() {
+				t.Errorf("the connection that came next was closed: %v", err)
+			}
+			if n := waiting(); n != maxWaiting-1 {
+				t.Errorf("%d connections waiting, want %d", n, maxWaiting-1)
+			}
+		})
+	}
+}
+
+// TestTheForwarderDropsAConnectionClosedWhileItWaited pins a connection a newer one
+// closed while it waited, off the waiting list by the time it shows the password or
+// the hop: it goes no further, and nothing of it reaches the proxy, not even a
+// connection.
+func TestTheForwarderDropsAConnectionClosedWhileItWaited(t *testing.T) {
+	const (
+		password = "forwarder-password-0123456789abcdefghijklmn"
+		hop      = "hop-secret-0123456789abcdefghijklmnopqrstuv"
+	)
+	login := "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyUser+":"+password)) + "\r\n"
+	for name, r := range map[string]struct {
+		way  forwarding
+		sent string
+	}{
+		"the password": {forwarding{password: password}, "GET http://api.example/ HTTP/1.1\r\nHost: api.example\r\n" + login + "\r\n"},
+		"the hop":      {forwarding{hop: hop}, link.RelayLine(hop) + "CONNECT api.example:443 HTTP/1.1\r\n\r\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up := startUpstream(t)
+			var d net.Dialer
+			r.way.dial = func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", up.ln.Addr().String()) }
+			f, err := listenForwarding("127.0.0.1:0", r.way)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			// The connection is served without being on the waiting list, as one a newer
+			// connection took off it is.
+			agent, c := net.Pipe()
+			defer agent.Close()
+			go io.WriteString(agent, r.sent)
+			served := make(chan struct{})
+			go func() {
+				f.serve(c)
+				close(served)
+			}()
+			select {
+			case <-served:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the connection went on")
+			}
+			time.Sleep(200 * time.Millisecond)
+			if opened, received := up.seen(); opened != 0 || len(received) != 0 {
+				t.Errorf("the proxy got %d connections, %q", opened, received)
+			}
+		})
+	}
+}
+
 // TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
 // never comes: once the agent closes its connection, the forwarder closes the proxy's
 // soon after, rather than at the run's end.

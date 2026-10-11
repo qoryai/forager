@@ -52,10 +52,12 @@ const (
 // A run gets two networks and two containers. The agent's container is on a network
 // created with --internal and on nothing else, so it has no route out and its resolver
 // knows only that network; the network's bridge gets no address, so the engine's host is
-// not on it either. The relay's container is on that network and on an ordinary
-// one; it runs [Relay], forwarding one port to the gateway, listens on its address on
-// the internal network alone, and is the one peer the agent can reach. Both run as a
-// user that is not root, with every capability dropped and no new privileges.
+// not on it either. The network is created with no IPv6 subnet, and the agent's
+// container starts with no IPv6 address but loopback's. The relay's container is on
+// that network and on an ordinary one; it runs [Relay], forwarding one port to the
+// gateway, listens on its address on the internal network alone, and is the one peer
+// the agent can reach. Both run as a user that is not root, with every capability
+// dropped and no new privileges.
 type Docker struct {
 	// Command is the program to run; empty means docker.
 	Command string
@@ -246,9 +248,10 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	//
 	// The inside network's bridge gets no address of the host's. With one, the network's
 	// gateway is the engine's host, and what listens there on every address is a route
-	// out of the enclosure.
+	// out of the enclosure. The network is created with no IPv6 subnet, whatever the
+	// daemon's default.
 	e.made = append(e.made, []string{"network", "rm", e.inside()})
-	if _, err := e.docker(ctx, "network", "create", "--internal", "--opt", "com.docker.network.bridge.inhibit_ipv4=true", "--label", e.label(), e.inside()); err != nil {
+	if _, err := e.docker(ctx, "network", "create", "--internal", "--ipv6=false", "--opt", "com.docker.network.bridge.inhibit_ipv4=true", "--label", e.label(), e.inside()); err != nil {
 		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 	}
 	e.made = append(e.made, []string{"network", "rm", e.outside()})
@@ -436,6 +439,15 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	} else {
 		run = append(run, e.hardening()...)
 	}
+	// The image's health check would run inside the agent's container beside its
+	// environment, and with a Docker of the agent's own as the enclosure's root; the
+	// agent's container runs none.
+	run = append(run, "--no-healthcheck")
+	// The agent's container starts with no IPv6 address but loopback's: on the inside
+	// network, which has no IPv6 subnet, the engine leaves its interface without IPv6,
+	// and IPv6 is off by default for an interface made later. Loopback, there before,
+	// keeps ::1, which tools dial localhost by.
+	run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {

@@ -143,6 +143,24 @@ func TestARequestRefusedForItsRunKeyIsAnsweredOnce(t *testing.T) {
 	b.Close()
 }
 
+// TestTheBodyAfterAnAnswerOtherThan2xxIsBounded pins what the one address waits for of
+// a request's body once its run key passed and its answer is other than a 2xx: the rest
+// of the body within the wait. A batch of a run that ended that sends 100 KiB of its
+// body and then stalls is closed unanswered then, not answered with a signature over
+// what came.
+func TestTheBodyAfterAnAnswerOtherThan2xxIsBounded(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	_, key := endedRun(t, r)
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	fmt.Fprintf(b.c, "POST /qory-link/events HTTP/1.1\r\nHost: gateway.example:8443\r\nAuthorization: Bearer %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", key, server.ContentType, 1<<20)
+	b.c.Write(bytes.Repeat([]byte("x"), 100<<10))
+	closedUnansweredWithin(t, "a batch of a run that ended that stalls after 100 KiB", b.r, b.c, gateway.RefusedWait+2*time.Second)
+}
+
 // TestTheLinksBoundsOnTheOneAddress pins the link's server there: a request whose head
 // is over 16 KiB is refused before its run key is read, and every request must arrive
 // whole within 60 seconds.
@@ -165,14 +183,21 @@ func TestTheLinksBoundsOnTheOneAddress(t *testing.T) {
 }
 
 // TestTheOneAddressBoundsTheConnectionsOfASource pins the 64 connections of one source
-// the one address holds at once before their run keys are admitted: the next is closed
-// at once, unanswered, and a source below its bound again is served again.
+// the one address holds at once before their run keys are admitted: the next closes the
+// oldest of them, unanswered, and is held. A connection whose run key passed, waiting,
+// is never closed for a newer one: the oldest of the others is; with 64 such
+// connections the next is closed at once, unanswered; and a source below its bound
+// again is served again.
 func TestTheOneAddressBoundsTheConnectionsOfASource(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	var conns []net.Conn
+	var vouched []*bound
 	defer func() {
 		for _, c := range conns {
 			c.Close()
+		}
+		for _, b := range vouched {
+			b.Close()
 		}
 	}()
 	dial := func() net.Conn {
@@ -188,19 +213,97 @@ func TestTheOneAddressBoundsTheConnectionsOfASource(t *testing.T) {
 		ne, ok := err.(net.Error)
 		return ok && ne.Timeout()
 	}
+	pending := func(want, waiting int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for gateway.PendingConns(r.g) != want || gateway.WaitingConns(r.g) != waiting {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d connections counted, %d waiting; want %d, %d", gateway.PendingConns(r.g), gateway.WaitingConns(r.g), want, waiting)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	closeConns := func() {
+		for _, c := range conns {
+			c.Close()
+		}
+		conns = nil
+	}
 	for range gateway.MaxSourceConns {
 		conns = append(conns, dial())
 	}
-	over := dial()
-	if open(over, 2*time.Second) {
-		t.Errorf("connection %d of one source is held", gateway.MaxSourceConns+1)
+	pending(gateway.MaxSourceConns, gateway.MaxSourceConns)
+	// Twice: each time the oldest goes.
+	for i := range 2 {
+		over := dial()
+		if !open(over, 300*time.Millisecond) {
+			t.Errorf("connection %d of one source is closed", gateway.MaxSourceConns+1+i)
+		}
+		if open(conns[0], 2*time.Second) {
+			t.Errorf("the oldest connection of a full source is held beside connection %d", gateway.MaxSourceConns+1+i)
+		}
+		if !open(conns[1], 200*time.Millisecond) {
+			t.Errorf("the second oldest connection of a full source is closed")
+		}
+		conns[0].Close()
+		conns = append(conns[1:], over)
+		pending(gateway.MaxSourceConns, gateway.MaxSourceConns)
 	}
-	over.Close()
-	if !open(conns[len(conns)-1], 200*time.Millisecond) {
-		t.Errorf("connection %d of one source is closed", gateway.MaxSourceConns)
+	closeConns()
+	pending(0, 0)
+
+	// A connection whose run key passed, oldest of its source, stays; the oldest of the
+	// others goes.
+	key := runKeyFor(t, event.NewRunID(), nil)
+	vouch := func() *bound {
+		t.Helper()
+		b, err := r.bind(t, gatewayKeys())
+		if err != nil {
+			t.Fatal(err)
+		}
+		vouched = append(vouched, b)
+		if a := b.do(t, key, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK || a.close {
+			t.Fatalf("a discovery: %d close=%v %s", a.status, a.close, a.body)
+		}
+		return b
+	}
+	first := vouch()
+	for range gateway.MaxSourceConns - 1 {
+		conns = append(conns, dial())
+	}
+	pending(gateway.MaxSourceConns, gateway.MaxSourceConns-1)
+	over := dial()
+	if !open(over, 300*time.Millisecond) {
+		t.Errorf("connection %d of one source is closed beside one whose run key passed", gateway.MaxSourceConns+1)
+	}
+	if open(conns[0], 2*time.Second) {
+		t.Error("the oldest connection whose run key did not pass is held")
+	}
+	if a := first.do(t, key, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK || a.close {
+		t.Errorf("the connection whose run key passed, oldest of its source: %d close=%v %s", a.status, a.close, a.body)
 	}
 	conns[0].Close()
-	conns = conns[1:]
+	conns = append(conns[1:], over)
+	closeConns()
+	pending(1, 0)
+
+	// 64 whose run keys passed: the next is closed at once, and none of them is.
+	for range gateway.MaxSourceConns - 1 {
+		vouch()
+	}
+	pending(gateway.MaxSourceConns, 0)
+	over = dial()
+	if open(over, 2*time.Second) {
+		t.Errorf("connection %d of one source is held beside %d whose run keys passed", gateway.MaxSourceConns+1, gateway.MaxSourceConns)
+	}
+	over.Close()
+	for i, b := range vouched {
+		if !open(b.c, 10*time.Millisecond) {
+			t.Fatalf("connection %d whose run key passed is closed", i+1)
+		}
+	}
+	vouched[0].Close()
+	vouched = vouched[1:]
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		c := dial()
@@ -417,9 +520,9 @@ func TestBearer(t *testing.T) {
 // TestAnAdmittedConnectionLeavesTheBounds pins the bounds on connections to those whose
 // run key the one address has not admitted: more than 64 proxy connections of a live
 // run from one source all work beside a connection of the link whose reload of the run
-// was answered; with them
-// open, 64 connections not admitted are held and the next is closed; a request refused
-// for its run key admits nothing; and once every connection is closed, by either side,
+// was answered; with them open, 64 connections not admitted are held and the next
+// closes the oldest of them and is held; a request refused for its run key admits
+// nothing; and once every connection is closed, by either side,
 // none is counted.
 func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
 	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
@@ -468,25 +571,34 @@ func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
 		t.Fatalf("the link: %d %s", a.status, a.body)
 	}
 	pending(0)
+	var notAdmitted []net.Conn
 	for range gateway.MaxSourceConns {
 		c, err := net.Dial("tcp", r.g.Addr())
 		if err != nil {
 			t.Fatal(err)
 		}
 		open = append(open, c)
+		notAdmitted = append(notAdmitted, c)
 	}
 	pending(gateway.MaxSourceConns)
 	over, err := net.Dial("tcp", r.g.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
-	over.SetReadDeadline(time.Now().Add(2 * time.Second))
+	open = append(open, over)
+	over.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	if _, err := over.Read(make([]byte, 1)); err == nil {
 		t.Error("a connection past the bound sent something")
-	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		t.Errorf("connection %d not admitted is held beside admitted ones", gateway.MaxSourceConns+1)
+	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Errorf("connection %d not admitted is closed beside admitted ones: %v", gateway.MaxSourceConns+1, err)
 	}
-	over.Close()
+	notAdmitted[0].SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := notAdmitted[0].Read(make([]byte, 1)); err == nil {
+		t.Error("the oldest connection not admitted sent something")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Errorf("the oldest connection not admitted is held beside connection %d", gateway.MaxSourceConns+1)
+	}
+	pending(gateway.MaxSourceConns)
 	for _, c := range open {
 		c.Close()
 	}
@@ -524,8 +636,8 @@ func TestAnAdmittedConnectionLeavesTheBounds(t *testing.T) {
 // TestAKeyOfNoLiveRunAdmitsNothing pins admission on the link to a live run's: a run key
 // that passes for a run that ended, or for one whose attach the server refused, gets
 // its answer with Connection: close and its connection closed after it, and while its
-// request is open the connection stays counted, so 64 of them from one source are held
-// and the next is closed. A discovery answered admits nothing either.
+// request is open the connection stays counted, never closed for a newer one, so 64 of
+// them from one source are held and the next is closed. A discovery answered admits nothing either.
 func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
 	pending := func(want int) {
@@ -611,6 +723,14 @@ func TestAKeyOfNoLiveRunAdmitsNothing(t *testing.T) {
 		}
 	}
 	pending(gateway.MaxSourceConns)
+	// Each run key passed: none of them is closed for a newer connection.
+	deadline := time.Now().Add(3 * time.Second)
+	for gateway.WaitingConns(r.g) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d connections whose run keys passed may be closed for a newer one", gateway.WaitingConns(r.g))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	over, err := net.Dial("tcp", r.g.Addr())
 	if err != nil {
 		t.Fatal(err)

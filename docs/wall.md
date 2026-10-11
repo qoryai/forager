@@ -27,12 +27,14 @@ nothing.
 ```
 
 - The agent's container is on a network with no route out.
+- The inside network has no IPv6 subnet, and the agent's container starts with no IPv6
+  address but loopback's ::1.
 - The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
   proxy, opening every connection with the run's proxy secret, and decides nothing. It
   forwards no packet between its networks.
-- The relay runs no health check of the image's.
+- Neither the relay nor the agent's container runs the image's health check.
 - The relay listens on the wall's inside network alone, on its one address in each of
-  its subnets.
+  its subnets, and takes a connection only from an address in those subnets.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs

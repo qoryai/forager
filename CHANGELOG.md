@@ -82,6 +82,8 @@ release may change what an existing document does, and says so under Upgrading.
   `Admit` is asked at the registration. The handler answers a reload only for a run its
   node registered, under any of the node's active keys, or for the gateway node that
   attached it, and `404` otherwise.
+- `json.Marshal` of `server.RegistrationAnswer` and `server.Attach` writes `run_key`
+  redacted, and of `server.LinkRunAnswer` `proxy_secret`; `Attach.Body` is the wire form.
 
 #### Added
 
@@ -492,7 +494,10 @@ release may change what an existing document does, and says so under Upgrading.
   `attach_by` if the run never attached. `server.GatewayRegistration` builds the body,
   its `Body` setting `time` from the clock when it is left empty, and
   `Client.RegisterThroughGateway` posts it and takes the answer only when its `run_id`
-  is the registration's and its `run_key` reads as one of that run; a refusal reads
+  is the registration's and its `run_key` reads as one of that run and it carries
+  neither `X-Qory-Run-Configuration` nor `ETag`, refusing one that does,
+  `registration answer <run.url>: the answer carries X-Qory-Run-Configuration or ETag;
+  a registration through a gateway carries no run configuration`; a refusal reads
   `register <run.url>: <code> (status 409)`, such as
   `register <run.url>: gateway_key (status 409)`, and no error contains the run key. A
   `server.RegistrationAnswer` prints and logs its run key as `[redacted]`, however it is
@@ -520,7 +525,10 @@ release may change what an existing document does, and says so under Upgrading.
   from any other key is `404`. A run behind a gateway counts as live from its attach, by
   the attach's `interval_seconds`, and one never attached is lost at `attach_by`.
   `server.Attach` builds the body and `Client.Attach` posts it, returning the run
-  configuration with its digest, the labels and `about`; a refusal reads
+  configuration with its digest, the labels and `about`; it takes an answer only with
+  one `ETag`, the `X-Qory-Run-Configuration` digest in quotes, and refuses any other,
+  `attach answer <run.url>/<run_id>/attach: the ETag header is not the
+  X-Qory-Run-Configuration digest in quotes`; a refusal reads
   `attach <run.url>/<run_id>: <code> (status <status>)`, such as
   `attach <run.url>/<run_id>: run_key_expired (status 409)`, and a signed `410` is no
   run. A `server.Attach` prints and logs its run key as `[redacted]`, however it is
@@ -803,9 +811,12 @@ release may change what an existing document does, and says so under Upgrading.
   and `from: apiary`. A run request for a run the gateway holds or is opening, live or
   ended, or holds a record of, is `409` `run_attached`, its message
   `attach <run.url>/<run_id>: run_attached (status 409)`. A gateway that stopped between
-  the attach and the run answer leaves a record that holds `dev.qory.run.registered`
-  alone, which the run request that comes again removes before the gateway attaches the
-  run again; an attach that failed leaves nothing of the run, and the run request that
+  the attach and marking the run's record `answered` leaves a record that holds
+  `dev.qory.run.registered` alone, which the run request that comes again removes before
+  the gateway attaches the run again; one that stopped after it keeps the record, and
+  the run request that comes again is `409` `run_attached`; a gateway that cannot write
+  `answered` answers the run request `500`, `run <id>: marking its record answered:
+  <error>`; an attach that failed leaves nothing of the run, and the run request that
   comes again asks for the attach again. A run that was open at a gateway that stopped
   is over: the gateway that starts again answers its reloads and batches `410`
   `run_closed` and its run request `409` `run_attached`. A run the gateway let go of
@@ -830,8 +841,10 @@ release may change what an existing document does, and says so under Upgrading.
   once, 64 of one source, an IPv4 address or an IPv6 /64, and 256 of one IPv6 /48,
   until its run key is admitted: on its first request of the link answered `2xx` for
   its live run, a run request, a reload or a batch, or in its relay preamble of a live
-  run. One past any bound is closed as it is accepted, unanswered, and an admitted
-  connection counts against none of them. On a bound connection a request of the link
+  run. One more closes the oldest such connection whose run key has not verified, of
+  its source when that is full, else of its /48, else of all, and is taken; when none
+  can be closed, it is closed as it is accepted, unanswered. An admitted connection
+  counts against none of them. On a bound connection a request of the link
   arrives whole, its body included, within 60 seconds, and its request line and fields
   within 16 KiB, the 4 KiB net/http allows past that aside: a longer head is net/http's
   own `431`, unsigned. Every request goes through the run key's check, `OPTIONS *`
@@ -840,7 +853,9 @@ release may change what an existing document does, and says so under Upgrading.
   refusal's signature covers, within 10 seconds; a body declared or sent longer, or one
   slower, closes the connection unanswered. Every answer other than
   a `2xx` to a request whose run key passed, a `409` or a `410` among them, carries
-  `Connection: close`, and the gateway closes the connection after it.
+  `Connection: close`, and the gateway closes the connection after it. A request
+  answered other than `2xx` whose body does not come whole within 10 seconds of the
+  answer closes the connection unanswered.
 - A separate gateway forgets a run it stops keeping, 15 minutes after its record is
   flushed, its run id and its record's flush error with it, so neither grows with the
   runs it has served. `Close`'s error keeps the first 16 such errors, in the order the
@@ -914,8 +929,8 @@ release may change what an existing document does, and says so under Upgrading.
   request's signature and each answer's stay the server's. It relays nothing else, the
   attach above all, and answers none of them itself. Its limits, each answered by the
   relay itself with no body, in this order: `429` past 60 requests a minute from one
-  source, in bursts of at most 20, or from a source new to the relay while it follows
-  65,536; `404` a path other than the four; `405` one of the four paths, its escapes
+  source, in bursts of at most 20, or past 240 a minute from one IPv6 /48, in bursts of
+  at most 80; `404` a path other than the four; `405` one of the four paths, its escapes
   decoded, with another method; `404` one of the four with its method, but a path with
   an escaped byte or a query on a `POST`; `413` a body over 16 KiB for the enrolment,
   64 KiB for a registration or 4 KiB for an outcome; `503` 64 requests
@@ -923,10 +938,13 @@ release may change what an existing document does, and says so under Upgrading.
   `504` no answer from the server within 10 seconds. A source is the connection's own
   IPv4 address or IPv6 /64, never a field the request carries, and the relay lets go of
   one idle for 20 seconds, the time its burst takes to come back whole, at its sweep
-  every 20 seconds. A connection of the relay reads a request whole, its body included,
-  within 30 seconds, and writes its answer within 30 seconds, or is closed; a request's
-  line and fields are within 16 KiB, the 4 KiB net/http allows past that aside, and a
-  longer head is net/http's own `431`, which counts toward no rate.
+  every 20 seconds. The relay follows at most 65,536 sources; a new one past that lets
+  go of the one idle longest. Of one IPv6 /48 it follows at most 256 sources; a new one
+  past that lets go of that /48's source idle longest. A connection of the relay reads
+  a request whole, its body included, within 30 seconds, and writes its answer within
+  30 seconds, or is closed; a request's line and fields are within 16 KiB, the 4 KiB
+  net/http allows past that aside, and a longer head is net/http's own `431`, which
+  counts toward no rate.
 - A separate gateway's calls to the server, the attach and the relay among them, use
   the proxy of the environment, `HTTPS_PROXY` and `NO_PROXY`, `HTTP_PROXY` never, since
   a server over http is on loopback, which Go never proxies: a proxy that ends their TLS
@@ -956,6 +974,9 @@ release may change what an existing document does, and says so under Upgrading.
   never reached through it, and the gateway's own machine only for a host the policy's
   allow list names", and for an ambiguous path "qory: <method> <host><path> denied by the
   gateway: the path could be read two ways".
+- The proxy answers a host's `101 Switching Protocols` to a request that asked for no
+  upgrade with `502`, `upstream: the host answered 101 Switching Protocols to a request
+  that asked for no upgrade`, and closes the host's connection and the client's.
 
 #### Fixed
 
@@ -1076,15 +1097,17 @@ release may change what an existing document does, and says so under Upgrading.
   wall's, when the run's is unset or empty; a non-empty one stays as it is.
 - The engine ran the agent's image's health check in the relay's container, as the
   relay's user, where it could read the run's proxy secret from the relay's environment
-  and reach what the relay reaches. `wall.Docker` now creates the relay with
-  `--no-healthcheck`; the agent's container is unchanged.
+  and reach what the relay reaches. `wall.Docker` now creates the relay and the agent's
+  container with `--no-healthcheck`.
+- `wall.Docker` creates the inside network with no IPv6 subnet, and the agent's
+  container starts with no IPv6 address but loopback's `::1`.
 - The relay listened on every address of its container, so whatever reached its address
   on its ordinary network, another container of the engine or a process of the machine,
   had its connections forwarded to the proxy opened with the run's proxy secret. The
   relay now listens on its address on the wall's inside network alone: `wall.Docker`
   gives it that network's subnets in `QORY_RELAY_INSIDE`, and `wall.Relay` refuses to
   start when the variable names none, or a subnet that holds no address of its own or
-  several.
+  several. `wall.Relay` takes a connection only from an address in those subnets.
 
 ### Session
 
@@ -1161,15 +1184,26 @@ release may change what an existing document does, and says so under Upgrading.
   `http://qory:<password>@127.0.0.1:<port>`, where it was the forwarder's address alone.
   The session makes, holds and checks the password as behind a separate gateway (Added,
   `session.RemoteGateway`), and the forwarder closes a connection whose first request
-  does not carry it unanswered, before anything reaches the gateway's proxy, so another
-  process of the machine that reaches the port reaches nothing. Without a wall, here and
-  behind a separate gateway, a connection to the forwarder carries one request, a
+  does not carry it unanswered, before anything reaches the gateway's proxy, so a
+  process of another user that reaches the port reaches nothing. Without a wall, here
+  and behind a separate gateway, a connection to the forwarder carries one request, a
   `CONNECT` and its tunnel or one plain HTTP request and its reply, which the forwarder
   passes on with `Connection: close`, or with `Connection: Upgrade` when it asks for an
   upgrade, a `101` reply making the connection a tunnel, so each request's password is
   checked and taken off before the request is passed on. A program that sends
   its proxy URL's user name and password as `Proxy-Authorization`, and opens a new
   connection after a reply with `Connection: close`, reaches the proxy as before.
+- Without a wall, the forwarder checks the request line of each request the password
+  lets in, and answers one it refuses with a `400` of its own, `Connection: close`,
+  before anything reaches the gateway's proxy: `the proxy takes HTTP/1.0 or HTTP/1.1`
+  for a line that is not a method, a target and `HTTP/1.0` or `HTTP/1.1`, each after a
+  single space; `CONNECT takes host:port` for a `CONNECT` whose target is not
+  `host:port` with a port from 1 to 65535; and `the proxy takes an absolute-form
+  request target` for any other method without an absolute-form target. It reads the
+  proxy's reply head to an upgrade up to 64 KiB, and closes the connection at the
+  first byte the agent sends before the reply to an upgrade. At most 128 connections at
+  once wait to show the password or the hop line; one more closes the one that has
+  waited longest.
 
 #### Added
 

@@ -113,6 +113,10 @@ type control struct {
 	// the body of every registration as it came, each try included.
 	labels        map[string]string
 	registrations [][]byte
+
+	// attachInstances and deliveryInstances are the X-Qory-Instance-Id of every attach
+	// and of every request to the events endpoint, in the order they came.
+	attachInstances, deliveryInstances []string
 }
 
 // runsPath is the control's run endpoint.
@@ -192,6 +196,9 @@ func newControl(t *testing.T) *control {
 		}
 		gone := false
 		if r.URL.Path == "/v1/events" {
+			c.mu.Lock()
+			c.deliveryInstances = append(c.deliveryInstances, r.Header.Get(server.HeaderInstanceID))
+			c.mu.Unlock()
 			n := c.deliveries.Add(1)
 			gone = c.goneAfter.Load() != 0 && n > c.goneAfter.Load()
 		}
@@ -247,6 +254,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	b, _ := io.ReadAll(r.Body)
 	c.mu.Lock()
 	c.attaches = append(c.attaches, b)
+	c.attachInstances = append(c.attachInstances, r.Header.Get(server.HeaderInstanceID))
 	doc, digest := c.run, c.digest
 	labels, about := c.attachLabels, c.attachAbout
 	c.mu.Unlock()
@@ -278,6 +286,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(m)
 	w.Header().Set(server.HeaderConfiguration, conf)
 	w.Header().Set(server.HeaderRunConfiguration, digest)
+	w.Header().Set("ETag", `"`+digest+`"`)
 	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
 	w.Write(body)
 }
@@ -287,6 +296,14 @@ func (c *control) attached() [][]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.attaches)
+}
+
+// instances are the X-Qory-Instance-Id of the attaches and of the deliveries the
+// control was sent.
+func (c *control) instances() (attaches, deliveries []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.attachInstances), slices.Clone(c.deliveryInstances)
 }
 
 // withEnd answers a delivery as the receiver does, and a 2xx with the end member e,

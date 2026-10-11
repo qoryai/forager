@@ -273,7 +273,12 @@ func Files() (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	regAnswer, err := json.Marshal(server.RegistrationAnswer{Version: 1, RunID: RunID, RunKey: rk})
+	// The answer's own struct: a server.RegistrationAnswer writes its run key redacted.
+	regAnswer, err := json.Marshal(struct {
+		Version int    `json:"version"`
+		RunID   string `json:"run_id"`
+		RunKey  string `json:"run_key"`
+	}{1, RunID, rk})
 	if err != nil {
 		return nil, err
 	}

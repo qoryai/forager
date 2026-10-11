@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -129,8 +130,9 @@ func gatewayControl(t *testing.T) *control {
 }
 
 // startRemote starts a separate gateway at the control, a gatewayControl when nil, with
-// cfg's Dir, Policy and test settings kept. At the test's end it is closed, and no line
-// it reported holds a run key it was sent.
+// cfg's Dir, Policy, Server and test settings kept, the control's Server when it has
+// none. At the test's end it is closed, and no line it reported holds a run key it was
+// sent.
 func startRemote(t *testing.T, c *control, cfg gateway.Config) *remote {
 	t.Helper()
 	if c == nil {
@@ -138,7 +140,10 @@ func startRemote(t *testing.T, c *control, cfg gateway.Config) *remote {
 	}
 	certFile, keyFile, pool := testCertificate(t, t.TempDir())
 	r := &remote{t: t, c: c, pool: pool}
-	cfg.Listen, cfg.TLS, cfg.Server = "127.0.0.1:0", &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, c.server()
+	cfg.Listen, cfg.TLS = "127.0.0.1:0", &gateway.TLS{CertFile: certFile, KeyFile: keyFile}
+	if cfg.Server == nil {
+		cfg.Server = c.server()
+	}
 	if cfg.Dir == "" {
 		cfg.Dir = t.TempDir()
 	}
@@ -899,6 +904,54 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	refused(t, "a run not held past attach_by", r.do(t, late, http.MethodGet, "/qory-link/configuration", nil), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(mustRunID(t, late), "run_key_expired"))
 }
 
+// TestTheGatewayKeepsItsPin pins that the gateway verifies run keys under the pin it
+// started with: once it has started, the caller's Server losing the signer's key, in
+// place and as a new pin, changes nothing, and a key of the new pin is not the gateway's.
+func TestTheGatewayKeepsItsPin(t *testing.T) {
+	c := gatewayControl(t)
+	srv := c.server()
+	srv.ApiaryPublicKey = slices.Clone(testPin)
+	r := startRemote(t, c, gateway.Config{Server: srv})
+	other := mustGenerate()
+	otherPin := accesskey.ServerKey{Alg: "ed25519", PublicKey: other.PublicKey().String()}
+	good := runKeyFor(t, event.NewRunID(), nil)
+	// The caller changes its Server as the gateway reads run keys: under -race, a
+	// gateway that read the caller's would be a data race.
+	started, stop, changed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(changed)
+		pin := srv.ApiaryPublicKey
+		for first := true; ; first = false {
+			pin[0] = otherPin
+			srv.ApiaryPublicKey = accesskey.Pin{otherPin}
+			if first {
+				close(started)
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	<-started
+	if a := r.do(t, good, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Errorf("a run key of the signer as the caller's pin loses it: %d %s", a.status, a.body)
+	}
+	close(stop)
+	<-changed
+	if a := r.do(t, good, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
+		t.Errorf("a run key of the signer once the caller's pin lost it: %d %s", a.status, a.body)
+	}
+	runID := event.NewRunID()
+	unpinned, err := runkey.Key{RunID: runID, Workspace: testWorkspace, NodeID: keyNode, Gateway: testGateway, InstanceID: keyInstance,
+		GatewayURL: "https://gateway.example:8443", GatewayKeys: gatewayKeys(), Issued: time.Now().Truncate(time.Second), AttachBy: time.Now().Add(time.Hour).Truncate(time.Second)}.Sign(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused(t, "a run key of the caller's new pin", r.do(t, unpinned, http.MethodGet, "/qory-link/configuration", nil), http.StatusBadRequest, "run_key_invalid", "gateway", keyInvalid)
+}
+
 // TestTheGatewayAllowsTheSkewPastAttachBy pins the skew the one address allows a run
 // key's attach_by by its own clock, server.Window, 300 s: a run key 100 s past its
 // attach_by opens its run, the attach sent to the server, and a batch of a run of such a
@@ -929,6 +982,47 @@ func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
 	refused(t, "a batch 400 s past attach_by of a run not held", r.do(t, late, http.MethodPost, "/qory-link/events", []byte(`[]`), http.Header{"Content-Type": {server.ContentType}}), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(lateID, "run_key_expired"))
 	if n := len(r.c.attached()); n != 1 {
 		t.Errorf("%d attaches; want the one within the skew", n)
+	}
+}
+
+// TestTheServersRunKeyExpiredIsKept pins the server's run_key_expired refusal of an
+// attach within the skew: two run requests with a run key 10 s past its attach_by send
+// one attach, and both get the server's refusal, the same answer. Once the gateway
+// holds a record of the run, the kept refusal is not given: the run request is the 409
+// run_attached of a run the gateway has a record of.
+func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "run_key_expired"})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, func(k *runkey.Key) {
+		k.AttachBy = time.Now().Add(-10 * time.Second).Truncate(time.Second)
+		k.Issued = k.AttachBy.Add(-time.Minute)
+	})
+	first := r.tryOpen(t, key, server.LinkRunRequest{})
+	refused(t, "the first run request", first, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
+	second := r.tryOpen(t, key, server.LinkRunRequest{})
+	refused(t, "the second run request", second, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
+	if !bytes.Equal(first.body, second.body) {
+		t.Errorf("the second refusal %s; want the first's, %s", second.body, first.body)
+	}
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+
+	// A record of the run, marked answered, which the gateway keeps.
+	dir := filepath.Join(r.cfg.Dir, "runs", runID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(`{"type":"`+event.RunRegistered+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "answered"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, "a run request of a run with a record", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
 	}
 }
 
@@ -1202,7 +1296,9 @@ func TestTheEndMember(t *testing.T) {
 // directory: a run it attached whose open never answered its session, its record
 // holding its dev.qory.run.registered alone, is reclaimed, and the session's run
 // request attaches it again and opens it; a run that was live there is over, a 410
-// run_closed to its batch and a 409 run_attached to its run request.
+// run_closed to its batch and a 409 run_attached to its run request. Its attaches and
+// its batches at the server carry the same X-Qory-Instance-Id, the one its caller
+// gives, before the restart and after.
 func TestAGatewayRestartedReattaches(t *testing.T) {
 	dir := t.TempDir()
 	c := gatewayControl(t)
@@ -1215,17 +1311,11 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 	before.g.Close(ctx)
 	cancel()
 	// The partial run's record as a gateway that stopped as it opened leaves it: its
-	// first line alone.
-	file := filepath.Join(dir, "runs", partial, "events.jsonl")
-	b, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, append(bytes.SplitN(b, []byte("\n"), 2)[0], '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.Remove(filepath.Join(dir, "runs", partial, "delivered.log"))
+	// first line alone, and no mark that it was answered.
+	firstLineAlone(t, dir, partial)
+	os.Remove(filepath.Join(dir, "runs", partial, "answered"))
 	attaches := len(c.attached())
+	_, delivered := c.instances()
 
 	r := startRemote(t, c, gateway.Config{Dir: dir})
 	a := r.tryOpen(t, partialKey, server.LinkRunRequest{})
@@ -1244,6 +1334,150 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 		t.Errorf("a batch of the run live before: %d %s", got.status, got.body)
 	}
 	refused(t, "a run request of the run live before", r.tryOpen(t, liveKey, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(live, "run_attached"))
+
+	var ans server.LinkRunAnswer
+	json.Unmarshal(a.body, &ans)
+	p := &edgeRun{r: r, key: partialKey, a: &ans}
+	if got := p.post(t, started(partial, nil), applied(partial, ans.Applied)); got.status != http.StatusAccepted {
+		t.Fatalf("a batch of the reclaimed run: %d %s", got.status, got.body)
+	}
+	eventually(t, "a delivery after the restart", func() bool {
+		_, d := c.instances()
+		return len(d) > len(delivered)
+	})
+	attachIDs, deliveryIDs := c.instances()
+	if len(attachIDs) != attaches+1 || len(delivered) == 0 {
+		t.Errorf("%d attaches, want %d, and %d deliveries before the restart", len(attachIDs), attaches+1, len(delivered))
+	}
+	for _, id := range append(attachIDs, deliveryIDs...) {
+		if id != testInstance {
+			t.Errorf("the attaches carry %q and the deliveries %q; want each %q", attachIDs, deliveryIDs, testInstance)
+			break
+		}
+	}
+}
+
+// TestARunMarkedAnsweredIsKeptWhenItsSessionGoes pins a run on the one address whose
+// session goes once its record is marked answered: the run is kept, its record and the
+// mark with it, and the run request that comes again with the same run key is a 409
+// run_attached, with no second attach.
+func TestARunMarkedAnsweredIsKeptWhenItsSessionGoes(t *testing.T) {
+	conns := make(chan *bound, 1)
+	cfg := gateway.Config{}
+	gateway.SetMarked(&cfg, func(ctx context.Context) {
+		var b *bound
+		select {
+		case b = <-conns:
+		default:
+			// A run request after the first: it goes on.
+			return
+		}
+		b.Close()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Error("the run request's context did not end when its connection closed")
+		}
+	})
+	r := startRemote(t, nil, cfg)
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	r.mu.Lock()
+	r.keys = append(r.keys, key)
+	r.mu.Unlock()
+	b, err := r.bind(t, gatewayKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns <- b
+	body, _ := json.Marshal(server.LinkRunRequest{Version: 1, RunID: runID})
+	req, err := http.NewRequest(http.MethodPost, "https://gateway.example:8443/qory-link/run-configuration", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", server.LinkContentType)
+	if err := req.Write(b.c); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run request's connection closed", func() bool {
+		_, err := b.r.ReadByte()
+		return err != nil
+	})
+	gateway.WaitOpens(r.g)
+	if runs, _ := gateway.Held(r.g); runs != 1 {
+		t.Errorf("%d runs held; want the run kept", runs)
+	}
+	if _, err := os.Stat(filepath.Join(r.cfg.Dir, "runs", runID, "answered")); err != nil {
+		t.Errorf("the mark: %v", err)
+	}
+	refused(t, "the run request again", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+}
+
+// firstLineAlone leaves the record of a run in the gateway directory dir as a gateway
+// that stopped without ending the run leaves it: its first line alone, and nothing
+// delivered.
+func firstLineAlone(t *testing.T, dir, runID string) {
+	t.Helper()
+	file := filepath.Join(dir, "runs", runID, "events.jsonl")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, append(bytes.SplitN(b, []byte("\n"), 2)[0], '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "runs", runID, "delivered.log"))
+}
+
+// TestAGatewayRestartedAfterTheAnswerKeepsTheRun pins the mark of an answered run
+// request behind a separate gateway: a gateway that stopped after it answered a run's
+// run request, the run's record holding its dev.qory.run.registered alone, keeps the
+// record when it starts again, and the run request that comes again is a 409
+// run_attached, with no second attach. A run whose record cannot be marked answered is
+// let go of, a 500 internal saying why, and the run request that comes again opens it.
+func TestAGatewayRestartedAfterTheAnswerKeepsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	c := gatewayControl(t)
+	before := startRemote(t, c, gateway.Config{Dir: dir})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, nil)
+	if a := before.tryOpen(t, key, server.LinkRunRequest{}); a.status != http.StatusOK {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	before.g.Close(ctx)
+	cancel()
+	firstLineAlone(t, dir, runID)
+
+	r := startRemote(t, c, gateway.Config{Dir: dir})
+	refused(t, "the run request again", r.tryOpen(t, key, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(runID, "run_attached"))
+	if n := len(c.attached()); n != 1 {
+		t.Errorf("%d attaches; want the one before the restart", n)
+	}
+	if rec := r.record(runID); len(rec) != 1 || rec[0].Type != event.RunRegistered {
+		t.Errorf("the run's record %v", types(rec))
+	}
+
+	unmarked := event.NewRunID()
+	mark := filepath.Join(dir, "runs", unmarked, "answered")
+	var once sync.Once
+	cfg := gateway.Config{Dir: dir}
+	gateway.SetOpened(&cfg, func() { once.Do(func() { os.WriteFile(mark, nil, 0o644) }) })
+	r.g.Close(context.Background())
+	m := startRemote(t, c, cfg)
+	unmarkedKey := runKeyFor(t, unmarked, nil)
+	refused(t, "a run whose record cannot be marked", m.tryOpen(t, unmarkedKey, server.LinkRunRequest{}), http.StatusInternalServerError, "internal", "gateway",
+		fmt.Sprintf("run %s: marking its record answered: open %s: file exists", unmarked, mark))
+	if runs, _ := gateway.Held(m.g); runs != 0 {
+		t.Errorf("%d runs held", runs)
+	}
+	if e := m.open(t, unmarkedKey, server.LinkRunRequest{}); e.a.RunID != unmarked {
+		t.Errorf("the run opened again is %s", e.a.RunID)
+	}
 }
 
 // TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun pins D4 behind a separate gateway:
