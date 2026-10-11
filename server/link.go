@@ -41,12 +41,10 @@ const LocalOrigin = "http://localhost"
 const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway: the
-// gateway closed the run, the run credential expired with no fresh one, its starter
-// reports it no longer active or ended another run of its run key, its run credential
-// could not be checked, the introspection endpoint unreachable or its answer not valid, the gateway heard
-// nothing from the session for too long, or it refused a batch of the session's. A 410
-// with another code, or none, is run_closed.
-var EndCodes = []string{event.ReasonRunClosed, event.ReasonCredentialExpired, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused, event.ReasonCredentialCheckUnreachable, event.ReasonCredentialCheckInvalid}
+// gateway closed the run, the run's starter ended it, the gateway heard nothing from the
+// session for too long, or it refused a batch of the session's. A 410 with another
+// code, or none, is run_closed.
+var EndCodes = []string{event.ReasonRunClosed, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused}
 
 // RunEnd is how a run ended at the gateway, as the link says it: Code, one of
 // [EndCodes], a 410's code or batch_refused for the gateway's 400 to a batch; From, who
@@ -162,9 +160,6 @@ type LinkImage struct {
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
-	// Credential is where the run's credential came from, which run.started reports:
-	// starter, the run's starter gave the run its run credential; none, on the local link.
-	Credential string `json:"credential"`
 	// Policy is the policy in force for the run, as policy.schema.json defines it, and
 	// Digest the hex SHA-256 of its canonical JSON; each is present with the other, and
 	// with neither the gateway observes everything.
@@ -192,9 +187,6 @@ type LinkRunAnswer struct {
 	Image *LinkImage `json:"image,omitempty"`
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
-	// Details are the keys of about.details the run credential decides, a JSON object,
-	// which run.started reports; nil when the answer has none.
-	Details json.RawMessage `json:"details,omitzero"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for
 	// the policy in force, a JSON object: every member but harness_hosts and variables,
 	// which the session adds. The gateway refuses a policy_applied whose other members
@@ -289,23 +281,6 @@ type LinkRefusal struct {
 	Message string `json:"message,omitempty"`
 }
 
-// LinkOutcome is the gateway's answer to the outcome request,
-// contracts/forager/v1/link-outcome-answer.schema.json: the outcome the run's starter
-// gave, State, succeeded, failed or cancelled, and its Reason, a code of the starter's.
-// A LinkOutcome without a State is {}: the starter gave none, and the runtime's exit
-// decides. Reason is empty when the starter gave none.
-type LinkOutcome struct {
-	State  string `json:"state,omitempty"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// OutcomeTimeout bounds the outcome request, [Link.Outcome]: a little over the about 6
-// seconds in which the gateway answers it.
-const OutcomeTimeout = 10 * time.Second
-
-// outcomeTimeout is [OutcomeTimeout], which a test shortens.
-var outcomeTimeout = OutcomeTimeout
-
 // values are variables as values by name; nil for none.
 func values(vars map[string]Variable) map[string]string {
 	if vars == nil {
@@ -324,12 +299,12 @@ func values(vars map[string]Variable) map[string]string {
 // local link, [NewLocalLink], the socket's peer is this process's user, checked before
 // the link secret is written on each connection, and the secret opens every
 // connection; behind a separate gateway, [NewRemoteLink], TLS 1.3 verifies the
-// gateway, and the run credential on every request the session. Once [Link.OpenRun]
+// gateway. Once [Link.OpenRun]
 // opened a run, every request on either link carries the run's secret,
 // X-Qory-Run-Secret, which names the run. Every URL it requests must have its origin, so
 // nothing it sends leaves the link, and it follows no redirect.
 //
-// A Link never prints the link secret, the run credential or the run secret: fmt and
+// A Link never prints the link secret or the run secret: fmt and
 // log/slog show it by its socket or its URL, and no error it returns contains any of
 // them.
 type Link struct {
@@ -345,12 +320,11 @@ type Link struct {
 	// uid is the user the local link's socket's peer must be.
 	uid  int
 	http *http.Client
-	// credential, address and tls are a separate gateway's, [NewRemoteLink]: the run
-	// credential, asked for before each request; the one address, host:port; and the
-	// TLS every connection to it is made with. All are empty on the local link.
-	credential func(context.Context) (string, error)
-	address    string
-	tls        *tls.Config
+	// address and tls are a separate gateway's, [NewRemoteLink]: the one address,
+	// host:port, and the TLS every connection to it is made with. Both are empty on the
+	// local link.
+	address string
+	tls     *tls.Config
 	// runSecret holds the run's secret, set once the run is open, [Link.UseRunSecret];
 	// it holds nil before. A pointer, so a copy of the Link printed shows no secret.
 	runSecret *atomic.Pointer[string]
@@ -831,11 +805,6 @@ func (k *Link) OpenRun(ctx context.Context, runURL string, req LinkRunRequest) (
 	if err := CheckLabels(a.Labels); err != nil {
 		return nil, &DocumentError{"the run answer", k.at(runURL), fmt.Errorf("/labels: %w", err)}
 	}
-	if a.Details != nil {
-		if why := checkDetails(a.Details); why != "" {
-			return nil, &DocumentError{"the run answer", k.at(runURL), errors.New("/details " + why)}
-		}
-	}
 	k.UseRunSecret(a.RunSecret)
 	return &a, nil
 }
@@ -872,67 +841,6 @@ func (k *Link) Reload(ctx context.Context, runURL, runID string) (*LinkReloadAns
 		return nil, &DocumentError{"the reload answer", k.at(u), err}
 	}
 	return &a, nil
-}
-
-// Outcome asks the gateway once how the run's starter says the run ended, at the
-// runtime's own exit: a GET of <runURL>/<runID>/outcome, with no query, authorised as a
-// reload is, the run credential and the run's secret, and bounded to [OutcomeTimeout]
-// besides ctx. It returns the answer's outcome when the gateway answers 200 with a
-// document link-outcome-answer.schema.json accepts. A reason that is one of Forager's
-// reserved codes, or one the schema refuses where the answer without it is valid, is
-// dropped alone, as the gateway drops it, and the state kept. Anything else is {}, with
-// the error that says why: a transport failure, no answer in time, any other status, a
-// 410 among them, or an answer that is not valid, one with a state the schema refuses
-// among them; a caller that reads the outcome reads {} as no outcome, and the error as
-// nothing more. The answer's digests are handed to nobody. On the local link there is
-// no starter to ask: it sends nothing, and returns {} at once.
-func (k *Link) Outcome(ctx context.Context, runURL, runID string) (LinkOutcome, error) {
-	if k.origin == LocalOrigin {
-		return LinkOutcome{}, errors.New("the local link has no outcome to ask for")
-	}
-	if err := k.onLink("the run URL", runURL); err != nil {
-		return LinkOutcome{}, fmt.Errorf("%s: %w", k.name, err)
-	}
-	if !runIDShape.MatchString(runID) {
-		return LinkOutcome{}, errors.New("the outcome request: the run id is not a UUID in the canonical lower-case form")
-	}
-	u := strings.TrimSuffix(runURL, "/") + "/" + runID + "/outcome"
-	ctx, cancel := context.WithTimeout(ctx, outcomeTimeout)
-	defer cancel()
-	a, err := k.send(ctx, http.MethodGet, u, nil, MaxRefusal, nil)
-	if err != nil {
-		return LinkOutcome{}, fmt.Errorf("the outcome request %s: %w", k.at(u), err)
-	}
-	if a.status != http.StatusOK {
-		return LinkOutcome{}, fmt.Errorf("the outcome request %s: status %d", k.at(u), a.status)
-	}
-	var o LinkOutcome
-	if err := readLinkDocument("link-outcome-answer.schema.json", a.body, &o); err != nil {
-		var kept LinkOutcome
-		if alone, ok := withoutReason(a.body); ok && readLinkDocument("link-outcome-answer.schema.json", alone, &kept) == nil && kept.State != "" {
-			return LinkOutcome{State: kept.State}, nil
-		}
-		return LinkOutcome{}, &DocumentError{"the outcome answer", k.at(u), err}
-	}
-	if event.Reserved(o.Reason) {
-		o.Reason = ""
-	}
-	return o, nil
-}
-
-// withoutReason is an outcome answer's object without its reason member, and whether
-// it had one to drop.
-func withoutReason(body []byte) ([]byte, bool) {
-	var members map[string]jsontext.Value
-	if jsonv2.Unmarshal(body, &members) != nil {
-		return nil, false
-	}
-	if _, ok := members["reason"]; !ok {
-		return nil, false
-	}
-	delete(members, "reason")
-	b, err := jsonv2.Marshal(members)
-	return b, err == nil
 }
 
 // Deliver posts one link batch to eventsURL, the discovery's events.url, as the

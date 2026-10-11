@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -31,24 +32,20 @@ import (
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
-	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/link"
-	"github.com/qoryai/forager/policy"
-	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
-// testIssuers are issuers of run credentials, neutral examples: Start checks only that
-// there are some, and the tests' verifier decides every run credential.
-var testIssuers = runcredential.Issuers{{Issuer: "https://issuer.example", Audience: "qory-gateway"}}
-
-// The run credentials of the tests' verifier: good opens a run of rk-0001, other one
-// of rk-0003, any other is refused.
+// The bearer values of the tests' verifier: good opens a run of rk-0001, other one of
+// rk-0003, any other is refused.
 const (
-	goodCredential  = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAxIn0.c2lnbmF0dXJl"
-	badCredential   = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAyIn0.c2lnbmF0dXJl"
-	otherCredential = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyay0wMDAzIn0.c2lnbmF0dXJl"
+	goodBearer  = "good.bearer-value.0001"
+	badBearer   = "refused.bearer-value.0002"
+	otherBearer = "other.bearer-value.0003"
 )
+
+// errRefusedBearer is the tests' verifier's refusal.
+var errRefusedBearer = errors.New("the bearer value is refused")
 
 // testCertificate writes a certificate for 127.0.0.1, ::1 and localhost, and its key,
 // into dir, signed by an authority of the test's own, which pool trusts.
@@ -83,22 +80,36 @@ func testCertificate(t *testing.T, dir string) (certFile, keyFile string, pool *
 	return certFile, keyFile, pool
 }
 
-// verifier is the tests' run credential verifier: it records every credential it is
-// handed and accepts goodCredential alone.
+// verifier is the tests' verifier of a request's bearer value: it records every value
+// it is handed and accepts those it knows, goodBearer and otherBearer from the start,
+// each until its expiry.
 type verifier struct {
 	mu   sync.Mutex
 	seen []string
+	ids  map[string]gateway.RunIdentity
 }
 
-func (v *verifier) authenticate(credential string) (gateway.RunIdentity, error) {
+func newVerifier() *verifier {
+	exp := time.Now().Add(time.Hour)
+	return &verifier{ids: map[string]gateway.RunIdentity{goodBearer: {Key: "rk-0001", Expires: exp}, otherBearer: {Key: "rk-0003", Expires: exp}}}
+}
+
+// allow makes the verifier accept value for a run of the key until expires.
+func (v *verifier) allow(value, key string, expires time.Time) {
 	v.mu.Lock()
-	v.seen = append(v.seen, credential)
-	v.mu.Unlock()
-	runKey := map[string]string{goodCredential: "rk-0001", otherCredential: "rk-0003"}[credential]
-	if runKey == "" {
-		return gateway.RunIdentity{}, runcredential.ErrRefused
+	defer v.mu.Unlock()
+	v.ids[value] = gateway.RunIdentity{Key: key, Expires: expires}
+}
+
+func (v *verifier) authenticate(value string) (gateway.RunIdentity, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.seen = append(v.seen, value)
+	id, ok := v.ids[value]
+	if !ok || time.Now().After(id.Expires) {
+		return gateway.RunIdentity{}, errRefusedBearer
 	}
-	return gateway.RunIdentity{Issuer: "https://issuer.example", RunKey: runKey, Labels: map[string]string{"forge": "example-forge", "repository": "example-namespace/project", "run_key": runKey}, Expires: time.Now().Add(time.Hour)}, nil
+	return id, nil
 }
 
 func (v *verifier) handed() []string {
@@ -118,9 +129,8 @@ type service struct {
 // verifier; cfg's Policy and the like are kept.
 func startService(t *testing.T, cfg gateway.Config, plain bool) *service {
 	t.Helper()
-	s := &service{v: &verifier{}}
+	s := &service{v: newVerifier()}
 	cfg.Listen = "127.0.0.1:0"
-	cfg.RunCredentials = testIssuers
 	if !plain {
 		certFile, keyFile, pool := testCertificate(t, t.TempDir())
 		cfg.TLS = &gateway.TLS{CertFile: certFile, KeyFile: keyFile}
@@ -128,7 +138,7 @@ func startService(t *testing.T, cfg gateway.Config, plain bool) *service {
 	}
 	gateway.SetRunAuth(&cfg, s.v.authenticate)
 	s.harness = start(t, cfg)
-	s.secrets = append(s.secrets, goodCredential, badCredential, otherCredential)
+	s.secrets = append(s.secrets, goodBearer, badBearer, otherBearer)
 	return s
 }
 
@@ -162,20 +172,20 @@ func (s *service) dial(t *testing.T) net.Conn {
 	return c
 }
 
-// bearerTransport sets a run credential on every request, and, as a session does, the
+// bearerTransport sets a bearer value on every request, and, as a session does, the
 // run secret of a run runSecret knows on its reloads and batches: the run of a reload's
 // path, and of a batch's first event. A request that sets X-Qory-Run-Secret itself keeps
 // its own.
 type bearerTransport struct {
-	credential string
-	runSecret  func(runID string) string
-	next       http.RoundTripper
+	value     string
+	runSecret func(runID string) string
+	next      http.RoundTripper
 }
 
 func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	if b.credential != "" {
-		r.Header.Set("Authorization", "Bearer "+b.credential)
+	if b.value != "" {
+		r.Header.Set("Authorization", "Bearer "+b.value)
 	}
 	if _, set := r.Header[server.HeaderRunSecret]; !set && b.runSecret != nil {
 		var runID string
@@ -199,10 +209,10 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // client is a session's client of the contract on the one address, a plain net/http
-// client trusting the gateway's certificate, with the run credential on every request
+// client trusting the gateway's certificate, with the bearer value on every request
 // and the run secret of each run the test opened on its reloads and batches.
-func (s *service) client(credential string) *http.Client {
-	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{credential: credential, runSecret: s.runSecretOf, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
+func (s *service) client(value string) *http.Client {
+	return &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{value: value, runSecret: s.runSecretOf, next: &http.Transport{TLSClientConfig: s.tlsConfig(), Proxy: nil}},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
@@ -228,21 +238,21 @@ func do(t *testing.T, c *http.Client, method, u, contentType, body string) (*htt
 	return resp, b
 }
 
-// openOver opens a run on the one address with the good run credential.
+// openOver opens a run on the one address with the good bearer value.
 func (s *service) openOver(t *testing.T, req server.LinkRunRequest) (*server.LinkRunAnswer, http.Header) {
 	t.Helper()
-	return s.openWith(t, goodCredential, req)
+	return s.openWith(t, goodBearer, req)
 }
 
-// openWith opens a run on the one address with the run credential given.
-func (s *service) openWith(t *testing.T, credential string, req server.LinkRunRequest) (*server.LinkRunAnswer, http.Header) {
+// openWith opens a run on the one address with the bearer value given.
+func (s *service) openWith(t *testing.T, value string, req server.LinkRunRequest) (*server.LinkRunAnswer, http.Header) {
 	t.Helper()
 	req.Version = 1
 	if req.RunID == "" {
 		req.RunID = event.NewRunID()
 	}
 	body, _ := json.Marshal(req)
-	resp, b := do(t, s.client(credential), http.MethodPost, s.url("/v1/run-configuration"), server.LinkContentType, string(body))
+	resp, b := do(t, s.client(value), http.MethodPost, s.url("/v1/run-configuration"), server.LinkContentType, string(body))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the run request: %d %s", resp.StatusCode, b)
 	}
@@ -254,19 +264,19 @@ func (s *service) openWith(t *testing.T, credential string, req server.LinkRunRe
 	return &a, resp.Header
 }
 
-// postOver posts one batch of a run's events on the one address, with the good run
-// credential.
+// postOver posts one batch of a run's events on the one address, with the good bearer
+// value.
 func (s *service) postOver(t *testing.T, evs ...map[string]any) int {
 	t.Helper()
-	return s.postWith(t, goodCredential, evs...)
+	return s.postWith(t, goodBearer, evs...)
 }
 
-// postWith posts one batch of a run's events on the one address, with the run
-// credential given.
-func (s *service) postWith(t *testing.T, credential string, evs ...map[string]any) int {
+// postWith posts one batch of a run's events on the one address, with the bearer value
+// given.
+func (s *service) postWith(t *testing.T, value string, evs ...map[string]any) int {
 	t.Helper()
 	body, _ := json.Marshal(evs)
-	resp, b := do(t, s.client(credential), http.MethodPost, s.url("/v1/events"), server.ContentType, string(body))
+	resp, b := do(t, s.client(value), http.MethodPost, s.url("/v1/events"), server.ContentType, string(body))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Errorf("a batch: %d %s", resp.StatusCode, b)
 	}
@@ -330,26 +340,20 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 	certFile, keyFile, _ := testCertificate(t, t.TempDir())
 	_, otherKey, _ := testCertificate(t, t.TempDir())
 	for name, cfg := range map[string]gateway.Config{
-		"not host:port":                  {Dir: dir, Listen: "127.0.0.1", RunCredentials: testIssuers},
-		"a port out of range":            {Dir: dir, Listen: "127.0.0.1:65536", RunCredentials: testIssuers},
-		"a port that is no number":       {Dir: dir, Listen: "127.0.0.1:https", RunCredentials: testIssuers},
-		"every address without TLS":      {Dir: dir, Listen: ":0", RunCredentials: testIssuers},
-		"0.0.0.0 without TLS":            {Dir: dir, Listen: "0.0.0.0:0", RunCredentials: testIssuers},
-		"another machine's without TLS":  {Dir: dir, Listen: "192.0.2.1:0", RunCredentials: testIssuers},
-		"a name without TLS":             {Dir: dir, Listen: "gateway.example:8443", RunCredentials: testIssuers},
-		"no run credentials":             {Dir: dir, Listen: "127.0.0.1:0"},
-		"no run credentials, with TLS":   {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}},
-		"no directory":                   {RunDir: func(id string) string { return filepath.Join(dir, id) }, Listen: "127.0.0.1:0", RunCredentials: testIssuers},
-		"a certificate file not there":   {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{CertFile: filepath.Join(dir, "none.pem"), KeyFile: keyFile}},
-		"a key file not there":           {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{CertFile: certFile, KeyFile: filepath.Join(dir, "none.pem")}},
-		"no files":                       {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{}},
-		"a key of another certificate":   {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{CertFile: certFile, KeyFile: otherKey}},
-		"a certificate without address":  {Dir: dir, TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}},
-		"a quiet time that is negative":  {Dir: dir, Runs: gateway.RunsConfig{Quiet: -time.Second}},
-		"the key in place of the cert":   {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{CertFile: keyFile, KeyFile: keyFile}},
-		"the cert in place of the key":   {Dir: dir, Listen: "127.0.0.1:0", RunCredentials: testIssuers, TLS: &gateway.TLS{CertFile: certFile, KeyFile: certFile}},
-		"loopback, TLS and no issuers":   {Dir: dir, Listen: "[::1]:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}},
-		"loopback by name and no issuer": {Dir: dir, Listen: "localhost:0"},
+		"not host:port":                 {Dir: dir, Listen: "127.0.0.1"},
+		"a port out of range":           {Dir: dir, Listen: "127.0.0.1:65536"},
+		"a port that is no number":      {Dir: dir, Listen: "127.0.0.1:https"},
+		"every address without TLS":     {Dir: dir, Listen: ":0"},
+		"0.0.0.0 without TLS":           {Dir: dir, Listen: "0.0.0.0:0"},
+		"another machine's without TLS": {Dir: dir, Listen: "192.0.2.1:0"},
+		"a name without TLS":            {Dir: dir, Listen: "gateway.example:8443"},
+		"a certificate file not there":  {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: filepath.Join(dir, "none.pem"), KeyFile: keyFile}},
+		"a key file not there":          {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: filepath.Join(dir, "none.pem")}},
+		"no files":                      {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{}},
+		"a key of another certificate":  {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: otherKey}},
+		"a certificate without address": {Dir: dir, TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}},
+		"the key in place of the cert":  {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: keyFile, KeyFile: keyFile}},
+		"the cert in place of the key":  {Dir: dir, Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: certFile}},
 	} {
 		g, err := gateway.Start(context.Background(), cfg)
 		if err == nil {
@@ -360,10 +364,6 @@ func TestStartRefusesAnAddressItCannotServe(t *testing.T) {
 		if b, _ := os.ReadFile(keyFile); strings.Contains(err.Error(), string(b[30:60])) {
 			t.Errorf("%s: the error holds the key: %v", name, err)
 		}
-	}
-	// Nothing was made of the gateway's authority by a start that was refused.
-	if _, err := os.Stat(gateway.AuthorityPath(dir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the authority after refused starts: %v", err)
 	}
 }
 
@@ -395,12 +395,12 @@ func TestTheOneAddressIsTLS13Only(t *testing.T) {
 	}
 	defer p.Close()
 	p.SetDeadline(time.Now().Add(5 * time.Second))
-	io.WriteString(p, "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer "+goodCredential+"\r\n\r\n")
+	io.WriteString(p, "GET /.well-known/qory-configuration HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer "+goodBearer+"\r\n\r\n")
 	if b, _ := io.ReadAll(p); bytes.Contains(b, []byte("HTTP/1.1 200")) {
 		t.Errorf("plain HTTP was answered: %q", b)
 	}
 	if got := s.v.handed(); len(got) != 0 {
-		t.Errorf("the verifier was handed %d credentials", len(got))
+		t.Errorf("the verifier was handed %d values", len(got))
 	}
 }
 
@@ -415,7 +415,7 @@ func TestADiscoveryOnTheOneAddress(t *testing.T) {
 	}
 	for _, plain := range []bool{false, true} {
 		s := startService(t, gateway.Config{Heartbeat: 5 * time.Second}, plain)
-		resp, b := do(t, s.client(goodCredential), http.MethodGet, s.url(server.WellKnown), "", "")
+		resp, b := do(t, s.client(goodBearer), http.MethodGet, s.url(server.WellKnown), "", "")
 		if resp.StatusCode != http.StatusOK || resp.Header.Get(server.HeaderConfiguration) == "" {
 			t.Fatalf("plain %v: %d %s", plain, resp.StatusCode, b)
 		}
@@ -432,13 +432,13 @@ func TestADiscoveryOnTheOneAddress(t *testing.T) {
 		if d.Events.URL != origin+"/v1/events" || d.Run.URL != origin+"/v1/run-configuration" || d.Proxy == nil || d.Proxy.Address != s.g.Addr() || d.Events.IntervalSeconds != 5 {
 			t.Errorf("plain %v: discovery %s", plain, b)
 		}
-		if got := s.v.handed(); !slices.Equal(got, []string{goodCredential}) {
-			t.Errorf("plain %v: the verifier was handed %d credentials", plain, len(got))
+		if got := s.v.handed(); !slices.Equal(got, []string{goodBearer}) {
+			t.Errorf("plain %v: the verifier was handed %d values", plain, len(got))
 		}
 		// The origin the session names, as its Host says.
 		req, _ := http.NewRequest(http.MethodGet, s.url(server.WellKnown), nil)
 		req.Host = "gateway.example"
-		resp, err = s.client(goodCredential).Do(req)
+		resp, err = s.client(goodBearer).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -466,12 +466,12 @@ func TestADiscoveryOnTheOneAddress(t *testing.T) {
 	}
 }
 
-// TestTheContractRefusesARequestWithoutARunCredential pins the 401 on the one address:
-// every path, with no Authorization, another scheme, two of them, or a run credential
-// the verifier refuses, is 401 run_credential_refused from the gateway, with
-// WWW-Authenticate: Bearer and nothing of why; the verifier is handed only a Bearer
-// credential in its syntax, and nothing reports one.
-func TestTheContractRefusesARequestWithoutARunCredential(t *testing.T) {
+// TestTheContractRefusesARequestWithoutABearerValue pins the 401 on the one address:
+// every path, with no Authorization, another scheme, two of them, or a bearer value the
+// verifier refuses, is 401 unauthorized from the gateway, with WWW-Authenticate: Bearer
+// and nothing of why; the verifier is handed only a Bearer value in its syntax, and
+// nothing reports one.
+func TestTheContractRefusesARequestWithoutABearerValue(t *testing.T) {
 	schema, err := contracts.Compile("link-refusal.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -487,12 +487,12 @@ func TestTheContractRefusesARequestWithoutARunCredential(t *testing.T) {
 	}
 	authorizations := map[string][]string{
 		"none":            nil,
-		"another scheme":  {"Basic " + base64.StdEncoding.EncodeToString([]byte("x:"+goodCredential))},
-		"two":             {"Bearer " + goodCredential, "Bearer " + goodCredential},
-		"no credential":   {"Bearer "},
-		"not its syntax":  {"Bearer " + goodCredential + " trailing"},
-		"a refused one":   {"Bearer " + badCredential},
-		"a refused, case": {"bEaReR " + badCredential},
+		"another scheme":  {"Basic " + base64.StdEncoding.EncodeToString([]byte("x:"+goodBearer))},
+		"two":             {"Bearer " + goodBearer, "Bearer " + goodBearer},
+		"no value":        {"Bearer "},
+		"not its syntax":  {"Bearer " + goodBearer + " trailing"},
+		"a refused one":   {"Bearer " + badBearer},
+		"a refused, case": {"bEaReR " + badBearer},
 	}
 	plain := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: s.tlsConfig()}}
 	for name, values := range authorizations {
@@ -513,22 +513,22 @@ func TestTheContractRefusesARequestWithoutARunCredential(t *testing.T) {
 			var r map[string]any
 			json.Unmarshal(b, &r)
 			doc, _ := contracts.Decode("refusal.json", b)
-			if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") != "Bearer" || r["error"] != "run_credential_refused" || r["from"] != "gateway" ||
-				r["names"] != nil || r["message"] != "the gateway refused this run credential" || schema.Validate(doc) != nil {
+			if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") != "Bearer" || r["error"] != "unauthorized" || r["from"] != "gateway" ||
+				r["names"] != nil || r["message"] != "the gateway refused the run: unauthorized" || schema.Validate(doc) != nil {
 				t.Errorf("%s, %s %s: %d %q %s", name, rq.method, rq.path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), b)
 			}
-			if bytes.Contains(b, []byte(goodCredential)) || bytes.Contains(b, []byte(badCredential)) {
-				t.Errorf("%s: the answer holds the credential", name)
+			if bytes.Contains(b, []byte(goodBearer)) || bytes.Contains(b, []byte(badBearer)) {
+				t.Errorf("%s: the answer holds the bearer value", name)
 			}
 		}
 	}
 	for _, c := range s.v.handed() {
-		if c != badCredential {
-			t.Errorf("the verifier was handed %d bytes other than the refused credential", len(c))
+		if c != badBearer {
+			t.Errorf("the verifier was handed %d bytes other than the refused value", len(c))
 		}
 	}
 	if got := len(s.v.handed()); got != 2*len(requests) {
-		t.Errorf("the verifier was handed %d credentials", got)
+		t.Errorf("the verifier was handed %d values", got)
 	}
 	// Nothing opened: the run id is free.
 	if _, err := s.tryOpen(server.LinkRunRequest{RunID: runID}); err != nil {
@@ -544,17 +544,17 @@ func TestTheContractRefusesARequestWithoutARunCredential(t *testing.T) {
 func TestARunOverTheOneAddress(t *testing.T) {
 	o := origin(t)
 	s := startService(t, gateway.Config{Policy: enforce127}, false)
-	_, discovered := do(t, s.client(goodCredential), http.MethodGet, s.url(server.WellKnown), "", "")
+	_, discovered := do(t, s.client(goodBearer), http.MethodGet, s.url(server.WellKnown), "", "")
 	var d server.LinkDiscovery
 	json.Unmarshal(discovered, &d)
 	a, header := s.openOver(t, server.LinkRunRequest{})
-	b, _ := s.openWith(t, otherCredential, server.LinkRunRequest{})
+	b, _ := s.openWith(t, otherBearer, server.LinkRunRequest{})
 	if a.ProxySecret == "" || a.ProxySecret == b.ProxySecret || header.Get(server.HeaderConfiguration) == "" || header.Get(server.HeaderRunConfiguration) == "" {
 		t.Fatalf("answers %+v %+v %v", a, b, header)
 	}
-	s.postOver(t, issuerStarted(a.RunID, a.Labels), applied(a.RunID, a.Applied))
-	s.postWith(t, otherCredential, issuerStarted(b.RunID, b.Labels), applied(b.RunID, b.Applied))
-	resp, body := do(t, s.client(goodCredential), http.MethodGet, d.Run.URL+"/"+a.RunID, "", "")
+	s.postOver(t, started(a.RunID, a.Labels), applied(a.RunID, a.Applied))
+	s.postWith(t, otherBearer, started(b.RunID, b.Labels), applied(b.RunID, b.Applied))
+	resp, body := do(t, s.client(goodBearer), http.MethodGet, d.Run.URL+"/"+a.RunID, "", "")
 	if resp.StatusCode != http.StatusOK || resp.Header.Get(server.HeaderRunConfiguration) != header.Get(server.HeaderRunConfiguration) {
 		t.Errorf("the reload: %d %s", resp.StatusCode, body)
 	}
@@ -632,68 +632,37 @@ func (s *service) proxyRequest(t *testing.T, head string) (*http.Response, net.C
 	return resp, c, r
 }
 
-// TestTheProxyLogin pins the proxy for a client with no session on the one address: a
-// CONNECT or an absolute-form request without a login the seam accepts is 407 with
-// Proxy-Authenticate: Basic realm="qory" and one line of text, the same for every
-// failure; with one, it reaches the
-// proxy the seam answers, which decides it by its policy.
+// TestTheProxyLogin pins the proxy of a session's run on the one address for a request
+// that names no relay: a CONNECT or an absolute-form request without a login that is a
+// live run's proxy secret, as the password of Basic, is 407 with Proxy-Authenticate:
+// Basic realm="qory" and one line of text, the same for every failure; with one, it
+// reaches that run's proxy, which decides it by its policy. The contract's verifier is
+// never asked.
 func TestTheProxyLogin(t *testing.T) {
 	o := origin(t)
 	host := strings.TrimPrefix(o.URL, "http://")
-	login := "Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+goodCredential))
-	var mu sync.Mutex
-	var decisions []proxy.Decision
-	px, err := proxy.New(policy.Enforce, []string{"127.0.0.1"}, nil, func(d proxy.Decision) {
-		mu.Lock()
-		decisions = append(decisions, d)
-		mu.Unlock()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	px.Guard([]string{"127.0.0.1"})
-	defer px.Close()
-	unguarded, _ := proxy.New(policy.Observe, nil, nil, func(proxy.Decision) {})
-	defer unguarded.Close()
-	var handed []string
-	var firsts []string
-	cfg := gateway.Config{}
-	gateway.SetProxyLogin(&cfg, func(authorization string, first *http.Request) (*proxy.Proxy, error) {
-		mu.Lock()
-		handed = append(handed, authorization)
-		firsts = append(firsts, first.Method+" "+first.Host)
-		mu.Unlock()
-		switch authorization {
-		case login:
-			return px, nil
-		case "Basic " + base64.StdEncoding.EncodeToString([]byte(":unguarded")):
-			return unguarded, nil
-		}
-		return nil, runcredential.ErrRefused
-	})
-	s := startService(t, cfg, false)
+	s := startService(t, gateway.Config{Policy: enforce127}, false)
+	a, _ := s.openOver(t, server.LinkRunRequest{})
+	handed := len(s.v.handed())
+	login := "Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+a.ProxySecret))
+	other := strings.Repeat("x", len(a.ProxySecret))
 	refused := map[string]string{
-		"a CONNECT without a login":       "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n",
-		"an absolute form without login":  "GET " + o.URL + "/ HTTP/1.1\r\nHost: " + host + "\r\n\r\n",
-		"a CONNECT with a refused login":  "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+badCredential)) + "\r\n\r\n",
-		"a POST with a refused login":     "POST " + o.URL + "/ HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Bearer " + badCredential + "\r\nContent-Length: 2\r\n\r\nhi",
-		"two logins":                      "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: " + login + "\r\nProxy-Authorization: " + login + "\r\n\r\n",
-		"a CONNECT to the contract's way": "CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\nAuthorization: Bearer " + goodCredential + "\r\n\r\n",
+		"a CONNECT without a login":        "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n",
+		"an absolute form without login":   "GET " + o.URL + "/ HTTP/1.1\r\nHost: " + host + "\r\n\r\n",
+		"a CONNECT with another secret":    "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+other)) + "\r\n\r\n",
+		"a POST with the secret as Bearer": "POST " + o.URL + "/ HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Bearer " + a.ProxySecret + "\r\nContent-Length: 2\r\n\r\nhi",
+		"a CONNECT with a bearer value":    "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+goodBearer)) + "\r\n\r\n",
+		"two logins":                       "CONNECT " + host + " HTTP/1.1\r\nHost: " + host + "\r\nProxy-Authorization: " + login + "\r\nProxy-Authorization: " + login + "\r\n\r\n",
+		"a CONNECT to the contract's way":  "CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\nAuthorization: Bearer " + goodBearer + "\r\n\r\n",
 	}
 	for name, head := range refused {
 		resp, c, _ := s.proxyRequest(t, head)
 		b, _ := io.ReadAll(resp.Body)
 		c.Close()
-		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || resp.ContentLength != int64(len(b)) || string(b) != "a valid run credential is required as the proxy password" {
+		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") != `Basic realm="qory"` || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" || resp.ContentLength != int64(len(b)) || string(b) != "a live run's proxy secret is required as the proxy password" {
 			t.Errorf("%s: %d %v %q", name, resp.StatusCode, resp.Header, b)
 		}
 	}
-	mu.Lock()
-	if want := []string{"Basic " + base64.StdEncoding.EncodeToString([]byte("anyone:"+badCredential)), "Bearer " + badCredential}; !sameSet(handed, want) {
-		t.Errorf("the login was handed %d values", len(handed))
-	}
-	handed = nil
-	mu.Unlock()
 
 	// With the login, CONNECT reaches the run's proxy and its tunnel the origin.
 	resp, c, r := s.proxyRequest(t, "CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\nProxy-Authorization: "+login+"\r\n\r\n")
@@ -722,26 +691,45 @@ func TestTheProxyLogin(t *testing.T) {
 		t.Errorf("an absolute form: %d %q", resp.StatusCode, b)
 	}
 	c.Close()
-	// A proxy the gateway may not serve another machine with is refused.
-	resp, c, _ = s.proxyRequest(t, "CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\nProxy-Authorization: Basic "+base64.StdEncoding.EncodeToString([]byte(":unguarded"))+"\r\n\r\n")
-	c.Close()
-	if resp.StatusCode != http.StatusInternalServerError || !s.reported("is not guarded") {
-		t.Errorf("an unguarded proxy: %d", resp.StatusCode)
+	if got := len(s.v.handed()); got != handed {
+		t.Errorf("the contract's verifier was handed %d values by the proxy", got-handed)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !slices.Contains(firsts, "CONNECT "+host) || !slices.Contains(firsts, "GET "+host) {
-		t.Errorf("first requests %v", firsts)
-	}
+	s.close()
 	var got []string
-	for _, d := range decisions {
-		got = append(got, d.Method+" "+d.Host+" "+d.Outcome)
+	for _, l := range s.record(a.RunID) {
+		if l.Type == event.RunEgress {
+			got = append(got, fmt.Sprint(l.Data["host"], " ", l.Data["decision"]))
+		}
 	}
-	if want := []string{"CONNECT 127.0.0.1 connected", "CONNECT denied.example refused", "HTTP denied.example refused", "HTTP 127.0.0.1 connected"}; !sameSet(got, want) {
-		t.Errorf("decisions %v", got)
+	if want := []string{"127.0.0.1 allowed", "denied.example denied", "denied.example denied", "127.0.0.1 allowed"}; !sameSet(got, want) {
+		t.Errorf("the run's egress %v", got)
 	}
-	if got := s.v.handed(); len(got) != 0 {
-		t.Errorf("the contract's verifier was handed %d credentials", len(got))
+}
+
+// TestAGatewayWithNoVerifierRefusesTheContract pins the one address of a gateway that
+// has no verifier of a request's bearer value: every request of the contract, the
+// discovery among them, whatever bearer value it carries, is 401 unauthorized from the
+// gateway with WWW-Authenticate: Bearer, and nothing opens.
+func TestAGatewayWithNoVerifierRefusesTheContract(t *testing.T) {
+	certFile, keyFile, pool := testCertificate(t, t.TempDir())
+	s := &service{pool: pool}
+	s.harness = start(t, gateway.Config{Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}})
+	runID := event.NewRunID()
+	for _, rq := range []struct{ method, path, contentType, body string }{
+		{http.MethodGet, server.WellKnown, "", ""},
+		{http.MethodPost, "/v1/run-configuration", server.LinkContentType, openBody(runID)},
+		{http.MethodGet, "/v1/run-configuration/" + runID, "", ""},
+		{http.MethodPost, "/v1/events", server.ContentType, "[]"},
+	} {
+		for _, value := range []string{"", goodBearer} {
+			resp, b := do(t, s.client(value), rq.method, s.url(rq.path), rq.contentType, rq.body)
+			if r := refusalOf(b); resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") != "Bearer" || r["error"] != "unauthorized" || r["from"] != "gateway" || r["message"] != "the gateway refused the run: unauthorized" {
+				t.Errorf("%s %s, bearer %q: %d %s", rq.method, rq.path, value, resp.StatusCode, b)
+			}
+		}
+	}
+	if runs := runsIn(t, s.dir); len(runs) != 0 {
+		t.Errorf("runs %v", runs)
 	}
 }
 
@@ -793,78 +781,8 @@ func TestTheOneAddressRoutesByTheFirstBytes(t *testing.T) {
 	}
 }
 
-// TestTheGatewaysOwnAuthority pins the certificate authority of the clients with no
-// session: made once in the gateway's directory, the directory mode 0700 and the file
-// 0600, the same after a restart; refused when another user may read it; none
-// without the one address.
-func TestTheGatewaysOwnAuthority(t *testing.T) {
-	dir := t.TempDir()
-	cfg := gateway.Config{Dir: dir, Listen: "127.0.0.1:0", RunCredentials: realIssuers(t, false), Report: func(string) {}}
-	g, err := gateway.Start(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := gateway.Authority(g)
-	g.Close(context.Background())
-	block, _ := pem.Decode(first)
-	if block == nil {
-		t.Fatalf("authority %q", first)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil || !cert.IsCA || cert.NotAfter.Before(time.Now().Add(5*365*24*time.Hour)) {
-		t.Errorf("authority %v %v", cert, err)
-	}
-	path := gateway.AuthorityPath(dir)
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Errorf("the file: %v %v", fi, err)
-	}
-	if fi, err := os.Stat(filepath.Dir(path)); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Errorf("the directory: %v %v", fi, err)
-	}
-	g, err = gateway.Start(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again := gateway.Authority(g); !bytes.Equal(again, first) {
-		t.Error("a restart made another authority")
-	}
-	g.Close(context.Background())
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if g, err := gateway.Start(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "open to other users") {
-		if g != nil {
-			g.Close(context.Background())
-		}
-		t.Errorf("an authority open to other users: %v", err)
-	}
-	os.Chmod(path, 0o600)
-	if err := os.WriteFile(path, []byte("not an authority"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if g, err := gateway.Start(context.Background(), cfg); err == nil || strings.Contains(err.Error(), "not an authority") {
-		if g != nil {
-			g.Close(context.Background())
-		}
-		t.Errorf("a file that is no authority: %v", err)
-	}
-	// Without the one address the gateway keeps none.
-	other := t.TempDir()
-	g, err = gateway.Start(context.Background(), gateway.Config{Dir: other, Report: func(string) {}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close(context.Background())
-	if gateway.Authority(g) != nil {
-		t.Error("an authority without the one address")
-	}
-	if _, err := os.Stat(gateway.AuthorityPath(other)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the authority's file without the one address: %v", err)
-	}
-}
-
 // TestTheLoginsSyntax pins how the one address reads a login: the password of Basic,
-// the user name ignored; the credential of Bearer in RFC 6750's syntax, one header.
+// the user name ignored; the value of Bearer in RFC 6750's syntax, one header.
 func TestTheLoginsSyntax(t *testing.T) {
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 	for value, want := range map[string]string{

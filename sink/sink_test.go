@@ -567,15 +567,15 @@ func TestTheLinkSinkPostsUnnumberedBatchesAndRetries(t *testing.T) {
 // TestTheGatewaysEndOfTheRunReachesTheCaller pins an answer on the link that ends the
 // run, a 410 or a 400 invalid_request to a batch: the sink stops and tells the caller
 // once with the end code, who ended the run, and the state and the reason a 410
-// carries, which the session records in its run.exited; the words for the user are the
+// carries, which the session records in its run.exited; a reserved old code is
+// run_closed, with neither; the words for the user are the
 // caller's, so the sink reports nothing itself.
 func TestTheGatewaysEndOfTheRunReachesTheCaller(t *testing.T) {
 	for _, c := range []struct {
 		status     int
 		body, want string
 	}{
-		{http.StatusGone, `{"error":"credential_expired","from":"gateway"}`, "credential_expired gateway  "},
-		{http.StatusGone, `{"error":"credential_expired","from":"gateway","state":"cancelled","reason":"credential_expired"}`, "credential_expired gateway cancelled credential_expired"},
+		{http.StatusGone, `{"error":"credential_expired","from":"gateway","state":"cancelled","reason":"credential_expired"}`, "run_closed gateway  "},
 		{http.StatusGone, `{"error":"stopped","from":"gateway","state":"failed","reason":"checks_failed"}`, "stopped gateway failed checks_failed"},
 		{http.StatusGone, `{"error":"run_closed","from":"gateway"}`, "run_closed gateway  "},
 		{http.StatusGone, `{"error":"session_lost","from":"gateway"}`, "session_lost gateway  "},

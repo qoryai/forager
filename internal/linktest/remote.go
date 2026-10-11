@@ -1,7 +1,6 @@
 package linktest
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -28,9 +27,7 @@ type remote struct {
 // StartRemoteFake starts a fake separate gateway, until the test ends: the answers of
 // [StartFake] over TLS 1.3 on 127.0.0.1, under an authority of its own whose certificate
 // names 127.0.0.1 alone, with a heartbeat interval of one second. Its discovery lists
-// URLs of its own origin and names its one address as its proxy, its run answer's
-// credential is starter, and it answers the outcome request {} unless OnOutcome says
-// otherwise. It has no local link and no proxy of its own: Local, Socket, Secret and
+// URLs of its own origin and names its one address as its proxy. It has no local link and no proxy of its own: Local, Socket, Secret and
 // ProxyAddr are not its.
 func StartRemoteFake(t testing.TB) *Fake {
 	t.Helper()
@@ -73,10 +70,4 @@ func (f *Fake) CAFile() string {
 		return ""
 	}
 	return f.remote.caFile
-}
-
-// Credential is a run credential a fake separate gateway takes, in the syntax of a
-// Bearer token and no real one: the fake checks none.
-func Credential(context.Context) (string, error) {
-	return "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJyay0wMDAxIn0.ZmFrZS1jcmVkZW50aWFs", nil
 }

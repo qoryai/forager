@@ -5,10 +5,10 @@
 // codes included. Its Detail reads as a sentence for the caller's user and contains
 // names alone: a variable's name, a tool's, an image's, never a value.
 //
-// It also holds the codes a gateway that verifies a run credential decides, which
-// Forager does not: a session reads them from the gateway's answer on the link,
-// unsigned and authenticated by the transport, as it reads the server's refusal from
-// the server's signed answer.
+// It also holds the code a gateway decides of a session's run request, which Forager
+// does not: a session reads it from the gateway's answer on the link, unsigned and
+// authenticated by the transport, as it reads the server's refusal from the server's
+// signed answer.
 package refusal
 
 import (
@@ -73,40 +73,17 @@ func Decides(code string) bool {
 	return false
 }
 
-// The codes a gateway that verifies a run credential, the one the run's starter gives it,
-// decides.
-const (
-	// RunCredentialRefused is a run credential the gateway refuses, for any reason, and
-	// a run key that already opened a run at this gateway: one opaque answer, with no
-	// names.
-	RunCredentialRefused = "run_credential_refused"
-	// TargetDiffersFromCredential is a session whose label forge or repository, the
-	// ones qory takes from the checkout, differs from the run credential's: its names
-	// are each such member and the credential's value, labels.<key>=<value>.
-	TargetDiffersFromCredential = "target_differs_from_credential"
-	// DiffersFromCredential is a session that sends any other key the run credential
-	// decides, a label or an about.details key, with another value: its names are each
-	// such member and the credential's value, labels.<key>=<value> or
-	// about.details.<key>=<value>.
-	DiffersFromCredential = "differs_from_credential"
-	// RunIDUsed is the link's run request whose run_id already names a run at this
-	// gateway: the session chooses the run id, and the gateway takes only an unused
-	// one. It is also the server's signed 409 to a run's registration whose run id it
-	// accepted with other bytes or under another access key. It has no names. A run_id
-	// that is not a canonical lower-case UUID is invalid_request.
-	RunIDUsed = "run_id_used"
-)
+// RunIDUsed is the link's run request whose run_id already names a run at this
+// gateway: the session chooses the run id, and the gateway takes only an unused one. It
+// is also the server's signed 409 to a run's registration whose run id it accepted with
+// other bytes or under another access key. It has no names. A run_id that is not a
+// canonical lower-case UUID is invalid_request.
+const RunIDUsed = "run_id_used"
 
-// GatewayDecides reports whether a gateway that verifies a run credential decides the
-// code, one of this package's: a refusal of the run credential or of what the session
-// sends beside it. Forager decides none of these, so [Decides] reports false for each.
-func GatewayDecides(code string) bool {
-	switch code {
-	case RunCredentialRefused, TargetDiffersFromCredential, DiffersFromCredential, RunIDUsed:
-		return true
-	}
-	return false
-}
+// GatewayDecides reports whether a gateway decides the code, a refusal of what the
+// session sends in its run request: run_id_used. Forager does not decide it, so
+// [Decides] reports false for it.
+func GatewayDecides(code string) bool { return code == RunIDUsed }
 
 // New is a refusal with the code, the names, sorted and each once, and the reason
 // written as fmt writes it, as its Detail. It is an [*accesskey.Refusal], the one type

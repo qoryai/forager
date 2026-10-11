@@ -216,8 +216,6 @@ func (g *Gateway) handler(s *side) http.Handler {
 			g.discover(s, w, r)
 		case r.URL.Path == runPath && r.Method == http.MethodPost:
 			g.openRun(s, w, r)
-		case outcomePath(r.URL.Path) != "" && r.Method == http.MethodGet:
-			g.outcome(s, w, r, outcomePath(r.URL.Path))
 		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
 			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
 		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
@@ -228,20 +226,6 @@ func (g *Gateway) handler(s *side) http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-}
-
-// outcomePath is the run id of the path of an ask at a runtime's exit, <run path>/<run
-// id>/outcome, a run id with no slash; empty for any other path.
-func outcomePath(path string) string {
-	rest, ok := strings.CutPrefix(path, runPath+"/")
-	if !ok {
-		return ""
-	}
-	runID, ok := strings.CutSuffix(rest, "/outcome")
-	if !ok || runID == "" || strings.Contains(runID, "/") {
-		return ""
-	}
-	return runID
 }
 
 // discover answers the link's discovery: 400 invalid_request on the one address to a

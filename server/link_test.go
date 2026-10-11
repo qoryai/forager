@@ -41,7 +41,7 @@ const (
 const discovery = `{"version":1,"events":{"url":"http://localhost/v1/events","types":["*"],"interval_seconds":30},"run":{"url":"http://localhost/v1/run-configuration"},"proxy":{"address":"127.0.0.1:41000"},"later":{"a":1}}`
 
 // runAnswer is a run answer with the members the link adds to the schema's.
-var runAnswer = `{"version":1,"run_id":"` + runID + `","credential":"none","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","run_secret":"` + runSecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"details":{"requester":"requester"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
+var runAnswer = `{"version":1,"run_id":"` + runID + `","policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"test"}},"proxy_secret":"` + proxySecret + `","run_secret":"` + runSecret + `","placeholders":["GIT_TOKEN"],"reserved":["EXAMPLE_SOURCE_KEY","EXAMPLE_OTHER_KEY"],"image":{"name":"base","ref":"registry.example/base@sha256:00","runtime":"sysbox-runc"},"labels":{"forge":"example-forge","repository":"example-namespace/project"},"applied":{"mode":"enforce","allow":["api.example"],"source":"config","digest":"` + policyHex + `"}}`
 
 // reloadAnswer is a reload answer with the members the link adds to the schema's.
 const reloadAnswer = `{"version":1,"policy":{"version":1,"egress":{"mode":"observe"}},"digest":"` + policyHex + `","variables":{"NODE_ENV":{"value":"prod"}},"placeholders":[],"reserved":["EXAMPLE_SOURCE_KEY"],"applied":{"mode":"observe","allow":[],"source":"config","digest":"` + policyHex + `"}}`
@@ -142,7 +142,7 @@ func TestTheLinkSpeaksTheContractOverTheSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.RunID != runID || a.ProxySecret != proxySecret || a.Digest != policyHex || a.Values()["NODE_ENV"] != "test" || len(a.Placeholders) != 1 || len(a.Reserved) != 2 || a.Image == nil || a.Image.Ref != "registry.example/base@sha256:00" || !strings.Contains(string(a.Policy), "api.example") ||
-		a.Labels["repository"] != "example-namespace/project" || string(a.Details) != `{"requester":"requester"}` {
+		a.Labels["repository"] != "example-namespace/project" {
 		t.Errorf("run answer %+v", a)
 	}
 	mu.Lock()
@@ -358,9 +358,8 @@ func TestTheLinksRefusalsSayWhoRefused(t *testing.T) {
 }
 
 // TestA410OnTheLinkEndsTheRun pins the end of a run at the gateway: a 410 on any
-// request carries its code, run_closed, credential_expired, stopped,
-// credential_check_unreachable, credential_check_invalid, session_lost or batch_refused, and
-// run_closed for another code or none, and who ended it, the gateway; and the state
+// request carries its code, run_closed, stopped, session_lost or batch_refused, and
+// run_closed for another code or none, the reserved old codes among them, and who ended it, the gateway; and the state
 // and the reason of that end, Forager's own codes among them, when the state is one of
 // run.exited's and the reason, if any, a code, else neither, and neither for run_closed.
 // It hands on no digests; and a batch's 410 ends the run with the same end.
@@ -368,26 +367,25 @@ func TestA410OnTheLinkEndsTheRun(t *testing.T) {
 	gw := accesskey.FromGateway
 	for body, want := range map[string]server.RunEnd{
 		`{"error":"run_closed","from":"gateway"}`:                   {Code: "run_closed", From: gw},
-		`{"error":"credential_expired","from":"gateway"}`:           {Code: "credential_expired", From: gw},
+		`{"error":"credential_expired","from":"gateway"}`:           {Code: "run_closed", From: gw},
 		`{"error":"stopped","from":"gateway"}`:                      {Code: "stopped", From: gw},
-		`{"error":"credential_check_unreachable","from":"gateway"}`: {Code: "credential_check_unreachable", From: gw},
-		`{"error":"credential_check_invalid","from":"gateway"}`:     {Code: "credential_check_invalid", From: gw},
+		`{"error":"credential_check_unreachable","from":"gateway"}`: {Code: "run_closed", From: gw},
+		`{"error":"credential_check_invalid","from":"gateway"}`:     {Code: "run_closed", From: gw},
 		`{"error":"session_lost","from":"gateway"}`:                 {Code: "session_lost", From: gw},
 		`{"error":"batch_refused","from":"gateway"}`:                {Code: "batch_refused", From: gw},
 		`{"error":"something_else"}`:                                {Code: "run_closed", From: gw},
 		``:                                                          {Code: "run_closed", From: gw},
-		`{"error":"stopped","from":"gateway","state":"failed","reason":"checks_failed"}`:                    {Code: "stopped", From: gw, State: "failed", Reason: "checks_failed"},
-		`{"error":"stopped","from":"gateway","state":"succeeded"}`:                                          {Code: "stopped", From: gw, State: "succeeded"},
-		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"stopped"}`:                       {Code: "stopped", From: gw, State: "cancelled", Reason: "stopped"},
-		`{"error":"credential_expired","from":"gateway","state":"cancelled","reason":"credential_expired"}`: {Code: "credential_expired", From: gw, State: "cancelled", Reason: "credential_expired"},
-		`{"error":"session_lost","from":"gateway","state":"failed","reason":"session_lost"}`:                {Code: "session_lost", From: gw, State: "failed", Reason: "session_lost"},
-		`{"error":"stopped","from":"gateway","state":"lost","reason":"no_longer_needed"}`:                   {Code: "stopped", From: gw},
-		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"No longer needed"}`:              {Code: "stopped", From: gw},
-		`{"error":"stopped","from":"gateway","state":"cancelled","reason":""}`:                              {Code: "stopped", From: gw},
-		`{"error":"stopped","from":"gateway","state":1}`:                                                    {Code: "stopped", From: gw},
-		`{"error":"stopped","from":"gateway","reason":"no_longer_needed"}`:                                  {Code: "stopped", From: gw},
-		`{"error":"run_closed","from":"gateway","state":"cancelled","reason":"no_longer_needed"}`:           {Code: "run_closed", From: gw},
-		`{"error":"something_else","state":"cancelled"}`:                                                    {Code: "run_closed", From: gw},
+		`{"error":"stopped","from":"gateway","state":"failed","reason":"checks_failed"}`:          {Code: "stopped", From: gw, State: "failed", Reason: "checks_failed"},
+		`{"error":"stopped","from":"gateway","state":"succeeded"}`:                                {Code: "stopped", From: gw, State: "succeeded"},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"stopped"}`:             {Code: "stopped", From: gw, State: "cancelled", Reason: "stopped"},
+		`{"error":"session_lost","from":"gateway","state":"failed","reason":"session_lost"}`:      {Code: "session_lost", From: gw, State: "failed", Reason: "session_lost"},
+		`{"error":"stopped","from":"gateway","state":"lost","reason":"no_longer_needed"}`:         {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":"No longer needed"}`:    {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":"cancelled","reason":""}`:                    {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","state":1}`:                                          {Code: "stopped", From: gw},
+		`{"error":"stopped","from":"gateway","reason":"no_longer_needed"}`:                        {Code: "stopped", From: gw},
+		`{"error":"run_closed","from":"gateway","state":"cancelled","reason":"no_longer_needed"}`: {Code: "run_closed", From: gw},
+		`{"error":"something_else","state":"cancelled"}`:                                          {Code: "run_closed", From: gw},
 	} {
 		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, http.StatusGone, body) }))
 		k, digests := newLink(t, g)
@@ -455,13 +453,10 @@ func TestAnAnswerTheLinkRefusesQuotesNoValue(t *testing.T) {
 	for name, body := range map[string]string{
 		"a proxy secret the schema refuses": strings.Replace(runAnswer, proxySecret, bad, 1),
 		"another run id":                    strings.Replace(runAnswer, runID, "0192f0c1-7d4e-7a2b-8c3d-000000000000", 1),
-		"no credential":                     strings.Replace(runAnswer, `"credential":"none",`, "", 1),
-		"a credential of no kind it names":  strings.Replace(runAnswer, `"credential":"none"`, `"credential":"apiary"`, 1),
 		"a placeholder that is no name":     strings.Replace(runAnswer, `"placeholders":["GIT_TOKEN"]`, `"placeholders":["GIT TOKEN `+proxySecret+`"]`, 1),
 		"an image without a reference":      strings.Replace(runAnswer, `"ref":"registry.example/base@sha256:00"`, `"ref":""`, 1),
 		"a member twice":                    strings.Replace(runAnswer, `"version":1,`, `"version":1,"proxy_secret":"`+proxySecret+`",`, 1),
 		"a digest without a policy":         strings.Replace(runAnswer, `"policy":{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}},`, "", 1),
-		"details that are no object":        strings.Replace(runAnswer, `"details":{"requester":"requester"}`, `"details":["`+proxySecret+`"]`, 1),
 		"a label key outside its grammar":   strings.Replace(runAnswer, `"forge":"example-forge"`, `"Forge":"example-forge"`, 1),
 	} {
 		g := linktest.Start(t, linkSecret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w, 200, body) }))

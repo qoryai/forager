@@ -19,7 +19,7 @@ import (
 // need. A method is its type's name, a dot and its own. A new export needs an edit
 // here, made on purpose.
 var gatewaySurface = []string{
-	"Start", "Config", "Server", "TLS", "RunsConfig",
+	"Start", "Config", "Server", "TLS",
 	"Gateway", "Gateway.Addr", "Gateway.LocalLink", "Gateway.Close", "Gateway.Wait",
 	"Gateway.String", "Gateway.Format", "Gateway.GoString", "Gateway.LogValue",
 	"Resend", "ResendConfig", "Delivery", "ErrRunning", "ResendTorn", "ResendNoServer", "ResendNotOpened",

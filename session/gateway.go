@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,8 +19,8 @@ import (
 // [LocalGateway] makes one on this machine; a [RemoteGateway] is a separate gateway, on
 // a machine of its own. A nil Gateway is none, and no run.
 //
-// A Gateway never prints the link secret or the run credential: fmt and log/slog show
-// it by its socket or its URL.
+// A Gateway never prints the link secret: fmt and log/slog show it by its socket or its
+// URL.
 type Gateway interface {
 	fmt.Stringer
 	fmt.GoStringer
@@ -61,13 +60,10 @@ func (g localGateway) LogValue() slog.Value { return slog.StringValue(g.String()
 // over TLS 1.3 on the gateway's one address (contracts/forager/v1/README.md §The
 // gateway's link). The session verifies the gateway's certificate chain for the host
 // name of URL, against the system's roots or CAFile's authorities, and its public key
-// against CertificateSHA256 when it is set; it presents the run credential on every
-// request, Authorization: Bearer. The run's labels are the run credential's: the
-// session's Labels, its forge and repository among them, must match it, or the gateway
-// refuses the run. It holds no access key: the gateway's signs toward the server.
+// against CertificateSHA256 when it is set. It holds no access key: the gateway's signs
+// toward the server.
 //
-// A RemoteGateway never prints the run credential: Credential is a function, and fmt
-// and log/slog show the gateway by its URL, its CAFile and its pin alone.
+// fmt and log/slog show a RemoteGateway by its URL, its CAFile and its pin alone.
 type RemoteGateway struct {
 	// URL is the gateway's, https and a host with an optional port, and no user
 	// information, path, query or fragment: https://gateway.example:8443.
@@ -79,26 +75,20 @@ type RemoteGateway struct {
 	// SubjectPublicKeyInfo, in standard base64 with padding, 44 characters ending in =;
 	// empty means no pin.
 	CertificateSHA256 string
-	// Credential returns the run's current run credential. It is asked again before
-	// every request, so a run credential its starter refreshes, in a file say, is sent
-	// from then on. Its error is returned as the request's, and must not hold the run
-	// credential. A RemoteGateway without one is no run.
-	Credential func(ctx context.Context) (string, error)
 }
 
 func (RemoteGateway) gateway() {}
 
 // link is the client of the gateway's link a run and a resend speak to it through:
-// TLS 1.3 to its one address, verified as the gateway says, and the run credential on
-// every request, set by the link alone. version is Forager's, in the User-Agent; digests
-// is as [server.NewRemoteLink] takes it.
+// TLS 1.3 to its one address, verified as the gateway says. version is Forager's, in
+// the User-Agent; digests is as [server.NewRemoteLink] takes it.
 func (g *RemoteGateway) link(version string, digests func(server.Digests)) (*server.Link, error) {
 	return server.NewRemoteLink(g.URL, server.RemoteTLS{CAFile: g.CAFile, CertificateSHA256: g.CertificateSHA256},
-		g.Credential, accesskey.UserAgent(version), digests)
+		accesskey.UserAgent(version), digests)
 }
 
 // String names the gateway by its URL's origin, without user information, a path, a
-// query or a fragment, its CAFile and its pin; never the run credential.
+// query or a fragment, its CAFile and its pin.
 func (g RemoteGateway) String() string {
 	shown := "(no URL)"
 	if g.URL != "" {
@@ -123,10 +113,10 @@ func (g RemoteGateway) String() string {
 // Format prints g as String does, under every verb and flag.
 func (g RemoteGateway) Format(f fmt.State, _ rune) { io.WriteString(f, g.String()) }
 
-// GoString is g as %#v prints it, never the run credential.
+// GoString is g as %#v prints it.
 func (g RemoteGateway) GoString() string { return g.String() }
 
-// LogValue is g as log/slog logs it, never the run credential.
+// LogValue is g as log/slog logs it.
 func (g RemoteGateway) LogValue() slog.Value { return slog.StringValue(g.String()) }
 
 // gatewayOf is the spec's gateway by its kind: the local link's, or a separate
@@ -136,9 +126,6 @@ func gatewayOf(g Gateway) (*localGateway, *RemoteGateway, error) {
 	case localGateway:
 		return &g, nil, nil
 	case RemoteGateway:
-		if g.Credential == nil {
-			return nil, nil, errNoCredential
-		}
 		return nil, &g, nil
 	case *RemoteGateway:
 		if g != nil {
@@ -168,6 +155,3 @@ func reservedOf(g Gateway) []string {
 
 // errNoGateway is a spec without a gateway.
 var errNoGateway = errors.New("the run has no gateway: a session speaks only to a gateway, session.LocalGateway or session.RemoteGateway")
-
-// errNoCredential is a separate gateway without a run credential.
-var errNoCredential = errors.New("the separate gateway has no run credential: a run behind one opens only with a run credential")

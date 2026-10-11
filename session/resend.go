@@ -27,7 +27,7 @@ import (
 // given.
 type ResendSpec struct {
 	// Gateway is the separate gateway the run spoke to, as the run's Spec gave it: the
-	// resend reaches it as the run did, with the run credential Credential returns.
+	// resend reaches it as the run did.
 	Gateway RemoteGateway
 	// Dir is the run directory on the session's machine, the one that holds the
 	// session's record, session.jsonl; its name is the run id.
@@ -88,21 +88,15 @@ type ResendResult struct {
 // directory that keeps none sends without it, and the gateway answers with the 401.
 // A directory that holds the run's stream, events.jsonl, is a gateway's record, which
 // gateway.Resend sends. A run the gateway has ended answers with its 410: RunClosed,
-// and the events stay in the directory. A refusal of the run credential, the 401
-// run_credential_refused, at the discovery or at a batch, and the 403 of a run
-// credential that differs from the run's, are a [*Refusal] with their code and From
-// gateway; what was not accepted is under undelivered/. After a gateway restarts, it
-// holds no run of the run credential: its batches get the 401, and its own resend
-// completes the run gateway_lost.
+// and the events stay in the directory. The gateway's 401 unauthorized, at the
+// discovery or at a batch, is a [*Refusal] with its code and From gateway; what was not
+// accepted is under undelivered/.
 func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	if spec.ForagerVersion == "" {
 		spec.ForagerVersion = "dev"
 	}
 	if spec.Report == nil {
 		spec.Report = func(string) {}
-	}
-	if spec.Gateway.Credential == nil {
-		return ResendResult{}, errNoCredential
 	}
 	if err := CheckRunID(filepath.Base(spec.Dir)); err != nil {
 		return ResendResult{}, err
@@ -204,10 +198,8 @@ func Resend(ctx context.Context, spec ResendSpec) (ResendResult, error) {
 	return res, nil
 }
 
-// refusing is the link's deliveries during a resend, which stop at the gateway's
-// refusal of the run credential: the 401 run_credential_refused, and the 403 of one
-// that differs from the run's. Sending again cannot change either; a run sends again,
-// as its credential may be refreshed meanwhile.
+// refusing is the link's deliveries during a resend, which stop at the gateway's 401
+// unauthorized: sending again cannot change it.
 type refusing struct {
 	to   sink.Deliverer
 	stop context.CancelFunc
@@ -216,17 +208,17 @@ type refusing struct {
 	ref *Refusal
 }
 
-// errRefusedBefore is a delivery not sent, after the gateway refused the run credential.
-var errRefusedBefore = errors.New("the gateway refused the run credential")
+// errRefusedBefore is a delivery not sent, after the gateway's 401 unauthorized.
+var errRefusedBefore = errors.New("the gateway refused the resend: unauthorized")
 
-// Deliver posts one batch through the link, and stops the resend at the gateway's
-// refusal of the run credential; after it, nothing more is sent.
+// Deliver posts one batch through the link, and stops the resend at the gateway's 401
+// unauthorized; after it, nothing more is sent.
 func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, body []byte, runDigest string) (server.Delivery, error) {
 	if r.refused() != nil {
 		return server.Delivery{}, errRefusedBefore
 	}
 	d, err := r.to.Deliver(ctx, eventsURL, deliveryID, body, runDigest)
-	if err == nil && credentialRefusal(d) {
+	if err == nil && unauthorized(d) {
 		r.mu.Lock()
 		if r.ref == nil {
 			r.ref = d.Refusal
@@ -237,25 +229,16 @@ func (r *refusing) Deliver(ctx context.Context, eventsURL, deliveryID string, bo
 	return d, err
 }
 
-// refused is the gateway's refusal of the run credential, nil for none.
+// refused is the gateway's 401 unauthorized, nil for none.
 func (r *refusing) refused() *Refusal {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ref
 }
 
-// credentialRefusal reports whether the gateway refused a batch for its run credential.
-func credentialRefusal(d server.Delivery) bool {
-	if d.Refusal == nil || d.Refusal.From != accesskey.FromGateway {
-		return false
-	}
-	switch d.Status {
-	case http.StatusUnauthorized:
-		return d.Code == refusal.RunCredentialRefused
-	case http.StatusForbidden:
-		return d.Code == refusal.TargetDiffersFromCredential || d.Code == refusal.DiffersFromCredential
-	}
-	return false
+// unauthorized reports whether the gateway refused a batch with its 401 unauthorized.
+func unauthorized(d server.Delivery) bool {
+	return d.Refusal != nil && d.Refusal.From == accesskey.FromGateway && d.Status == http.StatusUnauthorized && d.Code == accesskey.CodeUnauthorized
 }
 
 // recordedLine is one line of session.jsonl and what Resend reads of it.

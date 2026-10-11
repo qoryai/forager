@@ -26,7 +26,6 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/program"
-	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -48,9 +47,6 @@ type Gateway struct {
 	report   func(string)
 	interval int
 	quiet    time.Duration
-	// runsQuiet is how long a run with no session lasts with no connection,
-	// [RunsConfig.Quiet].
-	runsQuiet time.Duration
 
 	// client, conf and confDigest are the server's, nil without one.
 	client     *server.Client
@@ -74,17 +70,10 @@ type Gateway struct {
 	http    *http.Server
 	proxies *proxy.Listener
 	stream  *stream.Stream
-	// svc is the gateway's one address, nil without [Config.Listen]; auth and login
-	// decide the run credentials it is given. authority is the gateway's own
-	// certificate authority, kept in its directory, which the proxy of a run with no
-	// session reads inside HTTPS with; nil without Listen.
-	svc       *service
-	auth      runAuth
-	login     proxyLogin
-	authority *proxy.CA
-	// ended are the run keys the gateway refuses after the issuer's end, kept in its
-	// directory; nil without Listen.
-	ended *runcredential.Ended
+	// svc is the gateway's one address, nil without [Config.Listen]; auth decides the
+	// bearer value of every request of the contract it is given.
+	svc  *service
+	auth runAuth
 	// discovery is the link's discovery answer, and discoveryDigest its digest, the
 	// X-Qory-Configuration of every answer.
 	discovery       []byte
@@ -97,23 +86,9 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
-	// clientRuns are the runs of clients with no session by their run key, the one each
-	// key's connections join while it is open; opening the run keys whose client's run
-	// is opening, each closed once it opened or failed to; and endedUntil the latest exp
-	// each refused run key was kept to by this process.
-	clientRuns map[runKeyID]*linkRun
-	opening    map[runKeyID]chan struct{}
-	endedUntil map[runKeyID]time.Time
-	// unkept are the refused run keys whose write failed since the last that
-	// succeeded, each with the exp it is to be kept to, and keepTimer the next retry
-	// while there are any; keeping serialises the writes, so a write that succeeds
-	// clears only the run keys it holds.
-	unkept    map[runKeyID]time.Time
-	keepTimer *time.Timer
-	keeping   sync.Mutex
 	// spent are the runs on the one address that ended and were let go of, by their run
-	// id, kept as long as a run credential of theirs may be accepted; spentErrs and the
-	// delivery hold what they came to, for Close.
+	// id, kept as long as the identity they were opened with is accepted; spentErrs and
+	// the delivery hold what they came to, for Close.
 	spent     map[string]spentRun
 	spentErrs []error
 	// bySecret are the run ids of the session's runs, live, ended or spent, by the
@@ -135,9 +110,8 @@ type Gateway struct {
 //
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen that
 // is not loopback without TLS, TLS files it cannot read or whose certificate and key do
-// not match, TLS without a Listen, a Listen without RunCredentials or without Dir,
-// where the gateway's own certificate authority and the refused run keys are kept, and
-// RunCredentials whose check fails or whose files it cannot read.
+// not match, and TLS without a Listen. The gateway has no verifier of the bearer value
+// of a request on the one address: it refuses every request of the contract there.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cert, err := checkService(&cfg)
 	if err != nil {
@@ -176,39 +150,14 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
 	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
-		clientRuns: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, unkept: map[runKeyID]time.Time{}, spent: map[string]spentRun{}}
+		spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
 	}
-	g.runsQuiet = cfg.Runs.Quiet
-	if g.runsQuiet == 0 {
-		g.runsQuiet = defaultRunsQuiet
-	}
-	g.auth, g.login = cfg.runAuth, cfg.proxyLogin
-	if cfg.Listen != "" {
-		if g.auth == nil {
-			if g.auth, err = newCredentialVerifier(&cfg, cfg.Heartbeat); err != nil {
-				return nil, err
-			}
-		}
-		if g.login == nil {
-			g.login = clientLogin{g}
-		}
-		// Before the server is asked anything: a gateway that cannot keep its authority
-		// or its refused run keys does not start.
-		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
-			return nil, err
-		}
-		if g.ended, err = runcredential.OpenEnded(cfg.Dir); err != nil {
-			return nil, err
-		}
-	}
+	g.auth = cfg.runAuth
 	if g.auth == nil {
 		g.auth = refuseAll{}
-	}
-	if g.login == nil {
-		g.login = refuseAll{}
 	}
 	if cfg.Server != nil {
 		client, err := newClient(cfg.Server, cfg.Version)
@@ -490,10 +439,6 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 		}
 		g.delivery.Undelivered += lr.result.Undelivered
 		g.closedRun(lr)
-	}
-	// A write of the refused run keys that failed is tried once more.
-	if n := g.keepOnClose(); n > 0 {
-		g.report(fmt.Sprintf("closing with %d run keys of ended runs not written to %s: a restart would not refuse them", n, g.endedPath()))
 	}
 	g.mu.Lock()
 	errs = append(errs, g.spentErrs...)
