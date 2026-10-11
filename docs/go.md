@@ -136,7 +136,13 @@ its local link. Its `gateway.Config` sets it:
   signed gets `400` `run_key_invalid` on its next request and its proxy connections are
   closed unanswered; it attaches each run at the server under its own access key
   (`server.Client.Attach`), signs the binding and every answer of the link, and relays
-  to the server's origin. `Listen` needs it.
+  to the server's origin. The gateway's calls to the server, the attach and the relay
+  among them, use the proxy of the environment, `HTTPS_PROXY` and `NO_PROXY`, and check
+  the server's certificate against the system's roots; `HTTP_PROXY` does not apply,
+  since a server over http is on loopback, which Go never proxies. A proxy that ends
+  their TLS with a certificate the gateway's machine trusts sees the run keys they
+  carry, in each attach and in each accepted registration answer the gateway relays;
+  one that only tunnels them sees the server's host and port. `Listen` needs it.
 
 A separate gateway runs no sessions of its own machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
