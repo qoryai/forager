@@ -110,9 +110,15 @@ so every request is checked: it must carry the password in its one
 passes the request on with `Connection: close`, passes on nothing the agent sends after
 a plain request, and closes the connection at the end of its reply; a plain request
 that asks for an upgrade goes on with `Connection: Upgrade` instead, and a `101` reply
-makes the connection a tunnel. It closes a connection without the password unanswered,
-before anything reaches the gateway, so another process of the machine that reaches the
-port reaches nothing. Behind a separate gateway the forwarder reaches the gateway's one
+makes the connection a tunnel. It reads the proxy's reply head to an upgrade up to
+64 KiB. It closes the connection at the first byte the agent sends before the reply to
+an upgrade. It closes a connection without the password unanswered, before anything
+reaches the gateway, so a process of another user that reaches the port reaches
+nothing. At most 128 connections at once wait to show the password or the hop line; one
+more closes the one that has waited longest. A process of the agent's own user can read
+the agent's environment, and the password in its proxy URL with it, so the password
+keeps out the machine's other users, not the agent's own: the same user is trusted, as
+on the local link. Behind a separate gateway the forwarder reaches the gateway's one
 address over TLS instead, where a bound connection opens the run's proxy with the run
 key: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
