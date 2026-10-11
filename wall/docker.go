@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,12 +53,14 @@ const (
 // A run gets two networks and two containers. The agent's container is on a network
 // created with --internal and on nothing else, so it has no route out and its resolver
 // knows only that network; the network's bridge gets no address, so the engine's host is
-// not on it either. The network is created with no IPv6 subnet, and the agent's
-// container starts with no IPv6 address but loopback's. The relay's container is on
-// that network and on an ordinary one; it runs [Relay], forwarding one port to the
-// gateway, listens on its address on the internal network alone, and is the one peer
-// the agent can reach. Both run as a user that is not root, with every capability
-// dropped and no new privileges.
+// not on it either. For any image the network has no IPv6 subnet, and the agent's
+// container starts with no IPv6 address but loopback's. With a Docker of the agent's
+// own, which needs the docker command and Docker Engine 28 or later, the network has an
+// IPv6 subnet, the engine's choice, in Docker's isolated gateway mode: the bridge has
+// IPv6 off and no address. The relay's container is on that network and on an ordinary
+// one; it runs [Relay], forwarding one port to the gateway, listens on its addresses on
+// the internal network alone, and is the one peer the agent can reach. Both run as a
+// user that is not root, with every capability dropped and no new privileges.
 type Docker struct {
 	// Command is the program to run; empty means docker.
 	Command string
@@ -243,15 +246,28 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
 		env: d.selected()}
+	if req.Docker {
+		if err := e.nestEngine(ctx); err != nil {
+			return nil, err
+		}
+	}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
 	// the context may still have been carried out by the engine.
 	//
-	// The inside network's bridge gets no address of the host's. With one, the network's
-	// gateway is the engine's host, and what listens there on every address is a route
-	// out of the enclosure. The network is created with no IPv6 subnet, whatever the
-	// daemon's default.
+	// The inside network's bridge gets no address of the host's, so the network's
+	// gateway is not the engine's host. For any image the network is created with no
+	// IPv6 subnet, whatever the daemon's default. With a Docker of the agent's own it is
+	// created with an IPv6 subnet, the engine's choice, in the isolated gateway mode,
+	// where the bridge has IPv6 off and no address.
+	create := []string{"network", "create", "--internal"}
+	if req.Docker {
+		create = append(create, "--ipv6", "--opt", "com.docker.network.bridge.gateway_mode_ipv6=isolated")
+	} else {
+		create = append(create, "--ipv6=false")
+	}
+	create = append(create, "--opt", "com.docker.network.bridge.inhibit_ipv4=true", "--label", e.label(), e.inside())
 	e.made = append(e.made, []string{"network", "rm", e.inside()})
-	if _, err := e.docker(ctx, "network", "create", "--internal", "--ipv6=false", "--opt", "com.docker.network.bridge.inhibit_ipv4=true", "--label", e.label(), e.inside()); err != nil {
+	if _, err := e.docker(ctx, create...); err != nil {
 		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 	}
 	e.made = append(e.made, []string{"network", "rm", e.outside()})
@@ -278,7 +294,51 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 	}
 	e.subnets = strings.Fields(string(out))
+	if req.Docker && !slices.ContainsFunc(e.subnets, ipv6Subnet) {
+		return nil, errors.Join(errors.New("wall docker: the inside network got no IPv6 subnet"), e.Close(context.WithoutCancel(ctx)))
+	}
 	return e, nil
+}
+
+// ipv6Subnet reports whether s, written as CIDR, is an IPv6 subnet.
+func ipv6Subnet(s string) bool {
+	ip, _, err := net.ParseCIDR(s)
+	return err == nil && ip.To4() == nil
+}
+
+// nestFloor is the first major version of Docker Engine whose bridge networks take
+// the isolated gateway mode, which a Docker of the agent's own needs.
+const nestFloor = 28
+
+// engineVersion is the format that makes docker version print the version of the
+// engine's Engine component alone, and engineVersionShape the shape of what it prints.
+const engineVersion = `{{range .Server.Components}}{{if eq .Name "Engine"}}{{.Version}}{{end}}{{end}}`
+
+var engineVersionShape = regexp.MustCompile(`^([0-9]+)\.[0-9]+(\.[0-9]+)?([-+~][0-9A-Za-z.+~-]*)?$`)
+
+// nestEngine refuses an engine that cannot give a Docker of the agent's own its inside
+// network: a command other than docker, or a Docker Engine before [nestFloor]. It
+// runs before anything is made.
+func (e *dockerEnclosure) nestEngine(ctx context.Context) error {
+	if name := e.d.Name(); name != "docker" {
+		return fmt.Errorf("wall docker: a Docker of the agent's own needs the docker command and Docker Engine 28 or later, not %s", name)
+	}
+	out, err := e.sys.run(ctx, []string{e.command(), "version", "--format", engineVersion}, e.env)
+	if err != nil {
+		if said := bytes.TrimSpace(out); len(said) > 0 {
+			err = fmt.Errorf("%w: %s", err, said)
+		}
+		return fmt.Errorf("wall docker: docker version: %w", err)
+	}
+	version := string(bytes.TrimSpace(out))
+	m := engineVersionShape.FindStringSubmatch(version)
+	if m == nil {
+		return errors.New("wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine gave no Docker Engine version")
+	}
+	if major, err := strconv.Atoi(m[1]); err != nil || major < nestFloor {
+		return fmt.Errorf("wall docker: a Docker of the agent's own needs Docker Engine 28 or later; the engine is %s", version)
+	}
+	return nil
 }
 
 // dockerEnclosure is one run's networks and containers.
@@ -394,6 +454,11 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	// The relay is on both networks, so it forwards no packet between them: what it
 	// passes on is the connections it copies to the proxy, and nothing routed through it.
 	create = append(create, "--sysctl", "net.ipv4.ip_forward=0", "--sysctl", "net.ipv6.conf.all.forwarding=0")
+	if e.req.Docker {
+		// Its interface on the inside network has IPv6, and takes no router
+		// advertisement: its addresses and routes are the engine's alone.
+		create = append(create, "--sysctl", "net.ipv6.conf.all.accept_ra=0", "--sysctl", "net.ipv6.conf.default.accept_ra=0")
+	}
 	// The image's health check would run inside the relay, as its user and beside its
 	// environment, with the relay's way out; the relay runs none.
 	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
@@ -443,11 +508,15 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	// environment, and with a Docker of the agent's own as the enclosure's root; the
 	// agent's container runs none.
 	run = append(run, "--no-healthcheck")
-	// The agent's container starts with no IPv6 address but loopback's: on the inside
-	// network, which has no IPv6 subnet, the engine leaves its interface without IPv6,
-	// and IPv6 is off by default for an interface made later. Loopback, there before,
-	// keeps ::1, which tools dial localhost by.
-	run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	if !e.req.Docker {
+		// For any image the agent's container starts with no IPv6 address but
+		// loopback's: on the inside network, which has no IPv6 subnet, the engine leaves
+		// its interface without IPv6, and IPv6 is off by default for an interface made
+		// later. Loopback, there before, keeps ::1, which tools dial localhost by. With a
+		// Docker of the agent's own its interface has an address in the inside network's
+		// IPv6 subnet, and the enclosure's root sets the enclosure's own sysctls.
+		run = append(run, "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	}
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {

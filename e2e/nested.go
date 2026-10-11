@@ -116,11 +116,20 @@ func probeNested() *nested {
 		n.Image = err.Error()
 		return n
 	}
+	// The relay by its IPv4 address, as the agent's docker configuration names it: the
+	// containers the agent starts have IPv4 alone.
 	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
 	relay := ""
 	if err == nil {
 		if addrs, err := net.LookupHost(proxyURL.Hostname()); err == nil && len(addrs) > 0 {
-			relay = "http://" + net.JoinHostPort(addrs[0], proxyURL.Port())
+			addr := addrs[0]
+			for _, a := range addrs {
+				if ip := net.ParseIP(a); ip != nil && ip.To4() != nil {
+					addr = a
+					break
+				}
+			}
+			relay = "http://" + net.JoinHostPort(addr, proxyURL.Port())
 		}
 	}
 	for _, k := range innerKinds {
