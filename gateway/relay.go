@@ -117,7 +117,7 @@ type bucket struct {
 // newRelay is the relay to the server of the gateway's server document.
 func (g *Gateway) newRelay(addr net.Addr) *relay {
 	origin, _ := url.Parse(strings.TrimSuffix(g.cfg.Server.URL, "/"))
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	t := defaultTransport()
 	// The answer passes back as the server encoded it, and the holder decodes it.
 	t.DisableCompression = true
 	wait := relayWait
@@ -137,6 +137,22 @@ func (g *Gateway) newRelay(addr net.Addr) *relay {
 	go rl.http.Serve(rl.queue)
 	go rl.pruneEvery(relayRefill)
 	return rl
+}
+
+// defaultTransport is Go's default transport, cloned, or a new one of its settings when a program replaced it.
+func defaultTransport() *http.Transport {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }
 
 // pruneEvery lets go of the full buckets every d, until the relay closes.

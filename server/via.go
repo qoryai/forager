@@ -2,8 +2,10 @@ package server
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // Via is the server document's via: the gateway a keyed machine or a starter reaches
@@ -77,7 +79,7 @@ func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 	var t *http.Transport
 	switch b := base.(type) {
 	case nil:
-		t = http.DefaultTransport.(*http.Transport).Clone()
+		t = defaultTransport()
 	case *http.Transport:
 		t = b.Clone()
 	default:
@@ -89,6 +91,22 @@ func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 	t.DisableKeepAlives = true
 	t.ForceAttemptHTTP2 = false
 	return t, nil
+}
+
+// defaultTransport is Go's default transport, cloned, or a new one of its settings when a program replaced it.
+func defaultTransport() *http.Transport {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }
 
 // rebase returns u with Via's origin in place of its own and its target, the path and
