@@ -569,7 +569,7 @@ release may change what an existing document does, and says so under Upgrading.
   `fixtures/invalid/server-via-*` refused ones.
 - Package `link` has the binding of a connection to a separate gateway, `BindWord` and
   `BindLine`, `QORY-BIND`, `BoundLine`, `BindingMessage` and `BindingLabel`, the TLS
-  exporter label `EXPORTER-qory-link-binding`; `AnswerRequest`, the third line of a
+  exporter label `EXPERIMENTAL-qory-link-binding`; `AnswerRequest`, the third line of a
   separate gateway's signed answer, the hash of the connection's exporter value, the
   method, the target and the body; and `RemotePathPrefix`, `/qory-link/`, and
   `RemoteDiscoveryPath`. `accesskey.LinkAnswerDomain`, `qory-link-answer-ed25519-v1`, is

@@ -125,7 +125,7 @@ func TestTheBindingsBytes(t *testing.T) {
 	if link.BindLine != "QORY-BIND\n" || link.BoundLine("fp", "sig") != "QORY-BOUND fp sig\n" {
 		t.Errorf("the lines %q %q", link.BindLine, link.BoundLine("fp", "sig"))
 	}
-	if link.BindingLabel != "EXPORTER-qory-link-binding" || link.RemoteDiscoveryPath != "/qory-link/configuration" {
+	if link.BindingLabel != "EXPERIMENTAL-qory-link-binding" || link.RemoteDiscoveryPath != "/qory-link/configuration" {
 		t.Errorf("the label %q, the discovery %q", link.BindingLabel, link.RemoteDiscoveryPath)
 	}
 	if got, want := string(link.BindingMessage(ekm, "fp")), "qory-link-binding-ed25519-v1\n"+strings.Repeat("ab", 32)+"\nfp"; got != want {
