@@ -7,6 +7,8 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -86,6 +88,43 @@ type RegistrationAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
 	RunKey  string `json:"run_key"`
+}
+
+// shownRegistrationAnswer is a RegistrationAnswer without its methods, which fmt prints
+// the way it prints any struct.
+type shownRegistrationAnswer RegistrationAnswer
+
+func (a RegistrationAnswer) shown() shownRegistrationAnswer {
+	s := shownRegistrationAnswer(a)
+	if s.RunKey != "" {
+		s.RunKey = redactedSecret
+	}
+	return s
+}
+
+// Format prints a as fmt prints a struct, under every verb and flag, with its RunKey
+// redacted.
+func (a RegistrationAnswer) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "server.shownRegistrationAnswer", "server.RegistrationAnswer", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is a as %v prints it, its RunKey redacted.
+func (a RegistrationAnswer) String() string { return fmt.Sprintf("%v", a) }
+
+// GoString is a as %#v prints it, its RunKey redacted.
+func (a RegistrationAnswer) GoString() string { return fmt.Sprintf("%#v", a) }
+
+// LogValue is a as log/slog logs it: its version and run id, never the run key.
+func (a RegistrationAnswer) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Int("version", a.Version),
+		slog.String("run_id", a.RunID),
+		slog.String("run_key", a.shown().RunKey),
+	)
 }
 
 // RegisterThroughGateway posts a run's registration through a gateway, body, the bytes
@@ -206,6 +245,48 @@ func (a Attach) Body() ([]byte, error) {
 		return nil, errors.New("the attach: forager_version is empty")
 	}
 	return json.Marshal(a)
+}
+
+// shownAttach is an Attach without its methods, which fmt prints the way it prints any
+// struct.
+type shownAttach Attach
+
+func (a Attach) shown() shownAttach {
+	s := shownAttach(a)
+	if s.RunKey != "" {
+		s.RunKey = redactedSecret
+	}
+	return s
+}
+
+// Format prints a as fmt prints a struct, under every verb and flag, with its RunKey
+// redacted.
+func (a Attach) Format(f fmt.State, verb rune) {
+	out := fmt.Sprintf(fmt.FormatString(f, verb), a.shown())
+	if verb == 'v' && f.Flag('#') {
+		out = strings.Replace(out, "server.shownAttach", "server.Attach", 1)
+	}
+	io.WriteString(f, out)
+}
+
+// String is a as %v prints it, its RunKey redacted.
+func (a Attach) String() string { return fmt.Sprintf("%v", a) }
+
+// GoString is a as %#v prints it, its RunKey redacted.
+func (a Attach) GoString() string { return fmt.Sprintf("%#v", a) }
+
+// LogValue is a as log/slog logs it: what the run tells the server of itself and the
+// time, never the run key.
+func (a Attach) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Int("version", a.Version),
+		slog.String("run_key", a.shown().RunKey),
+		slog.Int("interval_seconds", a.IntervalSeconds),
+		slog.Any("events", a.Events),
+		slog.String("forager_version", a.ForagerVersion),
+		slog.Int("contract_version", a.ContractVersion),
+		slog.String("time", a.Time),
+	)
 }
 
 // AttachAnswer is the server's signed 200 to an attach, run-attach-answer.schema.json:

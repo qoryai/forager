@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -662,6 +665,72 @@ func TestViaSendsEveryRequestToTheGateway(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, "https://gateway.example:8443"+server.WellKnown, nil)
 		u, err := tr.Proxy(req)
 		t.Errorf("via's transport has a Proxy, which gives %v, %v for the gateway; want none", u, err)
+	}
+}
+
+// TestViaKeepsItsTrustOverACallersTLSDialing pins that a caller's transport that makes
+// TLS itself cannot switch via's trust off: net/http uses DialTLSContext in place of
+// TLSClientConfig, and here it accepts any certificate; under via the system's roots
+// still refuse the test's authority and a pin of another key still refuses the
+// gateway's certificate, while ca_file and the right pin reach it.
+func TestViaKeepsItsTrustOverACallersTLSDialing(t *testing.T) {
+	signer, key := generate(t), generate(t)
+	g := newRelay(t, signer, key)
+	ctx := context.Background()
+	insecure := &http.Transport{DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d := &tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true}}
+		return d.DialContext(ctx, network, addr)
+	}}
+	conn, err := insecure.DialTLSContext(ctx, "tcp", strings.TrimPrefix(g.srv.URL, "https://"))
+	if err != nil {
+		t.Fatalf("the caller's TLS dialing does not reach the test server: %v", err)
+	}
+	conn.Close()
+	other := sha256.Sum256([]byte("another key"))
+	for name, tc := range map[string]struct {
+		via  server.Via
+		pass bool
+	}{
+		"the system roots": {server.Via{URL: g.srv.URL}, false},
+		"another pin":      {server.Via{URL: g.srv.URL, CAFile: g.caFile, CertificateSHA256: base64.StdEncoding.EncodeToString(other[:])}, false},
+		"ca_file and pin":  {server.Via{URL: g.srv.URL, CAFile: g.caFile, CertificateSHA256: g.pin}, true},
+	} {
+		v := tc.via
+		c := &server.Client{Config: &server.Config{Version: 1, URL: "https://qory.example", AccessKeyID: accessKeyID, ApiaryPublicKey: pinOf(signer), Via: &v},
+			Key: key, InstanceID: instance, UserAgent: "qory-forager/test", HTTP: &http.Client{Transport: insecure}}
+		if _, _, err := c.Discover(ctx); (err == nil) != tc.pass {
+			t.Errorf("%s: discovery under a caller's DialTLSContext gave %v; want passed %v", name, err, tc.pass)
+		}
+	}
+}
+
+// TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach pins that a registration
+// answer and an attach print and log without their run key under every verb, by value
+// and by pointer, with the rest of what they hold.
+func TestTheRunKeyIsNeverShownInARegistrationAnswerOrAnAttach(t *testing.T) {
+	rk := runKeyOf(t, gatewayRunID)
+	var out bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&out, nil))
+	a := server.RegistrationAnswer{Version: 1, RunID: gatewayRunID, RunKey: rk}
+	at := server.Attach{Version: 1, RunKey: rk, IntervalSeconds: 30, Events: []string{"*"}, ForagerVersion: "v0.7.0-dev", ContractVersion: 1}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		fmt.Fprintf(&out, verb+"\n", a)
+		fmt.Fprintf(&out, verb+"\n", &a)
+		fmt.Fprintf(&out, verb+"\n", at)
+		fmt.Fprintf(&out, verb+"\n", &at)
+	}
+	log.Info("registered", "answer", a, "attach", at)
+	shown := out.String()
+	if strings.Contains(shown, rk[4:24]) {
+		t.Errorf("a run key is shown:\n%s", shown)
+	}
+	for _, want := range []string{"[redacted]", "server.RegistrationAnswer{", "server.Attach{", gatewayRunID, "v0.7.0-dev", `"run_key":"[redacted]"`, `"interval_seconds":30`} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("%s is not shown:\n%s", want, shown)
+		}
+	}
+	if b, err := at.Body(); err != nil || !strings.Contains(string(b), rk) {
+		t.Errorf("the attach's body %s, %v; want the run key in it", b, err)
 	}
 }
 

@@ -782,7 +782,8 @@ func TestABatchBehindTheGatewayIsOfItsRunKeysRun(t *testing.T) {
 // TestEveryRequestCarriesAnAcceptedRunKey pins the run key on the one address, in
 // order, on every path: none, two, another scheme, one that is no run key or that no
 // pinned key signed, is 400 run_key_invalid; then in the server's order of the attach,
-// past its attach_by with nothing of the run here 409 run_key_expired, before one of
+// past its attach_by plus the 300 s skew with nothing of the run here 409
+// run_key_expired, before one of
 // another gateway 409 wrong_gateway, and one of a workspace discovery does not list 409
 // workspace_not_served. Each 409 reads as the server's
 // refusal of the attach. A run key past its attach_by of a run the gateway holds goes
@@ -853,16 +854,19 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	}{
 		"another gateway's":   {func(k *runkey.Key) { k.Gateway = "ng_0therg4teway0000" }, "wrong_gateway"},
 		"another workspace's": {func(k *runkey.Key) { k.Workspace = "ws_0therw0rkspace00" }, "workspace_not_served"},
-		"past its attach_by": {func(k *runkey.Key) {
-			k.AttachBy = time.Now().Add(-time.Second).Truncate(time.Second)
+		"past its attach_by and the skew": {func(k *runkey.Key) {
+			k.AttachBy = time.Now().Add(-400 * time.Second).Truncate(time.Second)
 			k.Issued = k.AttachBy.Add(-time.Minute)
 		}, "run_key_expired"},
 		"another gateway's, late": {func(k *runkey.Key) {
-			k.Gateway, k.AttachBy, k.Issued = "ng_0therg4teway0000", time.Now().Add(-time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+			k.Gateway, k.AttachBy, k.Issued = "ng_0therg4teway0000", time.Now().Add(-400*time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
 		}, "run_key_expired"},
 		"another workspace's, late": {func(k *runkey.Key) {
-			k.Workspace, k.AttachBy, k.Issued = "ws_0therw0rkspace00", time.Now().Add(-time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+			k.Workspace, k.AttachBy, k.Issued = "ws_0therw0rkspace00", time.Now().Add(-400*time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
 		}, "run_key_expired"},
+		"another gateway's, within the skew": {func(k *runkey.Key) {
+			k.Gateway, k.AttachBy, k.Issued = "ng_0therg4teway0000", time.Now().Add(-100*time.Second).Truncate(time.Second), time.Now().Add(-time.Hour).Truncate(time.Second)
+		}, "wrong_gateway"},
 		"another gateway's and workspace's": {func(k *runkey.Key) {
 			k.Gateway, k.Workspace = "ng_0therg4teway0000", "ws_0therw0rkspace00"
 		}, "wrong_gateway"},
@@ -890,6 +894,39 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	}
 	late := runKeyFor(t, event.NewRunID(), nil)
 	refused(t, "a run not held past attach_by", r.do(t, late, http.MethodGet, "/qory-link/configuration", nil), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(mustRunID(t, late), "run_key_expired"))
+}
+
+// TestTheGatewayAllowsTheSkewPastAttachBy pins the skew the one address allows a run
+// key's attach_by by its own clock, server.Window, 300 s: a run key 100 s past its
+// attach_by opens its run, the attach sent to the server, and a batch of a run of such a
+// key the gateway holds nothing of is the 410 run_closed of a run not open here; 400 s
+// past, both are the gateway's 409 run_key_expired, and nothing is attached.
+func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	past := func(d time.Duration) (string, string) {
+		runID := event.NewRunID()
+		return runID, runKeyFor(t, runID, func(k *runkey.Key) {
+			k.AttachBy = time.Now().Add(-d).Truncate(time.Second)
+			k.Issued = k.AttachBy.Add(-time.Minute)
+		})
+	}
+	_, within := past(100 * time.Second)
+	if a := r.tryOpen(t, within, server.LinkRunRequest{}); a.status != http.StatusOK {
+		t.Errorf("a run key 100 s past its attach_by: %d %s; want the run open", a.status, a.body)
+	}
+	if got := r.c.attached(); len(got) != 1 || !strings.Contains(string(got[0]), within) {
+		t.Errorf("%d attaches; want the one of the key 100 s past its attach_by", len(got))
+	}
+	_, unheld := past(100 * time.Second)
+	if a := r.do(t, unheld, http.MethodPost, "/qory-link/events", []byte(`[]`), http.Header{"Content-Type": {server.ContentType}}); a.status != http.StatusGone || a.refusal()["error"] != "run_closed" {
+		t.Errorf("a batch 100 s past attach_by of a run not held: %d %s; want 410 run_closed", a.status, a.body)
+	}
+	lateID, late := past(400 * time.Second)
+	refused(t, "a run key 400 s past its attach_by", r.tryOpen(t, late, server.LinkRunRequest{}), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(lateID, "run_key_expired"))
+	refused(t, "a batch 400 s past attach_by of a run not held", r.do(t, late, http.MethodPost, "/qory-link/events", []byte(`[]`), http.Header{"Content-Type": {server.ContentType}}), http.StatusConflict, "run_key_expired", "gateway", r.attachLine(lateID, "run_key_expired"))
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want the one within the skew", n)
+	}
 }
 
 // mustRunID is the run id of a run key.

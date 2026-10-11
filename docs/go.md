@@ -123,13 +123,18 @@ its local link. Its `gateway.Config` sets it:
   `Authorization: Bearer <run key>`, or `QORY-RELAY`, a space and a run key, for that
   run's proxy; any other is the relay of the server's enrolment, discovery,
   registration and outcome
-  ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)). The
-  proxy of every run served there is guarded, wall or none. `Gateway.Addr` is this
-  address.
+  ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)), for a
+  keyed machine or a starter whose server document holds `via` (`server.Via`). The
+  gateway a request is relayed through sees the registration answer's run key, so `via`
+  names a gateway trusted at least as much as the run's own gateway. The proxy of every
+  run served there is guarded, wall or none. `Gateway.Addr` is this address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. `Listen` needs it.
 - `Server`, whose access key is a gateway's, `ng_`: the gateway verifies each run key
-  under the server's pin, attaches each run at the server under its own access key
+  under the server's pin, on every request of the run and every proxy connection, not
+  only the first, so once a server key is out of the pin, a run whose run key that key
+  signed gets `400` `run_key_invalid` on its next request and its proxy connections are
+  closed unanswered; it attaches each run at the server under its own access key
   (`server.Client.Attach`), signs the binding and every answer of the link, and relays
   to the server's origin. `Listen` needs it.
 
@@ -288,9 +293,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
   Any other refusal of a batch is sent again, as the session sends it. A batch for a run
   the gateway no longer holds is its `410`, the run's end while the gateway keeps it and
   then `run_closed`, which closes the resend, as long as the gateway still has the run's
-  record. Once the run key's `attach_by` has passed, a batch for a run the gateway holds
-  nothing of, its record included, is `409` `run_key_expired` instead, which stops the
-  resend as the refusals above do.
+  record. Once the run key's `attach_by` plus a skew of 300 seconds has passed, by the
+  gateway's clock, a batch for a run the gateway holds nothing of, its record included,
+  is `409` `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's own resend,

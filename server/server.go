@@ -153,11 +153,12 @@ func Read(name string, b []byte) (*Config, error) {
 // Parse validates the bytes of a server document against the schema and decodes it,
 // and checks the pin's keys as [accesskey.Pin.Check] does. A document that contains an
 // access key secret anywhere, in its bytes or, escaped, in a decoded string or member
-// name, is [accesskey.ErrSecretInDocument] before a schema reads it, so no schema
-// error quotes the secret.
+// name, is [accesskey.ErrSecretInDocument] before a schema reads it, and one that
+// contains a run key [accesskey.ErrRunKeyInDocument], so no schema error quotes the
+// secret.
 func Parse(name string, b []byte) (*Config, error) {
-	if accesskey.ContainsSecret(string(b)) {
-		return nil, accesskey.ErrSecretInDocument
+	if err := accesskey.SecretInDocument(string(b)); err != nil {
+		return nil, err
 	}
 	file := name
 	if !strings.Contains(file, ".") {
@@ -167,8 +168,8 @@ func Parse(name string, b []byte) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if accesskey.DocumentContainsSecret(doc) {
-		return nil, accesskey.ErrSecretInDocument
+	if err := accesskey.SecretInDocument(doc); err != nil {
+		return nil, err
 	}
 	if m, ok := doc.(map[string]any); ok {
 		if pin, _ := m["apiary_public_key"].([]any); len(pin) == 0 {

@@ -1,13 +1,33 @@
 package gateway
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"time"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/server"
 )
+
+// BoundLine is the line the gateway answers the binding with under key, on a connection
+// whose exporter value is ekm.
+func BoundLine(key *accesskey.Key, ekm []byte) string { return boundLine(key, ekm) }
+
+// SignedAnswer is what the one address writes, signed under key, on a connection whose
+// exporter value is ekm, when handler answers req, whose body is body.
+func SignedAnswer(key *accesskey.Key, ekm []byte, req *http.Request, body []byte, handler http.HandlerFunc) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	cb := &capturedBody{r: io.NopCloser(bytes.NewReader(body)), post: req.Method == http.MethodPost}
+	req.Body = cb
+	sw := &signedWriter{w: rec, key: key, ekm: ekm, req: req, body: cb, header: http.Header{}}
+	handler(sw, req)
+	sw.Flush()
+	return rec
+}
 
 // RegistrationAt is the bytes g sends for the registration reg at now: those it kept
 // for the run id, or new ones.

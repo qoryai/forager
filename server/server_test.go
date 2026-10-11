@@ -798,6 +798,25 @@ func TestAServerDocumentWithASecretQuotesNothing(t *testing.T) {
 	}
 }
 
+// TestAServerDocumentWithARunKeyQuotesNothing pins that a run key pasted into the
+// server document, into its url, a pin's public key or via's url, plain or escaped, is
+// refused with ErrRunKeyInDocument's fixed message, which does not contain it.
+func TestAServerDocumentWithARunKeyQuotesNothing(t *testing.T) {
+	const rk = "qrk_eyJ2ZXJzaW9uIjoxfQ.yUWE4vdQuSfML2OcqdMfci8yz-SsJLox2axjdUcV2kA"
+	pin := `[{"alg":"ed25519","public_key":"rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]`
+	for name, doc := range map[string]string{
+		"the url":      `{"version":1,"url":"https://qory.example/?k=` + rk + `","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `}`,
+		"a public key": `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":[{"alg":"ed25519","public_key":"` + rk + `"}]}`,
+		"via's url":    `{"version":1,"url":"https://qory.example","access_key_id":"ak_f1xt0re000000000","apiary_public_key":` + pin + `,"via":{"url":"https://gateway.example/` + rk + `"}}`,
+		"escaped":      `{"version":1,"url":"https://qory.example","access_key_id":"\u0071` + rk[1:] + `","apiary_public_key":` + pin + `}`,
+	} {
+		_, err := server.Read("server.json", []byte(doc))
+		if !errors.Is(err, accesskey.ErrRunKeyInDocument) || strings.Contains(err.Error(), rk[4:20]) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // TestAnEscapedSecretQuotesNothing pins that a secret hidden from the bytes by an
 // escape, a JSON q, a YAML \x71, or a YAML double-quoted line break between qak
 // and the underscore, in a value or a member name, is refused with the fixed message
