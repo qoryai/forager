@@ -878,11 +878,11 @@ release may change what an existing document does, and says so under Upgrading.
   that run ended, the state and the reason of the gateway's `dev.qory.run.exited` of
   it; for a resend that completes the record, `failed` and `gateway_lost`.
   `Delivery.ClosedBy` is removed: it always said `gateway`.
-- Each line the gateway reports of a run's end reads
-  `run <id>: <what happened>; the run ends: <state>`: "its session sent nothing for
-  1m30s; the run ends: failed", or "the gateway refused a batch of its session's, <why>;
-  the run ends: failed". The server's signed `410` is "the server wants no more events
-  of this run; the run goes on".
+- Each line the gateway reports of a run's end reads `run <id>: <what happened>; the run
+  ends: <state>`: "its session sent nothing for 1m30s; the run ends: failed", or "the
+  gateway refused a batch from the run's session, <why>; the run ends: failed". The
+  server's signed `410` is "the server wants no more events of this run; the run goes
+  on".
 - A run's certificate authority keeps at most 1024 hosts' certificates, the least
   recently used going first.
 - A run's end closes every tunnel of its proxy, at both ends, and the connections whose

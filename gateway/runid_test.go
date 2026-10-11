@@ -128,7 +128,7 @@ func TestABatchTheLinkRefusesEndsTheRunItNames(t *testing.T) {
 			if status, r := localRequest(t, h, http.MethodPost, "/v1/events", c.body(b.RunID), []string{a.RunID}); status != http.StatusBadRequest || r["error"] != "invalid_request" {
 				t.Errorf("the batch: %d %v", status, r)
 			}
-			line := fmt.Sprintf("run %s: the gateway refused a batch of its session's, %s; the run ends: failed", a.RunID, c.why)
+			line := fmt.Sprintf("run %s: the gateway refused a batch from the run's session, %s; the run ends: failed", a.RunID, c.why)
 			if !h.reported(line) {
 				t.Errorf("no line %q in %q", line, h.reportsWith(a.RunID))
 			}
