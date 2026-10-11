@@ -697,10 +697,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// secret itself, and the forwarder passes on what arrives as it is.
 		bind, secret = enclosure.ProxyAddr(), ""
 	}
+	// password is what the first request of every connection to an unwalled forwarder
+	// must carry, the password of the agent's proxy URL, a secret of the forwarder's own
+	// for this run: without a wall the agent's proxy is a port on loopback any process
+	// of the machine reaches.
+	var password string
+	if spec.Wall == nil {
+		if password, err = newForwarderSecret(); err != nil {
+			return fail(err)
+		}
+	}
 	var fwd *forwarder
 	switch {
 	case remote == nil:
-		fwd, err = listenForwarder(bind, disc.Proxy.Address, secret)
+		// On one machine: without a wall the forwarder on loopback takes a connection
+		// only with the password and opens it to the gateway's proxy with the run's
+		// proxy secret; behind a wall it passes on what the wall's relay sends.
+		fwd, err = listenForwarder(bind, disc.Proxy.Address, secret, password)
 	case spec.Wall != nil:
 		// Behind a wall and a separate gateway: the relay opens every connection with the
 		// hop secret, and the forwarder, which checks it, opens the connection to the
@@ -711,13 +724,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, hop: relayToken})
 	default:
 		// Without a wall, behind a separate gateway: the forwarder on loopback takes a
-		// connection only with the password of the agent's proxy URL, a secret of its own
-		// for this run, and carries it to the gateway inside TLS, bound, opened with the
-		// run key.
-		var password string
-		if password, err = newForwarderSecret(); err != nil {
-			return fail(err)
-		}
+		// connection only with the password, and carries it to the gateway inside TLS,
+		// bound, opened with the run key.
 		fwd, err = listenForwarding(bind, forwarding{dial: k.DialProxy, password: password})
 	}
 	if err != nil {

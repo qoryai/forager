@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/link"
@@ -26,14 +29,17 @@ const dialWait = 10 * time.Second
 // copies, byte for byte, to the gateway's proxy. Without a wall it opens each with the
 // relay's preamble and the run's proxy secret first; behind a wall the wall's relay
 // writes the preamble itself, and the forwarder passes on what arrives as it is.
+// Without a wall, on one machine as behind a separate gateway, the first request of
+// every connection must carry the password of the agent's proxy URL, a secret the
+// session made for this run's forwarder alone, which the forwarder takes off; the
+// connection carries that one request, so the password of every request is checked
+// and none reaches the proxy.
 //
 // Behind a separate gateway it reaches the gateway's one address over TLS, each
 // connection bound to a key the run key names and opened with the relay's preamble and
 // the run key, which the link's proxy dial writes: behind a wall, every connection must
 // first open with the relay's preamble and the hop secret the session gave the wall's
-// relay, which the forwarder takes off; without a wall, its first request must carry
-// the password of the agent's proxy URL, a secret the session made for this run's
-// forwarder alone, which the forwarder takes off.
+// relay, which the forwarder takes off.
 //
 // The secrets are held in memory alone: never in a file or a report, and in an
 // environment only as that password, in the unwalled agent's proxy URL.
@@ -66,18 +72,25 @@ type forwarding struct {
 	// password, when set, is the password of the proxy URL [forwarder.Env] gives, which
 	// the first request of every accepted connection must carry in its one
 	// Proxy-Authorization, Basic, before anything reaches the proxy; the header is not
-	// passed on.
+	// passed on. A connection then carries that one request: a CONNECT and its tunnel,
+	// or one plain request and its reply, so every plain request is checked; a plain
+	// request that asks for an upgrade the proxy answers with 101 makes it a tunnel.
 	password string
+	// headWait is how long a connection has to send its first request's head when the
+	// password is set; zero is [link.PreambleWait], as long as a preamble has.
+	headWait time.Duration
 }
 
 // listenForwarder listens on addr, host:port, and forwards to target, the gateway's
 // proxy address on this machine. A non-empty secret is written in the relay's preamble
-// at the start of every connection.
-func listenForwarder(addr, target, secret string) (*forwarder, error) {
+// at the start of every connection, and a non-empty password is what the first request
+// of every accepted connection must carry.
+func listenForwarder(addr, target, secret, password string) (*forwarder, error) {
 	var d net.Dialer
 	return listenForwarding(addr, forwarding{
-		dial:   func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
-		secret: secret,
+		dial:     func(ctx context.Context) (net.Conn, error) { return d.DialContext(ctx, "tcp", target) },
+		secret:   secret,
+		password: password,
 	})
 }
 
@@ -117,14 +130,14 @@ func (f *forwarder) Env() []string {
 	return link.ProxyEnv(u.String())
 }
 
-// proxyUser is the user name of an unwalled agent's proxy URL behind a separate
-// gateway, which the forwarder ignores.
+// proxyUser is the user name of an unwalled agent's proxy URL, which the forwarder
+// ignores.
 const proxyUser = "qory"
 
-// newForwarderSecret makes a secret of this run's forwarder alone behind a separate
-// gateway: 32 bytes from crypto/rand, base64url without padding. Behind a wall it is the
+// newForwarderSecret makes a secret of this run's forwarder alone: 32 bytes from
+// crypto/rand, base64url without padding. Behind a wall and a separate gateway it is the
 // hop secret the wall's relay opens every connection with, so the run key is in no file
-// of the wall's; without one it is the password of the agent's proxy URL, so no other
+// of the wall's; without a wall it is the password of the agent's proxy URL, so no other
 // process of the machine reaches the gateway through the forwarder.
 func newForwarderSecret() (string, error) {
 	var b [32]byte
@@ -184,15 +197,27 @@ func (f *forwarder) serve(c net.Conn) {
 		c.SetReadDeadline(time.Time{})
 	}
 	var src io.Reader = c
+	// plain is the one plain request of a connection the password let in.
+	var plain *proxied
 	if f.way.password != "" {
 		// Nothing reaches the proxy from a connection that is not the run's agent.
-		c.SetReadDeadline(time.Now().Add(proxyHeadWait))
+		wait := f.way.headWait
+		if wait == 0 {
+			wait = link.PreambleWait
+		}
+		c.SetReadDeadline(time.Now().Add(wait))
 		head, rest, ok := readProxyLogin(c, f.way.password)
 		if !ok {
 			return
 		}
 		c.SetReadDeadline(time.Time{})
-		src = io.MultiReader(bytes.NewReader(head), rest)
+		if connectHead(head) {
+			// The tunnel goes on as it is; a proxy that refuses it closes the connection
+			// rather than reading a second request.
+			src = io.MultiReader(bytes.NewReader(closingHead(head)), rest)
+		} else if plain = plainRequest(head, rest); plain == nil {
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, dialWait)
 	up, err := f.way.dial(ctx)
@@ -212,25 +237,132 @@ func (f *forwarder) serve(c net.Conn) {
 		}
 		up.SetWriteDeadline(time.Time{})
 	}
+	if plain != nil {
+		passPlain(c, up, plain)
+		return
+	}
+	pipe(c, up, src, up, f.way.password != "")
+}
+
+// pipe copies fromAgent to up and fromProxy, what up sends, to c, each direction until
+// its end, which it passes on as a half close. With closeUp, the end of what up sends
+// closes up before it is passed on, so nothing the agent sends after it reaches the
+// proxy: after a refused CONNECT, say, a request with the password in it.
+func pipe(c, up net.Conn, fromAgent, fromProxy io.Reader, closeUp bool) {
 	done := make(chan struct{}, 2)
-	pipe := func(dst net.Conn, src io.Reader) {
-		io.Copy(dst, src)
+	half := func(dst net.Conn) {
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			cw.CloseWrite()
 		} else {
 			dst.Close()
 		}
-		done <- struct{}{}
 	}
-	go pipe(up, src)
-	go pipe(c, up)
+	go func() {
+		io.Copy(up, fromAgent)
+		half(up)
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(c, fromProxy)
+		if closeUp {
+			up.Close()
+		}
+		half(c)
+		done <- struct{}{}
+	}()
 	<-done
 	<-done
 }
 
-// proxyHeadWait is how long a connection to an unwalled forwarder behind a separate
-// gateway has to send its first request's head, as long as a preamble has.
-var proxyHeadWait = link.PreambleWait
+// passPlain writes p, the one plain request of the agent's connection c, to up, the
+// proxy, and passes on its reply until the proxy ends it; nothing more of the agent's
+// goes on, so a request after it on the connection, with the password in its
+// Proxy-Authorization, never reaches the proxy. The proxy's side is not half closed,
+// which would end the request at a proxy that reads on; an agent that goes away, or
+// ends its side, while the reply is awaited closes it instead. A request that asks for
+// an upgrade the proxy answers with 101 makes the connection a tunnel.
+func passPlain(c, up net.Conn, p *proxied) {
+	if p.upgrade {
+		if err := p.req.WriteProxy(up); err != nil {
+			return
+		}
+		stop := watchAgent(c, p.from, up, false)
+		r := bufio.NewReader(up)
+		resp, err := http.ReadResponse(r, p.req)
+		stop()
+		if err != nil {
+			return
+		}
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			if err := writeResponseHead(c, resp); err != nil {
+				return
+			}
+			pipe(c, up, p.from, r, true)
+			return
+		}
+		// Any other answer is the request's alone, and the connection ends with it.
+		resp.Close = true
+		resp.Header.Del("Connection")
+		resp.Header.Del("Keep-Alive")
+		stop = watchAgent(c, p.from, up, true)
+		resp.Write(c)
+		stop()
+		return
+	}
+	replied := make(chan struct{})
+	go func() {
+		io.Copy(c, up)
+		close(replied)
+	}()
+	if err := p.req.WriteProxy(up); err != nil {
+		up.Close()
+		<-replied
+		return
+	}
+	stop := watchAgent(c, p.from, up, true)
+	<-replied
+	stop()
+}
+
+// watchAgent closes up when the agent's connection c, read through from, ends or fails,
+// until stop is called. With discard, what the agent sends meanwhile is read and
+// dropped; without it, the watch ends at the first byte the agent sends, which stays
+// in from.
+func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func()) {
+	var stopped atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, err := from.Peek(1); err != nil {
+				if !stopped.Load() {
+					up.Close()
+				}
+				return
+			}
+			if !discard {
+				return
+			}
+			from.Discard(from.Buffered())
+		}
+	}()
+	return func() {
+		stopped.Store(true)
+		c.SetReadDeadline(time.Now())
+		<-done
+		c.SetReadDeadline(time.Time{})
+	}
+}
+
+// writeResponseHead writes the status line and the header of resp to w.
+func writeResponseHead(w io.Writer, resp *http.Response) error {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "HTTP/%d.%d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.Status)
+	resp.Header.Write(&b)
+	b.WriteString("\r\n")
+	_, err := w.Write(b.Bytes())
+	return err
+}
 
 // maxProxyLine is the longest line of the first request's head the forwarder reads,
 // maxProxyLines the most lines, and maxProxyHead the most bytes of the whole head.
@@ -274,6 +406,77 @@ func readProxyLogin(c io.Reader, password string) (head []byte, rest *bufio.Read
 		return nil, nil, false
 	}
 	return out.Bytes(), r, true
+}
+
+// connectHead reports whether head, a request's head, is a CONNECT's.
+func connectHead(head []byte) bool {
+	return bytes.HasPrefix(head, []byte(http.MethodConnect+" "))
+}
+
+// closingHead is head, a request's head up to its empty line, with Connection: close
+// before that line.
+func closingHead(head []byte) []byte {
+	end := len(head) - 1
+	if end > 0 && head[end-1] == '\r' {
+		end--
+	}
+	out := make([]byte, 0, len(head)+len("Connection: close\r\n"))
+	out = append(out, head[:end]...)
+	out = append(out, "Connection: close\r\n"...)
+	return append(out, head[end:]...)
+}
+
+// proxied is the one plain request of a connection the password let in.
+type proxied struct {
+	req *http.Request
+	// from holds what the agent sends after the request's head: its body, then whatever
+	// follows.
+	from *bufio.Reader
+	// upgrade is whether the request asks for an upgrade: its Connection names upgrade
+	// and it has an Upgrade.
+	upgrade bool
+}
+
+// plainRequest reads the plain request whose head, without its Proxy-Authorization, is
+// head, and whose body follows in rest, as the one request of its connection: with
+// Connection: close, or Connection: Upgrade and its Upgrade when it asks for an
+// upgrade, without Keep-Alive, Proxy-Connection and the other headers its Connection
+// names, and with no User-Agent added where it had none. Its body is read from rest as
+// it is written on. It is nil when the head is no request.
+func plainRequest(head []byte, rest io.Reader) *proxied {
+	from := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(head), rest), maxProxyLine)
+	req, err := http.ReadRequest(from)
+	if err != nil {
+		return nil
+	}
+	var named []string
+	for _, v := range req.Header.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				named = append(named, name)
+			}
+		}
+	}
+	upgrade := req.Header.Get("Upgrade") != "" && slices.ContainsFunc(named, func(n string) bool { return strings.EqualFold(n, "upgrade") })
+	for _, name := range named {
+		if !upgrade || !strings.EqualFold(name, "upgrade") {
+			req.Header.Del(name)
+		}
+	}
+	for _, name := range []string{"Keep-Alive", "Proxy-Connection", "Proxy-Authorization"} {
+		req.Header.Del(name)
+	}
+	if _, ok := req.Header["User-Agent"]; !ok {
+		// An empty User-Agent is written as none.
+		req.Header["User-Agent"] = []string{""}
+	}
+	if upgrade {
+		req.Header.Set("Connection", "Upgrade")
+	} else {
+		req.Header.Set("Connection", "close")
+		req.Close = true
+	}
+	return &proxied{req: req, from: from, upgrade: upgrade}
 }
 
 // proxyLogin reports whether value, a Proxy-Authorization's, is Basic credentials whose

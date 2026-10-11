@@ -100,9 +100,21 @@ serves no socket, only the link in memory, to a session in the gateway's own pro
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 On the local link every connection to the proxy opens with the relay's preamble and the
 run's proxy secret: without a wall the forwarder writes it, behind one the wall's relay
-does. Behind a separate gateway the forwarder reaches the gateway's one address over TLS
-instead, where a bound connection opens the run's proxy with the run key: see
-[the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+does. Without a wall the agent's proxy URL is the forwarder on loopback with a password,
+`http://qory:<password>@127.0.0.1:<port>`, the password a secret the session makes for
+the run's forwarder alone, 32 bytes from the system's random source in base64url, which
+lives as long as the run and is never logged or recorded. A connection to the forwarder
+carries one request, a `CONNECT` and its tunnel or one plain HTTP request and its reply,
+so every request is checked: it must carry the password in its one
+`Proxy-Authorization`, Basic, the user name ignored. The forwarder takes the header off,
+passes the request on with `Connection: close`, passes on nothing the agent sends after
+a plain request, and closes the connection at the end of its reply; a plain request
+that asks for an upgrade goes on with `Connection: Upgrade` instead, and a `101` reply
+makes the connection a tunnel. It closes a connection without the password unanswered,
+before anything reaches the gateway, so another process of the machine that reaches the
+port reaches nothing. Behind a separate gateway the forwarder reaches the gateway's one
+address over TLS instead, where a bound connection opens the run's proxy with the run
+key: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -232,14 +244,11 @@ res, err := session.Run(ctx, session.Spec{
   reason ends the run as on one machine: `Result.RunClosed`, `State` and `Reason`.
 - Agent traffic goes to the gateway's one address over TLS through the session's
   forwarder, each connection bound and opened with the run key. Without a wall, the
-  agent's proxy URL is the forwarder on loopback, `http://qory:<password>@127.0.0.1:<port>`,
-  the password a secret the session makes for the run's forwarder alone, 32 bytes from
-  the system's random source in base64url, which lives as long as the run and is never
-  logged or recorded. The first request of every connection must carry it in its one
-  `Proxy-Authorization`, Basic, the user name ignored; the forwarder takes the header off
-  and closes a connection without it unanswered, before anything reaches the gateway.
-  Behind a wall, the relay reaches the forwarder with a value the session makes for the
-  run's forwarder alone, which the forwarder takes off: see
+  agent's proxy URL is the forwarder on loopback with its password,
+  `http://qory:<password>@127.0.0.1:<port>`, which the forwarder checks as on the local
+  link (above) before anything reaches the gateway. Behind a wall, the relay reaches the
+  forwarder with a value the session makes for the run's forwarder alone, which the
+  forwarder takes off: see
   [the relay to a separate gateway](wall.md#the-relay-to-a-separate-gateway). The run key
   stays in the session's memory, in no environment and no file.
 

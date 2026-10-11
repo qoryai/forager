@@ -404,7 +404,8 @@ func (f *Fake) serveProxy() {
 }
 
 // answerProxied answers each HTTP request it reads from r, after a connection's
-// preamble, with 200 "ok" on w, and records its request line.
+// preamble, with 200 "ok" on w, and records its request line; after a request with
+// Connection: close it answers no other, as a proxy does.
 func (f *Fake) answerProxied(w io.Writer, r *bufio.Reader) {
 	for {
 		req, err := http.ReadRequest(r)
@@ -415,6 +416,10 @@ func (f *Fake) answerProxied(w io.Writer, r *bufio.Reader) {
 		f.mu.Lock()
 		f.proxied = append(f.proxied, req.Method+" "+req.RequestURI)
 		f.mu.Unlock()
+		if req.Close {
+			io.WriteString(w, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+			return
+		}
 		if _, err := io.WriteString(w, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); err != nil {
 			return
 		}
