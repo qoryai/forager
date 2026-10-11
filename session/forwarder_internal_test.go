@@ -632,6 +632,111 @@ func TestTheUnwalledForwarderPassesAnUpgrade(t *testing.T) {
 	}
 }
 
+// heldUpgrade is a stand-in for the gateway's proxy that reads one request's head, after
+// the relay's preamble when there is one, and holds its reply: it reports on head when
+// the head has come, and on ended when the forwarder has closed the connection, before
+// or after the reply. With answer, it writes a 101 once wait has passed, then echoes.
+func heldUpgrade(t *testing.T, wait time.Duration, answer bool) (addr string, head, ended <-chan struct{}) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	h, e := make(chan struct{}), make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if line == "\r\n" {
+				break
+			}
+		}
+		close(h)
+		read := make(chan struct{})
+		go func() {
+			io.Copy(io.Discard, r)
+			close(e)
+			close(read)
+		}()
+		if answer {
+			time.Sleep(wait)
+			io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+		}
+		select {
+		case <-read:
+		case <-time.After(10 * time.Second):
+		}
+	}()
+	return ln.Addr().String(), h, e
+}
+
+// TestTheUnwalledForwarderRefusesBytesBeforeTheUpgrade pins a plain request that asks
+// for an upgrade, whose agent sends a byte before the proxy's reply: the forwarder
+// closes the proxy's connection and the agent's, which gets no 101 and no tunnel, and
+// an agent that sends a byte and leaves has the proxy's connection closed at once,
+// rather than when the reply comes.
+func TestTheUnwalledForwarderRefusesBytesBeforeTheUpgrade(t *testing.T) {
+	const upgrade = "GET http://tool.example/ws HTTP/1.1\r\nHost: tool.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+	for name, secret := range unwalledWays {
+		t.Run(name, func(t *testing.T) {
+			t.Run("an early byte", func(t *testing.T) {
+				addr, _, ended := heldUpgrade(t, 300*time.Millisecond, true)
+				f, login := unwalledForwarder(t, addr, secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\nearly")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				b, err := io.ReadAll(c)
+				var ne net.Error
+				if len(b) != 0 || errors.As(err, &ne) && ne.Timeout() {
+					t.Errorf("an agent that sent a byte before the reply got %q, %v; want the end and nothing", b, err)
+				}
+				select {
+				case <-ended:
+				case <-time.After(2 * time.Second):
+					t.Error("the proxy's connection outlived the agent's")
+				}
+			})
+			t.Run("a byte and the end", func(t *testing.T) {
+				addr, head, ended := heldUpgrade(t, 0, false)
+				f, login := unwalledForwarder(t, addr, secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				select {
+				case <-head:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the request did not reach the proxy")
+				}
+				time.Sleep(100 * time.Millisecond)
+				io.WriteString(c, "x")
+				time.Sleep(100 * time.Millisecond)
+				c.Close()
+				select {
+				case <-ended:
+				case <-time.After(2 * time.Second):
+					t.Error("the proxy's connection outlived the agent's")
+				}
+			})
+		})
+	}
+}
+
 // TestTheUnwalledForwarderLetsGoOfAnAgentThatLeft pins a plain request whose answer
 // never comes: once the agent closes its connection, the forwarder closes the proxy's
 // soon after, rather than at the run's end.

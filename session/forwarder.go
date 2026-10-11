@@ -280,17 +280,19 @@ func pipe(c, up net.Conn, fromAgent, fromProxy io.Reader, closeUp bool) {
 // Proxy-Authorization, never reaches the proxy. The proxy's side is not half closed,
 // which would end the request at a proxy that reads on; an agent that goes away, or
 // ends its side, while the reply is awaited closes it instead. A request that asks for
-// an upgrade the proxy answers with 101 makes the connection a tunnel.
+// an upgrade the proxy answers with 101 makes the connection a tunnel; an agent that
+// sends anything after it, or ends its side, before the proxy's reply is read gets no
+// reply: the connection closes.
 func passPlain(c, up net.Conn, p *proxied) {
 	if p.upgrade {
 		if err := p.req.WriteProxy(up); err != nil {
 			return
 		}
+		// WriteProxy has read the request's body: whatever the agent sends now is early.
 		stop := watchAgent(c, p.from, up, false)
 		r := bufio.NewReader(up)
 		resp, err := http.ReadResponse(r, p.req)
-		stop()
-		if err != nil {
+		if early := stop(); early || err != nil {
 			return
 		}
 		if resp.StatusCode == http.StatusSwitchingProtocols {
@@ -326,31 +328,31 @@ func passPlain(c, up net.Conn, p *proxied) {
 
 // watchAgent closes up when the agent's connection c, read through from, ends or fails,
 // until stop is called. With discard, what the agent sends meanwhile is read and
-// dropped; without it, the watch ends at the first byte the agent sends, which stays
-// in from.
-func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func()) {
-	var stopped atomic.Bool
+// dropped; without it, the first byte the agent sends closes up as the end does. stop
+// reports whether the watch closed up, or, without discard, whether from holds a byte
+// of the agent's.
+func watchAgent(c net.Conn, from *bufio.Reader, up net.Conn, discard bool) (stop func() bool) {
+	var stopped, closed atomic.Bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for {
-			if _, err := from.Peek(1); err != nil {
+			if _, err := from.Peek(1); err != nil || !discard {
 				if !stopped.Load() {
 					up.Close()
+					closed.Store(true)
 				}
-				return
-			}
-			if !discard {
 				return
 			}
 			from.Discard(from.Buffered())
 		}
 	}()
-	return func() {
+	return func() bool {
 		stopped.Store(true)
 		c.SetReadDeadline(time.Now())
 		<-done
 		c.SetReadDeadline(time.Time{})
+		return closed.Load() || !discard && from.Buffered() > 0
 	}
 }
 
