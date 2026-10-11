@@ -926,6 +926,10 @@ release may change what an existing document does, and says so under Upgrading.
   within 30 seconds, and writes its answer within 30 seconds, or is closed; a request's
   line and fields are within 16 KiB, the 4 KiB net/http allows past that aside, and a
   longer head is net/http's own `431`, which counts toward no rate.
+- A separate gateway's calls to the server, the attach and the relay among them, use
+  the proxy of the environment, `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`: a proxy
+  that ends their TLS with a certificate the gateway's machine trusts sees the run keys
+  they carry.
 - `gateway.Config.Discovered`, when not nil, is called once the server's signed
   configuration document is read and verified, before `gateway.Start` returns, with a
   `gateway.Discovery`: the access key's `node_id`, `NodeID`, and whether the document
