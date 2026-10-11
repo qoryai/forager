@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,6 +86,29 @@ const maxFirstLine = 8 << 10
 // open between requests: the session's client keeps one as long.
 const serviceIdle = 90 * time.Second
 
+// The one address's bounds on connections: how many it holds at once, and how many of
+// one source, an IPv4 address or an IPv6 /64 ([sourceOf]). A connection past either is
+// closed as it is accepted, unanswered.
+const (
+	maxConns       = 4096
+	maxSourceConns = 64
+)
+
+// The link's bounds on the one address: how long a request may take to arrive whole,
+// its body included, and the most its request line and fields may hold.
+const (
+	edgeReadWait  = 60 * time.Second
+	edgeMaxHeader = 16 << 10
+)
+
+// The bounds of a request the one address refuses for its run key: the most of its body
+// the gateway reads, which the refusal's signature covers, and how long it waits for it.
+// A longer body, or one slower, closes the connection unanswered.
+const (
+	refusedBody = 64 << 10
+	refusedWait = 10 * time.Second
+)
+
 // service is the gateway's one address: every connection is routed by its first bytes,
 // after the TLS handshake. One that opens with [link.BindWord] is an edge's: the
 // gateway answers with its [link.BoundWord] line, and the connection then carries the
@@ -98,6 +122,7 @@ type service struct {
 	edge  *http.Server
 	edgeQ *connQueue
 	relay *relay
+	conns *connLimit
 
 	mu      sync.Mutex
 	pending map[net.Conn]struct{}
@@ -111,9 +136,13 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{}}
+	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
+		conns: newConnLimit(maxConns, maxSourceConns)}
 	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
-	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, IdleTimeout: serviceIdle, ErrorLog: quietLog(),
+	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
+	// without one keeps a connection open.
+	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
+		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
 				return context.WithValue(ctx, bindingKey{}, b.ekm)
@@ -131,7 +160,8 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 func (s *service) addr() string { return s.ln.Addr().String() }
 
 // accept routes every connection in its own goroutine, so a peer that sends nothing
-// holds up no one else.
+// holds up no one else. A connection past [maxConns], or past [maxSourceConns] of its
+// source, is closed at once.
 func (s *service) accept() {
 	defer s.wg.Done()
 	var backoff time.Duration
@@ -146,6 +176,12 @@ func (s *service) accept() {
 			continue
 		}
 		backoff = 0
+		source := sourceOf(c.RemoteAddr())
+		if !s.conns.take(source) {
+			c.Close()
+			continue
+		}
+		c = &heldConn{Conn: c, release: func() { s.conns.give(source) }}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -221,14 +257,24 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
 		return false
 	}
 	if bytes.HasPrefix(line, []byte(link.RelayPreamble+" ")) {
-		if len(line) > maxRelayRunKey {
+		value, ok := relayRunKey(line)
+		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"))
+		return s.g.relayRun(c, r, value)
 	}
 	c.SetDeadline(time.Time{})
 	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm})
+}
+
+// relayRunKey is the run key of a line of the relay's preamble, its newline included,
+// and whether the line is within [maxRelayRunKey]: a longer one holds no run key.
+func relayRunKey(line []byte) (string, bool) {
+	if len(line) > maxRelayRunKey {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"), true
 }
 
 // lineEnd is the end of the first line in b, its newline included, or -1.
@@ -295,9 +341,11 @@ func bearer(values []string) (string, bool) {
 }
 
 // edgeHandler is the link on the one address: every request's run key, its bearer
-// value, decided first ([Gateway.admitRunKey]), a refusal answered with its code; then
-// the link's handler, with the run key in the request's context and no Authorization
-// left on it. Every answer is signed under the gateway's access key ([signedWriter]).
+// value, decided first ([Gateway.admitRunKey]), a refusal answered with its code and
+// Connection: close, once its body is read within [refusedBody] and [refusedWait], and
+// the connection closed unanswered when it is not; then the link's handler, with the
+// run key in the request's context and no Authorization left on it. Every answer is
+// signed under the gateway's access key ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +363,14 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 		value, ok := bearer(r.Header.Values("Authorization"))
 		k, ref := g.admitRunKey(value, ok)
 		if ref != nil {
+			if !readRefused(w, r, body) {
+				// The answer's signature covers a body the gateway did not read whole: no
+				// answer, and nothing more read, where net/http would read on before it
+				// closes.
+				http.NewResponseController(w).SetReadDeadline(time.Now())
+				panic(http.ErrAbortHandler)
+			}
+			sw.header.Set("Connection", "close")
 			refuse(sw, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
@@ -323,6 +379,20 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 		r.Header.Del("Authorization")
 		next.ServeHTTP(sw, r)
 	})
+}
+
+// readRefused reads the body of a request refused for its run key, through body, within
+// [refusedWait], and reports whether it is whole and at most [refusedBody].
+func readRefused(w http.ResponseWriter, r *http.Request, body *capturedBody) bool {
+	if r.ContentLength > refusedBody {
+		return false
+	}
+	if r.ContentLength == 0 {
+		return true
+	}
+	http.NewResponseController(w).SetReadDeadline(time.Now().Add(refusedWait))
+	n, err := io.Copy(io.Discard, io.LimitReader(body, refusedBody+1))
+	return err == nil && n <= refusedBody
 }
 
 // maxBound is the most of a request's body a bound answer's signature covers: a batch's
@@ -470,6 +540,82 @@ func (s *service) close(ctx context.Context) error {
 	}
 	s.edgeQ.Close()
 	s.relay.close(ctx)
+	return err
+}
+
+// sourceOf is the source a connection counts against: its IPv4 address, or the /64 of
+// its IPv6 address, an IPv4 address mapped into IPv6 counted as IPv4.
+func sourceOf(addr net.Addr) string {
+	if a, ok := addr.(*net.TCPAddr); ok {
+		return sourceKey(a.AddrPort().Addr())
+	}
+	return addressSource(addr.String())
+}
+
+// addressSource is the source of addr, host:port, as [sourceOf] counts it.
+func addressSource(addr string) string {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return addr
+	}
+	return sourceKey(ap.Addr())
+}
+
+// sourceKey is the source a's address counts as: itself for IPv4, its /64 for IPv6.
+func sourceKey(a netip.Addr) string {
+	a = a.Unmap().WithZone("")
+	if a.Is4() {
+		return a.String()
+	}
+	return netip.PrefixFrom(a, 64).Masked().String()
+}
+
+// connLimit counts the connections the one address holds, in all and by source.
+type connLimit struct {
+	mu         sync.Mutex
+	most, each int
+	total      int
+	by         map[string]int
+}
+
+func newConnLimit(most, each int) *connLimit {
+	return &connLimit{most: most, each: each, by: map[string]int{}}
+}
+
+// take counts one more connection of source, and reports whether it is within the
+// bounds; one that is not is not counted.
+func (l *connLimit) take(source string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.total >= l.most || l.by[source] >= l.each {
+		return false
+	}
+	l.total++
+	l.by[source]++
+	return true
+}
+
+// give lets go of a connection of source that take counted.
+func (l *connLimit) give(source string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.total--
+	if l.by[source]--; l.by[source] <= 0 {
+		delete(l.by, source)
+	}
+}
+
+// heldConn is a connection the one address counts until it is closed.
+type heldConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+// Close closes the connection and lets go of its count, once.
+func (c *heldConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
 	return err
 }
 

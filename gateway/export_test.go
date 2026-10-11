@@ -34,6 +34,9 @@ func SetCloseWait(c *Config, d time.Duration) { c.closeWait = d }
 // SetRelayWait makes wait how long the relay waits for the server.
 func SetRelayWait(c *Config, wait time.Duration) { c.relayWait = wait }
 
+// SetRelayInFlight makes n the most requests the relay has with the server at once.
+func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
+
 // SetNow makes now the clock the one address judges a run key's attach window by.
 func SetNow(c *Config, now func() time.Time) { c.now = now }
 
@@ -82,4 +85,34 @@ const (
 	RelayRegister  = relayRegister
 	RelayOutcome   = relayOutcome
 	RelayMaxAnswer = relayMaxAnswer
+)
+
+// ServiceServers are the servers of g's one address: the link's and the relay's.
+func ServiceServers(g *Gateway) (edge, relay *http.Server) { return g.svc.edge, g.svc.relay.http }
+
+// HoldEnded marks g's run of runID ended, as its end does before anything of the run is
+// let go of, and returns what marks it live again.
+func HoldEnded(g *Gateway, runID string) (undo func()) {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	lr.mu.Lock()
+	lr.ended = true
+	lr.mu.Unlock()
+	return func() {
+		lr.mu.Lock()
+		lr.ended = false
+		lr.mu.Unlock()
+	}
+}
+
+// The one address's bounds.
+const (
+	MaxSourceConns = maxSourceConns
+	RefusedBody    = refusedBody
+	RefusedWait    = refusedWait
+	EdgeReadWait   = edgeReadWait
+	EdgeMaxHeader  = edgeMaxHeader
+	RelayReadWait  = relayReadWait
+	RelayWriteWait = relayWriteWait
 )

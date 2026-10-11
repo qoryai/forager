@@ -579,7 +579,8 @@ func (r *Run) Discard(ctx context.Context) error {
 
 // Reclaim removes the record of a run whose open never answered its session, so its
 // run id opens again: a record whose lock is free and whose events.jsonl holds at most
-// the run's dev.qory.run.registered, which is never posted. It removes what [Run.Discard]
+// the run's dev.qory.run.registered, which is never posted. It reads the record under
+// its lock, so what it judges is what it removes. It removes what [Run.Discard]
 // removes, and reports whether it did; a record that holds anything more, one another
 // holds, and no record at all are left as they are.
 func (s *Stream) Reclaim(runID string) (bool, error) {
@@ -592,8 +593,7 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 		return false, nil
 	}
 	dir := s.Dir(runID)
-	b, err := os.ReadFile(filepath.Join(dir, sink.EventsFile))
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(dir, sink.EventsFile)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
@@ -607,6 +607,13 @@ func (s *Stream) Reclaim(runID string) (bool, error) {
 		return false, err
 	}
 	defer unlock()
+	b, err := os.ReadFile(filepath.Join(dir, sink.EventsFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
 	n := 0
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {

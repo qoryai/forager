@@ -839,6 +839,8 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		"no Authorization":    nil,
 		"two run keys":        {"Bearer " + good, "Bearer " + good},
 		"Basic":               {"Basic " + base64.StdEncoding.EncodeToString([]byte(":"+good))},
+		"Basic, the run key":  {"Basic " + good},
+		"Digest, the run key": {"Digest " + good},
 		"no run key":          {"Bearer not-a-run-key"},
 		"a key no pin signed": {"Bearer " + unpinned},
 		"a run key cut short": {"Bearer " + good[:len(good)-4]},

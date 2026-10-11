@@ -10,17 +10,20 @@ import (
 const keepEnded = 15 * time.Minute
 
 // spentRun is what a run on the one address leaves once it has ended and its record is
-// flushed: how a later request of the run is answered, until it lapses.
+// flushed: how a later request of the run is answered, until it lapses, and the error
+// its record's flush came to, for Close.
 type spentRun struct {
 	end   runEnd
 	until time.Time
+	err   error
 }
 
 // retire lets go of a run on the one address that has ended and its record flushed: the
 // gateway holds no more of it than its [spentRun], for [keepEnded]; what it came to
-// joins the gateway's delivery. The spent runs past their time go too, so they do not
-// grow with the runs a gateway has served. A gateway that is closing keeps every run
-// for Close.
+// joins the gateway's delivery. The spent runs past their time go too, their run ids
+// among the used and their errors with them, so none of these grows with the runs a
+// gateway has served: a run id the gateway no longer keeps is refused by its record. A
+// gateway that is closing keeps every run for Close.
 func (g *Gateway) retire(lr *linkRun) {
 	end, _ := lr.gone()
 	g.mu.Lock()
@@ -32,15 +35,13 @@ func (g *Gateway) retire(lr *linkRun) {
 	for id, sp := range g.spent {
 		if !now.Before(sp.until) {
 			delete(g.spent, id)
+			delete(g.used, id)
 		}
 	}
 	delete(g.runs, lr.id)
-	g.spent[lr.id] = spentRun{end: end, until: now.Add(keepEnded)}
+	g.spent[lr.id] = spentRun{end: end, until: now.Add(keepEnded), err: lr.err}
 	g.delivery.Undelivered += lr.result.Undelivered
 	g.closedRun(lr)
-	if lr.err != nil {
-		g.spentErrs = append(g.spentErrs, lr.err)
-	}
 }
 
 // spentOf is the spent run of the run id, when it is still kept.
@@ -50,6 +51,7 @@ func (g *Gateway) spentOf(runID string) (spentRun, bool) {
 	sp, ok := g.spent[runID]
 	if ok && !time.Now().Before(sp.until) {
 		delete(g.spent, runID)
+		delete(g.used, runID)
 		return spentRun{}, false
 	}
 	return sp, ok

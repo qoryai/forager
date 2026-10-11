@@ -1843,7 +1843,12 @@ connection by its first bytes after the TLS handshake: a connection that opens w
 `QORY-BIND` is an edge's, the session's or its forwarder's, and any other is the relay's
 (The relay of the server's endpoints, below). The gateway answers the binding under its
 access key, reads the edge's next line within the ten seconds of a preamble, each line
-at most 8 KiB, and closes a connection that sends neither in time unanswered. The run
+at most 8 KiB, and closes a connection that sends neither in time unanswered. It holds
+at most 4096 connections at once, and at most 64 of one source, an IPv4 address or an
+IPv6 /64; one more is closed as it is accepted, unanswered. On a bound connection a
+request of the link arrives whole, its body included, within 60 seconds, and its
+request line and fields within 16 KiB, the 4 KiB net/http allows past that aside: a
+longer head is net/http's own `431`, unsigned. The run
 request is `POST /qory-link/run-configuration`, a reload
 `GET /qory-link/run-configuration/<run_id>` and a batch `POST /qory-link/events`; the
 discovery lists them on the origin the request names in its `Host`, the address the
@@ -1861,6 +1866,13 @@ this order, from `gateway`:
 | 2 | `409` | `run_key_expired` | past its `attach_by`, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded |
 | 3 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
 | 4 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
+
+A request refused for its run key is answered once: the gateway reads its body, which
+the refusal's signature covers, up to 64 KiB within 10 seconds, answers with
+`Connection: close` and closes the connection. A body declared or sent longer than
+64 KiB, or one that does not come whole within those 10 seconds, closes the connection
+unanswered. No request without a run key the gateway takes keeps a connection open,
+`OPTIONS *` among them.
 
 Rows 2 to 4 are in the order the server decides an attach's refusals in. The message
 of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is the gateway's own refusal of the attach, decided before it asks the
@@ -1905,25 +1917,34 @@ not `ng_`.
 **The relay of the server's endpoints.** A connection to the one address that does not
 open with the binding is the relay's: HTTP/1.1, for a keyed machine or a starter whose
 server document holds `via` (§The server, Via). The relay forwards four endpoints alone
-to the origin of the gateway's own server document, with the target, the path and the
-query, unchanged, in origin form when it came in absolute form: the enrolment, `POST /.well-known/qory-enrolment`; discovery,
+to the origin of the gateway's own server document, with the target unchanged: the path
+it matched, which holds no escaped byte, and a discovery's query as it came; in origin
+form when it came in absolute form. They are the enrolment, `POST /.well-known/qory-enrolment`; discovery,
 `GET /.well-known/qory-configuration`; a registration, a `POST` to the path of the
 `run.url` of the gateway's discovery; and an outcome, a `POST` to that path, a slash, a
 run's id and `/outcome`. It drops the fields of one connection (RFC 9110 §7.6.1), those
-its `Connection` names among them, asks
+its `Connection` names among them, and the fields that name a source,
+`X-Forwarded-For`, `Forwarded` and `X-Real-IP`, asks
 for no compression, and passes the server's answer back byte for byte, its status and
 its fields but those of one connection, so each request's signature and each answer's
 stay the server's. It relays nothing else, the attach above all, and answers none of
-them itself. Its limits, each answered by the relay itself with no body:
+them itself. Its limits, each answered by the relay itself with no body, in this order:
 
 | Status | When |
 |---|---|
-| `429` | more than 60 requests a minute from one source address, in bursts of at most 20 |
-| `404` | a path other than the four |
+| `429` | more than 60 requests a minute from one source, in bursts of at most 20; or a source new to the relay while it follows 65,536 |
+| `404` | a path other than the four, a path with an escaped byte (`%2F` and the like), or a query on a `POST` |
 | `405` | one of the four paths with another method |
 | `413` | a request's body over 16 KiB for the enrolment, 64 KiB for a registration or 4 KiB for an outcome |
+| `503` | 64 requests with the server already |
 | `502` | the server not reached, or its answer over 1 MiB |
 | `504` | no answer from the server within 10 seconds |
+
+A source is the connection's own address, an IPv4 address or an IPv6 /64, never a field
+the request carries. The relay lets go of a source's count once it has been idle for
+the 20 seconds its burst takes to come back whole. A connection of the relay reads a
+request whole, its body included, within 30 seconds, and writes its answer within 30
+seconds of the request's head; a connection that misses either is closed.
 
 **On the wire.** A request on the link contains `User-Agent` and
 `X-Qory-Contract-Version`, as toward the server, and a batch its `Content-Type` and
