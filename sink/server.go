@@ -110,6 +110,12 @@ type Config struct {
 	// the state and the reason a 410 carries. A server never ends a run: its signed 410
 	// only stops the deliveries. It must not block.
 	OnEnded func(server.RunEnd)
+	// OnServerEnd, when not nil, gets the end member of every signed 2xx toward the
+	// server that carries one, [server.Delivery.ServerEnd]: the outcome the run's
+	// starter gave, which the server sends on every 2xx for the run until the run's
+	// dev.qory.run.exited arrives. It is called on the worker's goroutine, once for each
+	// such answer, and must not block.
+	OnServerEnd func(server.ServerEnd)
 	// Wait is how long a batch waits after its first event; zero means [BatchWait].
 	Wait time.Duration
 	// Link posts to the gateway's link: each event without its sequence, which the
@@ -125,6 +131,7 @@ type Server struct {
 	runDigest atomic.Pointer[string]
 	onDigests func(server.Digests)
 	onEnded   func(server.RunEnd)
+	onEnd     func(server.ServerEnd)
 	closeOnce sync.Once
 	dir       string
 	report    func(string)
@@ -178,7 +185,7 @@ func New(c Config) *Server {
 		wait = BatchWait
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link}
+	w := &Server{client: c.To, onDigests: c.OnDigests, onEnded: c.OnEnded, onEnd: c.OnServerEnd, dir: c.Spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep, wait: wait, link: c.Link}
 	w.target.Store(&c.Target)
 	if c.Spool != "" {
 		if acks, err := os.OpenFile(filepath.Join(c.Spool, DeliveredFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
@@ -358,6 +365,9 @@ func (w *Server) deliver(batch []queued) {
 		switch {
 		case err == nil && d.Accepted():
 			w.ack(id, batch)
+			if d.ServerEnd != nil && w.onEnd != nil {
+				w.onEnd(*d.ServerEnd)
+			}
 			return
 		case err == nil && d.Stop():
 			// A Stop while this try was on its way has recorded and reported the stop

@@ -225,9 +225,9 @@ type Result struct {
 	// server's 410 never closes a run: the gateway only stops sending it events.
 	RunClosed bool
 	// ClosedReason is the code the run was closed with when RunClosed, the 410's code
-	// as the gateway answered it: run_closed, stopped, session_lost when it heard
-	// nothing from the session for three heartbeat intervals, and batch_refused when it
-	// refused a batch of the session's.
+	// as the gateway answered it: run_closed, stopped when the run's starter ended it,
+	// session_lost when it heard nothing from the session for three heartbeat
+	// intervals, and batch_refused when it refused a batch of the session's.
 	ClosedReason string
 }
 

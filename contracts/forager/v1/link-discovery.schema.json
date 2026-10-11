@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/link-discovery.schema.json",
   "title": "Link discovery",
-  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration: where the session posts its events, the heartbeat interval, where it opens a run, and the gateway's proxy address. Unsigned: the link's transport authenticates it. It lists no node, no workspaces, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
+  "description": "What a gateway returns on its link for a GET of /.well-known/qory-configuration on the local link, and of /qory-link/configuration behind a separate gateway: where the session posts its events, the heartbeat interval, where it opens a run, and the gateway's proxy address. Unsigned on the local link, whose transport authenticates it; signed under the gateway's access key behind a separate gateway. It lists no node, no workspaces, no server key and no secrets endpoint, which are the gateway's toward the server. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "events", "run", "proxy"],
@@ -12,7 +12,7 @@
       "const": 1
     },
     "events": {
-      "description": "Where the session posts its batches, which events, and the run's heartbeat interval. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
+      "description": "Where the session posts its batches, which events, and the run's heartbeat interval. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin the request reached, the run key's gateway_url, and the path /qory-link/events.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url", "types", "interval_seconds"],
@@ -26,11 +26,11 @@
       }
     },
     "run": {
-      "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin of session.gateway.url.",
+      "description": "Where the session opens a run, with a POST of its run request. On the local link the URL is http://localhost and a path; behind a separate gateway it has the origin the request reached, the run key's gateway_url, and the path /qory-link/run-configuration.",
       "$ref": "configuration.schema.json#/properties/run"
     },
     "proxy": {
-      "description": "The gateway's proxy: the one address every connection of the run's agent traffic goes to, opened with QORY-RELAY and the run's proxy secret. On one machine an address on loopback; behind a separate gateway the gateway's one address.",
+      "description": "The gateway's proxy: the one address every connection of the run's agent traffic goes to, opened with QORY-RELAY and the run's proxy secret on one machine, an address on loopback; behind a separate gateway the gateway's one address, where a bound connection opens it with QORY-RELAY and the run key.",
       "type": "object",
       "additionalProperties": false,
       "required": ["address"],

@@ -28,7 +28,8 @@ The module is a library with two entry points: the gateway and the session.
   all of it: the proxy, the policy, the credentials, the tools and the access key.
   `gateway.Config.NoLinkSocket` makes no link socket and no link directory: the link is
   served in memory alone, to a session in the gateway's process, as `qory run` starts
-  it; without it the socket serves a session in another process too.
+  it; without it the socket serves a session in another process too. A separate
+  gateway, below, serves no local link either way.
 - It then builds a [`session.Spec`](../session/session.go): the program to start, and
   how, and the gateway it speaks to, `session.LocalGateway(g.LocalLink())`. The session
   holds no policy, no credential and no server. It speaks to the gateway alone, over the
@@ -94,10 +95,11 @@ secret, since the session and the gateway check that the socket's peer is their 
 user.
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
-Every connection to the proxy opens with the relay's preamble and the run's proxy
-secret: without a wall the forwarder writes it, behind one the wall's relay does.
-Behind a separate gateway the forwarder reaches the gateway's one address over TLS
-instead: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+On the local link every connection to the proxy opens with the relay's preamble and the
+run's proxy secret: without a wall the forwarder writes it, behind one the wall's relay
+does. Behind a separate gateway the forwarder reaches the gateway's one address over TLS
+instead, where a bound connection opens the run's proxy with the run key: see
+[the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -108,27 +110,46 @@ the gateway could not open for a reason without a code.
 
 ## A separate gateway
 
-A gateway serves the sessions of other machines on one address of its own, beside its
-local link. Its `gateway.Config` sets it:
+A gateway serves the sessions of other machines on one address of its own, in place of
+its local link. Its `gateway.Config` sets it:
 
 - `Listen`, the one address, `host:port`. Empty means the local link alone. Every
-  connection is routed by its first bytes, after the TLS handshake: `QORY-RELAY` and a
-  run's proxy secret go to that run's proxy; a proxy request, `CONNECT` or an
-  absolute-form target, to the proxy of the live run whose proxy secret its Basic
-  password is; any other request to the contract
+  connection is routed by its first bytes, after the TLS handshake: one that opens with
+  `QORY-BIND` is bound to its TLS, the gateway answering with its `QORY-BOUND` line
+  under its access key, and then carries the link, every request with
+  `Authorization: Bearer <run key>`, or `QORY-RELAY`, a space and a run key, for that
+  run's proxy; any other is the relay of the server's enrolment, discovery,
+  registration and outcome
   ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)). The
   proxy of every run served there is guarded, wall or none. `Gateway.Addr` is this
   address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
-  address speaks TLS 1.3 alone. Without it, `Listen` must be a loopback address.
+  address speaks TLS 1.3 alone. `Listen` needs it.
+- `Server`, whose access key is a gateway's, `ng_`: the gateway verifies each run key
+  under the server's pin, attaches each run at the server under its own access key
+  (`server.Client.Attach`), signs the binding and every answer of the link, and relays
+  to the server's origin. `Listen` needs it.
 
-The gateway answers every request of the contract on the one address, the discovery
-included, with a `401` `unauthorized` from `gateway`, "the gateway refused the run:
-unauthorized".
+A separate gateway runs no sessions of its own machine: it makes no local link, in
+memory or on a socket, and no proxy listener on loopback, and a session that dials its
+`LocalLink` gets "the gateway serves other machines on its address, and runs no
+sessions". Every run there opens by its run key: the gateway refuses one with
+`run_key_invalid`, `run_key_expired`, `wrong_gateway` or `workspace_not_served` before it
+asks the server, attaches the run, writes the record's `dev.qory.run.registered` from
+the run key and the attach's answer, and gives a run answer with no labels and no proxy
+secret. When the server's answer to a batch carries the outcome the run's starter
+gave, it ends the run `stopped` with that state and reason, as a direct node's gateway
+does. A gateway that starts again attaches again a run whose open never answered its
+session, and answers a run that was open before `410` `run_closed`.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
-`host:port`, one that is not loopback without `TLS`, certificate and key files it cannot
-read or that do not match, and `TLS` without `Listen`.
+`host:port`, a `Listen` without `TLS`, "the gateway's address <address> needs TLS, a
+certificate and its key: every connection of the link there is bound to its TLS", or
+without a `Server`, "the gateway's address <address> needs a server and a gateway's
+access key: the gateway attaches each run there", certificate and key files it cannot
+read or that do not match, and `TLS` without `Listen`; and once discovery is read, an
+access key that is not a gateway's, "the access key's node <node id> is not a gateway,
+ng_: the gateway's address <address> needs a gateway's access key".
 
 ### The session behind a separate gateway
 
@@ -191,8 +212,9 @@ res, err := session.Run(ctx, session.Spec{
 - The gateway's refusals return a `*session.Refusal` as on one machine, its `Error` the
   refusal's `message`: the run key's refusals the gateway passes on, `400`
   `run_key_invalid`, and `409` `wrong_gateway`, `workspace_not_served`,
-  `run_key_expired` and `run_attached`; and `run_id_used`. A refusal of the
-  run request is recorded in the session's record alone. A `410` with a state and a
+  `run_key_expired` and `run_attached`, which may come at the discovery, before
+  anything is recorded, and the attach's. A refusal of the run request is recorded in
+  the session's record alone. A `410` with a state and a
   reason ends the run as on one machine: `Result.RunClosed`, `State` and `Reason`.
 - Agent traffic goes to the gateway's one address over TLS through the session's
   forwarder, each connection bound and opened with the run key. Without a wall, the
@@ -258,8 +280,11 @@ res, err := session.Resend(ctx, session.ResendSpec{
   `wrong_gateway`, `workspace_not_served`, `run_key_expired` or `run_attached`, at the
   discovery or at a batch, is a `*session.Refusal` from `gateway`, its code and status
   the gateway's and its text the gateway's message, with the events left under
-  `undelivered/`; nothing more is sent after it. Any other refusal of a batch is sent
-  again, as the session sends it.
+  `undelivered/`; nothing more is sent after it. A `401` `unauthorized` stops the resend
+  the same way, though the gateway sends none, so a resend never sends again into one.
+  Any other refusal of a batch is sent again, as the session sends it. A batch for a run
+  the gateway no longer holds is its `410`, the run's end while the gateway keeps it and
+  then `run_closed`, which closes the resend.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
 - After a gateway restarts, it holds no run of before: the gateway's own resend,
@@ -310,7 +335,7 @@ A program that needs code of its own implements the interface.
   session in another process, and which a gateway started with `NoLinkSocket` does not
   make. A `session.Gateway` is printed and logged by its socket or, behind a separate
   gateway, the URL its run key names, never the run key, and a `*gateway.Gateway` by its
-  proxy's address and its socket. A nil
+  proxy's address and its socket, or a separate gateway by its one address. A nil
   `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
@@ -373,9 +398,9 @@ A program that needs code of its own implements the interface.
 - `Undelivered`, how many of the session's events the gateway did not accept; behind a
   separate gateway they are under the run directory's `undelivered/`.
 - `RunClosed` when the gateway closed the run, and `ClosedReason` the code of the
-  gateway's `410`, unchanged: `run_closed`, `stopped`, `session_lost` when it heard
-  nothing from the session for 3 heartbeat intervals, and `batch_refused` when it
-  refused a batch of the session's. The runtime was stopped as at its time limit. A server's
+  gateway's `410`, unchanged: `run_closed`, `stopped` when the run's starter ended it,
+  `session_lost` when it heard nothing from the session for 3 heartbeat intervals, and
+  `batch_refused` when it refused a batch of the session's. The runtime was stopped as at its time limit. A server's
   `410` closes no run: Qory Apiary records what a run reports and never ends a run it
   did not start.
 
@@ -433,8 +458,8 @@ with `e2e` to check them together.
     - `session/runtimes/runtimetest` is the conformance suite every runtime passes.
   - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
     and `variables`.
-- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, and with
-  `Config.Listen` on one address of its own, with the proxy, the credentials and the
+- `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, or with
+  `Config.Listen` the sessions of other machines on one address of its own, with the proxy, the credentials and the
   tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
   and the `Gateway` it returns, `Resend` with its `ResendConfig` and its lines of a
   run that never opened and of torn lines, `ResendNoServer`, `ResendNotOpened` and

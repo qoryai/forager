@@ -154,6 +154,12 @@ func Files() (map[string][]byte, error) {
 		return nil, err
 	}
 	configuration := "sha256=" + hexSHA256(bytes.TrimSpace(discovery))
+	// The discovery of the fixture gateway key, whose digest the gateway's answers carry.
+	gatewayDiscovery, err := fs.ReadFile(contracts.FS, Dir+"/discovery-gateway.json")
+	if err != nil {
+		return nil, err
+	}
+	gatewayConfiguration := "sha256=" + hexSHA256(bytes.TrimSpace(gatewayDiscovery))
 
 	rk, err := Key().Sign(signing)
 	if err != nil {
@@ -232,17 +238,29 @@ func Files() (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The run's run configuration, as a reload of the run answers it, whose digest the
+	// attach's answer carries; the answer is that document with the registration's labels
+	// and about.
+	policy := json.RawMessage(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`)
+	rc, err := json.Marshal(struct {
+		Version        int             `json:"version"`
+		SecurityPolicy json.RawMessage `json:"security_policy"`
+	}{1, policy})
+	if err != nil {
+		return nil, err
+	}
+	files["attach-run-configuration.json"] = rc
 	attAnswer, err := json.Marshal(struct {
 		Version        int               `json:"version"`
 		SecurityPolicy json.RawMessage   `json:"security_policy"`
 		Labels         map[string]string `json:"labels"`
 		About          *server.About     `json:"about"`
-	}{1, json.RawMessage(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`), Labels, About})
+	}{1, policy, Labels, About})
 	if err != nil {
 		return nil, err
 	}
-	answer("200 to the attach above, signed under the fixture signing key: the run configuration, with the registration's labels and about, no X-Qory-Configuration, and X-Qory-Run-Configuration sha256= and the hex SHA-256 of the body.",
-		"attach-answer.json", accesskey.Answer{Status: 200, RequestSignature: attSig, Body: attAnswer, RunConfiguration: "sha256=" + hexSHA256(attAnswer)})
+	answer("200 to the attach above, signed under the fixture signing key: the run configuration, with the registration's labels and about; X-Qory-Configuration sha256= and the hex SHA-256 of discovery-gateway.json, the fixture gateway key's discovery, and X-Qory-Run-Configuration, which ETag carries quoted, sha256= and the hex SHA-256 of attach-run-configuration.json, the run configuration without the labels and about, as a reload of the run answers it.",
+		"attach-answer.json", accesskey.Answer{Status: 200, RequestSignature: attSig, Body: attAnswer, Configuration: gatewayConfiguration, RunConfiguration: "sha256=" + hexSHA256(rc)})
 
 	// The outcome, and its answer.
 	out, err := json.Marshal(struct {

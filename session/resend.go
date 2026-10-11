@@ -277,8 +277,8 @@ type recordedLine struct {
 // a run.refused of a code the session does not decide or with a status, which the
 // session records in its own record alone, nor a run.exited whose reason is the code of
 // a gateway's 410, one of [server.EndCodes], which only the session's own record of a
-// 410 holds. Its own record of a 410 with a reason outside Forager's own, or none, reads
-// as a posted one does: delivered.log's stopped tells it apart ([owedOf]).
+// 410 holds. Its own record of a 410 with the starter's reason, or none, reads as a
+// posted one does: delivered.log's stopped tells it apart ([owedOf]).
 func (l recordedLine) posted() bool {
 	switch l.Type {
 	case event.RunExited:

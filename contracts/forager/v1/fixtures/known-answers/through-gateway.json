@@ -76,7 +76,7 @@
       "signature": "OkThcQj1BrHI39IjLj22YWd5Ci2aJS8vNnhLLrUWyMsU9bu7jASGnAmlVOmsjj-mRGhO9lap5dHzF1nqwcKTBA"
     },
     {
-      "note": "200 to the attach above, signed under the fixture signing key: the run configuration, with the registration's labels and about, no X-Qory-Configuration, and X-Qory-Run-Configuration sha256= and the hex SHA-256 of the body.",
+      "note": "200 to the attach above, signed under the fixture signing key: the run configuration, with the registration's labels and about; X-Qory-Configuration sha256= and the hex SHA-256 of discovery-gateway.json, the fixture gateway key's discovery, and X-Qory-Run-Configuration, which ETag carries quoted, sha256= and the hex SHA-256 of attach-run-configuration.json, the run configuration without the labels and about, as a reload of the run answers it.",
       "body": "fixtures/known-answers/attach-answer.json",
       "body_length": 175,
       "lines": [
@@ -84,11 +84,11 @@
         "200",
         "sDuz7tRXEQj8i4-STcotyqYRbDpP0qowbjAGByx_aOzQZx4sJyNMKubsfYq-nHdbBbTO6xaOHBMdKYW-mNJhDA",
         "706c3903c990de5e910c3690f1cf3cb835e27b143c6a14c68fc2bb61465f2f31",
-        "",
-        "sha256=706c3903c990de5e910c3690f1cf3cb835e27b143c6a14c68fc2bb61465f2f31"
+        "sha256=1fa00e65ff33a33337f58a577ff5af3b45dd25139b917278c8761aac6876b221",
+        "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"
       ],
-      "length": 251,
-      "signature": "XeKwoQuInK2oVav0OIRlWl0yGRUABY-T1CZSdB3PF2zJsEsPJ_4EbsNw4rJhHl9TaqxTuidVdztwVhmsQSIIBA"
+      "length": 322,
+      "signature": "MopswsjWUgQNEQLM4p3fF7j9Eeib_lOACDnlrLffaWfD_4FMI0Qd9zZzfc8mYEuan4RYBHNWtgow1yRC1MW1Cg"
     },
     {
       "note": "200 to the outcome above, signed under the fixture signing key: {\"version\": 1}, with the X-Qory-Configuration of the fixture discovery and no run-configuration digest.",

@@ -50,20 +50,22 @@ type Config struct {
 	// sends nothing for three.
 	Heartbeat time.Duration
 	// Listen is a separate gateway's one address, host:port, port 0 a port of the
-	// system's choosing: the contract for the sessions of other machines, and the proxy
-	// for their agents, routed connection by connection.
-	// Empty means the local link alone. Any address but loopback needs TLS; the local
-	// link is served beside it either way, as without it.
+	// system's choosing: the link for the sessions of other machines, the proxy for
+	// their agents, and the relay of their starters' and keyed machines' requests to the
+	// Server, routed connection by connection. It needs TLS, and a Server whose access
+	// key is a gateway's, ng_: the gateway verifies each run key under the Server's pin,
+	// attaches each run there and relays to its origin. A gateway with an address serves
+	// no local link, in memory or on a socket, and runs no sessions of its own machine.
+	// Empty means the local link alone.
 	Listen string
-	// TLS is the certificate and key Listen serves, TLS 1.3 alone; nil serves Listen
-	// without TLS, which a loopback address alone may.
+	// TLS is the certificate and key Listen serves, TLS 1.3 alone, whose exporter binds
+	// every connection of the link there; Listen needs it.
 	TLS *TLS
 	// NoLinkSocket makes no link socket and no link directory: the gateway's local link
 	// is served in memory alone, to a session in this process, the way
 	// [Gateway.LocalLink] hands out, and no other process can reach it. qory run sets it.
-	// False makes the socket, for a session in another process too. With Listen it
-	// serves the one address as without it, for the sessions of other machines, beside a
-	// local link in memory alone and no socket.
+	// False makes the socket, for a session in another process too. A gateway with
+	// Listen serves no local link either way.
 	NoLinkSocket bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
@@ -76,9 +78,12 @@ type Config struct {
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
-	// runAuth, when not nil, decides the bearer value of every request of the contract
-	// on the one address, in place of refusing every one: tests set it.
-	runAuth runAuth
+	// now, when not nil, is the clock the one address judges a run key's attach window
+	// by, in place of time.Now. Tests set it.
+	now func() time.Time
+	// relayWait, when not zero, replaces relayWait, how long the relay waits for the
+	// server. Tests set it.
+	relayWait time.Duration
 	// openWaits and openWindow, when set, replace openWaits and openWindow, the tries
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration

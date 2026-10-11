@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/server"
 )
 
@@ -184,23 +185,28 @@ func quietLog() *log.Logger { return log.New(io.Discard, "", 0) }
 const maxBatch = 2 << 20
 
 // handler routes the requests of the contract that reach the gateway by s: its local
-// link, or its one address.
+// link, on the paths of its discovery there, or its one address, on the paths under
+// [link.RemotePathPrefix].
 func (g *Gateway) handler(s *side) http.Handler {
+	discovery, runs, events := server.WellKnown, runPath, eventsPath
+	if s.remote {
+		discovery, runs, events = link.RemoteDiscoveryPath, remoteRunPath, remoteEventsPath
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.Header.Get(server.HeaderContractVersion); v != "" && v != strconv.Itoa(server.Revision) {
 			refuse(w, http.StatusBadRequest, "unsupported_contract_version", nil, accesskey.FromGateway, gatewayText("unsupported_contract_version"))
 			return
 		}
 		switch {
-		case r.URL.Path == server.WellKnown && r.Method == http.MethodGet:
+		case r.URL.Path == discovery && r.Method == http.MethodGet:
 			g.discover(s, w, r)
-		case r.URL.Path == runPath && r.Method == http.MethodPost:
+		case r.URL.Path == runs && r.Method == http.MethodPost:
 			g.openRun(s, w, r)
-		case strings.HasPrefix(r.URL.Path, runPath+"/") && r.Method == http.MethodGet:
-			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runPath+"/"))
-		case r.URL.Path == eventsPath && r.Method == http.MethodPost:
+		case strings.HasPrefix(r.URL.Path, runs+"/") && r.Method == http.MethodGet:
+			g.reload(s, w, r, strings.TrimPrefix(r.URL.Path, runs+"/"))
+		case r.URL.Path == events && r.Method == http.MethodPost:
 			g.batch(s, w, r)
-		case r.URL.Path == server.WellKnown || r.URL.Path == runPath || r.URL.Path == eventsPath || strings.HasPrefix(r.URL.Path, runPath+"/"):
+		case r.URL.Path == discovery || r.URL.Path == runs || r.URL.Path == events || strings.HasPrefix(r.URL.Path, runs+"/"):
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		default:
 			w.WriteHeader(http.StatusNotFound)

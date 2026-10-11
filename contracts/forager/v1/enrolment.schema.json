@@ -70,7 +70,7 @@
     },
     "answer": {
       "title": "Enrolment answer",
-      "description": "The 201 answer: the new access key's id, its node or node pool, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
+      "description": "The 201 answer: the new access key's id, its node, node pool or gateway, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "access_key_id", "node_id", "node_kind", "stored_secrets", "apiary_public_key"],
@@ -85,14 +85,14 @@
           "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_id": {
-          "description": "The id of the access key's node, nd_, or node pool, np_, followed by 16 lower-case Crockford base32 characters.",
+          "description": "The id of the access key's node, nd_, node pool, np_, or gateway, ng_, followed by 16 lower-case Crockford base32 characters.",
           "type": "string",
-          "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
+          "pattern": "^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_kind": {
-          "description": "node for an nd_ id, pool for an np_ id.",
+          "description": "node for an nd_ id, pool for an np_ id, gateway for an ng_ id.",
           "type": "string",
-          "enum": ["node", "pool"]
+          "enum": ["node", "pool", "gateway"]
         },
         "stored_secrets": {
           "description": "The access key's stored-secrets flag, fixed when the key is created.",
@@ -103,8 +103,15 @@
       "allOf": [
         {
           "if": {"properties": {"node_kind": {"const": "node"}}},
-          "then": {"properties": {"node_id": {"pattern": "^nd_"}}},
-          "else": {"properties": {"node_id": {"pattern": "^np_"}}}
+          "then": {"properties": {"node_id": {"pattern": "^nd_"}}}
+        },
+        {
+          "if": {"properties": {"node_kind": {"const": "pool"}}},
+          "then": {"properties": {"node_id": {"pattern": "^np_"}}}
+        },
+        {
+          "if": {"properties": {"node_kind": {"const": "gateway"}}},
+          "then": {"properties": {"node_id": {"pattern": "^ng_"}}}
         }
       ]
     },

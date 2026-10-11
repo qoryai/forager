@@ -72,7 +72,7 @@
       }
     },
     "proxy_secret": {
-      "description": "The run's proxy secret: at least 128 bits from the system's random source, made by the gateway for this run. It opens every connection to the gateway's proxy on loopback, in the relay's preamble: behind a wall the wall's relay writes it, and without one the session's forwarder writes it before what the agent sends. It is in no agent's environment. Compared in constant time, never logged, refused once its run ends, sent between machines only inside TLS. Characters the relay's preamble carries as they are. On the local link alone: behind a separate gateway the answer has none, since the run key opens the proxy's connections.",
+      "description": "The run's proxy secret: at least 128 bits from the system's random source, made by the gateway for this run. It opens every connection to the gateway's proxy on loopback, in the relay's preamble: behind a wall the wall's relay writes it, and without one the session's forwarder writes it before what the agent sends. It is in no agent's environment. Compared in constant time, never logged, refused once its run ends; it never leaves the machine. Characters the relay's preamble carries as they are. On the local link alone: behind a separate gateway the answer has none, since the run key opens the proxy's connections.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,256}$"
     },
