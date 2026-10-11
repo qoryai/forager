@@ -1904,9 +1904,10 @@ server, and its message is the line the server's refusal of the attach gives:
 `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
 that passes names the request's run: a run request for another `run_id`, or a reload of
 another, is `run_key_invalid`. The gateway verifies the run key under its pin on every
-request of the run and on every proxy connection, not only the first, so once a server
-key is out of the gateway's pin, a run whose run key that key signed gets `400`
-`run_key_invalid` on its next request, and its proxy connections are closed unanswered.
+request of the run and on every proxy connection, not only the first, so once the
+gateway restarts with a server key out of its pin, a run whose run key that key signed
+gets `400` `run_key_invalid` on its next request, and its proxy connections are closed
+unanswered.
 
 **Attach.** Behind a separate gateway the gateway opens a run by attaching it at the
 server (§The server, Through a gateway), not by registering it: on the run request it

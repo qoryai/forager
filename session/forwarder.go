@@ -33,7 +33,7 @@ const dialWait = 10 * time.Second
 // every connection must carry the password of the agent's proxy URL, a secret the
 // session made for this run's forwarder alone, which the forwarder takes off; the
 // connection carries that one request, so the password of every request is checked
-// and none reaches the proxy.
+// before the request is passed on.
 //
 // Behind a separate gateway it reaches the gateway's one address over TLS, each
 // connection bound to a key the run key names and opened with the relay's preamble and
