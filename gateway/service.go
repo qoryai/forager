@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -81,10 +80,6 @@ type side struct {
 
 // localSide is the local link's.
 var localSide = &side{}
-
-// authorityPath is where in the gateway's directory its own certificate authority is
-// kept.
-func authorityPath(dir string) string { return filepath.Join(dir, "authority", "ca.pem") }
 
 // checkService refuses a config whose one address cannot be served, before anything
 // starts, and returns the certificate it serves, nil for none. It never reads the key's

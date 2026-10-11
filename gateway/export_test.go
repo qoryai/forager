@@ -82,8 +82,7 @@ func SecretsIndexed(g *Gateway) int {
 func SetOpened(c *Config, f func()) { c.opened = f }
 
 // SetOpenTries sets the waits between the tries of the run's registration with Qory
-// Apiary as a run opens, and how long after the run request or the login a try
-// may start again, in place of openWaits and openWindow.
+// Apiary as a run opens, and how long after the run request a try may start again, in place of openWaits and openWindow.
 func SetOpenTries(c *Config, waits []time.Duration, window time.Duration) {
 	c.openWaits, c.openWindow = waits, window
 }
