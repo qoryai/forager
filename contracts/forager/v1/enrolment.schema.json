@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/enrolment.schema.json",
   "title": "Enrolment",
-  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, its 201 answer and its signed refusals: the request's body is $defs/request, the answer's $defs/answer, a signed 409's or 429's $defs/refusal, and a document is one of the three. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer and every signed refusal are signed under the server's key, the first line of the signed answer being the enrolment answers' own domain line, qory-enrol-answer-ed25519-v1, and line 3 the request's proof exactly as sent. The server checks the key and verifies the proof under it before it signs anything. The answer and every signed refusal list the server's keys, so a machine without a pin verifies either under the key its code's first fingerprint names. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
+  "description": "The POST to <url>/.well-known/qory-enrolment, which assigns a new access key its id, its 201 answer and its signed refusals: the request's body is $defs/request, the answer's $defs/answer, a signed 409's or 429's $defs/refusal, and a document is one of the three. The request carries no access key id and no request signature; the code and the proof authenticate it. The answer and every signed refusal are signed under the server's key, the first line of the signed answer being the enrolment answers' domain line, qory-enrol-answer-ed25519-v1, and line 3 the request's proof exactly as sent. The server checks the key and verifies the proof under it before it signs anything. The answer and every signed refusal list the server's keys, so a machine without a pin verifies either under the key its code's first fingerprint names. A member the schema does not define is refused, and so is a member name twice in one object. Every binary value is base64url without padding.",
   "oneOf": [
     {"$ref": "#/$defs/request"},
     {"$ref": "#/$defs/answer"},
@@ -56,7 +56,7 @@
           "$ref": "#/$defs/public_key"
         },
         "timestamp": {
-          "description": "The machine's clock, in decimal seconds since the Unix epoch. The server accepts it within 300 seconds of its own. It is a JSON integer below 2^53, with no sign, fraction or exponent; the server checks the form when it decodes.",
+          "description": "The machine's clock, in decimal seconds since the Unix epoch. The server accepts it within 300 seconds of its clock. It is a JSON integer below 2^53, with no sign, fraction or exponent; the server checks the form when it decodes.",
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991

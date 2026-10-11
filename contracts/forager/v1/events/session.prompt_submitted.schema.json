@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["session_id", "prompt"],
   "properties": {
-    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "session_id": {"description": "The runtime's session identifier.", "type": "string", "minLength": 1},
     "prompt": {"type": "string"},
     "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
     "agent_type": {"description": "The subagent's type, or the agent the session was started as.", "type": "string", "minLength": 1}
