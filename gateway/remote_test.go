@@ -1493,7 +1493,7 @@ func TestABatchBehindTheGatewayTheLinkRefusesEndsItsRun(t *testing.T) {
 	if a := e.reload(t); a.status != http.StatusGone || a.refusal()["error"] != "batch_refused" {
 		t.Errorf("the run after: %d %s", a.status, a.body)
 	}
-	if !r.reported("run " + runID + ": the gateway refused a batch of its session's, an event of another run; the run ends: failed") {
+	if !r.reported("run " + runID + ": the gateway refused a batch from the run's session, an event of another run; the run ends: failed") {
 		t.Error("no line of the refused batch")
 	}
 }
