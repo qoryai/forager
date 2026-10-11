@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"io"
 	"time"
 
@@ -75,6 +76,9 @@ type Config struct {
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()
+	// marked, when not nil, is called once the record of a run on the one address is
+	// marked answered, with the context of its run request. Tests set it.
+	marked func(context.Context)
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
