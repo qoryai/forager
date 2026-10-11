@@ -65,7 +65,8 @@ func mediaType(r *http.Request, want string) bool {
 // for a narrowing, which the local link refuses; on the one address 400 run_key_invalid
 // for a run id that is not the run key's, 400 invalid_request for labels or about, which
 // are the starter's registration's, and 409 run_attached for a run the gateway holds,
-// is opening or has a record of; 409 run_id_used for a run id that already names a run here; the run's
+// is opening or has a record of, and the server's run_key_expired again for a run key
+// whose attach the server refused so ([expired]); 409 run_id_used for a run id that already names a run here; the run's
 // refusal when it does not open; else the run answer, on the one address once the run's
 // record is marked answered, and a 500 internal of a run let go of when it cannot be.
 func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
@@ -101,6 +102,12 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		how.runKey, how.key = p.raw, p.key
+		if err := g.expired.refusal(p.raw, g.now()); err != nil {
+			// The server refused the run key's attach run_key_expired before: the same
+			// refusal, and no attach.
+			refuseOpen(w, err)
+			return
+		}
 	}
 	g.mu.Lock()
 	if g.closing {
@@ -154,6 +161,9 @@ func (g *Gateway) openRun(s *side, w http.ResponseWriter, r *http.Request) {
 			g.mu.Lock()
 			delete(g.used, req.RunID)
 			g.mu.Unlock()
+			if s.remote {
+				g.expired.keep(how.runKey, err, how.key.AttachBy.Add(server.Window), g.now())
+			}
 		}
 		refuseOpen(w, err)
 		return

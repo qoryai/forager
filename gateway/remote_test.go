@@ -932,6 +932,29 @@ func TestTheGatewayAllowsTheSkewPastAttachBy(t *testing.T) {
 	}
 }
 
+// TestTheServersRunKeyExpiredIsKept pins the server's run_key_expired refusal of an
+// attach within the skew: two run requests with a run key 10 s past its attach_by send
+// one attach, and both get the server's refusal, the same answer.
+func TestTheServersRunKeyExpiredIsKept(t *testing.T) {
+	r := startRemote(t, nil, gateway.Config{})
+	r.c.attachRefusal.Store(&receiver.Refusal{Status: http.StatusConflict, Code: "run_key_expired"})
+	runID := event.NewRunID()
+	key := runKeyFor(t, runID, func(k *runkey.Key) {
+		k.AttachBy = time.Now().Add(-10 * time.Second).Truncate(time.Second)
+		k.Issued = k.AttachBy.Add(-time.Minute)
+	})
+	first := r.tryOpen(t, key, server.LinkRunRequest{})
+	refused(t, "the first run request", first, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
+	second := r.tryOpen(t, key, server.LinkRunRequest{})
+	refused(t, "the second run request", second, http.StatusConflict, "run_key_expired", "apiary", r.attachLine(runID, "run_key_expired"))
+	if !bytes.Equal(first.body, second.body) {
+		t.Errorf("the second refusal %s; want the first's, %s", second.body, first.body)
+	}
+	if n := len(r.c.attached()); n != 1 {
+		t.Errorf("%d attaches; want 1", n)
+	}
+}
+
 // mustRunID is the run id of a run key.
 func mustRunID(t *testing.T, key string) string {
 	t.Helper()
