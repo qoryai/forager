@@ -1007,8 +1007,8 @@ release may change what an existing document does, and says so under Upgrading.
 - Of a policy's path rules, the one for the most specific host pattern that matches
   applies: an exact host before a wildcard, a longer suffix before a shorter.
 - `gateway.Policy.Under` keeps each side's path rules apart, as beside a server's
-  policy: a request to a host either side holds to paths matches an entry of each side
-  that lists it, whatever the sides' modes.
+  policy: a request to a host either side holds to paths must match an entry of each
+  side that lists it, and the run's mode decides a miss.
 
 ### Wall
 
