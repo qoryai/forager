@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ func Dirs() string { return filepath.Join(os.TempDir(), dirPrefix+"*") }
 
 // Listen creates a private directory under the system's temporary directory, mode
 // 0700, and listens on a socket in it. Close removes both. grace is how long Close
-// keeps accepting; zero means [Grace].
+// keeps accepting; zero or less means [Grace].
 func Listen(grace time.Duration) (*Listener, error) {
 	if grace <= 0 {
 		grace = Grace
@@ -122,14 +123,19 @@ func read(r io.Reader, handle func(descriptor.Record), bad func(error)) {
 const Grace = 200 * time.Millisecond
 
 // Close drains the socket, then removes it and its directory: it keeps accepting for
-// the grace Listen was given, waits for Serve to return, and closes. Records read during the drain still
-// reach handle, which is why a caller closes the socket before it writes the run's
-// last event.
+// the grace Listen was given, waits for Serve to return, and closes. Records read
+// during the drain still reach handle, which is why a caller closes the socket before
+// it writes the run's last event.
 func (l *Listener) Close() error {
 	l.ln.SetDeadline(time.Now().Add(l.grace))
+	wait := l.grace + Patience
+	if wait < l.grace {
+		// A grace near the largest duration waits as long as a duration can.
+		wait = math.MaxInt64
+	}
 	select {
 	case <-l.done:
-	case <-time.After(l.grace + Patience):
+	case <-time.After(wait):
 	}
 	err := l.ln.Close()
 	if rmErr := os.RemoveAll(l.dir); err == nil {

@@ -176,7 +176,7 @@ type Spec struct {
 	// Report receives one line per thing the session reports to its user; nil means Stderr.
 	Report func(string)
 	// SocketGrace is how long the run socket keeps accepting after the runtime exits,
-	// so a hook on its last event is still read; zero means 200 ms. For tests:
+	// so a hook on its last event is still read; zero or less means 200 ms. For tests:
 	// production leaves it zero.
 	SocketGrace time.Duration
 }
