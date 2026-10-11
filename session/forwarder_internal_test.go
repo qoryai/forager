@@ -739,8 +739,9 @@ func TestTheUnwalledForwarderRefusesBytesBeforeTheUpgrade(t *testing.T) {
 
 // TestTheUnwalledForwarderBoundsTheUpgradesReplyHead pins the head of the proxy's
 // reply to an upgrade: one longer than the forwarder reads closes the agent's
-// connection with no reply, and a short 101 followed by a tunnel longer than that
-// bound passes the tunnel whole.
+// connection with no reply, a short 101 followed by a tunnel longer than that bound
+// passes the tunnel whole, and so does another answer, its head within the bound, with
+// a body longer than it.
 func TestTheUnwalledForwarderBoundsTheUpgradesReplyHead(t *testing.T) {
 	const upgrade = "GET http://tool.example/ws HTTP/1.1\r\nHost: tool.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
 	const switching = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
@@ -792,6 +793,26 @@ func TestTheUnwalledForwarderBoundsTheUpgradesReplyHead(t *testing.T) {
 				var ne net.Error
 				if len(b) != 0 || errors.As(err, &ne) && ne.Timeout() {
 					t.Errorf("a reply head of %d bytes got the agent %.200q, %v; want the end and nothing", len(switching)+len(pad)+2, b, err)
+				}
+			})
+			t.Run("a long body", func(t *testing.T) {
+				pad := strings.Repeat("X-Pad: "+strings.Repeat("a", 1015)+"\r\n", 60)
+				body := strings.Repeat("b", 1<<20)
+				reply := fmt.Sprintf("HTTP/1.1 400 Bad Request\r\n%sContent-Length: %d\r\n\r\n%s", pad, len(body), body)
+				f, login := unwalledForwarder(t, replying(t, reply), secret)
+				c, err := net.Dial("tcp", f.Addr())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				io.WriteString(c, upgrade+login+"\r\n")
+				c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+				if err != nil || resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("the refused upgrade got %v, %v", resp, err)
+				}
+				if b, err := io.ReadAll(resp.Body); err != nil || string(b) != body {
+					t.Errorf("the answer's body passed %d bytes, %v; want %d", len(b), err, len(body))
 				}
 			})
 			t.Run("a long tunnel", func(t *testing.T) {
