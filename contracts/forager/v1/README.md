@@ -988,8 +988,10 @@ when `ca_file` is set, against the authorities of that file, which replace them;
 SubjectPublicKeyInfo in standard base64 with padding, 44 characters ending in `=`, and
 with it only a certificate with that public key is accepted, its chain still checked.
 The trust is never relaxed there, since a relayed registration's answer carries the run
-key. `server.Via` holds the setting, its `Transport` the trust, and
-`accesskey.EnrolmentRequest.PostVia` sends an enrolment through it.
+key. The gateway a request is relayed through sees that run key, so `via` names a
+gateway trusted at least as much as the run's own gateway. `server.Via` holds the
+setting, its `Transport` the trust, and `accesskey.EnrolmentRequest.PostVia` sends an
+enrolment through it.
 
 **The access key.** The access key authenticates Forager to the server. It is one
 Ed25519 key, whose secret is one line: `qak_` and the 32-byte seed in base64url without
@@ -1874,7 +1876,10 @@ of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `40
 server, and its message is the line the server's refusal of the attach gives:
 `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
 that passes names the request's run: a run request for another `run_id`, or a reload of
-another, is `run_key_invalid`.
+another, is `run_key_invalid`. The gateway verifies the run key under its pin on every
+request of the run and on every proxy connection, not only the first, so once a server
+key is out of the gateway's pin, a run whose run key that key signed gets `400`
+`run_key_invalid` on its next request, and its proxy connections are closed unanswered.
 
 **Attach.** Behind a separate gateway the gateway opens a run by attaching it at the
 server (§The server, Through a gateway), not by registering it: on the run request it
