@@ -1073,6 +1073,17 @@ release may change what an existing document does, and says so under Upgrading.
   entry, the agent's `docker` command read the empty one as unset, and the containers it
   started got no proxy. The agent's environment now contains one `DOCKER_CONFIG`, the
   wall's, when the run's is unset or empty; a non-empty one stays as it is.
+- The engine ran the agent's image's health check in the relay's container, as the
+  relay's user, where it could read the run's proxy secret from the relay's environment
+  and reach what the relay reaches. `wall.Docker` now creates the relay with
+  `--no-healthcheck`; the agent's container is unchanged.
+- The relay listened on every address of its container, so whatever reached its address
+  on its ordinary network, another container of the engine or a process of the machine,
+  had its connections forwarded to the proxy opened with the run's proxy secret. The
+  relay now listens on its address on the wall's inside network alone: `wall.Docker`
+  gives it that network's subnets in `QORY_RELAY_INSIDE`, and `wall.Relay` refuses to
+  start when the variable names none, or a subnet that holds no address of its own or
+  several.
 
 ### Session
 

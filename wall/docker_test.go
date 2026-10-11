@@ -53,6 +53,8 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	switch {
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
+	case strings.Contains(line, "{{.Subnet}}"):
+		return []byte("10.89.0.0/24 \n"), nil
 	case strings.Contains(line, "network inspect"):
 		return []byte(r.gateway + " \n"), nil
 	case strings.Contains(line, " inspect --format {{.State"):
@@ -203,7 +205,7 @@ func TestDockerCommandLines(t *testing.T) {
 				t.Error("Close left the environment file")
 			}
 			got := strings.Join(rec.lines, "\n") + "\n\nwrapped:\n" + words(append([]string{wrapped.Command}, wrapped.Args...)) + "\n\nenvironment:\n" + string(env)
-			if rec.relayEnv != RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
+			if rec.relayEnv != RelayInsideEnv+"=10.89.0.0/24\n"+RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
 				t.Errorf("the proxy's token belongs in the relay's environment file and nowhere else; the file holds %q", rec.relayEnv)
 			}
 			if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "not-a-real-key") {
@@ -336,6 +338,38 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 	l.Mounts = append(l.Mounts, Mount{Path: "/var/run/docker.sock"})
 	if _, err := e.Wrap(context.Background(), l); err == nil {
 		t.Error("the engine's socket was mounted")
+	}
+}
+
+// TestTheRelayRunsNoHealthCheck pins that the relay's container is created without the
+// image's health check, which would run beside the relay's environment, and that the
+// agent's command is not changed by it.
+func TestTheRelayRunsNoHealthCheck(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	got, err := e.Wrap(context.Background(), launch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := false
+	for _, line := range rec.lines {
+		if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
+			created = true
+			if !strings.Contains(line, " --read-only --no-healthcheck ") {
+				t.Errorf("the relay is created with the image's health check: %s", line)
+			}
+		}
+	}
+	if !created {
+		t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
+	}
+	if slices.Contains(got.Args, "--no-healthcheck") {
+		t.Errorf("the agent's command changed: %s", words(got.Args))
 	}
 }
 
