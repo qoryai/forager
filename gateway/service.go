@@ -11,9 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,6 +87,31 @@ const maxFirstLine = 8 << 10
 // open between requests: the session's client keeps one as long.
 const serviceIdle = 90 * time.Second
 
+// The one address's bounds on the connections it holds whose run key it has not
+// admitted: in all, of one source, an IPv4 address or an IPv6 /64, and of one IPv6 /48
+// ([sourceOf]). A connection past any is closed as it is accepted, unanswered. One
+// whose run key is admitted counts against none of them.
+const (
+	maxConns       = 4096
+	maxSourceConns = 64
+	maxBlockConns  = 256
+)
+
+// The link's bounds on the one address: how long a request may take to arrive whole,
+// its body included, and the most its request line and fields may hold.
+const (
+	edgeReadWait  = 60 * time.Second
+	edgeMaxHeader = 16 << 10
+)
+
+// The bounds of a request the one address refuses for its run key: the most of its body
+// the gateway reads, which the refusal's signature covers, and how long it waits for it.
+// A longer body, or one slower, closes the connection unanswered.
+const (
+	refusedBody = 64 << 10
+	refusedWait = 10 * time.Second
+)
+
 // service is the gateway's one address: every connection is routed by its first bytes,
 // after the TLS handshake. One that opens with [link.BindWord] is an edge's: the
 // gateway answers with its [link.BoundWord] line, and the connection then carries the
@@ -98,6 +125,7 @@ type service struct {
 	edge  *http.Server
 	edgeQ *connQueue
 	relay *relay
+	conns *connLimit
 
 	mu      sync.Mutex
 	pending map[net.Conn]struct{}
@@ -111,12 +139,16 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{}}
+	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
+		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
 	s.tls = &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: []string{"http/1.1"}}
-	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, IdleTimeout: serviceIdle, ErrorLog: quietLog(),
+	// OPTIONS * goes to the handler too, which refuses it for its run key: no request
+	// without one keeps a connection open.
+	s.edge = &http.Server{Handler: g.edgeHandler(s.side), ReadHeaderTimeout: link.PreambleWait, ReadTimeout: edgeReadWait, MaxHeaderBytes: edgeMaxHeader,
+		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
-				return context.WithValue(ctx, bindingKey{}, b.ekm)
+				return context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit)
 			}
 			return ctx
 		}}
@@ -131,7 +163,8 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 func (s *service) addr() string { return s.ln.Addr().String() }
 
 // accept routes every connection in its own goroutine, so a peer that sends nothing
-// holds up no one else.
+// holds up no one else. A connection past [maxConns], [maxSourceConns] of its source or
+// [maxBlockConns] of its /48 whose run keys are not admitted is closed at once.
 func (s *service) accept() {
 	defer s.wg.Done()
 	var backoff time.Duration
@@ -146,6 +179,12 @@ func (s *service) accept() {
 			continue
 		}
 		backoff = 0
+		source := sourceOf(c.RemoteAddr())
+		if !s.conns.take(source) {
+			c.Close()
+			continue
+		}
+		c = &heldConn{Conn: c, release: func() { s.conns.give(source) }}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -190,7 +229,11 @@ func (s *service) route(raw net.Conn) {
 	}
 	if string(line) == link.BindLine {
 		r.Discard(len(line))
-		handed = s.bind(tc, r)
+		admit := func() {}
+		if h, ok := raw.(*heldConn); ok {
+			admit = h.admit
+		}
+		handed = s.bind(tc, r, admit)
 		return
 	}
 	tc.SetDeadline(time.Time{})
@@ -201,8 +244,10 @@ func (s *service) route(raw net.Conn) {
 // writes its [link.BoundWord] line, signed under its access key over the connection's
 // exporter value, then reads the connection's next line within the same deadline. The
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
-// other line is the link's HTTP/1.1. It reports whether c was handed on.
-func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
+// other line is the link's HTTP/1.1. admit lets go of c's count among the connections
+// whose run keys are not admitted, once its run key is. It reports whether c was
+// handed on.
+func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
 		return false
@@ -219,14 +264,24 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader) bool {
 		return false
 	}
 	if bytes.HasPrefix(line, []byte(link.RelayPreamble+" ")) {
-		if len(line) > maxRelayRunKey {
+		value, ok := relayRunKey(line)
+		if !ok {
 			return false
 		}
 		r.Discard(len(line))
-		return s.g.relayRun(c, r, strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"))
+		return s.g.relayRun(c, r, value, admit)
 	}
 	c.SetDeadline(time.Time{})
-	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm})
+	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit})
+}
+
+// relayRunKey is the run key of a line of the relay's preamble, its newline included,
+// and whether the line is within [maxRelayRunKey]: a longer one holds no run key.
+func relayRunKey(line []byte) (string, bool) {
+	if len(line) > maxRelayRunKey {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(string(line), link.RelayPreamble+" "), "\n"), true
 }
 
 // boundLine is the gateway's answer to [link.BindWord] on the connection whose
@@ -272,16 +327,21 @@ type linkConn struct {
 
 func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-// boundConn is a bound connection of the link: what its binding read, and its exporter
-// value, which signs every answer on it.
+// boundConn is a bound connection of the link: what its binding read, its exporter
+// value, which signs every answer on it, and what lets go of its count once a run key
+// is admitted on it.
 type boundConn struct {
 	linkConn
-	ekm []byte
+	ekm   []byte
+	admit func()
 }
 
 // bindingKey is the key of a bound connection's exporter value in its requests'
 // contexts.
 type bindingKey struct{}
+
+// admitKey is the key of a bound connection's admit in its requests' contexts.
+type admitKey struct{}
 
 // b64token is the value of an Authorization of the Bearer scheme, RFC 6750 §2.1.
 var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
@@ -301,16 +361,20 @@ func bearer(values []string) (string, bool) {
 }
 
 // edgeHandler is the link on the one address: every request's run key, its bearer
-// value, decided first ([Gateway.admitRunKey]), a refusal answered with its code; then
-// the link's handler, with the run key in the request's context and no Authorization
-// left on it. Every answer is signed under the gateway's access key ([signedWriter]).
+// value, decided first ([Gateway.admitRunKey]), a refusal answered with its code and
+// Connection: close, once its body is read within [refusedBody] and [refusedWait], and
+// the connection closed unanswered when it is not; then the link's handler, with the
+// run key in the request's context and no Authorization left on it, every answer of
+// it other than a 2xx with Connection: close. The connection is admitted once a run
+// request, a reload or a batch is answered 2xx ([forLiveRun]), after the answer. Every
+// answer is signed under the gateway's access key ([signedWriter]).
 func (g *Gateway) edgeHandler(s *side) http.Handler {
 	next := g.handler(s)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ekm, _ := r.Context().Value(bindingKey{}).([]byte)
-		body := &capturedBody{r: r.Body, post: r.Method == http.MethodPost}
+		body := newCapturedBody(r, ekm)
 		r.Body = body
-		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, ekm: ekm, req: r, body: body, header: http.Header{}}
+		sw := &signedWriter{w: w, key: g.cfg.Server.AccessKey, req: r, body: body, header: http.Header{}}
 		defer func() {
 			// A handler that panics has no answer to sign: the connection is closed.
 			if v := recover(); v != nil {
@@ -321,32 +385,89 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 		value, ok := bearer(r.Header.Values("Authorization"))
 		k, ref := g.admitRunKey(value, ok)
 		if ref != nil {
+			if !readRefused(w, r, body) {
+				// The answer's signature covers a body the gateway did not read whole: no
+				// answer, and nothing more read, where net/http would read on before it
+				// closes.
+				http.NewResponseController(w).SetReadDeadline(time.Now())
+				panic(http.ErrAbortHandler)
+			}
+			sw.header.Set("Connection", "close")
 			refuse(sw, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
 		}
+		admit, _ := r.Context().Value(admitKey{}).(func())
+		live := forLiveRun(r)
 		r = r.WithContext(context.WithValue(r.Context(), runKeyKey{}, presented{raw: value, key: k}))
 		r.Header = r.Header.Clone()
 		r.Header.Del("Authorization")
 		next.ServeHTTP(sw, r)
+		success := sw.status == 0 || sw.status >= 200 && sw.status < 300
+		if !success {
+			// A run key that passed, of a run that ended or that the server refused among
+			// them: the connection goes with the answer.
+			sw.header.Set("Connection", "close")
+		}
+		sw.Flush()
+		if success && live && admit != nil {
+			admit()
+		}
 	})
+}
+
+// forLiveRun reports whether r is a request of the link a 2xx answers for a live run
+// only: the run request, a reload or a batch. Once one is answered 2xx, its connection
+// is admitted.
+func forLiveRun(r *http.Request) bool {
+	switch {
+	case r.Method == http.MethodPost && (r.URL.Path == remoteRunPath || r.URL.Path == remoteEventsPath):
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, remoteRunPath+"/"):
+		return true
+	}
+	return false
+}
+
+// readRefused reads the body of a request refused for its run key, through body, within
+// [refusedWait], and reports whether it is whole and at most [refusedBody].
+func readRefused(w http.ResponseWriter, r *http.Request, body *capturedBody) bool {
+	if r.ContentLength > refusedBody {
+		return false
+	}
+	if r.ContentLength == 0 {
+		return true
+	}
+	http.NewResponseController(w).SetReadDeadline(time.Now().Add(refusedWait))
+	n, err := io.Copy(io.Discard, io.LimitReader(body, refusedBody+1))
+	return err == nil && n <= refusedBody
 }
 
 // maxBound is the most of a request's body a bound answer's signature covers: a batch's
 // bound, and one byte more, which no request the gateway answers in full carries.
 const maxBound = maxBatch + 1
 
-// capturedBody is a request's body on a bound connection, kept as it is read, so its
-// answer's signature covers it: the body of a POST, nothing of a GET.
+// capturedBody is a request's body on a bound connection, hashed as it is read into
+// the third line of its answer's signature ([link.AnswerRequestHash]), so the signature
+// covers it and nothing of it is kept: the body of a POST, nothing of a GET.
 type capturedBody struct {
 	r    io.ReadCloser
 	post bool
-	buf  bytes.Buffer
+	h    hash.Hash
+	n    int
+}
+
+// newCapturedBody is r's body on the connection whose exporter value is ekm, hashed
+// with r's method and target.
+func newCapturedBody(r *http.Request, ekm []byte) *capturedBody {
+	return &capturedBody{r: r.Body, post: r.Method == http.MethodPost, h: link.AnswerRequestHash(ekm, r.Method, r.RequestURI)}
 }
 
 func (b *capturedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
-	if b.post && b.buf.Len() < maxBound {
-		b.buf.Write(p[:min(n, maxBound-b.buf.Len())])
+	if b.post && b.n < maxBound {
+		k := min(n, maxBound-b.n)
+		b.h.Write(p[:k])
+		b.n += k
 	}
 	return n, err
 }
@@ -354,13 +475,13 @@ func (b *capturedBody) Read(p []byte) (int, error) {
 // Close closes the request's body.
 func (b *capturedBody) Close() error { return b.r.Close() }
 
-// whole is the request's body, up to [maxBound]: what the handler read, then the rest;
-// empty for a GET.
-func (b *capturedBody) whole() []byte {
-	if b.post && b.buf.Len() < maxBound {
-		io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.buf.Len())))
+// answerRequest is the third line of the answer's signature over the request's body,
+// up to [maxBound]: what the handler read, then the rest; empty for a GET.
+func (b *capturedBody) answerRequest() string {
+	if b.post && b.n < maxBound {
+		io.Copy(io.Discard, io.LimitReader(b, int64(maxBound-b.n)))
 	}
-	return b.buf.Bytes()
+	return hex.EncodeToString(b.h.Sum(nil))
 }
 
 // signedWriter holds an answer on a bound connection until it is whole, then writes it
@@ -370,7 +491,6 @@ func (b *capturedBody) whole() []byte {
 type signedWriter struct {
 	w      http.ResponseWriter
 	key    *accesskey.Key
-	ekm    []byte
 	req    *http.Request
 	body   *capturedBody
 	header http.Header
@@ -409,7 +529,7 @@ func (s *signedWriter) Flush() {
 		s.status = http.StatusOK
 	}
 	a := accesskey.Answer{
-		Link: true, Status: s.status, RequestSignature: link.AnswerRequest(s.ekm, s.req.Method, s.req.RequestURI, s.body.whole()), Body: s.buf.Bytes(),
+		Link: true, Status: s.status, RequestSignature: s.body.answerRequest(), Body: s.buf.Bytes(),
 		Configuration: s.header.Get(server.HeaderConfiguration), RunConfiguration: s.header.Get(server.HeaderRunConfiguration),
 	}
 	h := s.w.Header()
@@ -476,6 +596,110 @@ func (s *service) close(ctx context.Context) error {
 	}
 	s.edgeQ.Close()
 	s.relay.close(ctx)
+	return err
+}
+
+// connSource is what a connection counts against: its source, an IPv4 address or an
+// IPv6 /64, and for IPv6 its /48.
+type connSource struct {
+	key, block string
+}
+
+// sourceOf is what a connection from addr counts against: its IPv4 address, or the /64
+// and the /48 of its IPv6 address, an IPv4 address mapped into IPv6 counted as IPv4.
+func sourceOf(addr net.Addr) connSource {
+	var a netip.Addr
+	if t, ok := addr.(*net.TCPAddr); ok {
+		a = t.AddrPort().Addr()
+	} else if ap, err := netip.ParseAddrPort(addr.String()); err == nil {
+		a = ap.Addr()
+	} else {
+		return connSource{key: addr.String()}
+	}
+	a = a.Unmap().WithZone("")
+	if a.Is4() {
+		return connSource{key: a.String()}
+	}
+	return connSource{key: sourceKey(a), block: netip.PrefixFrom(a, 48).Masked().String()}
+}
+
+// addressSource is the source of addr, host:port, as [sourceOf] counts it.
+func addressSource(addr string) string {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return addr
+	}
+	return sourceKey(ap.Addr())
+}
+
+// sourceKey is the source a's address counts as: itself for IPv4, its /64 for IPv6.
+func sourceKey(a netip.Addr) string {
+	a = a.Unmap().WithZone("")
+	if a.Is4() {
+		return a.String()
+	}
+	return netip.PrefixFrom(a, 64).Masked().String()
+}
+
+// connLimit counts the connections the one address holds whose run key it has not
+// admitted: in all, by source and by IPv6 /48.
+type connLimit struct {
+	mu                sync.Mutex
+	most, each, block int
+	total             int
+	by, blocks        map[string]int
+}
+
+func newConnLimit(most, each, block int) *connLimit {
+	return &connLimit{most: most, each: each, block: block, by: map[string]int{}, blocks: map[string]int{}}
+}
+
+// take counts one more connection of s, and reports whether it is within the bounds;
+// one that is not is not counted.
+func (l *connLimit) take(s connSource) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.total >= l.most || l.by[s.key] >= l.each || s.block != "" && l.blocks[s.block] >= l.block {
+		return false
+	}
+	l.total++
+	l.by[s.key]++
+	if s.block != "" {
+		l.blocks[s.block]++
+	}
+	return true
+}
+
+// give lets go of a connection of s that take counted.
+func (l *connLimit) give(s connSource) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.total--
+	if l.by[s.key]--; l.by[s.key] <= 0 {
+		delete(l.by, s.key)
+	}
+	if s.block != "" {
+		if l.blocks[s.block]--; l.blocks[s.block] <= 0 {
+			delete(l.blocks, s.block)
+		}
+	}
+}
+
+// heldConn is a connection the one address counts until its run key is admitted or it
+// is closed, whichever comes first.
+type heldConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+// admit lets go of the connection's count, once: its run key is admitted.
+func (c *heldConn) admit() { c.once.Do(c.release) }
+
+// Close closes the connection and lets go of its count, once.
+func (c *heldConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
 	return err
 }
 

@@ -84,6 +84,9 @@ type Config struct {
 	// relayWait, when not zero, replaces relayWait, how long the relay waits for the
 	// server. Tests set it.
 	relayWait time.Duration
+	// relayInFlight, when not zero, replaces relayInFlight, the most requests the relay
+	// has with the server at once. Tests set it.
+	relayInFlight int
 	// openWaits and openWindow, when set, replace openWaits and openWindow, the tries
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration

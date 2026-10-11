@@ -140,3 +140,27 @@ func TestTheBindingsBytes(t *testing.T) {
 		t.Errorf("a GET's request line %s", got)
 	}
 }
+
+// TestAnswerRequestHash pins the streaming form of AnswerRequest: the body written to
+// it in pieces of any size gives the same line, the SHA-256 of the same bytes, for an
+// empty body, a small one and one of 2 MiB.
+func TestAnswerRequestHash(t *testing.T) {
+	ekm := bytes.Repeat([]byte{0xab}, link.BindingSize)
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = byte(i*7 + i>>9)
+	}
+	for _, body := range [][]byte{nil, []byte("[]"), big} {
+		h := link.AnswerRequestHash(ekm, "POST", "/qory-link/events")
+		for rest, k := body, 1; len(rest) > 0; k = k*3 + 1 {
+			n := min(k, len(rest))
+			h.Write(rest[:n])
+			rest = rest[n:]
+		}
+		sum := sha256.Sum256(append([]byte(strings.Repeat("ab", 32)+"\nPOST\n/qory-link/events\n"), body...))
+		got := hex.EncodeToString(h.Sum(nil))
+		if want := link.AnswerRequest(ekm, "POST", "/qory-link/events", body); got != want || got != hex.EncodeToString(sum[:]) {
+			t.Errorf("a body of %d bytes: %s; AnswerRequest %s, the digest %x", len(body), got, want, sum)
+		}
+	}
+}

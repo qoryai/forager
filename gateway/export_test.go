@@ -21,9 +21,10 @@ func BoundLine(key *accesskey.Key, ekm []byte) string { return boundLine(key, ek
 // exporter value is ekm, when handler answers req, whose body is body.
 func SignedAnswer(key *accesskey.Key, ekm []byte, req *http.Request, body []byte, handler http.HandlerFunc) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	cb := &capturedBody{r: io.NopCloser(bytes.NewReader(body)), post: req.Method == http.MethodPost}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	cb := newCapturedBody(req, ekm)
 	req.Body = cb
-	sw := &signedWriter{w: rec, key: key, ekm: ekm, req: req, body: cb, header: http.Header{}}
+	sw := &signedWriter{w: rec, key: key, req: req, body: cb, header: http.Header{}}
 	handler(sw, req)
 	sw.Flush()
 	return rec
@@ -53,6 +54,9 @@ func SetCloseWait(c *Config, d time.Duration) { c.closeWait = d }
 
 // SetRelayWait makes wait how long the relay waits for the server.
 func SetRelayWait(c *Config, wait time.Duration) { c.relayWait = wait }
+
+// SetRelayInFlight makes n the most requests the relay has with the server at once.
+func SetRelayInFlight(c *Config, n int) { c.relayInFlight = n }
 
 // SetNow makes now the clock the one address judges a run key's attach window by.
 func SetNow(c *Config, now func() time.Time) { c.now = now }
@@ -103,3 +107,44 @@ const (
 	RelayOutcome   = relayOutcome
 	RelayMaxAnswer = relayMaxAnswer
 )
+
+// ServiceServers are the servers of g's one address: the link's and the relay's.
+func ServiceServers(g *Gateway) (edge, relay *http.Server) { return g.svc.edge, g.svc.relay.http }
+
+// HoldEnded marks g's run of runID ended, as its end does before anything of the run is
+// let go of, and returns what marks it live again.
+func HoldEnded(g *Gateway, runID string) (undo func()) {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	lr.mu.Lock()
+	lr.ended = true
+	lr.mu.Unlock()
+	return func() {
+		lr.mu.Lock()
+		lr.ended = false
+		lr.mu.Unlock()
+	}
+}
+
+// The one address's bounds.
+const (
+	MaxSourceConns = maxSourceConns
+	MaxBlockConns  = maxBlockConns
+	RefusedBody    = refusedBody
+	MaxBound       = maxBound
+	RefusedWait    = refusedWait
+	EdgeReadWait   = edgeReadWait
+	EdgeMaxHeader  = edgeMaxHeader
+	RelayReadWait  = relayReadWait
+	RelayWriteWait = relayWriteWait
+	RelayMaxHeader = relayMaxHeader
+)
+
+// PendingConns counts the connections g's one address holds whose run key it has not
+// admitted.
+func PendingConns(g *Gateway) int {
+	g.svc.conns.mu.Lock()
+	defer g.svc.conns.mu.Unlock()
+	return g.svc.conns.total
+}

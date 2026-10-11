@@ -19,19 +19,44 @@ import (
 	"github.com/qoryai/forager/server"
 )
 
-// The relay's limits: requests a minute from one source address, and the burst of them;
-// the most of a request's body it takes for each endpoint; the most of an answer it
-// passes back; and how long it waits for the server.
+// The relay's limits: requests a minute from one source, an IPv4 address or an IPv6
+// /64 ([sourceKey]), and the burst of them; the most of a request's body it takes for
+// each endpoint; the most of an answer it passes back; and how long it waits for the
+// server.
 const (
-	relayPerMinute   = 60
-	relayBurst       = 20
-	relayEnrolment   = 16 << 10
-	relayRegister    = 64 << 10
-	relayOutcome     = 4 << 10
-	relayMaxAnswer   = 1 << 20
-	enrolmentPath    = "/.well-known/qory-enrolment"
-	relayIdleSources = 10 * time.Minute
+	relayPerMinute = 60
+	relayBurst     = 20
+	relayEnrolment = 16 << 10
+	relayRegister  = 64 << 10
+	relayOutcome   = 4 << 10
+	relayMaxAnswer = 1 << 20
+	enrolmentPath  = "/.well-known/qory-enrolment"
 )
+
+// relayRefill is how long a source's bucket takes to fill from empty: one idle as long
+// is full, and the relay lets go of it, every relayRefill.
+const relayRefill = time.Minute * relayBurst / relayPerMinute
+
+// relaySources is the most sources the relay follows at once: a new one past it is
+// 429 until buckets are let go of.
+const relaySources = 1 << 16
+
+// relayInFlight is the most requests the relay has with the server at once: one more is
+// 503.
+const relayInFlight = 64
+
+// The relay's bounds on a request: how long it may take to arrive whole, its body
+// included; how long its answer may take from then on, the server's wait among it; and
+// the most its request line and fields may hold.
+const (
+	relayReadWait  = 30 * time.Second
+	relayWriteWait = 30 * time.Second
+	relayMaxHeader = 16 << 10
+)
+
+// sourceFields are the fields that name a request's source to the server, which the
+// relay never passes on: the server sees the gateway as the source.
+var sourceFields = []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"}
 
 // relayWait is how long the relay waits for the server's answer.
 const relayWait = 10 * time.Second
@@ -62,9 +87,10 @@ func dropHop(h http.Header) {
 // one address that open with no binding: a keyed machine's or a starter's enrolment,
 // discovery, registration and outcome, each signed by the holder's own key. It
 // forwards each request to the server's origin with its target in origin form, the path
-// and the query, unchanged, and passes the answer back byte for byte, so the request's signature and
-// the answer's are the server's. It relays nothing else, the attach above all, and
-// serves none of them itself.
+// it matched, and the query of a discovery, as the holder sent them, and passes the
+// answer back byte for byte, so the request's signature and the answer's are the
+// server's. It relays nothing else, the attach above all, and serves none of them
+// itself.
 type relay struct {
 	g      *Gateway
 	origin *url.URL
@@ -72,6 +98,10 @@ type relay struct {
 	wait   time.Duration
 	http   *http.Server
 	queue  *connQueue
+
+	// slots holds one value for each request with the server, at most [relayInFlight].
+	slots chan struct{}
+	done  chan struct{}
 
 	mu      sync.Mutex
 	sources map[string]*bucket
@@ -94,27 +124,56 @@ func (g *Gateway) newRelay(addr net.Addr) *relay {
 	if g.cfg.relayWait != 0 {
 		wait = g.cfg.relayWait
 	}
+	inFlight := relayInFlight
+	if g.cfg.relayInFlight != 0 {
+		inFlight = g.cfg.relayInFlight
+	}
 	rl := &relay{g: g, origin: origin, queue: newConnQueue(addr), sources: map[string]*bucket{}, wait: wait,
+		slots: make(chan struct{}, inFlight), done: make(chan struct{}),
 		client: &http.Client{Transport: t, Timeout: wait, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	rl.http = &http.Server{Handler: rl, ReadHeaderTimeout: link.PreambleWait, IdleTimeout: serviceIdle, ErrorLog: quietLog()}
+	// OPTIONS * goes to the handler too, which counts it and answers it 404.
+	rl.http = &http.Server{Handler: rl, ReadHeaderTimeout: link.PreambleWait, ReadTimeout: relayReadWait, WriteTimeout: relayWriteWait,
+		MaxHeaderBytes: relayMaxHeader, IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog()}
 	go rl.http.Serve(rl.queue)
+	go rl.pruneEvery(relayRefill)
 	return rl
 }
 
-// allow takes one request of the source address from its bucket, and reports whether
-// there was one. Buckets full again are let go of now and then, so they do not grow
-// with the addresses the relay has seen.
+// pruneEvery lets go of the full buckets every d, until the relay closes.
+func (rl *relay) pruneEvery(d time.Duration) {
+	t := time.NewTicker(d)
+	defer t.Stop()
+	for {
+		select {
+		case now := <-t.C:
+			rl.prune(now)
+		case <-rl.done:
+			return
+		}
+	}
+}
+
+// prune lets go of every bucket idle for [relayRefill] or more as of now: full again,
+// it is the one a new source gets.
+func (rl *relay) prune(now time.Time) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for s, b := range rl.sources {
+		if now.Sub(b.at) >= relayRefill {
+			delete(rl.sources, s)
+		}
+	}
+}
+
+// allow takes one request of the source from its bucket, and reports whether there was
+// one. A source new to the relay while it follows [relaySources] has none.
 func (rl *relay) allow(source string, now time.Time) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	b := rl.sources[source]
 	if b == nil {
-		if len(rl.sources) > 1024 {
-			for s, o := range rl.sources {
-				if now.Sub(o.at) > relayIdleSources {
-					delete(rl.sources, s)
-				}
-			}
+		if len(rl.sources) >= relaySources {
+			return false
 		}
 		b = &bucket{left: relayBurst, at: now}
 		rl.sources[source] = b
@@ -157,27 +216,32 @@ func (rl *relay) limit(method, path string) (int, int) {
 	return max, 0
 }
 
-// ServeHTTP relays one request, in order: past its source address's rate, 429; a
-// method or a path the relay does not relay, 405 or 404; a body over its endpoint's
-// bound, 413; the server unreached, 502, or not answering within [relayWait], 504; an
-// answer over [relayMaxAnswer], 502. Each of these is the relay's own answer, with no
-// body. Otherwise the server's answer, its status, its fields but those of one
-// connection, and its body as it came.
+// ServeHTTP relays one request, in order: past its source's rate, or a source new to a
+// relay that follows [relaySources], 429; a method or a target the relay does not
+// relay, 405 or 404, an escaped path and a query on a POST among the latter; a body over
+// its endpoint's bound, 413; [relayInFlight] requests with the server already, 503; the
+// server unreached, 502, or not answering within [relayWait], 504; an answer over
+// [relayMaxAnswer], 502. Each of these is the relay's own answer, with no body.
+// Otherwise the server's answer, its status, its fields but those of one connection,
+// and its body as it came.
 func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	source, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		source = r.RemoteAddr
-	}
-	if !rl.allow(source, time.Now()) {
+	// The connection's own address, never a field the request carries.
+	if !rl.allow(addressSource(r.RemoteAddr), time.Now()) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
 	max, status := rl.limit(r.Method, r.URL.Path)
+	if status == 0 && (r.URL.RawPath != "" || r.Method == http.MethodPost && (r.URL.RawQuery != "" || r.URL.ForceQuery)) {
+		// A path with an escaped byte is not the one matched, and no POST the relay
+		// passes on has a query.
+		status = http.StatusNotFound
+	}
 	if status != 0 {
 		w.WriteHeader(status)
 		return
 	}
 	var body []byte
+	var err error
 	if r.Method == http.MethodPost {
 		if body, err = io.ReadAll(io.LimitReader(r.Body, int64(max)+1)); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -188,9 +252,20 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	select {
+	case rl.slots <- struct{}{}:
+		defer func() { <-rl.slots }()
+	default:
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	target := r.URL.EscapedPath()
+	if r.Method == http.MethodGet && (r.URL.RawQuery != "" || r.URL.ForceQuery) {
+		target += "?" + r.URL.RawQuery
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), rl.wait)
 	defer cancel()
-	out, err := http.NewRequestWithContext(ctx, r.Method, rl.origin.Scheme+"://"+rl.origin.Host+r.URL.RequestURI(), bytes.NewReader(body))
+	out, err := http.NewRequestWithContext(ctx, r.Method, rl.origin.Scheme+"://"+rl.origin.Host+target, bytes.NewReader(body))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -200,6 +275,9 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Header = r.Header.Clone()
 	dropHop(out.Header)
+	for _, k := range sourceFields {
+		out.Header.Del(k)
+	}
 	resp, err := rl.client.Do(out)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -232,4 +310,5 @@ func (rl *relay) close(ctx context.Context) {
 		rl.http.Close()
 	}
 	rl.queue.Close()
+	close(rl.done)
 }

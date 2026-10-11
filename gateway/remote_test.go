@@ -296,11 +296,12 @@ func verifyAnswer(keys []accesskey.PublicKey, a accesskey.Answer, sig string) bo
 	return false
 }
 
-// answer is an answer on a bound connection.
+// answer is an answer on a bound connection, and whether it closes the connection.
 type answer struct {
 	status int
 	header http.Header
 	body   []byte
+	close  bool
 }
 
 // refusal is the answer's body as a refusal's members.
@@ -364,7 +365,7 @@ func (b *bound) do(t *testing.T, runKey, method, path string, body []byte, extra
 	if !verifyAnswer(gatewayKeys(), a, resp.Header.Get(server.HeaderSignature)) {
 		t.Errorf("%s %s: the answer %d %s is not signed under the gateway's key for its request", method, path, resp.StatusCode, got)
 	}
-	return answer{status: resp.StatusCode, header: resp.Header, body: got}
+	return answer{status: resp.StatusCode, header: resp.Header, body: got, close: resp.Close}
 }
 
 // edgeRun is a session's run behind the gateway: its run key and the run answer.
@@ -840,6 +841,8 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		"no Authorization":    nil,
 		"two run keys":        {"Bearer " + good, "Bearer " + good},
 		"Basic":               {"Basic " + base64.StdEncoding.EncodeToString([]byte(":"+good))},
+		"Basic, the run key":  {"Basic " + good},
+		"Digest, the run key": {"Digest " + good},
 		"no run key":          {"Bearer not-a-run-key"},
 		"a key no pin signed": {"Bearer " + unpinned},
 		"a run key cut short": {"Bearer " + good[:len(good)-4]},
