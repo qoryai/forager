@@ -20,7 +20,7 @@ what it does, and stops it.
 
 ## Why
 
-A coding agent acts on its own. It runs commands and calls hosts you don't see. It has
+A coding agent acts unsupervised. It runs commands and calls hosts you don't see. It has
 your secrets. Afterwards, you can't tell what it reached, or what it did there.
 
 A proxy sees only the programs that honour it. A secret in the agent's environment goes
@@ -41,7 +41,7 @@ brew install qoryai/tap/qory
 `qory` builds the agent's launch from the harness: what the agent reads, such as
 instructions, skills and settings. Forager runs it.
 
-To build Forager into a program of your own, see [Embed it in Go](#embed-it-in-go).
+To build Forager into your program, see [Embed it in Go](#embed-it-in-go).
 
 ## Try it
 
@@ -63,8 +63,8 @@ them under its state directory and prints the path:
 - `events.jsonl`: one CloudEvent per line, in order.
 - `output.log`: the session's bytes.
 
-Forager writes its own events: the start, the policy, each connection, each chunk of
-output, a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
+Forager writes its events: the start, the policy, each connection, each chunk of output,
+a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
 session's events: prompts, tool calls, subagents, turns. A **descriptor** maps them.
 Forager ships one for Claude Code.
 
@@ -133,16 +133,15 @@ Every event goes to files. With a server, the events it selects go there too:
 - The server can return the run's policy and variables, chosen by the run's labels. It
   can change the policy while the run goes.
 
-A server is your control plane, or a receiver of your own. The package `receiver` is a
-worked example.
+A server is your control plane, or your receiver. The package `receiver` is a worked
+example.
 
 More: [docs/server.md](docs/server.md).
 
 ## Embed it in Go
 
-Forager is a Go module, and `qory` is one program built on it. Build it into a
-program of your own to run an agent inside the same boundary. It needs Go 1.27.1 or
-above:
+Forager is a Go module, and `qory` is one program built on it. Build it into your
+program to run an agent inside the same boundary. It needs Go 1.27.1 or above:
 
 ```sh
 go get github.com/qoryai/forager

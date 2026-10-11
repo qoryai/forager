@@ -2,18 +2,18 @@
 
 Forager is the security boundary around one coding agent session. It is a Go module,
 `github.com/qoryai/forager`. The [`qory`](https://github.com/qoryai/qory) command imports
-it, and ships `qory run` in front of it. The module has no command of its own.
+it, and ships `qory run` in front of it. The module has no command.
 
 Forager:
 
 - starts the agent on a composed harness;
 - pins a policy that can only narrow what the binary allows;
 - observes and enforces egress through a proxy it owns;
-- keeps its own credentials out of the session;
+- keeps its credentials out of the session;
 - heartbeats while the session runs;
 - keeps the policy, the credentials, the tools and the access key in a gateway, which
   the session speaks to over a local link;
-- reports the session's output and its own observations as CloudEvents: to files
+- reports the session's output and Forager's observations as CloudEvents: to files
   always, to a server when one is configured;
 - optionally, starts the agent behind a wall, a container with no route out except to
   that proxy.
@@ -82,7 +82,7 @@ For each run the session, over the gateway's link:
    the one the answer names; the variables the gateway sets are not the session's to
    set;
 4. records `dev.qory.run.started`, with the gateway's labels on the local link, and
-   `dev.qory.run.policy_applied` with the members the gateway decides, its own
+   `dev.qory.run.policy_applied` with the members the gateway decides, and the run's
    variables and the harness's hosts beside them, and posts every event of the run to
    the gateway, a heartbeat every interval among them;
 5. fetches the run's configuration again whenever the gateway's answers carry a new
@@ -91,11 +91,12 @@ For each run the session, over the gateway's link:
    to a batch.
 
 On the local link every batch names its run in `X-Qory-Run-Id`; the link carries no
-secret, since the session and the gateway check that the socket's peer is their own
+secret, since the session and the gateway check that the socket's peer runs as their
 user. That uid is the whole of the local link's trust: a process of the same user that
 reaches the socket can post a batch into a local run whose id it knows, fetch the run's
 configuration again, or end the run. `gateway.Start` with `gateway.Config.NoLinkSocket`
-serves no socket, only the link in memory, to a session in the gateway's own process.
+serves no socket, only the link in memory, to a session in the same process as the
+gateway.
 
 The agent reaches the gateway's proxy through the session's forwarder, on loopback.
 On the local link every connection to the proxy opens with the relay's preamble and the
@@ -115,12 +116,12 @@ makes the connection a tunnel. It reads the proxy's reply head to an upgrade up 
 an upgrade. It closes a connection without the password unanswered, before anything
 reaches the gateway, so a process of another user that reaches the port reaches
 nothing. At most 128 connections at once wait to show the password or the hop line; one
-more closes the one that has waited longest. A process of the agent's own user can read
-the agent's environment, and the password in its proxy URL with it, so the password
-keeps out the machine's other users, not the agent's own: the same user is trusted, as
-on the local link. Behind a separate gateway the forwarder reaches the gateway's one
-address over TLS instead, where a bound connection opens the run's proxy with the run
-key: see [the session behind a separate gateway](#the-session-behind-a-separate-gateway).
+more closes the one that has waited longest. A process of the agent's user can read the
+agent's environment, and the password in its proxy URL with it, so the password keeps
+out the machine's other users, not the agent's user: the same user is trusted, as on the
+local link. Behind a separate gateway the forwarder reaches the gateway's one address
+over TLS instead, where a bound connection opens the run's proxy with the run key: see
+[the session behind a separate gateway](#the-session-behind-a-separate-gateway).
 
 A refusal the gateway or the server answers with a code returns a `*session.Refusal`,
 with the code, the names it concerns and `From`, `apiary` or `gateway`. Its `Error` is
@@ -131,8 +132,8 @@ the gateway could not open for a reason without a code.
 
 ## A separate gateway
 
-A gateway serves the sessions of other machines on one address of its own, in place of
-its local link. Its `gateway.Config` sets it:
+A gateway serves the sessions of other machines on one address, in place of its local
+link. Its `gateway.Config` sets it:
 
 - `Listen`, the one address, `host:port`. Empty means the local link alone. Every
   connection is routed by its first bytes, after the TLS handshake: one that opens with
@@ -144,18 +145,18 @@ its local link. Its `gateway.Config` sets it:
   ([§The gateway's link](../contracts/forager/v1/README.md#the-gateways-link)), for a
   keyed machine or a starter whose server document holds `via` (`server.Via`). The
   gateway a request is relayed through sees the registration answer's run key, so `via`
-  names a gateway trusted at least as much as the run's own gateway. The proxy of every
-  run served there is guarded, wall or none. `Gateway.Addr` is this address.
+  names a gateway trusted at least as much as the run's gateway. The proxy of every run
+  served there is guarded, wall or none. `Gateway.Addr` is this address.
 - `TLS`, `{CertFile, KeyFile}`, the operator's certificate and key, in PEM: the one
   address speaks TLS 1.3 alone. `Listen` needs it.
 - `Server`, whose access key is a gateway's, `ng_`: the gateway verifies each run key
   under the server's pin, on every request of the run and every proxy connection, not
   only the first, so once the gateway restarts with a server key out of the pin, a run
   whose run key that key signed gets `400` `run_key_invalid` on its next request and its
-  proxy connections are closed unanswered; it attaches each run at the server under its
-  own access key (`server.Client.Attach`), signs the binding and every answer of the
-  link, and relays to the server's origin. The gateway's calls to the server, the attach
-  and the relay among them, use the proxy of the environment, `HTTPS_PROXY` and
+  proxy connections are closed unanswered; it attaches each run at the server under the
+  gateway's access key (`server.Client.Attach`), signs the binding and every answer of
+  the link, and relays to the server's origin. The gateway's calls to the server, the
+  attach and the relay among them, use the proxy of the environment, `HTTPS_PROXY` and
   `NO_PROXY`, and check the server's certificate against the system's roots;
   `HTTP_PROXY` does not apply, since a server over http is on loopback, which Go never
   proxies. A proxy that ends their TLS with a certificate the gateway's machine trusts
@@ -163,7 +164,7 @@ its local link. Its `gateway.Config` sets it:
   the gateway relays; one that only tunnels them sees the server's host and port.
   `Listen` needs it.
 
-A separate gateway runs no sessions of its own machine: it makes no local link, in
+A separate gateway runs no sessions on the gateway's machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
 `LocalLink` gets "the gateway serves other machines on its address, and runs no
 sessions". Every run there opens by its run key: the gateway refuses one with
@@ -228,9 +229,8 @@ res, err := session.Run(ctx, session.Spec{
   `session.jsonl` and `output.log`, its mark, `separate-gateway` (`session.GatewayMark`),
   an empty file no other writer of a run directory writes, what the gateway accepted of
   the record, `delivered.log`, and the batches it did not, `undelivered/`; never the run
-  key. The gateway's record,
-  `events.jsonl`, with its own delivery state toward the server, is on the gateway's
-  machine ([where the record is](events.md#where-the-record-is)).
+  key. The gateway's record, `events.jsonl`, with its delivery state toward the server,
+  is on the gateway's machine ([where the record is](events.md#where-the-record-is)).
   `session.BehindGateway(dir string) (bool, error)` reports whether a run directory holds
   a record a session made behind a separate gateway, which `session.Resend` sends:
   whether `dir` holds `separate-gateway` as a regular file, not followed if it is a
@@ -281,9 +281,9 @@ res, err := session.Resend(ctx, session.ResendSpec{
 - Every event of `session.jsonl` the link takes that `delivered.log` does not name is
   posted to the discovery's events URL, in order, in the link's batches, until the
   gateway accepts it or `ctx` ends; what it still has not accepted is under
-  `undelivered/` again, unless the gateway ended the run. The events the session
-  records in its own record alone are not sent. A record that owes nothing is sent
-  nothing, with no request, and the result is the zero `ResendResult`.
+  `undelivered/` again, unless the gateway ended the run. The events the session records
+  only in the session's record are not sent. A record that owes nothing is sent nothing,
+  with no request, and the result is the zero `ResendResult`.
 - A record with no `delivered.log` is of a run that never opened at the gateway, a run
   refused at its run request say: `ResendResult.NotOpened` says so, the record is left
   as it is, and nothing is sent, with no request. A record that owes nothing has a
@@ -320,7 +320,7 @@ res, err := session.Resend(ctx, session.ResendSpec{
   is `409` `run_key_expired` instead, which stops the resend as the refusals above do.
 - `session.jsonl` is never completed: the gateway writes the end of a run whose session
   was lost.
-- After a gateway restarts, it holds no run of before: the gateway's own resend,
+- After a gateway restarts, it holds no run of before: the gateway's resend,
   `gateway.Resend`, completes the run `gateway_lost`.
 
 ## The runtime
@@ -338,11 +338,11 @@ res, err := session.Resend(ctx, session.ResendSpec{
 
 1. A descriptor `<name>.yaml` in `dir`. This is how a machine describes a runtime nothing
    ships for.
-2. The contract's own descriptor: Claude Code's.
+2. The contract's descriptor: Claude Code's.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
 
-A program that needs code of its own implements the interface.
+A program that needs custom code implements the interface.
 `session/runtimes/runtimetest` runs the same checks on it.
 
 ## The spec
@@ -359,17 +359,17 @@ A program that needs code of its own implements the interface.
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
-  own files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
+  files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
-  `session.RemoteGateway` on a machine of its own (see
-  [the session behind a separate gateway](#the-session-behind-a-separate-gateway)). The session reaches
-  a gateway of its own process in memory, never by its socket's path, which serves a
-  session in another process, and which a gateway started with `NoLinkSocket` does not
-  make. A `session.Gateway` is printed and logged by its socket or, behind a separate
-  gateway, the URL its run key names, never the run key, and a `*gateway.Gateway` by its
-  proxy's address and its socket, or a separate gateway by its one address. A nil
-  `Gateway` is no run. The server the run reports to and the node's
+  `session.RemoteGateway` on a separate machine (see
+  [the session behind a separate gateway](#the-session-behind-a-separate-gateway)). The
+  session reaches a gateway in the same process in memory, never by its socket's path,
+  which serves a session in another process, and which a gateway started with
+  `NoLinkSocket` does not make. A `session.Gateway` is printed and logged by its socket
+  or, behind a separate gateway, the URL its run key names, never the run key, and a
+  `*gateway.Gateway` by its proxy's address and its socket, or a separate gateway by its
+  one address. A nil `Gateway` is no run. The server the run reports to and the node's
   policy are the gateway's, `gateway.Config.Server` and `gateway.Config.Policy`. See
   [the server](server.md) and
   [the policy](policy.md#the-node-narrows-the-servers-policy).
@@ -378,8 +378,8 @@ A program that needs code of its own implements the interface.
 - The variables come from several sources, and for each name the highest wins. See
   [variables](server.md#variables).
   - `LaunchFixed` is the values the harness computes itself. They win over every source
-    but the session's own names. The server's variables come next.
-  - `Variables.Run` is the run's own, `--env`, and `Variables.Machine` the machine's,
+    but the session's names. The server's variables come next.
+  - `Variables.Run` is the run's, `--env`, and `Variables.Machine` the machine's,
     `wall.env`. `Variables` also holds the deny entries and how an unwalled run takes
     the server's.
   - `LaunchDefaults` is the values the harness's author wrote as defaults, and `Env`
@@ -492,15 +492,16 @@ with `e2e` to check them together.
   - `session/internal/`: what the session alone uses: `chunk`, `descriptor`, `socket`
     and `variables`.
 - `gateway/`: the gateway. `gateway.Start` serves sessions on a local link, or with
-  `Config.Listen` the sessions of other machines on one address of its own, with the proxy, the credentials and the
-  tools in `gateway/internal/`, and reports every run to the server. `gateway.Resend` sends a run's record again. `Start` with its `Config`
-  and the `Gateway` it returns, `Resend` with its `ResendConfig` and its lines of a
-  run that never opened and of torn lines, `ResendNoServer`, `ResendNotOpened` and
-  `ResendTorn`, and the types their fields need are the package's whole surface.
+  `Config.Listen` the sessions of other machines on one address, with the proxy, the
+  credentials and the tools in `gateway/internal/`, and reports every run to the server.
+  `gateway.Resend` sends a run's record again. `Start` with its `Config` and the
+  `Gateway` it returns, `Resend` with its `ResendConfig` and its lines of a run that
+  never opened and of torn lines, `ResendNoServer`, `ResendNotOpened` and `ResendTorn`,
+  and the types their fields need are the package's whole surface.
 - `wall/`: the wall.
   - The adapter interface, and the Docker adapter.
   - `wall.Relay`, the one peer an enclosure reaches.
-  - `wall.Nest`, which starts a Docker of the agent's own inside it. Experimental.
+  - `wall.Nest`, which starts nested Docker inside it. Experimental.
 - `e2e/`: the conformance suite every wall adapter passes before it ships: a real
   session behind the wall, with the gateway between.
 

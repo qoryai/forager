@@ -11,7 +11,7 @@ Everywhere. Three kinds are the most useful:
   session events of the contract, with the fixtures that prove the mapping. A descriptor
   matches and copies; it never computes. A descriptor without fixtures is not accepted.
 - **The contract.** The documents under `contracts/forager/v1/`, their schemas and their
-  fixtures. A receiver follows the contract and lives in your own repository; nothing in
+  fixtures. A receiver follows the contract and lives in your repository; nothing in
   this one has to change for it.
 - **Forager** and the receiver: the parts `session`, `gateway` and `wall`, the
   packages at the module's root that they share, and `receiver`.

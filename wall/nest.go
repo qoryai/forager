@@ -79,7 +79,7 @@ func userNamespaced(uidMap string) error {
 		}
 		if inside == 0 {
 			if outside == 0 {
-				return errors.New("nest: the enclosure's root is the machine's root; a Docker of the agent's own needs a runtime that maps it to a user of the machine's that is not root, such as sysbox-runc")
+				return errors.New("nest: the enclosure's root is the machine's root; nested Docker needs a runtime that maps it to a user of the machine's that is not root, such as sysbox-runc")
 			}
 			return nil
 		}
@@ -120,7 +120,7 @@ func findDaemon(dirs []string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New("nest: the image holds no dockerd in " + strings.Join(dirs, ", ") + "; an image with a Docker of the agent's own carries the daemon")
+	return "", errors.New("nest: the image holds no dockerd in " + strings.Join(dirs, ", ") + "; an image with nested Docker carries the daemon")
 }
 
 // nestIDs are the agent's user and group, from uid:gid, or from the image's own users

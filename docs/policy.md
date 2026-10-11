@@ -40,7 +40,7 @@ A run has one policy. It comes from one of three places:
 
 - **The machine's policy.** For `qory`, the `gateway.egress` section of `forager.yaml`,
   below. From Go, `Policy` in the gateway's `gateway.Config`.
-- **A run's own policy.** `qory run --policy <file>` reads it, in the format of the
+- **A run's policy file.** `qory run --policy <file>` reads it, in the format of the
   contract's [policy](../contracts/forager/v1/README.md#the-policy).
   - It narrows the machine's `gateway.egress`, and never widens it.
   - Keep the file outside the checkout: the agent can write there. `qory` refuses a file
@@ -50,8 +50,8 @@ A run has one policy. It comes from one of three places:
   run endpoint, with the run's labels, and the answer is the run configuration. Its
   `security_policy` is the server's policy, and the node's policy narrows it.
 
-The node's policy is `gateway.Config.Policy`, the policy Forager is passed: for `qory`, the
-machine's `gateway.egress` with the run's own under it. Which one applies:
+The node's policy is `gateway.Config.Policy`, the policy Forager is passed: for `qory`,
+the machine's `gateway.egress` with the run's policy file under it. Which one applies:
 
 | Forager has            | The policy is                                                           |
 | ---------------------- | ----------------------------------------------------------------------- |
@@ -101,8 +101,9 @@ gateway:
       - {alg: ed25519, public_key: <the server's public key>}   # enrolment writes it
 ```
 
-- `gateway.egress` is the machine's policy. It is the ceiling on a run's own, and it
-  narrows the server's. See [where the policy comes from](#where-the-policy-comes-from).
+- `gateway.egress` is the machine's policy. It is the ceiling on a run's policy file,
+  and it narrows the server's. See
+  [where the policy comes from](#where-the-policy-comes-from).
 - Without `gateway.egress`, and with no other policy, everything is allowed and recorded.
 - `gateway.server` defines the server Forager reports to. See [the server](server.md).
 
