@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -89,8 +90,10 @@ const serviceIdle = 90 * time.Second
 
 // The one address's bounds on the connections it holds whose run key it has not
 // admitted: in all, of one source, an IPv4 address or an IPv6 /64, and of one IPv6 /48
-// ([sourceOf]). A connection past any is closed as it is accepted, unanswered. One
-// whose run key is admitted counts against none of them.
+// ([sourceOf]). A connection past any closes the oldest such connection whose run key
+// has not passed, of its source when that is full, else of its /48, else of all, and is
+// taken; when none can be closed, it is closed as it is accepted, unanswered. One whose
+// run key is admitted counts against none of them.
 const (
 	maxConns       = 4096
 	maxSourceConns = 64
@@ -149,7 +152,7 @@ func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 		IdleTimeout: serviceIdle, DisableGeneralOptionsHandler: true, ErrorLog: quietLog(),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if b, ok := c.(*boundConn); ok {
-				return context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit)
+				return context.WithValue(context.WithValue(context.WithValue(ctx, bindingKey{}, b.ekm), admitKey{}, b.admit), vouchKey{}, b.vouch)
 			}
 			return ctx
 		}}
@@ -165,7 +168,9 @@ func (s *service) addr() string { return s.ln.Addr().String() }
 
 // accept routes every connection in its own goroutine, so a peer that sends nothing
 // holds up no one else. A connection past [maxConns], [maxSourceConns] of its source or
-// [maxBlockConns] of its /48 whose run keys are not admitted is closed at once.
+// [maxBlockConns] of its /48 whose run keys are not admitted closes the oldest of them
+// whose run key has not passed ([connLimit.take]), or, when there is none, is closed at
+// once.
 func (s *service) accept() {
 	defer s.wg.Done()
 	var backoff time.Duration
@@ -180,12 +185,12 @@ func (s *service) accept() {
 			continue
 		}
 		backoff = 0
-		source := sourceOf(c.RemoteAddr())
-		if !s.conns.take(source) {
+		h := s.conns.hold(c, sourceOf(c.RemoteAddr()))
+		if h == nil {
 			c.Close()
 			continue
 		}
-		c = &heldConn{Conn: c, release: func() { s.conns.give(source) }}
+		c = h
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -230,11 +235,11 @@ func (s *service) route(raw net.Conn) {
 	}
 	if string(line) == link.BindLine {
 		r.Discard(len(line))
-		admit := func() {}
+		admit, vouch := func() {}, func() {}
 		if h, ok := raw.(*heldConn); ok {
-			admit = h.admit
+			admit, vouch = h.admit, h.vouch
 		}
-		handed = s.bind(tc, r, admit)
+		handed = s.bind(tc, r, admit, vouch)
 		return
 	}
 	tc.SetDeadline(time.Time{})
@@ -246,9 +251,9 @@ func (s *service) route(raw net.Conn) {
 // exporter value, then reads the connection's next line within the same deadline. The
 // relay's preamble with a run key goes to that run's proxy ([Gateway.relayRun]); any
 // other line is the link's HTTP/1.1. admit lets go of c's count among the connections
-// whose run keys are not admitted, once its run key is. It reports whether c was
-// handed on.
-func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit func()) bool {
+// whose run keys are not admitted, once its run key is; vouch keeps c from being closed
+// for a newer one, once a run key on it passed. It reports whether c was handed on.
+func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit, vouch func()) bool {
 	cs := c.ConnectionState()
 	if cs.Version != tls.VersionTLS13 {
 		return false
@@ -273,7 +278,7 @@ func (s *service) bind(c *tls.Conn, r *bufio.Reader, admit func()) bool {
 		return s.g.relayRun(c, r, value, admit)
 	}
 	c.SetDeadline(time.Time{})
-	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit})
+	return s.edgeQ.deliver(&boundConn{linkConn: linkConn{Conn: c, r: r}, ekm: ekm, admit: admit, vouch: vouch})
 }
 
 // relayRunKey is the run key of a line of the relay's preamble, its newline included,
@@ -329,12 +334,12 @@ type linkConn struct {
 func (c *linkConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // boundConn is a bound connection of the link: what its binding read, its exporter
-// value, which signs every answer on it, and what lets go of its count once a run key
-// is admitted on it.
+// value, which signs every answer on it, what lets go of its count once a run key is
+// admitted on it, and what keeps it held once a run key on it passed.
 type boundConn struct {
 	linkConn
-	ekm   []byte
-	admit func()
+	ekm          []byte
+	admit, vouch func()
 }
 
 // bindingKey is the key of a bound connection's exporter value in its requests'
@@ -343,6 +348,9 @@ type bindingKey struct{}
 
 // admitKey is the key of a bound connection's admit in its requests' contexts.
 type admitKey struct{}
+
+// vouchKey is the key of a bound connection's vouch in its requests' contexts.
+type vouchKey struct{}
 
 // b64token is the value of an Authorization of the Bearer scheme, RFC 6750 §2.1.
 var b64token = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
@@ -362,7 +370,8 @@ func bearer(values []string) (string, bool) {
 }
 
 // edgeHandler is the link on the one address: every request's run key, its bearer
-// value, decided first ([Gateway.admitRunKey]), a refusal answered with its code and
+// value, decided first ([Gateway.admitRunKey]), one that passes vouching for its
+// connection ([connLimit.vouch]), a refusal answered with its code and
 // Connection: close, once its body is read within [refusedBody] and [refusedWait], and
 // the connection closed unanswered when it is not; then the link's handler, with the
 // run key in the request's context and no Authorization left on it, every answer of
@@ -397,6 +406,9 @@ func (g *Gateway) edgeHandler(s *side) http.Handler {
 			sw.header.Set("Connection", "close")
 			refuse(sw, ref.Status, ref.Code, nil, ref.From, ref.Error())
 			return
+		}
+		if vouch, _ := r.Context().Value(vouchKey{}).(func()); vouch != nil {
+			vouch()
 		}
 		admit, _ := r.Context().Value(admitKey{}).(func())
 		live := forLiveRun(r)
@@ -630,72 +642,150 @@ type connSource struct {
 // sourceOf is what a connection from addr counts against: its IPv4 address, or the /64
 // and the /48 of its IPv6 address, an IPv4 address mapped into IPv6 counted as IPv4.
 func sourceOf(addr net.Addr) connSource {
-	var a netip.Addr
 	if t, ok := addr.(*net.TCPAddr); ok {
-		a = t.AddrPort().Addr()
-	} else if ap, err := netip.ParseAddrPort(addr.String()); err == nil {
-		a = ap.Addr()
-	} else {
-		return connSource{key: addr.String()}
+		return sourceOfAddr(t.AddrPort().Addr())
 	}
+	return addressSource(addr.String())
+}
+
+// addressSource is what a connection from addr, host:port, counts against, as
+// [sourceOf] has it.
+func addressSource(addr string) connSource {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return connSource{key: addr}
+	}
+	return sourceOfAddr(ap.Addr())
+}
+
+// sourceOfAddr is what a connection from a counts against.
+func sourceOfAddr(a netip.Addr) connSource {
 	a = a.Unmap().WithZone("")
 	if a.Is4() {
 		return connSource{key: a.String()}
 	}
-	return connSource{key: sourceKey(a), block: netip.PrefixFrom(a, 48).Masked().String()}
-}
-
-// addressSource is the source of addr, host:port, as [sourceOf] counts it.
-func addressSource(addr string) string {
-	ap, err := netip.ParseAddrPort(addr)
-	if err != nil {
-		return addr
-	}
-	return sourceKey(ap.Addr())
-}
-
-// sourceKey is the source a's address counts as: itself for IPv4, its /64 for IPv6.
-func sourceKey(a netip.Addr) string {
-	a = a.Unmap().WithZone("")
-	if a.Is4() {
-		return a.String()
-	}
-	return netip.PrefixFrom(a, 64).Masked().String()
+	return connSource{key: netip.PrefixFrom(a, 64).Masked().String(), block: netip.PrefixFrom(a, 48).Masked().String()}
 }
 
 // connLimit counts the connections the one address holds whose run key it has not
-// admitted: in all, by source and by IPv6 /48.
+// admitted: in all, by source and by IPv6 /48. It keeps those of them no run key has
+// vouched for in the order they were taken, in all, by source and by /48, so a
+// connection past a bound closes the oldest of them in the narrowest group that is
+// full.
 type connLimit struct {
 	mu                sync.Mutex
 	most, each, block int
 	total             int
 	by, blocks        map[string]int
+	waiting           list.List
+	waitingBy         map[string]*list.List
+	waitingBlocks     map[string]*list.List
 }
 
 func newConnLimit(most, each, block int) *connLimit {
-	return &connLimit{most: most, each: each, block: block, by: map[string]int{}, blocks: map[string]int{}}
+	return &connLimit{most: most, each: each, block: block, by: map[string]int{}, blocks: map[string]int{},
+		waitingBy: map[string]*list.List{}, waitingBlocks: map[string]*list.List{}}
 }
 
-// take counts one more connection of s, and reports whether it is within the bounds;
-// one that is not is not counted.
-func (l *connLimit) take(s connSource) bool {
+// connSlot is a connection connLimit counts: its source, what closes it, whether it is
+// counted, and, until a run key vouches for it, its places among the connections
+// waiting, in all, of its source and of its /48.
+type connSlot struct {
+	s              connSource
+	c              io.Closer
+	counted        bool
+	all, by, block *list.Element
+}
+
+// hold counts c, a connection of s, and returns it held ([heldConn]); nil when it is
+// past the bounds ([connLimit.take]).
+func (l *connLimit) hold(c net.Conn, s connSource) *heldConn {
+	h := &heldConn{Conn: c, limit: l, slot: &connSlot{s: s}}
+	h.slot.c = h
+	if !l.take(h.slot) {
+		return nil
+	}
+	return h
+}
+
+// take counts one more connection, cs, and reports whether it did. Past a bound, it
+// first closes the oldest connection no run key has vouched for of cs's source when
+// that is full, else of its /48 when that is full, else of all, and lets go of its
+// count; when that group has none, cs is not counted.
+func (l *connLimit) take(cs *connSlot) bool {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.total >= l.most || l.by[s.key] >= l.each || s.block != "" && l.blocks[s.block] >= l.block {
-		return false
+	s := cs.s
+	full := true
+	var group *list.List
+	switch {
+	case l.by[s.key] >= l.each:
+		group = l.waitingBy[s.key]
+	case s.block != "" && l.blocks[s.block] >= l.block:
+		group = l.waitingBlocks[s.block]
+	case l.total >= l.most:
+		group = &l.waiting
+	default:
+		full = false
+	}
+	var oldest *connSlot
+	if full {
+		if group == nil || group.Len() == 0 {
+			l.mu.Unlock()
+			return false
+		}
+		oldest = group.Front().Value.(*connSlot)
+		l.drop(oldest)
 	}
 	l.total++
 	l.by[s.key]++
+	cs.all = l.waiting.PushBack(cs)
+	cs.by = waitingOf(l.waitingBy, s.key).PushBack(cs)
 	if s.block != "" {
 		l.blocks[s.block]++
+		cs.block = waitingOf(l.waitingBlocks, s.block).PushBack(cs)
+	}
+	cs.counted = true
+	l.mu.Unlock()
+	if oldest != nil {
+		oldest.c.Close()
 	}
 	return true
 }
 
-// give lets go of a connection of s that take counted.
-func (l *connLimit) give(s connSource) {
+// waitingOf is the list of m under k, made when there is none.
+func waitingOf(m map[string]*list.List, k string) *list.List {
+	w := m[k]
+	if w == nil {
+		w = list.New()
+		m[k] = w
+	}
+	return w
+}
+
+// vouch keeps cs counted but never closed for a newer connection: a run key on it
+// passed.
+func (l *connLimit) vouch(cs *connSlot) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if cs.counted {
+		l.unwait(cs)
+	}
+}
+
+// give lets go of cs's count, once.
+func (l *connLimit) give(cs *connSlot) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if cs.counted {
+		l.drop(cs)
+	}
+}
+
+// drop lets go of cs's count and its places among the connections waiting.
+func (l *connLimit) drop(cs *connSlot) {
+	l.unwait(cs)
+	s := cs.s
+	cs.counted = false
 	l.total--
 	if l.by[s.key]--; l.by[s.key] <= 0 {
 		delete(l.by, s.key)
@@ -707,21 +797,47 @@ func (l *connLimit) give(s connSource) {
 	}
 }
 
+// unwait takes cs from among the connections waiting, if it is there.
+func (l *connLimit) unwait(cs *connSlot) {
+	if cs.all == nil {
+		return
+	}
+	l.waiting.Remove(cs.all)
+	unlist(l.waitingBy, cs.s.key, cs.by)
+	if cs.s.block != "" {
+		unlist(l.waitingBlocks, cs.s.block, cs.block)
+	}
+	cs.all, cs.by, cs.block = nil, nil, nil
+}
+
+// unlist removes e from the list of m under k, and the list once it is empty.
+func unlist(m map[string]*list.List, k string, e *list.Element) {
+	w := m[k]
+	w.Remove(e)
+	if w.Len() == 0 {
+		delete(m, k)
+	}
+}
+
 // heldConn is a connection the one address counts until its run key is admitted or it
 // is closed, whichever comes first.
 type heldConn struct {
 	net.Conn
-	once    sync.Once
-	release func()
+	once  sync.Once
+	limit *connLimit
+	slot  *connSlot
 }
 
 // admit lets go of the connection's count, once: its run key is admitted.
-func (c *heldConn) admit() { c.once.Do(c.release) }
+func (c *heldConn) admit() { c.once.Do(func() { c.limit.give(c.slot) }) }
+
+// vouch keeps the connection from being closed for a newer one: a run key on it passed.
+func (c *heldConn) vouch() { c.limit.vouch(c.slot) }
 
 // Close closes the connection and lets go of its count, once.
 func (c *heldConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.release)
+	c.admit()
 	return err
 }
 

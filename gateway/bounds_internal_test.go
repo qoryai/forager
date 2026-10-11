@@ -60,62 +60,151 @@ func src(addr string) connSource {
 }
 
 // TestTheConnectionLimit pins the connections the one address counts: at most each of
-// one source, at most block of one IPv6 /48, at most most in all, and one let go of is
-// one more taken.
+// one source, at most block of one IPv6 /48, at most most in all. Past a bound, the
+// oldest connection no run key vouched for of the narrowest full group, the source, else
+// the /48, else all, is closed and let go of, and the new one taken; one vouched for is
+// counted but never closed, and with none to close the new one is refused. One let go
+// of is one more taken.
 func TestTheConnectionLimit(t *testing.T) {
 	l := newConnLimit(7, 2, 3)
-	a, b := src("[2001:db8::1]:1"), src("[2001:db8::2]:1")
-	if !l.take(a) || !l.take(a) {
+	var closed []string
+	take := func(name, addr string) *connSlot {
+		t.Helper()
+		cs := &connSlot{s: src(addr), c: closeFunc(func() { closed = append(closed, name) })}
+		if !l.take(cs) {
+			return nil
+		}
+		return cs
+	}
+	wantClosed := func(what string, want ...string) {
+		t.Helper()
+		if !reflect.DeepEqual(closed, want) {
+			t.Errorf("%s: closed %q; want %q", what, closed, want)
+		}
+		closed = nil
+	}
+	a1, a2 := take("a1", "[2001:db8::1]:1"), take("a2", "[2001:db8::2]:1")
+	if a1 == nil || a2 == nil {
 		t.Fatal("the first two of a source are not taken")
 	}
-	if l.take(b) {
-		t.Error("a third connection of one /64 is taken")
+	a3 := take("a3", "[2001:db8::3]:1")
+	if a3 == nil {
+		t.Fatal("a third connection of one /64 is not taken")
 	}
-	if !l.take(src("[2001:db8:0:1::1]:1")) {
-		t.Error("a third connection of one /48 is not taken")
+	wantClosed("a third connection of one /64", "a1")
+	l.vouch(a2)
+	a4 := take("a4", "[2001:db8::4]:1")
+	if a4 == nil {
+		t.Fatal("a fourth connection of one /64 is not taken")
 	}
-	if l.take(src("[2001:db8:0:2::1]:1")) {
-		t.Error("a fourth connection of one /48 is taken")
+	wantClosed("a fourth connection of one /64 beside one vouched for", "a3")
+	l.vouch(a4)
+	if take("a5", "[2001:db8::5]:1") != nil {
+		t.Error("a connection of a /64 whose connections are all vouched for is taken")
 	}
-	if !l.take(src("[2001:db8:1::1]:1")) {
+	wantClosed("a connection of a /64 whose connections are all vouched for")
+	b1 := take("b1", "[2001:db8:0:1::1]:1")
+	if b1 == nil {
+		t.Fatal("a third connection of one /48 is not taken")
+	}
+	b2 := take("b2", "[2001:db8:0:2::1]:1")
+	if b2 == nil {
+		t.Fatal("a fourth connection of one /48 is not taken")
+	}
+	wantClosed("a fourth connection of one /48", "b1")
+	l.vouch(b2)
+	if take("b3", "[2001:db8:0:3::1]:1") != nil {
+		t.Error("a connection of a /48 whose connections are all vouched for is taken")
+	}
+	wantClosed("a connection of a /48 whose connections are all vouched for")
+	c1 := take("c1", "[2001:db8:1::1]:1")
+	if c1 == nil {
 		t.Error("a connection of another /48 is not taken")
 	}
+	var v []*connSlot
 	for i := range 3 {
-		if !l.take(src(fmt.Sprintf("192.0.2.%d:1", i+1))) {
+		cs := take(fmt.Sprintf("v%d", i+1), fmt.Sprintf("192.0.2.%d:1", i+1))
+		if cs == nil {
 			t.Fatalf("connection %d in all is not taken", i+5)
 		}
+		v = append(v, cs)
 	}
-	if l.take(src("192.0.2.9:1")) {
-		t.Error("an eighth connection in all is taken")
+	wantClosed("seven connections in all")
+	w := take("w", "192.0.2.9:1")
+	if w == nil {
+		t.Fatal("an eighth connection in all is not taken")
 	}
-	l.give(a)
-	if !l.take(src("192.0.2.9:1")) {
-		t.Error("a connection let go of is not one more taken")
+	wantClosed("an eighth connection in all", "c1")
+	l.give(c1)
+	if l.total != 7 {
+		t.Errorf("a connection closed for a newer one, let go of again: %d counted", l.total)
 	}
-	if l.take(a) {
-		t.Error("a connection past the bound in all is taken")
+	l.give(v[0])
+	x := take("x", "192.0.2.10:1")
+	if x == nil {
+		t.Fatal("a connection let go of is not one more taken")
 	}
-	if l.total != 7 || len(l.by) != 7 || l.blocks["2001:db8::/48"] != 2 || l.blocks["2001:db8:1::/48"] != 1 {
+	wantClosed("a connection let go of, one more taken")
+	if l.total != 7 || len(l.by) != 6 || l.by["2001:db8::/64"] != 2 || l.blocks["2001:db8::/48"] != 3 || l.blocks["2001:db8:1::/48"] != 0 {
 		t.Errorf("counted %d in all, by %v, by /48 %v", l.total, l.by, l.blocks)
 	}
-	// Admitted, closed, or both in either order, a connection is let go of once.
-	for _, steps := range [][]string{{"admit"}, {"close"}, {"admit", "close"}, {"close", "admit"}, {"close", "close", "admit", "admit"}} {
+	for _, cs := range []*connSlot{v[1], v[2], w, x} {
+		l.vouch(cs)
+	}
+	if take("y", "192.0.2.11:1") != nil {
+		t.Error("a connection past the bound in all, all of them vouched for, is taken")
+	}
+	wantClosed("a connection past the bound in all, all of them vouched for")
+	if l.total != 7 || l.waiting.Len() != 0 || len(l.waitingBy) != 0 || len(l.waitingBlocks) != 0 {
+		t.Errorf("counted %d, waiting %d, by %v, by /48 %v", l.total, l.waiting.Len(), l.waitingBy, l.waitingBlocks)
+	}
+
+	// Admitted, closed, vouched for, or any of these in any order, a connection is let go
+	// of once.
+	a := src("[2001:db8::1]:1")
+	for _, steps := range [][]string{{"admit"}, {"close"}, {"admit", "close"}, {"close", "admit"}, {"close", "close", "admit", "admit"}, {"vouch", "close"}, {"vouch", "admit", "vouch"}, {"close", "vouch"}} {
 		l := newConnLimit(1, 1, 1)
-		if !l.take(a) {
+		c := l.hold(nopConn{}, a)
+		if c == nil {
 			t.Fatal("a first connection is not taken")
 		}
-		c := &heldConn{Conn: nopConn{}, release: func() { l.give(a) }}
 		for _, s := range steps {
-			if s == "admit" {
+			switch s {
+			case "admit":
 				c.admit()
-			} else {
+			case "vouch":
+				c.vouch()
+			default:
 				c.Close()
 			}
 		}
-		if l.total != 0 || len(l.by) != 0 || len(l.blocks) != 0 {
-			t.Errorf("%v: %d counted, by %v, by /48 %v", steps, l.total, l.by, l.blocks)
+		if l.total != 0 || len(l.by) != 0 || len(l.blocks) != 0 || l.waiting.Len() != 0 || len(l.waitingBy) != 0 || len(l.waitingBlocks) != 0 {
+			t.Errorf("%v: %d counted, by %v, by /48 %v, %d waiting", steps, l.total, l.by, l.blocks, l.waiting.Len())
 		}
 	}
+	// A held connection closed for a newer one is closed, and closing it again lets go of
+	// nothing more.
+	l = newConnLimit(1, 1, 1)
+	first := &closedConn{}
+	h := l.hold(first, a)
+	if h == nil || l.hold(&closedConn{}, a) == nil {
+		t.Fatal("a connection is not taken")
+	}
+	if !first.closed {
+		t.Error("the oldest connection is not closed for a newer one")
+	}
+	h.Close()
+	if l.total != 1 || l.waiting.Len() != 1 {
+		t.Errorf("a connection closed for a newer one, closed again: %d counted, %d waiting", l.total, l.waiting.Len())
+	}
+}
+
+// closeFunc is a closer that calls itself.
+type closeFunc func()
+
+func (f closeFunc) Close() error {
+	f()
+	return nil
 }
 
 // nopConn is a connection that does nothing.
@@ -123,12 +212,29 @@ type nopConn struct{ net.Conn }
 
 func (nopConn) Close() error { return nil }
 
+// closedConn is a connection that does nothing but say it was closed.
+type closedConn struct {
+	net.Conn
+	closed bool
+}
+
+func (c *closedConn) Close() error {
+	c.closed = true
+	return nil
+}
+
 // TestTheRelaysBuckets pins the relay's buckets: by the connection's source, an IPv6
-// /64 one bucket whatever the request's fields say; a full map refuses a new source
-// and serves those it follows; and buckets are let go of when they are full again, by
-// prune alone.
+// /64 one bucket whatever the request's fields say, and by its IPv6 /48 a bucket of 240
+// a minute in bursts of 80 beside it, none for IPv4; at most 256 sources of one /48
+// followed, a new one past that letting go of the one of that /48 idle longest; a full
+// map letting go of the source idle longest for a new one; and buckets let go of when
+// they are full again, by prune alone, a /48's with its last source.
 func TestTheRelaysBuckets(t *testing.T) {
-	rl := &relay{g: &Gateway{conf: &server.Configuration{Run: &server.Endpoint{URL: "https://apiary.example/v1/runs"}}}, sources: map[string]*bucket{}}
+	buckets := func() *relay {
+		return &relay{g: &Gateway{conf: &server.Configuration{Run: &server.Endpoint{URL: "https://apiary.example/v1/runs"}}},
+			sources: map[string]*relaySource{}, blocks: map[string]*relayBlock{}}
+	}
+	rl := buckets()
 	serve := func(remote string, i int) int {
 		req := httptest.NewRequest(http.MethodGet, "/nothing", nil)
 		req.RemoteAddr = remote
@@ -149,31 +255,88 @@ func TestTheRelaysBuckets(t *testing.T) {
 		t.Errorf("another /64: %d", got)
 	}
 
+	// One /48's burst, from as many /64s; a quarter of a minute later a quarter of its
+	// rate.
 	now := time.Now()
-	rl = &relay{sources: map[string]*bucket{}}
-	for i := range relaySources {
-		rl.sources[fmt.Sprintf("source %d", i)] = &bucket{left: relayBurst, at: now.Add(-time.Hour)}
+	rl = buckets()
+	sixtyFour := func(i int) connSource { return src(fmt.Sprintf("[2001:db8:0:%x::1]:1", i)) }
+	for i := range relayBlockBurst {
+		if !rl.allow(sixtyFour(i), now) {
+			t.Fatalf("request %d of one /48 is refused", i+1)
+		}
 	}
-	if rl.allow("new", now) {
-		t.Error("a new source past the sources followed is allowed")
+	if rl.allow(sixtyFour(relayBlockBurst), now) {
+		t.Errorf("request %d of one /48 is allowed", relayBlockBurst+1)
 	}
-	if !rl.allow("source 1", now) {
-		t.Error("a source followed is refused")
+	if !rl.allow(src("[2001:db8:1::1]:1"), now) || !rl.allow(src("192.0.2.1:1"), now) {
+		t.Error("another /48, or an IPv4 address, is refused")
 	}
-	if len(rl.sources) != relaySources {
-		t.Errorf("a new source let go of buckets: %d", len(rl.sources))
+	later := now.Add(time.Minute / 4)
+	for i := range relayBlockPerMinute / 4 {
+		if !rl.allow(sixtyFour(100+i), later) {
+			t.Fatalf("request %d of one /48 a quarter of a minute later is refused", i+1)
+		}
 	}
-	rl.sources["source 2"].at = now.Add(-relayRefill + time.Second)
-	rl.sources["source 3"].at = now.Add(-relayRefill)
-	rl.prune(now)
-	if len(rl.sources) != 2 || rl.sources["source 1"] == nil || rl.sources["source 2"] == nil {
-		t.Errorf("after prune: %d buckets", len(rl.sources))
+	if rl.allow(sixtyFour(200), later) {
+		t.Errorf("request %d of one /48 a quarter of a minute later is allowed", relayBlockPerMinute/4+1)
 	}
-	if !rl.allow("new", now) {
-		t.Error("a new source once buckets are let go of is refused")
+	// IPv4 addresses of one /24 have no bucket of the /24.
+	for i := range relayBlockBurst + 1 {
+		if !rl.allow(src(fmt.Sprintf("198.51.100.%d:1", i+1)), now) {
+			t.Fatalf("IPv4 address %d of one /24 is refused", i+1)
+		}
 	}
 
-	rl = &relay{sources: map[string]*bucket{"old": {left: relayBurst, at: now.Add(-time.Hour)}}, done: make(chan struct{})}
+	// At most 256 sources of one /48: past that, the one of that /48 idle longest goes.
+	rl = buckets()
+	at := func(i int) time.Time { return now.Add(time.Duration(i) * time.Millisecond) }
+	for i := range relayBlockSources {
+		rl.allow(sixtyFour(i), at(i))
+	}
+	rl.allow(sixtyFour(0), at(relayBlockSources))
+	rl.allow(sixtyFour(0xffff), at(relayBlockSources+1))
+	rl.allow(src("[2001:db8:1::1]:1"), at(relayBlockSources+2))
+	if n := rl.blocks["2001:db8::/48"].sources.Len(); n != relayBlockSources || len(rl.sources) != relayBlockSources+1 {
+		t.Errorf("%d sources of one /48 followed, %d in all", n, len(rl.sources))
+	}
+	if rl.sources["2001:db8::/64"] == nil || rl.sources["2001:db8:0:1::/64"] != nil || rl.sources["2001:db8:0:ffff::/64"] == nil || rl.sources["2001:db8:1::/64"] == nil {
+		t.Error("a new source of a /48 past its bound let go of another than the one of it idle longest")
+	}
+
+	// A full map lets go of the source idle longest, and of its /48 with it.
+	rl = buckets()
+	for i := range relaySources {
+		s := connSource{key: fmt.Sprintf("source %d", i)}
+		if i == 1 {
+			s = src("[2001:db8:5::1]:1")
+		}
+		rl.allow(s, at(i))
+	}
+	rl.allow(connSource{key: "source 0"}, at(relaySources))
+	if !rl.allow(connSource{key: "new"}, at(relaySources+1)) {
+		t.Error("a new source past the sources followed is refused")
+	}
+	if len(rl.sources) != relaySources || rl.sources["new"] == nil || rl.sources["source 0"] == nil || rl.sources["2001:db8:5::/64"] != nil || rl.blocks["2001:db8:5::/48"] != nil {
+		t.Errorf("a new source past the sources followed: %d followed, the one idle longest let go of %t", len(rl.sources), rl.sources["2001:db8:5::/64"] == nil)
+	}
+	if !rl.allow(connSource{key: "source 2"}, at(relaySources+2)) {
+		t.Error("a source followed is refused")
+	}
+
+	// prune lets go of the buckets idle for relayRefill, a /48's with its last source.
+	rl = buckets()
+	rl.allow(src("192.0.2.1:1"), now.Add(-time.Hour))
+	rl.allow(src("[2001:db8::1]:1"), now.Add(-relayRefill))
+	rl.allow(src("[2001:db8:1::1]:1"), now.Add(-relayRefill))
+	rl.allow(src("[2001:db8:0:1::1]:1"), now.Add(-relayRefill+time.Second))
+	rl.prune(now)
+	if len(rl.sources) != 1 || rl.sources["2001:db8:0:1::/64"] == nil || len(rl.blocks) != 1 || rl.blocks["2001:db8::/48"] == nil || rl.idle.Len() != 1 {
+		t.Errorf("after prune: %d sources, %d /48s", len(rl.sources), len(rl.blocks))
+	}
+
+	rl = buckets()
+	rl.done = make(chan struct{})
+	rl.allow(src("192.0.2.1:1"), now.Add(-time.Hour))
 	go rl.pruneEvery(10 * time.Millisecond)
 	defer close(rl.done)
 	deadline := time.Now().Add(2 * time.Second)
