@@ -2,9 +2,7 @@ package gateway
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/program"
-	"github.com/qoryai/forager/runcredential"
 	"github.com/qoryai/forager/server"
 )
 
@@ -39,21 +37,20 @@ const (
 // defaultHeartbeat is the interval when the config names none.
 const defaultHeartbeat = 30 * time.Second
 
-// Gateway is a gateway serving sessions on its local link, and on its one address with
-// [Config.Listen]: it opens each run, decides
-// its connections by its policy through the shared proxy, numbers its events and sends
-// them to the server.
+// Gateway is a gateway serving sessions on its local link, or those of other machines
+// on its one address with [Config.Listen]: it opens each run, decides its connections by
+// its policy through its proxy, numbers its events and sends them to the server.
 type Gateway struct {
 	cfg      Config
 	report   func(string)
 	interval int
 	quiet    time.Duration
-	// runsQuiet is how long a run with no session lasts with no connection,
-	// [RunsConfig.Quiet].
-	runsQuiet time.Duration
 
-	// client, conf and confDigest are the server's, nil without one.
+	// client is the server's, nil without one; conf and confDigest are its
+	// configuration document and its digest, under confMu: read again when an answer
+	// carries another digest.
 	client     *server.Client
+	confMu     sync.Mutex
 	conf       *server.Configuration
 	confDigest string
 	// registrations are the registrations built for run ids, each kept for
@@ -68,23 +65,14 @@ type Gateway struct {
 	cancel context.CancelFunc
 
 	dir     string
-	secret  secretValue
 	ln      net.Listener
 	link    *linkListener
 	http    *http.Server
 	proxies *proxy.Listener
 	stream  *stream.Stream
-	// svc is the gateway's one address, nil without [Config.Listen]; auth and login
-	// decide the run credentials it is given. authority is the gateway's own
-	// certificate authority, kept in its directory, which the proxy of a run with no
-	// session reads inside HTTPS with; nil without Listen.
-	svc       *service
-	auth      runAuth
-	login     proxyLogin
-	authority *proxy.CA
-	// ended are the run keys the gateway refuses after the issuer's end, kept in its
-	// directory; nil without Listen.
-	ended *runcredential.Ended
+	// svc is the gateway's one address, nil without [Config.Listen]; with it there is
+	// no local link, ln, link, http and proxies all nil.
+	svc *service
 	// discovery is the link's discovery answer, and discoveryDigest its digest, the
 	// X-Qory-Configuration of every answer.
 	discovery       []byte
@@ -97,28 +85,13 @@ type Gateway struct {
 	used  map[string]bool
 	runs  map[string]*linkRun
 	opens sync.WaitGroup
-	// clientRuns are the runs of clients with no session by their run key, the one each
-	// key's connections join while it is open; opening the run keys whose client's run
-	// is opening, each closed once it opened or failed to; and endedUntil the latest exp
-	// each refused run key was kept to by this process.
-	clientRuns map[runKeyID]*linkRun
-	opening    map[runKeyID]chan struct{}
-	endedUntil map[runKeyID]time.Time
-	// unkept are the refused run keys whose write failed since the last that
-	// succeeded, each with the exp it is to be kept to, and keepTimer the next retry
-	// while there are any; keeping serialises the writes, so a write that succeeds
-	// clears only the run keys it holds.
-	unkept    map[runKeyID]time.Time
-	keepTimer *time.Timer
-	keeping   sync.Mutex
 	// spent are the runs on the one address that ended and were let go of, by their run
-	// id, kept as long as a run credential of theirs may be accepted; spentErrs and the
-	// delivery hold what they came to, for Close.
-	spent     map[string]spentRun
-	spentErrs []error
-	// bySecret are the run ids of the session's runs, live, ended or spent, by the
-	// SHA-256 of their run secret.
-	bySecret map[[sha256.Size]byte]string
+	// id, each kept for [keepEnded]; each and the delivery hold what they came to, for
+	// Close. lapsedErrs are the errors of the first [keepLapsedErrs] spent runs past
+	// their time that came to one, and lapsedMore counts the others.
+	spent      map[string]spentRun
+	lapsedErrs []error
+	lapsedMore int
 
 	closed   chan struct{}
 	delivery Delivery
@@ -127,17 +100,16 @@ type Gateway struct {
 
 // Start starts a gateway: with a server, it fetches the server's configuration
 // document first and calls [Config.Discovered], and a refusal is an
-// [*accesskey.Refusal]; then it makes the local link, served in memory to a session in
-// this process and, unless [Config.NoLinkSocket], on a socket in a private directory of
-// its own, the shared proxy listener on loopback, and, with [Config.Listen], its one
-// address, and serves sessions until Close. It sends nothing more before a session
-// opens a run.
+// [*accesskey.Refusal]; then, without [Config.Listen], it makes the local link, served
+// in memory to a session in this process and, unless [Config.NoLinkSocket], on a socket
+// in a private directory of its own, and the shared proxy listener on loopback; with
+// Listen, its one address alone. It serves sessions until Close, and sends nothing more
+// before a session opens a run.
 //
-// Start refuses, before anything starts, a Listen that is not host:port, a Listen that
-// is not loopback without TLS, TLS files it cannot read or whose certificate and key do
-// not match, TLS without a Listen, a Listen without RunCredentials or without Dir,
-// where the gateway's own certificate authority and the refused run keys are kept, and
-// RunCredentials whose check fails or whose files it cannot read.
+// Start refuses, before anything starts, a Listen that is not host:port, a Listen
+// without TLS or without a Server, TLS files it cannot read or whose certificate and key
+// do not match, and TLS without a Listen; and once discovery is read, a Listen whose
+// access key is not a gateway's, whose node id is not ng_.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	cert, err := checkService(&cfg)
 	if err != nil {
@@ -176,39 +148,10 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		report = func(line string) { fmt.Fprintln(os.Stderr, "qory run:", line) }
 	}
 	g := &Gateway{cfg: cfg, report: report, interval: int(cfg.Heartbeat / time.Second), used: map[string]bool{}, runs: map[string]*linkRun{}, closed: make(chan struct{}),
-		clientRuns: map[runKeyID]*linkRun{}, opening: map[runKeyID]chan struct{}{}, endedUntil: map[runKeyID]time.Time{}, unkept: map[runKeyID]time.Time{}, spent: map[string]spentRun{}}
+		spent: map[string]spentRun{}}
 	g.quiet = 3 * cfg.Heartbeat
 	if cfg.quiet != 0 {
 		g.quiet = cfg.quiet
-	}
-	g.runsQuiet = cfg.Runs.Quiet
-	if g.runsQuiet == 0 {
-		g.runsQuiet = defaultRunsQuiet
-	}
-	g.auth, g.login = cfg.runAuth, cfg.proxyLogin
-	if cfg.Listen != "" {
-		if g.auth == nil {
-			if g.auth, err = newCredentialVerifier(&cfg, cfg.Heartbeat); err != nil {
-				return nil, err
-			}
-		}
-		if g.login == nil {
-			g.login = clientLogin{g}
-		}
-		// Before the server is asked anything: a gateway that cannot keep its authority
-		// or its refused run keys does not start.
-		if g.authority, err = proxy.OpenCA(authorityPath(cfg.Dir)); err != nil {
-			return nil, err
-		}
-		if g.ended, err = runcredential.OpenEnded(cfg.Dir); err != nil {
-			return nil, err
-		}
-	}
-	if g.auth == nil {
-		g.auth = refuseAll{}
-	}
-	if g.login == nil {
-		g.login = refuseAll{}
 	}
 	if cfg.Server != nil {
 		client, err := newClient(cfg.Server, cfg.Version)
@@ -224,6 +167,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 				return nil, err
 			}
 		}
+		if cfg.Listen != "" && !strings.HasPrefix(conf.NodeID, "ng_") {
+			return nil, fmt.Errorf("the access key's node %s is not a gateway, ng_: the gateway's address %s needs a gateway's access key", conf.NodeID, cfg.Listen)
+		}
 		g.client, g.conf, g.confDigest = client, conf, digest
 	}
 	g.base, g.cancel = context.WithCancel(context.WithoutCancel(ctx))
@@ -233,11 +179,16 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			g.cancel()
 		}
 	}()
-	secret, err := newSecret()
-	if err != nil {
-		return nil, err
+	if cfg.Listen != "" {
+		// A gateway with an address serves other machines alone: no local link, and no
+		// proxy on loopback.
+		g.stream = stream.New(stream.Config{Dir: cfg.Dir, RunDir: cfg.RunDir, Events: cfg.Events, Report: report, CloseWait: cfg.closeWait})
+		if g.svc, err = g.startService(cert); err != nil {
+			return nil, err
+		}
+		ok = true
+		return g, nil
 	}
-	g.secret = newSecretValue(secret)
 	if !cfg.NoLinkSocket {
 		if err := g.listenLink(); err != nil {
 			return nil, err
@@ -271,14 +222,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.uid != nil {
 		uid = *cfg.uid
 	}
-	g.link = newLinkListener(g.ln, secret, uid)
-	if cfg.Listen != "" {
-		if g.svc, err = g.startService(cert); err != nil {
-			g.link.Close()
-			g.proxies.Close()
-			return nil, err
-		}
-	}
+	g.link = newLinkListener(g.ln, uid)
 	g.http = &http.Server{Handler: g.handler(localSide), ReadHeaderTimeout: link.PreambleWait, ErrorLog: quietLog()}
 	go g.http.Serve(g.link)
 	ok = true
@@ -319,16 +263,6 @@ func (g *Gateway) socket() string {
 	return filepath.Join(g.dir, link.LinkSocketName)
 }
 
-// newSecret makes the link secret: 32 bytes from the system's random source, in
-// base64url without padding.
-func newSecret() (string, error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b[:]), nil
-}
-
 // newClient is the signed client of the server document s.
 func newClient(s *Server, version string) (*server.Client, error) {
 	b, _ := json.Marshal(s)
@@ -340,7 +274,8 @@ func newClient(s *Server, version string) (*server.Client, error) {
 }
 
 // Addr is the address of the gateway's proxy, host:port: with [Config.Listen] its one
-// address, as it listens; else on loopback, where every connection opens with the
+// address, as it listens, where a bound connection opens a run's proxy with the relay's
+// preamble and the run key; else on loopback, where every connection opens with the
 // relay's preamble and a live run's proxy secret.
 func (g *Gateway) Addr() string {
 	if g.svc != nil {
@@ -352,33 +287,42 @@ func (g *Gateway) Addr() string {
 // LocalLink is what a session in this process needs of the gateway: the way to its link
 // in memory, which a session's client takes in place of the socket, so no other process
 // can stand in for the gateway at the socket's path; the link's socket, for a session
-// in another process, empty with [Config.NoLinkSocket], and its secret; the proxy's address, the gateway's own files,
-// which a walled run must not mount, and the names a walled run must not pass.
+// in another process, empty with [Config.NoLinkSocket]; the proxy's address, the
+// gateway's own files, which a walled run must not mount, and the names a walled run
+// must not pass. A
+// gateway with [Config.Listen] runs no sessions of its machine: its Local has no socket
+// and no proxy, and every connection to it fails.
 func (g *Gateway) LocalLink() link.Local {
+	if g.svc != nil {
+		return link.Local{Files: g.files(), Reserved: g.reserved()}.InMemory(func(context.Context) (net.Conn, error) {
+			return nil, errNoSessions
+		})
+	}
 	return link.Local{
 		Socket:   g.socket(),
-		Secret:   g.secret.reveal(),
 		Proxy:    g.proxies.Addr(),
 		Files:    g.files(),
 		Reserved: g.reserved(),
 	}.InMemory(g.link.dial)
 }
 
-// String names the gateway by its proxy's address, its link's socket and its one
+// errNoSessions is a connection to the local link of a gateway with an address.
+var errNoSessions = errors.New("the gateway serves other machines on its address, and runs no sessions")
+
+// String names the gateway by its proxy's address and its link's socket, or by its one
 // address when it has one, never a secret.
 func (g *Gateway) String() string {
 	if g == nil {
 		return "gateway.Gateway(nil)"
 	}
+	if g.svc != nil {
+		return "gateway.Gateway{address " + g.svc.addr() + "}"
+	}
 	where := g.socket()
 	if where == "" {
 		where = "in memory"
 	}
-	s := "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where
-	if g.svc != nil {
-		s += ", address " + g.svc.addr()
-	}
-	return s + "}"
+	return "gateway.Gateway{proxy " + g.proxies.Addr() + ", link " + where + "}"
 }
 
 // Format prints g as String does, under every verb and flag: never its secret.
@@ -491,23 +435,20 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 		g.delivery.Undelivered += lr.result.Undelivered
 		g.closedRun(lr)
 	}
-	// A write of the refused run keys that failed is tried once more.
-	if n := g.keepOnClose(); n > 0 {
-		g.report(fmt.Sprintf("closing with %d run keys of ended runs not written to %s: a restart would not refuse them", n, g.endedPath()))
-	}
 	g.mu.Lock()
-	errs = append(errs, g.spentErrs...)
+	errs = append(errs, g.spentErrs()...)
 	g.mu.Unlock()
 	shut, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-	if err := g.http.Shutdown(shut); err != nil {
-		g.http.Close()
-	}
 	if g.svc != nil {
 		errs = append(errs, g.svc.close(shut))
+	} else {
+		if err := g.http.Shutdown(shut); err != nil {
+			g.http.Close()
+		}
+		g.link.Close()
+		errs = append(errs, g.proxies.Close())
 	}
 	cancel()
-	g.link.Close()
-	errs = append(errs, g.proxies.Close())
 	if g.dir != "" {
 		errs = append(errs, os.RemoveAll(g.dir))
 	}

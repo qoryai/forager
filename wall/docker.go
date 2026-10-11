@@ -53,9 +53,9 @@ const (
 // created with --internal and on nothing else, so it has no route out and its resolver
 // knows only that network; the network's bridge gets no address, so the engine's host is
 // not on it either. The relay's container is on that network and on an ordinary
-// one; it runs [Relay], forwarding one port to the gateway, and is the
-// one peer the agent can reach. Both run as a user that is not root, with every
-// capability dropped and no new privileges.
+// one; it runs [Relay], forwarding one port to the gateway, listens on its address on
+// the internal network alone, and is the one peer the agent can reach. Both run as a
+// user that is not root, with every capability dropped and no new privileges.
 type Docker struct {
 	// Command is the program to run; empty means docker.
 	Command string
@@ -266,6 +266,15 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 			break
 		}
 	}
+	// The relay listens on its address in the inside network's subnets and on no other:
+	// on the ordinary network, what reaches it would have its connections opened with
+	// the proxy's secret. The engine gives the relay its address there only when it
+	// starts, so the relay finds it by the subnet.
+	out, err = e.docker(ctx, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}", e.inside())
+	if err != nil {
+		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+	}
+	e.subnets = strings.Fields(string(out))
 	return e, nil
 }
 
@@ -278,6 +287,8 @@ type dockerEnclosure struct {
 	base string
 	// host is how the relay reaches this machine: the gateway's address, or hostName.
 	host string
+	// subnets are the inside network's, where the relay listens.
+	subnets []string
 	// made holds the commands that remove what was created, in the order created.
 	made [][]string
 	temp string
@@ -363,9 +374,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
-	var relayEnv []string
+	relayEnv := []string{RelayInsideEnv + "=" + strings.Join(e.subnets, ",")}
 	if l.ProxyToken != "" {
-		relayEnv = []string{RelayTokenEnv + "=" + l.ProxyToken}
+		relayEnv = append(relayEnv, RelayTokenEnv+"="+l.ProxyToken)
 	}
 	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
@@ -380,7 +391,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	// The relay is on both networks, so it forwards no packet between them: what it
 	// passes on is the connections it copies to the proxy, and nothing routed through it.
 	create = append(create, "--sysctl", "net.ipv4.ip_forward=0", "--sysctl", "net.ipv6.conf.all.forwarding=0")
-	create = append(create, "--env-file", relayEnvFile, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	// The image's health check would run inside the relay, as its user and beside its
+	// environment, with the relay's way out; the relay runs none.
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
@@ -441,7 +454,8 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 	// The docker CLI that starts the agent's container runs without the access key's
-	// variables, as every other command of the run's, and reaches the engine recorded.
+	// variables and the run key's, as every other command of the run's, and reaches
+	// the engine recorded.
 	cli := accesskey.WithoutVariables(os.Environ())
 	if e.env != nil {
 		cli = withSelection(cli, e.env)
@@ -765,8 +779,8 @@ func selectedCommand(ctx context.Context, argv, env []string) *exec.Cmd {
 }
 
 // hostCommand is a command of the machine's the wall runs, the docker CLI say, with
-// Forager's environment without the access key's variables, which neither the CLI
-// nor a credential helper it starts receives.
+// Forager's environment without the access key's variables and the run key's, which
+// neither the CLI nor a credential helper it starts receives.
 func hostCommand(ctx context.Context, argv []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = accesskey.WithoutVariables(os.Environ())

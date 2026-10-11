@@ -22,6 +22,7 @@
 package stream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -574,6 +575,62 @@ func (r *Run) Discard(ctx context.Context) error {
 	// Left in place when it holds anything else, a session's own files on one machine.
 	os.Remove(r.dir)
 	return errors.Join(errs...)
+}
+
+// Reclaim removes the record of a run whose open never answered its session, so its
+// run id opens again: a record whose lock is free and whose events.jsonl holds at most
+// the run's dev.qory.run.registered, which is never posted. It reads the record under
+// its lock, so what it judges is what it removes. It removes what [Run.Discard]
+// removes, and reports whether it did; a record that holds anything more, one another
+// holds, and no record at all are left as they are.
+func (s *Stream) Reclaim(runID string) (bool, error) {
+	if err := checkRunID(runID); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runs[runID] != nil {
+		return false, nil
+	}
+	dir := s.Dir(runID)
+	if _, err := os.Stat(filepath.Join(dir, sink.EventsFile)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	unlock, err := lock(dir, lockFile)
+	if err != nil {
+		if errors.Is(err, ErrRunning) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer unlock()
+	b, err := os.ReadFile(filepath.Join(dir, sink.EventsFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	n := 0
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var ev struct {
+			Type string `json:"type"`
+		}
+		if n++; n > 1 || json.Unmarshal(line, &ev) != nil || ev.Type != event.RunRegistered {
+			return false, nil
+		}
+	}
+	var errs []error
+	for _, name := range []string{sink.EventsFile, sink.DeliveredFile, sink.UndeliveredDir} {
+		errs = append(errs, os.RemoveAll(filepath.Join(dir, name)))
+	}
+	return true, errors.Join(errs...)
 }
 
 // DecodeBatch reads a link batch, a JSON array of the session's events, keeping each

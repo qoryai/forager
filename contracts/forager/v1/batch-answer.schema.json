@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/batch-answer.schema.json",
+  "title": "Batch answer",
+  "description": "The body a signed 2xx to a batch may carry, application/json, covered by line 4 of the answer's signature, the body's hash. An empty body, or one without end, means no end. Once the server has recorded the run's starter's outcome, it sends end on every 2xx for the run until the run's dev.qory.run.exited arrives; the answer to the batch that carries dev.qory.run.exited holds no end. A signed 410 still stops the run's events, and carries no end. A member Forager does not recognise is ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "end": {
+      "description": "The run's starter's outcome, as the server recorded it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "description": "How the starter says the run ended, dev.qory.run.exited's vocabulary.",
+          "enum": ["succeeded", "failed", "cancelled"]
+        },
+        "reason": {
+          "description": "The starter's reason, a code, absent when the outcome has none: the server drops a reason that is no code at the outcome, so an end never carries one. A body whose reason is no code is refused, and Forager reads no end from it. Forager drops a reason that is one of its reserved codes, and keeps the state.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        }
+      }
+    }
+  }
+}

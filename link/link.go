@@ -3,9 +3,9 @@
 // point a program at the proxy, the preamble of the wall's relay, the proxy's loopback
 // address, the variables that name the run's socket and a tool's socket, the headers
 // the proxy sets on a request it hands to a tool, the value of a placeholder variable,
-// the names of the gateway's link: its preamble, its socket's directory and modes, and
-// the scheme a run credential is presented in; what a session needs of a gateway on the
-// same machine, [Local]; and the writing and reading of a preamble.
+// the names of the gateway's link: its socket's directory and modes; what a session
+// needs of a gateway on the same machine, [Local]; the reading of the relay's preamble;
+// and the wire of the link to a separate gateway, its channel binding and its paths.
 package link
 
 import "io/fs"
@@ -65,13 +65,6 @@ const (
 // reads it, and is no credential anywhere.
 const Placeholder = "qory-sets-the-credential-outside-the-enclosure"
 
-// LinkPreamble is what opens every connection of the session to the gateway's local
-// link: this word, a space, the link secret and a newline, before the first byte of
-// HTTP. The secret is at least 128 bits from the system's random source, made each time
-// the gateway starts; the gateway compares it in constant time, never logs it, and
-// closes a connection that opens otherwise unanswered.
-const LinkPreamble = "QORY-LINK"
-
 // LinkDirPrefix begins the name of the private directory the gateway makes, in the
 // system's temporary directory, for the local link's socket. Every such directory on
 // the machine is one of Forager's files, which no walled run binds.
@@ -82,14 +75,8 @@ const LinkSocketName = "sock"
 
 // LinkDirMode and LinkSocketMode are the modes of the local link's directory and
 // socket: the user's alone. The session also checks that the socket's peer is its own
-// user before it writes the link secret.
+// user before it sends anything, and the gateway serves only a peer of its own user.
 const (
 	LinkDirMode    fs.FileMode = 0o700
 	LinkSocketMode fs.FileMode = 0o600
 )
-
-// BearerScheme is the scheme of the Authorization header every request of the session
-// to a separate gateway carries, Authorization: Bearer and the run credential, in the
-// syntax of RFC 6750 §2.1. The run credential is never logged, recorded or sent
-// anywhere but to the gateway.
-const BearerScheme = "Bearer"

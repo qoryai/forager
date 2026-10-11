@@ -143,18 +143,11 @@ func TestARuntimeThatLeavesAtItsOwnInterruptIsCancelled(t *testing.T) {
 }
 
 // TestAContextThatEndsAfterTheExitIsNoCancel pins a runtime that exits by itself
-// behind a separate gateway, and a context that ends after its exit was observed:
-// while the gateway is asked for the outcome, or while the sinks close. The run is not
+// behind a separate gateway, and a context that ends after its exit was observed,
+// while the sinks close. The run is not
 // cancelled, and the result's state and exit code are run.exited's.
 func TestAContextThatEndsAfterTheExitIsNoCancel(t *testing.T) {
 	for name, c := range map[string]func(g *linktest.Fake, cancel context.CancelFunc){
-		"the outcome ask": func(g *linktest.Fake, cancel context.CancelFunc) {
-			g.OnOutcome(func(string) linktest.Reply {
-				cancel()
-				time.Sleep(200 * time.Millisecond)
-				return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
-			})
-		},
 		"the sink close": func(g *linktest.Fake, cancel context.CancelFunc) {
 			g.OnBatch(func(evs []map[string]any) linktest.Reply {
 				if len(ofType(evs, "dev.qory.run.exited")) > 0 {
@@ -305,7 +298,7 @@ func TestANormalExitIsNeitherCancelledNorTimedOut(t *testing.T) {
 // 130 at the stop signal SIGINT, killed by SIGTERM, or killed by SIGKILL after the
 // grace. Each is recorded cancelled with interrupted, the runtime's own exit status and
 // signal kept, Run returns its result with no error, and Cancelled is true. Behind a
-// separate gateway the same is posted, and nothing is asked.
+// separate gateway the same is posted.
 func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 	for name, c := range map[string]struct {
 		script, stop string
@@ -328,9 +321,6 @@ func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 			if c.remote {
 				sp, g, _ = remoteSpec(t, 0)
 				sp.Args = []string{"-c", script}
-				g.OnOutcome(func(string) linktest.Reply {
-					return linktest.Reply{Status: 200, Body: map[string]any{"state": "failed", "reason": "checks_failed"}}
-				})
 			} else {
 				sp = shellSpec(t, script)
 			}
@@ -352,9 +342,6 @@ func TestAStopFromWhereTheRunWasStartedIsInterrupted(t *testing.T) {
 				t.Errorf("run.exited %s %s %d", state, reason, code)
 			}
 			if c.remote {
-				if got := g.Outcomes(); len(got) != 0 {
-					t.Errorf("the outcome was asked for %v", got)
-				}
 				posted := ofType(g.Events(), "dev.qory.run.exited")
 				if len(posted) != 1 || data(posted[0])["state"] != "cancelled" || data(posted[0])["reason"] != "interrupted" {
 					t.Errorf("the gateway received run.exited %v", posted)

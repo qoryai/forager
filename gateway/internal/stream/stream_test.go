@@ -717,3 +717,37 @@ func TestTheRecordIsTodays(t *testing.T) {
 		t.Fatal("no recorded runs")
 	}
 }
+
+// TestReclaimReadsTheRecordUnderItsLock pins Reclaim's order: a record another holds is
+// left as it is, unread, and one whose lock is free and that holds the run's
+// registration alone is removed.
+func TestReclaimReadsTheRecordUnderItsLock(t *testing.T) {
+	s := New(Config{Dir: t.TempDir()})
+	id := event.NewRunID()
+	dir := s.Dir(id)
+	// An events.jsonl no read can take: Reclaim fails if it reads it.
+	if err := os.MkdirAll(filepath.Join(dir, sink.EventsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lock(dir, lockFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Reclaim(id); ok || err != nil {
+		t.Errorf("a record another holds: %v %v", ok, err)
+	}
+	unlock()
+	os.Remove(filepath.Join(dir, sink.EventsFile))
+	if err := os.WriteFile(filepath.Join(dir, sink.EventsFile), []byte(`{"type":"`+event.RunRegistered+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Reclaim(id); !ok || err != nil {
+		t.Errorf("a record of the registration alone: %v %v", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sink.EventsFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the record is left: %v", err)
+	}
+	if ok, err := s.Reclaim(event.NewRunID()); ok || err != nil {
+		t.Errorf("no record: %v %v", ok, err)
+	}
+}

@@ -20,12 +20,15 @@ import (
 // answer to an enrolment has its own, EnrolAnswerDomain: its third line is the
 // request's proof, which anyone holding a live code can make up, so a signature over an
 // enrolment answer never verifies as the answer to a signed request, whose third line
-// is that request's signature.
+// is that request's signature. A separate gateway's answer on its link has its own too,
+// LinkAnswerDomain: its third line binds the answer to the connection and the request
+// it answers, since a request of the link carries no signature.
 const (
 	RequestDomain     = "qory-request-ed25519-v1"
 	AnswerDomain      = "qory-answer-ed25519-v1"
 	EnrolDomain       = "qory-enrol-ed25519-v1"
 	EnrolAnswerDomain = "qory-enrol-answer-ed25519-v1"
+	LinkAnswerDomain  = "qory-link-answer-ed25519-v1"
 )
 
 // The headers of a signed request and of a signed answer.
@@ -109,9 +112,11 @@ func Timestamp(now time.Time) string { return strconv.FormatInt(now.Unix(), 10) 
 
 // Answer is one answer of the server, as its signature covers it: six lines joined by
 // a line feed, with none after the last. The domain line, AnswerDomain, or
-// EnrolAnswerDomain for an answer to an enrolment; the status, three decimal digits;
-// the request's X-Qory-Signature-Ed25519 exactly as sent, or for an enrolment the
-// request's proof; the lower-case hex SHA-256 of the body as the server produced it,
+// EnrolAnswerDomain for an answer to an enrolment, or LinkAnswerDomain for a separate
+// gateway's answer on its link; the status, three decimal digits; the request's
+// X-Qory-Signature-Ed25519 exactly as sent, for an enrolment the request's proof, and
+// for a separate gateway's answer the hash of the connection and the request,
+// link.AnswerRequest; the lower-case hex SHA-256 of the body as the server produced it,
 // before any content coding; the answer's X-Qory-Configuration, or empty; and its
 // X-Qory-Run-Configuration, or empty. The third line binds the answer to its request,
 // and through the request's signature to the access key and the instance that sent it.
@@ -119,7 +124,10 @@ type Answer struct {
 	// Enrolment marks an answer to an enrolment, whose message starts with
 	// EnrolAnswerDomain. [EnrolmentRequest.VerifyAnswer] sets it; a server sets it to
 	// sign an enrolment answer.
-	Enrolment        bool
+	Enrolment bool
+	// Link marks a separate gateway's answer on its link, whose message starts with
+	// LinkAnswerDomain, signed under the gateway's key.
+	Link             bool
 	Status           int
 	RequestSignature string
 	Body             []byte
@@ -130,8 +138,11 @@ type Answer struct {
 // Message returns the six lines the answer's signature covers.
 func (a Answer) Message() []byte {
 	domain := AnswerDomain
-	if a.Enrolment {
+	switch {
+	case a.Enrolment:
 		domain = EnrolAnswerDomain
+	case a.Link:
+		domain = LinkAnswerDomain
 	}
 	sum := sha256.Sum256(a.Body)
 	return []byte(domain + "\n" + fmt.Sprintf("%03d", a.Status) + "\n" + a.RequestSignature + "\n" +
@@ -141,6 +152,13 @@ func (a Answer) Message() []byte {
 // SignAnswer returns X-Qory-Signature-Ed25519 for an answer: its signature under the
 // server's signing key, 64 bytes in base64url.
 func (k *Key) SignAnswer(a Answer) string { return encodeSignature(k.Sign(a.Message())) }
+
+// VerifyAnswer reports whether signature, as X-Qory-Signature-Ed25519 contains it, is
+// the answer's signature under the public key.
+func (p PublicKey) VerifyAnswer(a Answer, signature string) bool {
+	sig, err := decode(signature, ed25519.SignatureSize)
+	return err == nil && p.Verify(a.Message(), sig)
+}
 
 // ServerKey is one entry of a pin, and of the apiary_public_key list a server's
 // discovery and enrolment answer contain: {"alg": "ed25519", "public_key": "<32
@@ -158,18 +176,18 @@ type Pin []ServerKey
 // ParsePin reads a pin written as JSON, the form QORY_APIARY_PUBLIC_KEY contains:
 // [{"alg": "ed25519", "public_key": "<32 bytes, base64url>"}]. A member it does not
 // define is refused, and so is a member twice. It then runs [Pin.Check]. A pin that
-// contains an access key secret is [ErrSecretInDocument], whose message quotes
-// nothing.
+// contains an access key secret is [ErrSecretInDocument], and one that contains a run
+// key [ErrRunKeyInDocument], whose messages quote nothing.
 func ParsePin(b []byte) (Pin, error) {
-	if ContainsSecret(string(b)) {
-		return nil, ErrSecretInDocument
+	if err := SecretInDocument(string(b)); err != nil {
+		return nil, err
 	}
 	var doc any
 	if err := jsonv2.Unmarshal(b, &doc); err != nil {
 		return nil, errors.New("the pin is not a JSON list of {alg, public_key}")
 	}
-	if DocumentContainsSecret(doc) {
-		return nil, ErrSecretInDocument
+	if err := SecretInDocument(doc); err != nil {
+		return nil, err
 	}
 	var p Pin
 	if err := jsonv2.Unmarshal(b, &p, jsonv2.RejectUnknownMembers(true)); err != nil {
@@ -256,6 +274,21 @@ func (p Pin) VerifyAnswer(a Answer, signature string) bool { return p.Verify(a.M
 // ErrSecretInDocument is the error of a document that contains an access key secret
 // where none belongs: a fixed message, so the secret appears in no error.
 var ErrSecretInDocument = errors.New("the document contains an access key secret, which belongs in access-key-secret or QORY_ACCESS_KEY_SECRET and nowhere else")
+
+// ErrRunKeyInDocument is the error of a document that contains a run key, and no access
+// key secret, where none belongs: a fixed message, so the run key appears in no error.
+// errors.Is reports it as [ErrSecretInDocument] as well.
+var ErrRunKeyInDocument error = runKeyInDocument{}
+
+// runKeyInDocument is [ErrRunKeyInDocument].
+type runKeyInDocument struct{}
+
+func (runKeyInDocument) Error() string {
+	return "the document contains a run key, which belongs in QORY_RUN_KEY and nowhere else"
+}
+
+// Is reports [ErrSecretInDocument] as the error's kind.
+func (runKeyInDocument) Is(target error) bool { return target == ErrSecretInDocument }
 
 // encodeSignature writes a signature in base64url without padding.
 func encodeSignature(sig []byte) string { return base64.RawURLEncoding.EncodeToString(sig) }

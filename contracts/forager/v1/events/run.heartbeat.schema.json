@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": ["elapsed_seconds", "interval_seconds"],
   "properties": {
-    "elapsed_seconds": {"description": "Seconds since the start of the run's heartbeats: on a session's run, since the session's discovery of its gateway's link; on a run a gateway opened, since the run's registration, or since dev.qory.run.started when the run has no server.", "type": "integer", "minimum": 0},
+    "elapsed_seconds": {"description": "Seconds since the start of the run's heartbeats: the session's discovery of its gateway's link.", "type": "integer", "minimum": 0},
     "interval_seconds": {"description": "Seconds between heartbeats, so a receiver can detect a missed one.", "type": "integer", "minimum": 1}
   }
 }

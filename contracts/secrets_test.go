@@ -92,6 +92,11 @@ type fixtureKeys struct {
 	} `json:"access_key"`
 	SigningKey     keyPair `json:"signing_key"`
 	NextSigningKey keyPair `json:"next_signing_key"`
+	GatewayKey     struct {
+		Secret      string `json:"secret"`
+		AccessKeyID string `json:"access_key_id"`
+		PublicKey   string `json:"public_key"`
+	} `json:"gateway_key"`
 }
 
 func loadKeys(t *testing.T) fixtureKeys {
@@ -112,9 +117,10 @@ func (k fixtureKeys) accessKey(t *testing.T) ed25519.PrivateKey {
 }
 
 // TestSecretsFixturesValidate pins that every fixture of enrolment and of the known
-// answers passes its schema: discovery, the registration and its answer, and the
-// enrolment request, answer and signed refusals each against the part of
-// enrolment.schema.json it is.
+// answers passes its schema: discovery, the registration and its answer, the run key's
+// payload, the registration through a gateway, the attach and the outcome, each with
+// its answer, and the enrolment request, answer and signed refusals each against the
+// part of enrolment.schema.json it is.
 func TestSecretsFixturesValidate(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
@@ -128,22 +134,34 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		return s.Validate
 	}
 	want := map[string][]string{
-		"fixtures/known-answers/discovery.json":                {"configuration.schema.json"},
-		"fixtures/known-answers/registration.json":             {"run-registration.schema.json"},
-		"fixtures/known-answers/registration-answer.json":      {"run-configuration.schema.json"},
-		"fixtures/enrolment/request.json":                      {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/request-two-fingerprints.json":     {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
-		"fixtures/enrolment/answer.json":                       {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
-		"fixtures/enrolment/refusal-key-limit.json":            {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-invalid.json":          {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-limit-rotation.json":   {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-key-invalid-rotation.json": {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
-		"fixtures/enrolment/refusal-rate-limited.json":         {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/known-answers/discovery.json":                   {"configuration.schema.json"},
+		"fixtures/known-answers/registration.json":                {"run-registration.schema.json"},
+		"fixtures/known-answers/registration-answer.json":         {"run-configuration.schema.json"},
+		"fixtures/known-answers/run-key-payload.json":             {"run-key.schema.json"},
+		"fixtures/known-answers/registration-gateway.json":        {"run-registration.schema.json"},
+		"fixtures/known-answers/registration-gateway-answer.json": {"run-registration-answer.schema.json"},
+		"fixtures/known-answers/attach.json":                      {"run-attach.schema.json"},
+		"fixtures/known-answers/attach-answer.json":               {"run-attach-answer.schema.json", "run-configuration.schema.json"},
+		"fixtures/known-answers/attach-run-configuration.json":    {"run-configuration.schema.json"},
+		"fixtures/known-answers/discovery-gateway.json":           {"configuration.schema.json"},
+		"fixtures/known-answers/outcome.json":                     {"run-outcome.schema.json"},
+		"fixtures/known-answers/outcome-answer.json":              {"run-outcome-answer.schema.json"},
+		"fixtures/enrolment/request.json":                         {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/request-two-fingerprints.json":        {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/request-gateway.json":                 {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
+		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/answer-gateway.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-key-invalid-rotation.json":    {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
+		"fixtures/enrolment/refusal-rate-limited.json":            {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 	}
 	data := map[string]bool{
-		"fixtures/known-answers/keys.json":        true,
-		"fixtures/known-answers/signatures.json":  true,
-		"fixtures/known-answers/small-order.json": true,
+		"fixtures/known-answers/keys.json":            true,
+		"fixtures/known-answers/signatures.json":      true,
+		"fixtures/known-answers/through-gateway.json": true,
+		"fixtures/known-answers/small-order.json":     true,
 	}
 	for _, dir := range []string{"fixtures/enrolment", "fixtures/known-answers"} {
 		for _, f := range files(t, dir) {
@@ -336,17 +354,27 @@ func TestRequestSignatures(t *testing.T) {
 
 // TestEnrolmentProofs pins the enrolment proof's five lines, built from the request's
 // body, and the proof the body carries, under the fixture access key, for a code with
-// the signing key's fingerprint and for one made during a rotation with both.
+// the signing key's fingerprint and for one made during a rotation with both, and under
+// the fixture gateway key for a gateway's request, with the signing key's fingerprint.
 func TestEnrolmentProofs(t *testing.T) {
 	k := loadKeys(t)
 	priv := k.accessKey(t)
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Enrolment) != 2 {
-		t.Fatalf("%d enrolment vectors; want 2", len(v.Enrolment))
+	if len(v.Enrolment) != 3 {
+		t.Fatalf("%d enrolment vectors; want 3", len(v.Enrolment))
 	}
+	gatewaySecret, _ := strings.CutPrefix(k.GatewayKey.Secret, "qak_")
+	gatewayPriv := ed25519.NewKeyFromSeed(b64(t, gatewaySecret))
 	fingerprints := []string{k.SigningKey.Fingerprint, k.NextSigningKey.Fingerprint}
 	for i, e := range v.Enrolment {
+		priv, publicKey, codeKeys := priv, k.AccessKey.PublicKey, fingerprints[:1]
+		switch i {
+		case 1:
+			codeKeys = fingerprints
+		case 2:
+			priv, publicKey = gatewayPriv, k.GatewayKey.PublicKey
+		}
 		var body struct {
 			Code      string `json:"code"`
 			Name      string `json:"name"`
@@ -361,12 +389,12 @@ func TestEnrolmentProofs(t *testing.T) {
 		if !slices.Equal(e.Lines, want) {
 			t.Errorf("%s: lines %q; want %q from the body", e.Note, e.Lines, want)
 		}
-		if body.PublicKey != k.AccessKey.PublicKey {
-			t.Errorf("%s: public key %s; want the fixture access key's", e.Note, body.PublicKey)
+		if body.PublicKey != publicKey {
+			t.Errorf("%s: public key %s; want %s", e.Note, body.PublicKey, publicKey)
 		}
 		parts := strings.Split(body.Code, ".")
-		if !slices.Equal(parts[1:], fingerprints[:i+1]) {
-			t.Errorf("%s: the code's fingerprints %q; want %q", e.Note, parts[1:], fingerprints[:i+1])
+		if !slices.Equal(parts[1:], codeKeys) {
+			t.Errorf("%s: the code's fingerprints %q; want %q", e.Note, parts[1:], codeKeys)
 		}
 		signs(t, e.Note, priv, e.message(t), body.Proof)
 	}
@@ -376,7 +404,7 @@ func TestEnrolmentProofs(t *testing.T) {
 // under the fixture signing key: 200 with the discovery body and 404 with an empty
 // body, to the GET of discovery, and 200 to the registration with its run
 // configuration and that digest alone, under qory-answer-ed25519-v1; 201 to the enrolment request, whose line 3 is the
-// request's proof, the signed 409s key_limit and key_invalid at enrolment, with one key
+// request's proof, and 201 to the gateway's request, naming the fixture gateway key, the signed 409s key_limit and key_invalid at enrolment, with one key
 // and, during a rotation, to the request with two fingerprints, with two keys, current
 // first, and the signed 429 rate_limited per code with one key, under
 // qory-enrol-answer-ed25519-v1. A signature under one domain line does not verify under
@@ -386,14 +414,15 @@ func TestAnswerSignatures(t *testing.T) {
 	signing := ed25519.NewKeyFromSeed(b64(t, k.SigningKey.Seed))
 	var v signatureVectors
 	load(t, "fixtures/known-answers/signatures.json", &v)
-	if len(v.Answers) != 9 {
-		t.Fatalf("%d answer vectors; want 9", len(v.Answers))
+	if len(v.Answers) != 10 {
+		t.Fatalf("%d answer vectors; want 10", len(v.Answers))
 	}
-	var proof, rotation struct {
+	var proof, rotation, gatewayProof struct {
 		Proof string `json:"proof"`
 	}
 	load(t, "fixtures/enrolment/request.json", &proof)
 	load(t, "fixtures/enrolment/request-two-fingerprints.json", &rotation)
+	load(t, "fixtures/enrolment/request-gateway.json", &gatewayProof)
 	for _, a := range v.Answers {
 		domain := "qory-answer-ed25519-v1"
 		if a.Lines[1] == "201" || a.Lines[1] == "409" || a.Lines[1] == "429" {
@@ -432,16 +461,22 @@ func TestAnswerSignatures(t *testing.T) {
 				t.Errorf("%s: lines %q; want the GET's signature and no digest", a.Note, a.Lines)
 			}
 		case a.Lines[1] == "201":
-			if a.Lines[2] != proof.Proof || a.Lines[4] != "" || a.Lines[5] != "" {
+			gateway := a.Body != nil && *a.Body == "fixtures/enrolment/answer-gateway.json"
+			wantProof, wantID, wantKind := proof.Proof, k.AccessKey.AccessKeyID, "node"
+			if gateway {
+				wantProof, wantID, wantKind = gatewayProof.Proof, k.GatewayKey.AccessKeyID, "gateway"
+			}
+			if a.Lines[2] != wantProof || a.Lines[4] != "" || a.Lines[5] != "" {
 				t.Errorf("%s: lines %q; want the enrolment proof and no digest", a.Note, a.Lines)
 			}
 			var e struct {
+				NodeKind        string `json:"node_kind"`
 				AccessKeyID     string `json:"access_key_id"`
 				APIaryPublicKey []struct {
 					PublicKey string `json:"public_key"`
 				} `json:"apiary_public_key"`
 			}
-			if err := json.Unmarshal(body, &e); err != nil || e.AccessKeyID != k.AccessKey.AccessKeyID ||
+			if err := json.Unmarshal(body, &e); err != nil || e.AccessKeyID != wantID || e.NodeKind != wantKind ||
 				len(e.APIaryPublicKey) != 1 || e.APIaryPublicKey[0].PublicKey != k.SigningKey.PublicKey {
 				t.Errorf("%s: the answer contains %s and %v; want the fixture access key and signing key", a.Note, e.AccessKeyID, e.APIaryPublicKey)
 			}
@@ -811,14 +846,16 @@ func TestRunRefusedCodes(t *testing.T) {
 		"differs_from_credential", "engine_unreachable", "image_unknown", "instance_limit",
 		"invalid_request", "key_invalid", "key_limit", "labels_changed",
 		"mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run",
-		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_closed",
-		"run_configuration_invalid", "run_configuration_superseded", "run_credential_refused",
-		"run_id_used", "secrets_not_allowed", "server_needs_wall", "session_lost", "stopped",
-		"target_differs_from_credential", "tool_unknown", "unauthorized", "unavailable",
-		"unsupported_contract_version", "variable_reserved",
+		"mount_through_link", "not_found", "placeholder_conflict", "rate_limited", "run_attached",
+		"run_closed", "run_configuration_invalid", "run_configuration_superseded",
+		"run_credential_refused", "run_id_used", "run_key_expired", "run_key_invalid",
+		"secrets_not_allowed",
+		"server_needs_wall", "session_lost", "stopped", "target_differs_from_credential",
+		"tool_unknown", "unauthorized", "unavailable", "unsupported_contract_version",
+		"variable_reserved", "workspace_not_served", "wrong_gateway",
 	}
-	if len(want) != 37 {
-		t.Fatalf("%d codes in the test's list; want 37", len(want))
+	if len(want) != 42 {
+		t.Fatalf("%d codes in the test's list; want 42", len(want))
 	}
 	if got := slices.Sorted(slices.Values(s.Then.Properties.Code.Enum)); !slices.Equal(got, want) {
 		t.Errorf("run.refused codes %q; want %q", got, want)

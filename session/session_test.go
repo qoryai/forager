@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -70,15 +71,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("XDG_STATE_HOME", state)
-	// The roots of the process are the authority of the tests' starters, read before
-	// anything verifies a certificate.
-	removeAuthority, err := trustStarters()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 	code := m.Run()
-	removeAuthority()
 	os.RemoveAll(state)
 	os.Exit(code)
 }
@@ -86,11 +79,17 @@ func TestMain(m *testing.M) {
 // fakeRuntime prints what a headless runtime prints, reaches two hosts through the
 // proxy, calls its hook the way a runtime calls a command hook, and exits as told. It
 // sends its requests through HTTP_PROXY explicitly, because the origins are on
-// loopback, which Forager's NO_PROXY exempts and Go never proxies.
+// loopback, which Forager's NO_PROXY exempts and Go never proxies. With FAKE_STRAY set
+// it first reaches the proxy without its password and writes what came of it to the
+// file FAKE_STRAY names.
 func fakeRuntime() int {
 	fmt.Println(`{"type":"system","subtype":"init","session_id":"fake","model":"m"}`)
 	fmt.Fprintln(os.Stderr, "fake runtime: starting")
 	proxyURL, _ := url.Parse(os.Getenv("HTTP_PROXY"))
+	if out := os.Getenv("FAKE_STRAY"); out != "" && proxyURL != nil {
+		// Reach the proxy as another process of the machine would, first.
+		os.WriteFile(out, []byte(stray(proxyURL.Host)), 0o600)
+	}
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	for _, u := range []string{os.Getenv("FAKE_ALLOWED_URL"), os.Getenv("FAKE_DENIED_URL")} {
 		if u == "" {
@@ -136,6 +135,34 @@ func fakeRuntime() int {
 	code := 0
 	fmt.Sscan(os.Getenv("FAKE_EXIT"), &code)
 	return code
+}
+
+// stray sends the proxy at addr a request without the proxy URL's password and one with
+// another password, each on a connection of its own, and says of each, a line apiece,
+// whether the proxy answered it, kept it open or closed it unanswered.
+func stray(addr string) string {
+	var b strings.Builder
+	for _, login := range []string{"", "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("qory:another-password")) + "\r\n"} {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			fmt.Fprintf(&b, "dial: %v\n", err)
+			continue
+		}
+		io.WriteString(c, "GET http://api.example/stray HTTP/1.1\r\nHost: api.example\r\n"+login+"\r\n")
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		answer, err := io.ReadAll(c)
+		c.Close()
+		var ne net.Error
+		switch {
+		case len(answer) > 0:
+			fmt.Fprintf(&b, "answered %q\n", answer)
+		case errors.As(err, &ne) && ne.Timeout():
+			b.WriteString("kept open\n")
+		default:
+			b.WriteString("closed unanswered\n")
+		}
+	}
+	return b.String()
 }
 
 // spec returns a spec running the fake runtime with the given environment, in a fresh
@@ -624,7 +651,7 @@ func TestAboutIsInRunStartedAlone(t *testing.T) {
 	if !errors.As(err, &ae) || err.Error() != "about.subjects[0].ref is empty" {
 		t.Errorf("an About without a ref: %v", err)
 	}
-	if n := g.Accepted.Load() + g.Rejected.Load(); n != 0 {
+	if n := g.Accepted.Load(); n != 0 {
 		t.Errorf("the gateway saw %d connections of a refused run", n)
 	}
 	if entries, _ := os.ReadDir(sp.RunsDir); len(entries) > 0 {

@@ -55,6 +55,11 @@ type fixtureKeys struct {
 	} `json:"access_key"`
 	SigningKey     signingKey `json:"signing_key"`
 	NextSigningKey signingKey `json:"next_signing_key"`
+	GatewayKey     struct {
+		Secret      string `json:"secret"`
+		AccessKeyID string `json:"access_key_id"`
+		PublicKey   string `json:"public_key"`
+	} `json:"gateway_key"`
 }
 
 type signingKey struct {
@@ -403,13 +408,22 @@ func TestAnswerKnownAnswers(t *testing.T) {
 }
 
 // TestEnrolmentKnownAnswers builds the published enrolment requests from the fixture
-// access key, the code, the name and the timestamp, and checks each body and proof;
-// then verifies the published answer as qory does, under the key the code's first
-// fingerprint selects, and pins only the keys the code carries.
+// access key, or for the gateway's request the fixture gateway key, the code, the name
+// and the timestamp, and checks each body and proof; then verifies the published
+// answers as qory does, under the key the code's first fingerprint selects, and pins
+// only the keys the code carries: the node's, and the gateway's, of a gateway's node.
 func TestEnrolmentKnownAnswers(t *testing.T) {
 	k := keys(t)
 	key := k.accessKey(t)
+	gatewayKey, err := accesskey.ParseSecret(k.GatewayKey.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, v := range vectors(t).Enrolment {
+		key := key
+		if v.Lines[2] == k.GatewayKey.PublicKey {
+			key = gatewayKey
+		}
 		var want accesskey.EnrolmentRequest
 		if err := json.Unmarshal(v.body(t), &want); err != nil {
 			t.Fatal(err)
@@ -450,6 +464,22 @@ func TestEnrolmentKnownAnswers(t *testing.T) {
 	}
 	if len(got.Pin) != 1 || got.Pin[0].PublicKey != k.SigningKey.PublicKey {
 		t.Errorf("pin %+v; want the fixture signing key alone", got.Pin)
+	}
+	// The answer to the gateway's request.
+	gr, err := accesskey.NewEnrolmentRequest(gatewayKey, vectors(t).Enrolment[2].Lines[1], "gateway-01", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gans := vectors(t).Answers[9]
+	gw, err := gr.VerifyAnswer(accesskey.Answer{Status: http.StatusCreated, Body: gans.body(t)}, gans.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gw.AccessKeyID != k.GatewayKey.AccessKeyID || gw.NodeID != "ng_f1xt0re000000000" || gw.NodeKind != "gateway" || gw.StoredSecrets {
+		t.Errorf("the gateway's answer %+v", gw)
+	}
+	if _, err := r.VerifyAnswer(accesskey.Answer{Status: http.StatusCreated, Body: gans.body(t)}, gans.Signature); err == nil {
+		t.Error("the gateway's answer verifies for the node's request")
 	}
 	// Signed by another key than the one the code names: refused.
 	other := k.NextSigningKey.key(t)
@@ -894,6 +924,53 @@ func TestErrorsNeverQuoteASecret(t *testing.T) {
 	}
 }
 
+// TestErrorsNeverQuoteARunKey pins that a run key pasted where another value belongs, a
+// public key, an access key id, an instance id, a name, a pin or a server URL, is
+// named in the error and never quoted, as an access key secret is: a pin or a document
+// that contains one is ErrRunKeyInDocument, which errors.Is reports as
+// ErrSecretInDocument too, and a document with an access key secret is still
+// ErrSecretInDocument alone.
+func TestErrorsNeverQuoteARunKey(t *testing.T) {
+	var v struct {
+		RunKey struct {
+			RunKey string `json:"run_key"`
+		} `json:"run_key"`
+	}
+	if err := json.Unmarshal(read(t, "fixtures/known-answers/through-gateway.json"), &v); err != nil {
+		t.Fatal(err)
+	}
+	rk := v.RunKey.RunKey
+	payload := rk[4:24]
+	_, e1 := accesskey.ParsePublicKey(rk)
+	_, e2 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","public_key":"` + rk + `"}]`))
+	_, e3 := accesskey.ParsePin([]byte(`[{"alg":"ed25519","` + rk + `":"x"}]`))
+	r, _ := accesskey.NewEnrolmentRequest(keys(t).accessKey(t), "qec_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	_, e4 := r.Post(context.Background(), nil, "https://qory.example/?k="+rk, "test")
+	for i, err := range []error{e1, e2, e3, e4, accesskey.CheckID(rk), accesskey.CheckInstanceID(rk), accesskey.CheckName(rk), accesskey.CheckName(strings.ToUpper(rk[:12])), accesskey.CheckNodeID(rk)} {
+		if err == nil || strings.Contains(strings.ToLower(err.Error()), strings.ToLower(payload)) || strings.Contains(strings.ToLower(err.Error()), "qrk_") {
+			t.Errorf("%d: %v", i, err)
+		}
+	}
+	for i, err := range []error{e2, e3} {
+		if !errors.Is(err, accesskey.ErrRunKeyInDocument) || !errors.Is(err, accesskey.ErrSecretInDocument) || err.Error() != "the document contains a run key, which belongs in QORY_RUN_KEY and nowhere else" {
+			t.Errorf("pin %d: %v; want ErrRunKeyInDocument", i, err)
+		}
+	}
+	if err := accesskey.CheckName("x" + rk[:8]); err == nil || !strings.Contains(err.Error(), "(a value that contains a run key)") {
+		t.Errorf("a name with a run key: %v; want it named", err)
+	}
+	if !accesskey.ContainsSecret("QRK_x") || !accesskey.DocumentContainsSecret(map[string]any{"a": []any{"qrk_x"}}) || accesskey.ContainsSecret("qr_k") {
+		t.Error("ContainsSecret or DocumentContainsSecret does not report qrk_ in any case")
+	}
+	secret := keys(t).AccessKey.Secret
+	if err := accesskey.SecretInDocument([]any{rk, secret}); err != accesskey.ErrSecretInDocument {
+		t.Errorf("a document with both: %v; want ErrSecretInDocument", err)
+	}
+	if err := accesskey.SecretInDocument(map[string]any{"run": "qory.example"}); err != nil {
+		t.Errorf("a document with neither: %v", err)
+	}
+}
+
 // TestRefusedKeysVerifyNothing pins that a key the key checks refuse verifies no
 // signature, as a key and in a pin: the forged signature R = identity, S = 0, which
 // crypto/ed25519 accepts under the identity key for any message, and the same
@@ -1063,5 +1140,27 @@ func TestReadRefusalIsApiarys(t *testing.T) {
 	r.Detail, r.Text = "register https://apiary.example/v1/runs", "the text the user reads"
 	if got := r.Error(); got != "the text the user reads" {
 		t.Errorf("Error() with a Text = %q", got)
+	}
+}
+
+// TestWithoutVariablesTakesOutForagersOwn pins the environment a program Forager starts
+// receives: the access key's variables and the run key's are taken out, and every
+// other variable is kept as it was, in its order.
+func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		accesskey.EnvSecret + "=qak_not-a-real-one",
+		accesskey.EnvID + "=ak_f1xt0re000000000",
+		accesskey.EnvPin + "=[]",
+		accesskey.EnvRunKey + "=qrk_not-a-real-one.sig",
+		"QORY_RUN_KEY_OTHER=kept",
+		"HOME=/home/user",
+	}
+	got := accesskey.WithoutVariables(env)
+	if want := []string{"PATH=/usr/bin", "QORY_RUN_KEY_OTHER=kept", "HOME=/home/user"}; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if accesskey.EnvRunKey != "QORY_RUN_KEY" {
+		t.Errorf("EnvRunKey is %q", accesskey.EnvRunKey)
 	}
 }

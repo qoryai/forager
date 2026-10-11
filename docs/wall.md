@@ -30,6 +30,9 @@ nothing.
 - The one peer it reaches is the relay. The relay copies a fixed port to the gateway's
   proxy, opening every connection with the run's proxy secret, and decides nothing. It
   forwards no packet between its networks.
+- The relay runs no health check of the image's.
+- The relay listens on the wall's inside network alone, on its one address in each of
+  its subnets.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are mounted at their own paths. The workspace is
   the working directory inside. The run's record is mounted read-only, from a runs
@@ -210,22 +213,23 @@ refused.
 ### The relay to a separate gateway
 
 Behind a `session.RemoteGateway` the gateway's proxy is on another machine, at the
-gateway's one address. The relay still reaches the session's forwarder, on the address
-the enclosure names, as on one machine, and the forwarder carries every connection to the
-gateway over TLS 1.3, with the link's trust: the system's roots or `CAFile`, the host
-name of the gateway's URL, and the pin when one is set.
+gateway's one address, the run key's `gateway_url`. The relay still reaches the session's
+forwarder, on the address the enclosure names, as on one machine, and the forwarder
+carries every connection to the gateway over TLS 1.3, its chain checked against the
+system's roots for the host name of the gateway's URL.
 
-- The relay opens every connection with `QORY-RELAY` and a token the session makes for
-  the run's forwarder alone, 256 bits from the system's random source, in place of the
-  run's proxy secret. It is the token the wall's relay is given,
-  `wall.Launch.ProxyToken`, and so the one in the relay's environment file.
-- The forwarder reads the token first, compares it in constant time, and closes a
-  connection without it unanswered: whoever else reaches the forwarder's address, another
-  container of the engine or a process of the machine, reaches nothing.
-- It then opens the connection to the gateway, and sends `QORY-RELAY` and the run's
-  proxy secret inside TLS, before what the relay sent.
-- So the proxy secret is in no file of the wall's and never leaves the machine outside
-  TLS, and the token opens nothing at the gateway.
+- The relay opens every connection with `QORY-RELAY` and a hop secret the session makes
+  for the run's forwarder alone, 256 bits from the system's random source. It is the
+  value the wall's relay is given, `wall.Launch.ProxyToken`, and so the one in the
+  relay's environment file.
+- The forwarder reads the hop secret first, compares it in constant time, takes it off,
+  and closes a connection without it unanswered: whoever else reaches the forwarder's
+  address, another container of the engine or a process of the machine, reaches nothing.
+- It then opens the connection to the gateway, which proves on it that it holds a key
+  the run key names (`QORY-BIND`, `QORY-BOUND`), and only then sends `QORY-RELAY` and
+  the run key inside TLS, before what the relay sent.
+- So the run key is in no file of the wall's and never leaves the machine outside TLS,
+  and the hop secret opens nothing at the gateway.
 
 On one machine nothing changes: the relay sends the run's proxy secret, and the
 forwarder passes the connection on to the gateway's proxy on loopback as it is.

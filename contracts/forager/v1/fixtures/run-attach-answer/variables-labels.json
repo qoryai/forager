@@ -1,0 +1,1 @@
+{"version": 1, "variables": {"NODE_ENV": {"value": "test"}}, "labels": {"repository": "acme/shop"}}

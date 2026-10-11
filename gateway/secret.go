@@ -9,8 +9,8 @@ import (
 // redacted is how a secret prints.
 const redacted = "[redacted]"
 
-// secretValue holds a secret of the gateway's, the link secret, a run's proxy secret
-// or the run answer that holds it, so that printing it
+// secretValue holds a secret of the gateway's, a run's proxy secret or the run answer
+// that holds it, so that printing it
 // never shows it: its String, Format, GoString and LogValue are [redacted]. It is a
 // func, which fmt prints as its address alone under every verb, so a copy of a struct
 // that holds one, printed with %v, %+v, %#v or any other verb, never shows the bytes

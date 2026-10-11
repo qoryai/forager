@@ -40,7 +40,7 @@ func TestARunWithoutAGatewayIsNone(t *testing.T) {
 		t.Errorf("a run without a gateway: %v", err)
 	}
 	sp = spec(t)
-	sp.Gateway = session.LocalGateway(link.Local{Socket: filepath.Join(t.TempDir(), "sock"), Secret: "a-link-secret-of-the-test"})
+	sp.Gateway = session.LocalGateway(link.Local{Socket: filepath.Join(t.TempDir(), "sock")})
 	if _, err := session.Run(context.Background(), sp); err == nil {
 		t.Error("a run whose gateway is gone started")
 	}
@@ -49,11 +49,11 @@ func TestARunWithoutAGatewayIsNone(t *testing.T) {
 	}
 }
 
-// TestTheGatewayPrintsNoSecret pins that a Gateway is printed by its socket alone.
-func TestTheGatewayPrintsNoSecret(t *testing.T) {
-	g := session.LocalGateway(link.Local{Socket: "/tmp/qory-link-x/sock", Secret: "the-link-secret-of-the-test"})
+// TestTheGatewayPrintsBySocket pins that a Gateway is printed by its socket.
+func TestTheGatewayPrintsBySocket(t *testing.T) {
+	g := session.LocalGateway(link.Local{Socket: "/tmp/qory-link-x/sock"})
 	for _, s := range []string{g.String(), g.GoString()} {
-		if strings.Contains(s, "the-link-secret") || !strings.Contains(s, "/tmp/qory-link-x/sock") {
+		if !strings.Contains(s, "/tmp/qory-link-x/sock") {
 			t.Errorf("printed as %q", s)
 		}
 	}
@@ -128,21 +128,12 @@ func TestTheGatewaysRefusalsAreTheRuns(t *testing.T) {
 		"the gateway's batch_refused": {linktest.Reply{Status: 410, Body: linktest.Refusal("batch_refused", "gateway")},
 			"batch_refused", accesskey.FromGateway, nil, "the run did not start: it has ended already",
 			map[string]any{"code": "batch_refused", "status": 410.0}},
-		"the gateway's credential_expired": {linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
-			"credential_expired", accesskey.FromGateway, nil, "the run did not start: it has ended already",
-			map[string]any{"code": "credential_expired", "status": 410.0}},
+		"a 410 with a reserved old code": {linktest.Reply{Status: 410, Body: linktest.Refusal("credential_expired", "gateway")},
+			"run_closed", accesskey.FromGateway, nil, "the run did not start: it has ended already",
+			map[string]any{"code": "run_closed", "status": 410.0}},
 		"the gateway's stopped": {linktest.Reply{Status: 410, Body: linktest.Refusal("stopped", "gateway")},
 			"stopped", accesskey.FromGateway, nil, "the run did not start: it has ended already",
 			map[string]any{"code": "stopped", "status": 410.0}},
-		"the gateway's 410 credential_check_unreachable": {linktest.Reply{Status: 410, Body: linktest.Refusal("credential_check_unreachable", "gateway")},
-			"credential_check_unreachable", accesskey.FromGateway, nil, "the run did not start: it has ended already",
-			map[string]any{"code": "credential_check_unreachable", "status": 410.0}},
-		"the gateway's 503 credential_check_unreachable": {linktest.Reply{Status: 503, Body: map[string]any{"error": "credential_check_unreachable", "from": "gateway", "message": "the run did not start: its run credential could not be checked; try again"}},
-			"credential_check_unreachable", accesskey.FromGateway, nil, "the run did not start: its run credential could not be checked; try again",
-			map[string]any{"code": "credential_check_unreachable"}},
-		"the gateway's 502 credential_check_invalid": {linktest.Reply{Status: 502, Body: map[string]any{"error": "credential_check_invalid", "from": "gateway", "message": "the run did not start: its run credential could not be checked"}},
-			"credential_check_invalid", accesskey.FromGateway, nil, "the run did not start: its run credential could not be checked",
-			map[string]any{"code": "credential_check_invalid"}},
 		"the server's not_found": {linktest.Reply{Status: 404, Body: linktest.Refusal("not_found", "apiary")},
 			"not_found", accesskey.FromApiary, nil, "the gateway: not_found (status 404)", map[string]any{"code": "not_found", "status": 404.0}},
 		"a code of the server's the contract does not list": {linktest.Reply{Status: 404, Body: linktest.Refusal("example_server_code", "apiary")},
@@ -195,18 +186,18 @@ func equalJSON(a, b map[string]any) bool {
 	return must(jsonString(a)) == must(jsonString(b))
 }
 
-// TestRunStartedHasTheGatewaysLabelsAndDetails pins run.started of a run whose labels
-// the gateway holds otherwise than the session sent them, and whose details the
-// gateway decides: the record has exactly the gateway's labels, and each detail the
-// gateway decides with its value beside the run's own.
-func TestRunStartedHasTheGatewaysLabelsAndDetails(t *testing.T) {
+// TestRunStartedHasTheGatewaysLabels pins run.started of a run whose labels the gateway
+// holds otherwise than the session sent them: the record has exactly the gateway's
+// labels, and the run's own about, its details as the session sent them; a details
+// member of the run answer, which no gateway sends, sets nothing.
+func TestRunStartedHasTheGatewaysLabels(t *testing.T) {
 	sp, g := specGateway(t)
 	sleeps(&sp, 0)
 	sp.Labels = map[string]string{"repository": "example-namespace/project"}
 	sp.About = &session.About{Title: "Example", Details: []byte(`{"requester":"someone","note":"kept"}`)}
 	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
 		a := linktest.RunAnswer(req)
-		a["labels"] = map[string]string{"repository": "example-namespace/project", "run_key": "rk-0001"}
+		a["labels"] = map[string]string{"repository": "example-namespace/project", "queue": "example-queue"}
 		a["details"] = map[string]string{"requester": "requester"}
 		return linktest.Reply{Status: 200, Body: a}
 	})
@@ -218,7 +209,7 @@ func TestRunStartedHasTheGatewaysLabelsAndDetails(t *testing.T) {
 	labels, _ := started["labels"].(map[string]any)
 	about, _ := started["about"].(map[string]any)
 	details, _ := about["details"].(map[string]any)
-	if len(labels) != 2 || labels["run_key"] != "rk-0001" || details["requester"] != "requester" || details["note"] != "kept" || about["title"] != "Example" {
+	if len(labels) != 2 || labels["queue"] != "example-queue" || details["requester"] != "someone" || details["note"] != "kept" || about["title"] != "Example" {
 		t.Errorf("run.started %v", started)
 	}
 }
@@ -318,20 +309,16 @@ func TestTheRunEndsWhenItIsClosed(t *testing.T) {
 		code          string
 		state, reason string
 	}{
-		"the gateway's run_closed":         {batch: gone("run_closed", "", ""), code: "run_closed", state: "failed", reason: "run_closed"},
-		"a 410 with no state":              {batch: gone("credential_expired", "", ""), code: "credential_expired", state: "failed", reason: "credential_expired"},
-		"the gateway's credential_expired": {batch: gone("credential_expired", "cancelled", "credential_expired"), code: "credential_expired", state: "cancelled", reason: "credential_expired"},
-		"a 410 to a reload with no state":  {reload: gone("stopped", "", ""), code: "stopped", state: "failed", reason: "stopped"},
+		"the gateway's run_closed":        {batch: gone("run_closed", "", ""), code: "run_closed", state: "failed", reason: "run_closed"},
+		"a 410 with no state":             {batch: gone("session_lost", "", ""), code: "session_lost", state: "failed", reason: "session_lost"},
+		"a reserved old code":             {batch: gone("credential_expired", "cancelled", "credential_expired"), code: "run_closed", state: "failed", reason: "run_closed"},
+		"a 410 to a reload with no state": {reload: gone("stopped", "", ""), code: "stopped", state: "failed", reason: "stopped"},
 		"the starter's outcome on a 410 to a reload": {reload: gone("stopped", "failed", "checks_failed"),
 			code: "stopped", state: "failed", reason: "checks_failed"},
 		"the starter's outcome with no reason": {batch: gone("stopped", "succeeded", ""), code: "stopped", state: "succeeded"},
 		"the starter's cancelled":              {batch: gone("stopped", "cancelled", "no_longer_needed"), code: "stopped", state: "cancelled", reason: "no_longer_needed"},
 		"no outcome from the starter":          {batch: gone("stopped", "cancelled", "stopped"), code: "stopped", state: "cancelled", reason: "stopped"},
-		"the gateway's 410 credential_check_unreachable": {batch: gone("credential_check_unreachable", "failed", "credential_check_unreachable"),
-			code: "credential_check_unreachable", state: "failed", reason: "credential_check_unreachable"},
-		"the gateway's 410 credential_check_invalid to a reload": {reload: gone("credential_check_invalid", "failed", "credential_check_invalid"),
-			code: "credential_check_invalid", state: "failed", reason: "credential_check_invalid"},
-		"the gateway's 410 to a lost session": {batch: gone("session_lost", "failed", "session_lost"), code: "session_lost", state: "failed", reason: "session_lost"},
+		"the gateway's 410 to a lost session":  {batch: gone("session_lost", "failed", "session_lost"), code: "session_lost", state: "failed", reason: "session_lost"},
 		"the gateway's 410 after a refused batch": {batch: gone("batch_refused", "failed", "session_lost"),
 			code: "batch_refused", state: "failed", reason: "batch_refused"},
 		"a 410 whose state the schema refuses": {batch: gone("stopped", "lost", "no_longer_needed"), code: "stopped", state: "failed", reason: "stopped"},

@@ -20,5 +20,12 @@
     "seed": "oaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-v8A",
     "public_key": "C0eCPnEJXdWb54rCccV27zifh7ZFYasHz5pOvNAtIEE",
     "fingerprint": "52vzzF--Ic7qH_eZWi5K2A"
+  },
+  "gateway_key": {
+    "note": "The fixture gateway key: a gateway's access key, the seed being bytes 97 to 128, its secret qak_ and the seed in base64url. It signs the attach of through-gateway.json under the id below, with the fixture access key's instance id, and a run key's gateway_public_key lists it. qory refuses this secret and the server refuses this key.",
+    "secret": "qak_YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-f4A",
+    "access_key_id": "ak_f1xt0re00000000g",
+    "public_key": "iC0Oo7KGTnpYfz5pjOpEWZmDEuZV4F-l6LURnYuqyM0",
+    "fingerprint": "tMtLk8QCfOPUVfKaF1guwg"
   }
 }

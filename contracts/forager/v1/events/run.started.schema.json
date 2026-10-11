@@ -2,28 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/events/run.started.schema.json",
   "title": "dev.qory.run.started",
-  "description": "The run is open: with opened_by session the runtime is about to start; with opened_by gateway a gateway opened the run on a run credential, and no runtime starts. The first event of a run in the file, and the event a receiver creates the run on.",
+  "description": "The run is open: the runtime is about to start. The first event of a run in the file, and the event a receiver creates the run on.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["opened_by", "credential", "forager_version"],
-  "allOf": [
-    {
-      "if": {"properties": {"opened_by": {"const": "session"}}, "required": ["opened_by"]},
-      "then": {"required": ["runtime", "command", "args", "dir", "interactive"]}
-    },
-    {
-      "if": {"properties": {"opened_by": {"const": "gateway"}}, "required": ["opened_by"]},
-      "then": {
-        "properties": {
-          "runtime": false, "runtime_version": false, "command": false, "args": false, "dir": false,
-          "interactive": false, "terminal": false, "host": false, "wall": false, "image": false
-        }
-      }
-    }
-  ],
+  "required": ["opened_by", "forager_version", "runtime", "command", "args", "dir", "interactive"],
   "properties": {
-    "opened_by": {"description": "What opened the run. session: a Forager session around a runtime, which emits this event as the runtime is about to start, with runtime, command, args, dir and interactive. gateway: a gateway, on a run credential a client presented through its proxy, with no session; the run has no process, so this event contains none of runtime, runtime_version, command, args, dir, interactive, terminal, host, wall and image, and its dev.qory.run.exited contains no exit_code.", "type": "string", "enum": ["session", "gateway"]},
-    "credential": {"description": "Where the run's credential came from. starter: the run's starter gave the run its run credential, as for a session's run on a gateway's one address and every run a gateway opened. none: the run has no run credential, as for a run on a gateway's local link. The gateway decides it, and a session copies it from the gateway's run answer. Nothing else of the starter is reported.", "type": "string", "enum": ["starter", "none"]},
+    "opened_by": {"description": "What opened the run: session, a Forager session around a runtime, which emits this event as the runtime is about to start, with runtime, command, args, dir and interactive.", "type": "string", "enum": ["session"]},
     "runtime": {"description": "The runtime's name: claude, codex.", "type": "string", "minLength": 1},
     "runtime_version": {"description": "The runtime version Forager's adapter for it, such as a descriptor, was written against; Forager never checks the installed version. Absent for a bare runtime, whose records the session does not parse, and when the runtime's adapter reports no version.", "type": "string", "minLength": 1},
     "command": {"description": "The program started, as the runtime prepared it.", "type": "string", "minLength": 1},
@@ -40,7 +24,7 @@
         "rows": {"description": "The height, in rows.", "type": "integer", "minimum": 1, "maximum": 65535}
       }
     },
-    "forager_version": {"description": "The version of the Forager that opened the run: the session's, or the gateway's for a run a gateway opened.", "type": "string", "minLength": 1},
+    "forager_version": {"description": "The version of the Forager that opened the run, the session's.", "type": "string", "minLength": 1},
     "host": {"description": "The host name of the agent's machine, the one the runtime runs on.", "type": "string", "minLength": 1},
     "wall": {"description": "The adapter that built the enclosure the runtime runs in: docker. Absent when there is no wall, where command and dir are the machine's own; present, they are the enclosure's.", "type": "string", "minLength": 1},
     "image": {"description": "The image the enclosure runs, the reference. Present with wall.", "type": "string", "minLength": 1},
@@ -48,14 +32,14 @@
     "container_runtime": {"description": "The container runtime the wall started the image under, as the machine's definition sets it: sysbox-runc. Absent means the engine's default.", "type": "string", "minLength": 1},
     "docker": {"description": "True when the enclosure has a Docker daemon of its own, started by the wall before the runtime. Absent otherwise.", "const": true},
     "labels": {
-      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run received them, or, for a run a gateway opened, as the run credential's mapping gives them, run_key among them. Forager copies them and reads nothing into them. Only this event contains them among the events, and the gateway's registration of the run sends them in its body, never in a URL; a receiver keeps them with the run it creates on it.",
+      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run received them. Forager copies them and reads nothing into them. Only this event contains them among the events, and the gateway's registration of the run sends them in its body, never in a URL; a receiver keeps them with the run it creates on it.",
       "type": "object",
       "maxProperties": 16,
       "propertyNames": {"pattern": "^[a-z0-9_.-]{1,64}$"},
       "additionalProperties": {"type": "string", "maxLength": 256}
     },
     "about": {
-      "description": "What the run is about, as the caller passed it, or, for a run a gateway opened, details as the run credential's mapping gives them: the kind of run, a title, the subjects it works on and details, every member optional. Forager copies it and reads nothing into it. Only this event contains it among the events, and the gateway's registration of the run sends it in its body; it never selects or changes a security policy. An empty about is left out. No string in it, key or value, contains a control character: U+0000 to U+001F, U+007F to U+009F, U+2028 and U+2029. Forager alone checks these rules, which the schema cannot state: the byte limits, the 8192 bytes of details, that no two subjects have the same type and ref, a url's syntax and host, that a url carries no user name or password, and that no member name appears twice in details. Each maxLength counts characters and is an upper bound of the byte limit the description states.",
+      "description": "What the run is about, as the caller passed it: the kind of run, a title, the subjects it works on and details, every member optional. Forager copies it and reads nothing into it. Only this event contains it among the events, and the gateway's registration of the run sends it in its body; it never selects or changes a security policy. An empty about is left out. No string in it, key or value, contains a control character: U+0000 to U+001F, U+007F to U+009F, U+2028 and U+2029. Forager alone checks these rules, which the schema cannot state: the byte limits, the 8192 bytes of details, that no two subjects have the same type and ref, a url's syntax and host, that a url carries no user name or password, and that no member name appears twice in details. Each maxLength counts characters and is an upper bound of the byte limit the description states.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
