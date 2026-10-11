@@ -1225,7 +1225,9 @@ func TestTheEndMember(t *testing.T) {
 // directory: a run it attached whose open never answered its session, its record
 // holding its dev.qory.run.registered alone, is reclaimed, and the session's run
 // request attaches it again and opens it; a run that was live there is over, a 410
-// run_closed to its batch and a 409 run_attached to its run request.
+// run_closed to its batch and a 409 run_attached to its run request. Its attaches and
+// its batches at the server carry the same X-Qory-Instance-Id, the one its caller
+// gives, before the restart and after.
 func TestAGatewayRestartedReattaches(t *testing.T) {
 	dir := t.TempDir()
 	c := gatewayControl(t)
@@ -1242,6 +1244,7 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 	firstLineAlone(t, dir, partial)
 	os.Remove(filepath.Join(dir, "runs", partial, "answered"))
 	attaches := len(c.attached())
+	_, delivered := c.instances()
 
 	r := startRemote(t, c, gateway.Config{Dir: dir})
 	a := r.tryOpen(t, partialKey, server.LinkRunRequest{})
@@ -1260,6 +1263,27 @@ func TestAGatewayRestartedReattaches(t *testing.T) {
 		t.Errorf("a batch of the run live before: %d %s", got.status, got.body)
 	}
 	refused(t, "a run request of the run live before", r.tryOpen(t, liveKey, server.LinkRunRequest{}), http.StatusConflict, "run_attached", "gateway", r.attachLine(live, "run_attached"))
+
+	var ans server.LinkRunAnswer
+	json.Unmarshal(a.body, &ans)
+	p := &edgeRun{r: r, key: partialKey, a: &ans}
+	if got := p.post(t, started(partial, nil), applied(partial, ans.Applied)); got.status != http.StatusAccepted {
+		t.Fatalf("a batch of the reclaimed run: %d %s", got.status, got.body)
+	}
+	eventually(t, "a delivery after the restart", func() bool {
+		_, d := c.instances()
+		return len(d) > len(delivered)
+	})
+	attachIDs, deliveryIDs := c.instances()
+	if len(attachIDs) != attaches+1 || len(delivered) == 0 {
+		t.Errorf("%d attaches, want %d, and %d deliveries before the restart", len(attachIDs), attaches+1, len(delivered))
+	}
+	for _, id := range append(attachIDs, deliveryIDs...) {
+		if id != testInstance {
+			t.Errorf("the attaches carry %q and the deliveries %q; want each %q", attachIDs, deliveryIDs, testInstance)
+			break
+		}
+	}
 }
 
 // firstLineAlone leaves the record of a run in the gateway directory dir as a gateway
