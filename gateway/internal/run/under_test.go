@@ -203,3 +203,41 @@ func TestUnderKeepsTheCeilingsPathsBesideThePolicys(t *testing.T) {
 		t.Errorf("a ceiling with nothing to add changed the policy: %+v", got)
 	}
 }
+
+// badCeilingPaths are path rules the schema refuses: a host with a trailing dot, a bare
+// wildcard, a host in capitals beside the same host in lower case, a path not from the
+// root.
+var badCeilingPaths = map[string]map[string][]string{
+	"a trailing dot":  {"api.example.": {"/v1/*"}},
+	"a bare wildcard": {"*": {"/v1/*"}},
+	"capitals":        {"API.EXAMPLE": {"/v1/*"}, pathHost: {}},
+	"a relative path": {pathHost: {"v1"}},
+}
+
+// TestUnderChecksTheCeilingsPaths pins that the path rules a ceiling puts beside a
+// policy are checked against the schema as the policy is, in each combination of
+// modes: a side the schema refuses is a policy error and no run, with a wall or without.
+func TestUnderChecksTheCeilingsPaths(t *testing.T) {
+	for _, modes := range [][2]string{{"observe", "observe"}, {"observe", "enforce"}, {"enforce", "observe"}, {"enforce", "enforce"}} {
+		for name, paths := range badCeilingPaths {
+			ceiling := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: modes[0], Allow: []string{"*.example"}, Paths: paths}}
+			p := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: modes[1], Allow: []string{pathHost}, Paths: map[string][]string{pathHost: {"/v1/*"}}}}
+			under := p.Under(ceiling)
+			if err := run.CheckBeside(under); err == nil {
+				t.Errorf("ceiling %s, run %s, %s: checked", modes[0], modes[1], name)
+			}
+			for _, wall := range []bool{true, false} {
+				_, err := run.Decide(run.Config{RunID: runID, Node: under, Wall: wall})
+				var pe *policy.Error
+				if !errors.As(err, &pe) {
+					t.Errorf("ceiling %s, run %s, %s, wall %v: %v, want a policy error", modes[0], modes[1], name, wall, err)
+				}
+			}
+		}
+	}
+	good := (&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{pathHost}}}).Under(
+		&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe", Paths: map[string][]string{"*.example": {"/v1/*"}, pathHost: {}}}})
+	if err := run.CheckBeside(good); err != nil {
+		t.Errorf("rules the schema takes: %v", err)
+	}
+}

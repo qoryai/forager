@@ -145,6 +145,9 @@ func Decide(cfg Config) (*Run, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := CheckBeside(cfg.Node); err != nil {
+			return nil, err
+		}
 		r.node, pol = node, node
 		r.beside = cfg.Node.Egress.beside
 	}

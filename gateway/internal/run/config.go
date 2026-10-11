@@ -1,6 +1,7 @@
 package run
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -13,7 +14,8 @@ import (
 
 // Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the
 // caller passes it to Forager. Forager validates it against the schema before
-// anything starts and pins it for the run with the digest of its canonical JSON.
+// anything starts, the path rules [Policy.Under] puts beside it included
+// ([CheckBeside]), and pins it for the run with the digest of its canonical JSON.
 type Policy struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
@@ -148,6 +150,25 @@ func sides(lists ...[]map[string][]string) []map[string][]string {
 		}
 	}
 	return out
+}
+
+// CheckBeside validates each side of path rules beside the policy, [Policy.Under]'s,
+// against the schema as the paths of a policy document, as the policy is validated: a
+// side the schema refuses is a [*policy.Error] naming "policy", and no run.
+func CheckBeside(p *Policy) error {
+	if p == nil {
+		return nil
+	}
+	for _, side := range p.Egress.beside {
+		b, err := json.Marshal(Policy{Version: 1, Egress: PolicyEgress{Mode: string(policy.Observe), Paths: side}})
+		if err != nil {
+			return &policy.Error{Name: "policy", Err: err}
+		}
+		if _, err := policy.Read("policy", b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bothDeny is the deny list of a policy under a ceiling: the ceiling's entries, then

@@ -20,6 +20,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/link"
@@ -139,6 +140,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Policy != nil {
 		b, _ := json.Marshal(cfg.Policy)
 		if _, err := policy.Read("policy", b); err != nil {
+			return nil, err
+		}
+		if err := run.CheckBeside(cfg.Policy); err != nil {
 			return nil, err
 		}
 	}
