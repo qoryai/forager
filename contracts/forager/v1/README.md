@@ -1268,23 +1268,26 @@ Forager, which compares it byte for byte and never recomputes it.
  "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
 ```
 
-`version`, `node_id`, `workspaces`, `events`, `run` and `apiary_public_key` are
-required. `node_id` is the id of the access key's node, node pool or gateway,
-`^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`, listed for display: `qory` prints it. Discovery has no
-member that names the key's kind: the `ng_` prefix alone says the key is a gateway's.
-`workspaces` holds ids of the form `^ws_[0-9a-hjkmnp-tv-z]{16}$`: for a node's or a node
-pool's key exactly one, the workspace the node or node pool belongs to, and for a
-gateway's key one or more, the workspaces the gateway may serve, everything below its
-level (`fixtures/configuration/gateway.json`). A direct node's gateway records its one
-entry as `workspace`, and `node_id`, in a run's `dev.qory.run.registered`.
-`apiary_public_key` lists the server's current key, and during a rotation the next one,
-for information: Forager verifies under its pin alone.
-`secrets` is optional, `{url}` with `events.url`'s grammar: present for an access key
-allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
-enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
-address; `events.types` is a non-empty list of full type names, or `*` for every type.
-`run.url` is the run endpoint, `https`, or `http` to a loopback address, with no query,
-no fragment and no trailing slash, since a reload appends a slash and the run's id to it: a run registers
+`version`, `node_id`, `events`, `run` and `apiary_public_key` are required, and
+`workspaces` for a node's or a node pool's key. `node_id` is the id of the access key's
+node, node pool or gateway, `^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`, listed for display:
+`qory` prints it. Discovery has no member that names the key's kind: the `ng_` prefix
+alone says the key is a gateway's. `workspaces` holds ids of the form
+`^ws_[0-9a-hjkmnp-tv-z]{16}$`: for a node's or a node pool's key exactly one, the
+workspace the node or node pool belongs to. A gateway's key has no `workspaces`
+(`fixtures/configuration/gateway.json`), and a document of a gateway's key with
+`workspaces` is refused: a gateway is connected to the nodes and node pools whose choice
+resolves to it (Through a gateway, below), and takes each run's workspace from the run's
+run key. A direct node's gateway records its one entry as `workspace`, and `node_id`, in
+a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key,
+and during a rotation the next one, for information: Forager verifies under its pin
+alone. `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access
+key allowed stored secrets, and a server that lists it requires a wall for every run.
+Discovery lists no key endpoint: keys change through enrolment alone. A `401` is no run,
+`unauthorized`. `events.url` is `https`, or `http` to a loopback address; `events.types`
+is a non-empty list of full type names, or `*` for every type. `run.url` is the run
+endpoint, `https`, or `http` to a loopback address, with no query, no fragment and no
+trailing slash, since a reload appends a slash and the run's id to it: a run registers
 there, and a reload fetches a run's configuration again there (The run endpoint, below).
 A document without `run` is refused, as any document the schema refuses. A top-level member
 Forager does not recognise is ignored, which is how a new revision adds a section.
@@ -1713,32 +1716,33 @@ enrolment, verifies each request and answers in the order this section defines, 
 every answer after verification under the receiver's key, returns the digest headers,
 deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
 `workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`; for a key whose
-node or gateway its records hold, `node_id` and `workspaces` are that key's, a gateway's
-being every workspace it may serve. It resolves each registration's gateway from the
-records of nodes and node pools, workspaces, organisations and gateways it is given, as
-Through a gateway says, at the workspace and the organisation, with no operator level; a
-key with no node is a separate node, which reports directly. It issues each run through
-a gateway its run key, signed under the receiver's key, and holds no organisation
-suspended. A hook of the server that embeds it is handed the run id, the labels, `about`
-and the run's placement, its node, workspace and gateway, and returns the run's run
-configuration, or refuses the run with a status and a code or with no code; `about` is
-for display and never selects a policy. It asks the hook at the registration, at the
-attach and at each reload. Without a hook it answers every run `{"version": 1}`, no
-policy. A hook decides whether an instance may start a run, the instance limit. It keeps
-each registration it accepted by its run id, with what became of the run: its attach,
-its heartbeats, its `dev.qory.run.exited` and its outcome. The module's tests run
-Forager's client against it. `fixtures/signed/` is what any receiver is tested against:
-one request per file, `method`, `target`, `headers`, a header sent twice being a list of
-its values, `body` (a string, or `null` for a GET), the status a receiver returns as
-`expect`, the code of a coded refusal as `expect_code`, and a `note` that explains why.
-A `POST` is a batch or a registration. Every signature in them is real, under the
-fixture access key secret as the fixture access key and instance; a receiver under test
-holds the fixture access key under `ak_f1xt0re000000000`, sets its clock to
-`1700000000`, around which the timestamps and the registrations' `time` are, counts the
-fixture instance as the one live instance the fixture access key's node allows, and
-replays the files in the order of their names, so a registration that repeats another's
-run id, and the reload of a run, come after that run's registration. A receiver written
-by anyone else follows this section, replays those files, and may read that code.
+node or gateway its records hold, `node_id` is that key's and `workspaces` a node's or
+node pool's one workspace, and a gateway's key gets no `workspaces`. It resolves each
+registration's gateway from the records of nodes and node pools, workspaces,
+organisations and gateways it is given, as Through a gateway says, at the workspace and
+the organisation, and at no other organisation; a key with no node is a separate node,
+which reports directly. It issues each run through a gateway its run key, signed under
+the receiver's key, and holds no organisation suspended. A hook of the server that
+embeds it is handed the run id, the labels, `about` and the run's placement, its node,
+workspace and gateway, and returns the run's run configuration, or refuses the run with
+a status and a code or with no code; `about` is for display and never selects a policy.
+It asks the hook at the registration, at the attach and at each reload. Without a hook
+it answers every run `{"version": 1}`, no policy. A hook decides whether an instance may
+start a run, the instance limit. It keeps each registration it accepted by its run id,
+with what became of the run: its attach, its heartbeats, its `dev.qory.run.exited` and
+its outcome. The module's tests run Forager's client against it. `fixtures/signed/` is
+what any receiver is tested against: one request per file, `method`, `target`,
+`headers`, a header sent twice being a list of its values, `body` (a string, or `null`
+for a GET), the status a receiver returns as `expect`, the code of a coded refusal as
+`expect_code`, and a `note` that explains why. A `POST` is a batch or a registration.
+Every signature in them is real, under the fixture access key secret as the fixture
+access key and instance; a receiver under test holds the fixture access key under
+`ak_f1xt0re000000000`, sets its clock to `1700000000`, around which the timestamps and
+the registrations' `time` are, counts the fixture instance as the one live instance the
+fixture access key's node allows, and replays the files in the order of their names, so
+a registration that repeats another's run id, and the reload of a run, come after that
+run's registration. A receiver written by anyone else follows this section, replays
+those files, and may read that code.
 
 ## The gateway's link
 
@@ -1893,7 +1897,6 @@ this order, from `gateway`:
 | 1 | `400` | `run_key_invalid` | no single `Authorization` of the Bearer scheme, or a value that is not a run key that verifies under the server's pin |
 | 2 | `409` | `run_key_expired` | past its `attach_by` plus a skew of 300 seconds, by the gateway's clock, for a run the gateway holds nothing of: not open, not opening, not kept after its end and not recorded; within the skew the request goes on as before `attach_by`, and the server decides the attach |
 | 3 | `409` | `wrong_gateway` | the run key's `gateway` is not the `node_id` the gateway's discovery lists |
-| 4 | `409` | `workspace_not_served` | its `workspace` is not among the `workspaces` the gateway's discovery lists |
 
 A request refused for its run key is answered once: the gateway reads its body, which
 the refusal's signature covers, up to 64 KiB within 10 seconds, answers with
@@ -1905,10 +1908,10 @@ passes, a `409` or a `410` among them, carries `Connection: close` too, and the 
 closes the connection after it. A request answered other than `2xx` whose body does not
 come whole within 10 seconds of the answer closes the connection unanswered.
 
-Rows 2 to 4 are in the order the server decides an attach's refusals in. The message
-of `run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is
-the gateway's refusal of the attach, decided before it asks the server, and its message
-is the line the server's refusal of the attach gives:
+Rows 2 and 3 are in the order the server decides an attach's refusals in. The message of
+`run_key_invalid` is "the gateway refused the run: run_key_invalid". Each `409` is the
+gateway's refusal of the attach, decided before it asks the server, and its message is
+the line the server's refusal of the attach gives:
 `attach <run.url>/<run_id>: <code> (status 409)`, `run.url` the server's. A run key
 that passes names the request's run: a run request for another `run_id`, or a reload of
 another, is `run_key_invalid`. The gateway verifies the run key under its pin on every
@@ -1932,18 +1935,17 @@ record's first event, `dev.qory.run.registered`: `workspace`, `node_id` and
 delivers the run's events toward the server under the gateway's access key, and fetches
 a reload of the run at the run endpoint, as a direct node's gateway does. An answer
 whose `X-Qory-Configuration` differs from the one in force makes it read its discovery
-again and serve the workspaces that discovery lists, for every run, not only the one
-whose answer said so. A gateway that stopped between the attach and marking the run's
-record `answered` (The record files) leaves a record that holds the run's
-`dev.qory.run.registered` alone: the run request that comes again removes it, and the
-gateway attaches the run again, which the server answers the same; one that stopped
-after it keeps the record, and the run request that comes again is `409`
-`run_attached`. An attach that fails, the server's refusal or no answer, leaves nothing
-of the run at the gateway: the run request that comes again, with the same run key, asks
-for the attach again. A run that was open at a gateway that stopped is over: the gateway that starts
-again answers its reloads and batches `410` `run_closed` and its run request `409`
-`run_attached`, and `qory run resend` writes its
-`dev.qory.run.exited` with `gateway_lost` (§The server).
+again and put that document in force for every run, not only the one whose answer said
+so. A gateway that stopped between the attach and marking the run's record `answered`
+(The record files) leaves a record that holds the run's `dev.qory.run.registered` alone:
+the run request that comes again removes it, and the gateway attaches the run again,
+which the server answers the same; one that stopped after it keeps the record, and the
+run request that comes again is `409` `run_attached`. An attach that fails, the server's
+refusal or no answer, leaves nothing of the run at the gateway: the run request that
+comes again, with the same run key, asks for the attach again. A run that was open at a
+gateway that stopped is over: the gateway that starts again answers its reloads and
+batches `410` `run_closed` and its run request `409` `run_attached`, and
+`qory run resend` writes its `dev.qory.run.exited` with `gateway_lost` (§The server).
 
 **No local sessions.** A separate gateway serves other machines alone: with `Listen`
 it makes no local link, in memory or on a socket, and no proxy listener on loopback,
@@ -2981,7 +2983,7 @@ the option experimental.
 |---|---|---|
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin, one of them with `via`, its `ca_file` and its pin | `server.schema.json` |
-| `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation, a gateway key's with two workspaces | `configuration.schema.json` |
+| `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation, a gateway key's, with no `workspaces` | `configuration.schema.json` |
 | `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member; and in the gateway shape, one with labels, `about` and `attach_seconds`, and one with `version`, `run_id` and `time` alone | `run-registration.schema.json` |
 | `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |

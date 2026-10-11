@@ -98,7 +98,7 @@ type control struct {
 
 	mu sync.Mutex
 	// node and workspaces are what the configuration document lists: the test node and
-	// workspace unless asGateway made them a gateway key's.
+	// workspace unless asGateway made them a gateway key's, with no workspaces.
 	node       string
 	workspaces []string
 	// attaches are the body of every attach as it came, each try included, and
@@ -230,8 +230,12 @@ func (c *control) configuration() ([]byte, string) {
 	node, workspaces := c.node, c.workspaces
 	c.mu.Unlock()
 	pin, _ := json.Marshal(testPin)
-	ws, _ := json.Marshal(workspaces)
-	doc := `{"version":1,"node_id":"` + node + `","workspaces":` + string(ws) + `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+	doc := `{"version":1,"node_id":"` + node + `"`
+	if workspaces != nil {
+		ws, _ := json.Marshal(workspaces)
+		doc += `,"workspaces":` + string(ws)
+	}
+	doc += `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
 	doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
 	return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 }
@@ -240,11 +244,11 @@ func (c *control) configuration() ([]byte, string) {
 const testGateway = "ng_f1xt0re000000000"
 
 // asGateway makes the control's configuration document a gateway key's, testGateway,
-// serving the workspaces.
-func (c *control) asGateway(workspaces ...string) {
+// with no workspaces.
+func (c *control) asGateway() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.node, c.workspaces = testGateway, workspaces
+	c.node, c.workspaces = testGateway, nil
 }
 
 // attach answers an attach of the tests' access key, as Qory Apiary does: the run

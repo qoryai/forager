@@ -1020,12 +1020,12 @@ func runKeyUnder(t *testing.T, rk string) string {
 // nodeShape is discovery's node_id of a node, node pool or gateway.
 var nodeShape = regexp.MustCompile(`^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`)
 
-// TestEachKeyDiscoversItsOwnNode pins discovery per access key: a gateway's key gets
-// its gateway's id, ng_, as node_id and every workspace the gateway may serve, its
-// workspace's at the workspace level and each of its organisation's at the organisation
-// level, sorted; a pool's key its pool and its one workspace, as Forager's client reads
-// it; a key with no node the document as configured. Each digest is sha256= and the hex
-// SHA-256 of the document served, and the answers to the key's batches carry the same.
+// TestEachKeyDiscoversItsOwnNode pins discovery per access key, as Forager's client
+// reads it: a gateway's key gets its gateway's id, ng_, as node_id and no workspaces
+// member, at the workspace level and at the organisation level alike; a pool's key its
+// pool and its one workspace; a key with no node the document as configured. Each
+// digest is sha256= and the hex SHA-256 of the document served, and the answers to the
+// key's batches carry the same.
 func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 	s := newStand(t)
 	s.now = time.Now().UTC().Truncate(time.Second)
@@ -1039,8 +1039,8 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 		node       string
 		workspaces []string
 	}{
-		gwKey:     {gw, []string{ws}},
-		orgGWKey:  {orgGW, []string{ws, ws1}},
+		gwKey:     {gw, nil},
+		orgGWKey:  {orgGW, nil},
 		key:       {pool, []string{ws}},
 		otherNode: {"nd_f1xt0re000000000", []string{ws}},
 	} {
@@ -1059,11 +1059,14 @@ func TestEachKeyDiscoversItsOwnNode(t *testing.T) {
 		if digest != digestOf(rec.Body.Bytes()) || (keyID == otherNode) != (rec.Body.String() == string(conf)) {
 			t.Errorf("discovery under %s: the digest %s of %s", keyID, digest, rec.Body.String())
 		}
-		if !strings.HasPrefix(want.node, "ng_") {
-			c, d, err := client(keyID).Discover(context.Background())
-			if err != nil || c.NodeID != want.node || strings.Join(c.Workspaces, ",") != strings.Join(want.workspaces, ",") || d != digest {
-				t.Errorf("discovery under %s, as Forager's client reads it: %+v %s, %v", keyID, c, d, err)
-			}
+		var members map[string]json.RawMessage
+		json.Unmarshal(rec.Body.Bytes(), &members)
+		if _, has := members["workspaces"]; has == strings.HasPrefix(want.node, "ng_") {
+			t.Errorf("discovery under %s: the workspaces member %v in %s", keyID, has, rec.Body.String())
+		}
+		c, d, err := client(keyID).Discover(context.Background())
+		if err != nil || c.NodeID != want.node || strings.Join(c.Workspaces, ",") != strings.Join(want.workspaces, ",") || d != digest {
+			t.Errorf("discovery under %s, as Forager's client reads it: %+v %s, %v", keyID, c, d, err)
 		}
 		_, brec := s.batch(keyID, event.NewEmitter(event.NewRunID(), nil), event.RunStarted)
 		if brec.Header().Get(server.HeaderConfiguration) != digest {
@@ -1140,18 +1143,23 @@ func TestABatchIsOfOneRun(t *testing.T) {
 	s.expect("two runs' events, each stored before", req, rec, http.StatusBadRequest, "invalid_request")
 }
 
-// TestAGatewayServingNoWorkspaceHasNoDiscovery pins that the key of a gateway that
-// may serve no workspace the records hold gets a signed 500 to discovery, no document
-// the schema refuses, and answers to its other requests carry no configuration digest.
-func TestAGatewayServingNoWorkspaceHasNoDiscovery(t *testing.T) {
+// TestAGatewayKeyDiscoversNoWorkspaces pins that the key of a gateway whose
+// organisation holds no workspace in the records gets a signed 200 to discovery, with
+// its node_id, no workspaces member and the digest of the document served, and that the
+// answers to its batches carry that digest.
+func TestAGatewayKeyDiscoversNoWorkspaces(t *testing.T) {
 	s := newStand(t)
 	s.h.Gateways[orgGW] = receiver.Gateway{URL: "https://gateway-two.example", Organisation: "org_three", AccessKeys: []string{orgGWKey}}
 	req := s.signed(orgGWKey, http.MethodGet, server.WellKnown, nil)
-	if rec := serve(s.h, req); rec.Code != http.StatusInternalServerError || rec.Body.Len() != 0 || !signedAnswer(req, rec) ||
-		rec.Header().Get(server.HeaderConfiguration) != "" {
-		t.Errorf("discovery of a gateway serving no workspace: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
+	rec := serve(s.h, req)
+	var members map[string]json.RawMessage
+	json.Unmarshal(rec.Body.Bytes(), &members)
+	_, has := members["workspaces"]
+	digest := rec.Header().Get(server.HeaderConfiguration)
+	if rec.Code != http.StatusOK || !signedAnswer(req, rec) || string(members["node_id"]) != `"`+orgGW+`"` || has || digest != digestOf(rec.Body.Bytes()) {
+		t.Errorf("discovery of a gateway's key: %d %s %v", rec.Code, rec.Body.String(), rec.Header())
 	}
-	if _, rec := s.batch(orgGWKey, event.NewEmitter(event.NewRunID(), nil), event.RunStarted); rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) != "" {
+	if _, rec := s.batch(orgGWKey, event.NewEmitter(event.NewRunID(), nil), event.RunStarted); rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderConfiguration) != digest {
 		t.Errorf("a batch under that gateway's key: %d %v", rec.Code, rec.Header())
 	}
 }

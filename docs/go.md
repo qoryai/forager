@@ -168,13 +168,13 @@ A separate gateway runs no sessions on the gateway's machine: it makes no local 
 memory or on a socket, and no proxy listener on loopback, and a session that dials its
 `LocalLink` gets "the gateway serves other machines on its address, and runs no
 sessions". Every run there opens by its run key: the gateway refuses one with
-`run_key_invalid`, `run_key_expired`, `wrong_gateway` or `workspace_not_served` before it
-asks the server, attaches the run, writes the record's `dev.qory.run.registered` from
-the run key and the attach's answer, and gives a run answer with no labels and no proxy
-secret. When the server's answer to a batch carries the outcome the run's starter
-gave, it ends the run `stopped` with that state and reason, as a direct node's gateway
-does. A gateway that starts again attaches again a run whose open never answered its
-session, and answers a run that was open before `410` `run_closed`.
+`run_key_invalid`, `run_key_expired` or `wrong_gateway` before it asks the server,
+attaches the run, writes the record's `dev.qory.run.registered` from the run key and the
+attach's answer, and gives a run answer with no labels and no proxy secret. When the
+server's answer to a batch carries the outcome the run's starter gave, it ends the run
+`stopped` with that state and reason, as a direct node's gateway does. A gateway that
+starts again attaches again a run whose open never answered its session, and answers a
+run that was open before `410` `run_closed`.
 
 `Start` refuses, before anything starts, what it cannot serve: a `Listen` that is not
 `host:port`, a `Listen` without `TLS`, "the gateway's address <address> needs TLS, a

@@ -43,12 +43,10 @@ import (
 // control's signing key signs, as an edge of the link sends them: on a bound connection,
 // every answer's signature checked under the gateway's key.
 
-// The run key's values: the node that registered the run, its instance, and a second
-// workspace the gateway serves.
+// The run key's values: the node that registered the run, and its instance.
 const (
-	keyNode        = "np_f1xt0re000000000"
-	keyInstance    = "i_gYKDhIWGh4iJiouMjY6PkA"
-	otherWorkspace = "ws_f1xt0re000000001"
+	keyNode     = "np_f1xt0re000000000"
+	keyInstance = "i_gYKDhIWGh4iJiouMjY6PkA"
 )
 
 // testCertificate writes a certificate for 127.0.0.1, ::1 and localhost, and its key,
@@ -121,11 +119,11 @@ type remote struct {
 	keys    []string
 }
 
-// gatewayControl is a control whose access key is a gateway's, serving testWorkspace
-// and otherWorkspace.
+// gatewayControl is a control whose access key is a gateway's, its discovery with no
+// workspaces.
 func gatewayControl(t *testing.T) *control {
 	c := newControl(t)
-	c.asGateway(testWorkspace, otherWorkspace)
+	c.asGateway()
 	return c
 }
 
@@ -790,9 +788,8 @@ func TestABatchBehindTheGatewayIsOfItsRunKeysRun(t *testing.T) {
 // pinned key signed, is 400 run_key_invalid; then in the server's order of the attach,
 // past its attach_by plus the 300 s skew with nothing of the run here 409
 // run_key_expired, before one of
-// another gateway 409 wrong_gateway, and one of a workspace discovery does not list 409
-// workspace_not_served. Each 409 reads as the server's
-// refusal of the attach. A run key past its attach_by of a run the gateway holds goes
+// another gateway 409 wrong_gateway. Each 409 reads as the server's
+// refusal of the attach. A run key of any workspace passes. A run key past its attach_by of a run the gateway holds goes
 // on. Each answer is signed, and nothing is attached.
 func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	var now time.Time
@@ -860,8 +857,7 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 		change func(*runkey.Key)
 		code   string
 	}{
-		"another gateway's":   {func(k *runkey.Key) { k.Gateway = "ng_0therg4teway0000" }, "wrong_gateway"},
-		"another workspace's": {func(k *runkey.Key) { k.Workspace = "ws_0therw0rkspace00" }, "workspace_not_served"},
+		"another gateway's": {func(k *runkey.Key) { k.Gateway = "ng_0therg4teway0000" }, "wrong_gateway"},
 		"past its attach_by and the skew": {func(k *runkey.Key) {
 			k.AttachBy = time.Now().Add(-400 * time.Second).Truncate(time.Second)
 			k.Issued = k.AttachBy.Add(-time.Minute)
@@ -887,10 +883,10 @@ func TestEveryRequestCarriesAnAcceptedRunKey(t *testing.T) {
 	if n := len(r.c.attached()); n != 0 {
 		t.Errorf("%d attaches", n)
 	}
-	// The second workspace the gateway serves is served.
-	other := runKeyFor(t, event.NewRunID(), func(k *runkey.Key) { k.Workspace = otherWorkspace })
+	// A run key of any workspace passes: the gateway takes the workspace from the run key.
+	other := runKeyFor(t, event.NewRunID(), func(k *runkey.Key) { k.Workspace = "ws_0therw0rkspace00" })
 	if a := r.do(t, other, http.MethodGet, "/qory-link/configuration", nil); a.status != http.StatusOK {
-		t.Errorf("the second workspace: %d %s", a.status, a.body)
+		t.Errorf("another workspace's run key: %d %s", a.status, a.body)
 	}
 	// A run the gateway holds goes on past its key's attach_by.
 	e := r.open(t, good, server.LinkRunRequest{})
@@ -1152,7 +1148,7 @@ func TestARunThroughTheGateway(t *testing.T) {
 // gateway holds nothing of it.
 func TestAnAttachRefusalReachesTheSession(t *testing.T) {
 	r := startRemote(t, nil, gateway.Config{})
-	for _, ref := range []receiver.Refusal{{Status: http.StatusConflict, Code: "run_attached"}, {Status: http.StatusConflict, Code: "run_key_expired"}, {Status: http.StatusConflict, Code: "not_a_gateway"}} {
+	for _, ref := range []receiver.Refusal{{Status: http.StatusConflict, Code: "run_attached"}, {Status: http.StatusConflict, Code: "run_key_expired"}, {Status: http.StatusConflict, Code: "not_a_gateway"}, {Status: http.StatusConflict, Code: "workspace_not_served"}} {
 		r.c.attachRefusal.Store(&ref)
 		runID := event.NewRunID()
 		refused(t, ref.Code, r.tryOpen(t, runKeyFor(t, runID, nil), server.LinkRunRequest{}), ref.Status, ref.Code, "apiary", r.attachLine(runID, ref.Code))

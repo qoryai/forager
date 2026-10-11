@@ -23,21 +23,22 @@
 // GET's timestamp or a POST's time outside the window, the unsigned 401; then each
 // endpoint's own.
 //
-// Discovery answers each access key with its own node: Configuration's document, with
-// node_id and workspaces those of the key's record, a gateway's being every workspace
-// it may serve. The run endpoint resolves each registration's gateway from the record of
-// the registering key's node or node pool, never from the body: Direct, Default, the
-// workspace's default gateway, else its organisation's, or a named gateway, ng_. It
-// keeps every registration it accepted by its run id, with the answer it gave, holding a
-// SHA-256 of each body rather than the body: the same bytes under any active key of the
-// same node get that answer again; a run the receiver wants nothing more of is a signed
-// 410; a gateway's own key, a signed 409 gateway_key; a body whose shape does not match
-// the node's resolved choice, node_is_direct or node_uses_gateway; a choice that
-// resolves to no gateway, no_default_gateway, gateway_not_serving or
-// gateway_without_key; a new instance it does not admit, instance_limit; and the same
-// run id from another node, even with the same bytes, or other bytes, run_id_used. A
-// direct run is answered its run configuration; a run through a gateway its run key,
-// signed under the receiver's key, which the gateway it names attaches with. The
+// Discovery answers each access key with the key's node: Configuration's document, with
+// node_id that of the key's record, workspaces a node's or node pool's one workspace,
+// and no workspaces for a gateway's key. The run endpoint resolves each registration's
+// gateway from the record of the registering key's node or node pool, never from the
+// body: Direct, Default, the workspace's default gateway, else its organisation's, or a
+// named gateway, ng_. It keeps every registration it accepted by its run id, with the
+// answer it gave, holding a SHA-256 of each body rather than the body: the same bytes
+// under any active key of the same node get that answer again; a run the receiver wants
+// nothing more of is a signed 410; a gateway's own key, a signed 409 gateway_key; a
+// body whose shape does not match the node's resolved choice, node_is_direct or
+// node_uses_gateway; a choice that resolves to no gateway, no_default_gateway,
+// gateway_not_serving or gateway_without_key; a new instance it does not admit,
+// instance_limit; and the same run id from another node, even with the same bytes, or
+// other bytes, run_id_used. A direct run is answered its run configuration; a run
+// through a gateway its run key, signed under the receiver's key, which the gateway it
+// names attaches with. The
 // [Handler.RunConfiguration] hook is handed each run's id, labels, about and placement,
 // and returns its run configuration or refuses the run; without it every run gets
 // {"version":1}, no policy. A run's reloads and batches are accepted from one node
@@ -274,11 +275,10 @@ type Handler struct {
 	// Configuration answers discovery with the configuration document and the
 	// receiver's digest of it. The document lists version, node_id, workspaces, events,
 	// run, whose url is the run endpoint, and apiary_public_key, the receiver's public
-	// key. For an access key whose node or gateway the records hold, node_id and
-	// workspaces are replaced by its own, and the digest is sha256= and the hex SHA-256
-	// of the document served; a gateway's key whose gateway may serve no workspace the
-	// records hold has no document, and its discovery is a signed 500. Nil means
-	// discovery is not served.
+	// key. For an access key whose node or gateway the records hold, node_id is replaced
+	// by the key's, workspaces by a node's or node pool's one workspace, and a gateway's
+	// key gets no workspaces; the digest is then sha256= and the hex SHA-256 of the
+	// document served. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration decides the run configuration of a run: as it registers, as it
 	// is attached and reloaded by its id, and for the digest every answer to a delivery
@@ -525,11 +525,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !h.fresh(r.Header.Get(server.HeaderTimestamp)):
 		refuse(w, http.StatusUnauthorized, "unauthorized")
 	case to == toDiscovery:
-		doc, digest, ok := h.configuration(v)
-		if !ok {
-			h.answer(w, v, http.StatusInternalServerError, nil)
-			return
-		}
+		doc, digest := h.configuration(v)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderConfiguration, digest)
 		h.answer(w, v, http.StatusOK, doc)
@@ -540,44 +536,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // configuration is discovery's document for a verified access key, with the
 // receiver's digest of it: Configuration's, and for a key whose node or node pool
-// Nodes holds, or whose gateway Gateways holds, with node_id that id and workspaces the
-// node's one workspace, or every workspace the gateway may serve, its digest then
-// sha256= and the hex SHA-256 of the document served. A gateway that may serve no
-// workspace the records hold has no document the schema accepts, which needs one: false,
-// and its key's discovery is a signed 500.
-func (h *Handler) configuration(v verified) ([]byte, string, bool) {
+// Nodes holds, or whose gateway Gateways holds, with node_id that id, workspaces the
+// node's one workspace and no workspaces for a gateway, its digest then sha256= and
+// the hex SHA-256 of the document served.
+func (h *Handler) configuration(v verified) ([]byte, string) {
 	doc, digest := h.Configuration()
-	var workspaces []string
-	if n, ok := h.Nodes[v.key.Node]; ok && v.key.Node != "" {
-		workspaces = []string{n.Workspace}
-	} else if _, ok := h.Gateways[v.key.Node]; ok && v.key.Node != "" {
-		if workspaces = h.served(v.key.Node); len(workspaces) == 0 {
-			return nil, "", false
-		}
-	} else {
-		return doc, digest, true
+	n, node := h.Nodes[v.key.Node]
+	_, gateway := h.Gateways[v.key.Node]
+	if v.key.Node == "" || !node && !gateway {
+		return doc, digest
 	}
 	var m map[string]json.RawMessage
 	if json.Unmarshal(doc, &m) != nil {
-		return doc, digest, true
+		return doc, digest
 	}
 	m["node_id"], _ = json.Marshal(v.key.Node)
-	m["workspaces"], _ = json.Marshal(workspaces)
+	if node {
+		m["workspaces"], _ = json.Marshal([]string{n.Workspace})
+	} else {
+		delete(m, "workspaces")
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return doc, digest, true
+		return doc, digest
 	}
 	sum := sha256.Sum256(b)
-	return b, "sha256=" + hex.EncodeToString(sum[:]), true
+	return b, "sha256=" + hex.EncodeToString(sum[:])
 }
 
 // setConfiguration sets on an answer the digest of the access key's discovery, when
-// discovery is served and has a document for the key.
+// discovery is served.
 func (h *Handler) setConfiguration(w http.ResponseWriter, v verified) {
 	if h.Configuration != nil {
-		if _, digest, ok := h.configuration(v); ok {
-			w.Header().Set(server.HeaderConfiguration, digest)
-		}
+		_, digest := h.configuration(v)
+		w.Header().Set(server.HeaderConfiguration, digest)
 	}
 }
 
@@ -815,23 +807,6 @@ func (h *Handler) serves(gateway, workspace string) bool {
 		return false
 	}
 	return g.Workspace == workspace || g.Organisation != "" && h.Workspaces[workspace].Organisation == g.Organisation
-}
-
-// served lists the workspaces a gateway may serve, sorted: the one it lives at, or
-// every workspace of the organisation it lives at.
-func (h *Handler) served(gateway string) []string {
-	g := h.Gateways[gateway]
-	if g.Workspace != "" {
-		return []string{g.Workspace}
-	}
-	var out []string
-	for id, ws := range h.Workspaces {
-		if g.Organisation != "" && ws.Organisation == g.Organisation {
-			out = append(out, id)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // gatewayKeys are a gateway's active keys, the first two, current then next: of its

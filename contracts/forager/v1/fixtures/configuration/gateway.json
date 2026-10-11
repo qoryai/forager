@@ -1,7 +1,6 @@
 {
   "version": 1,
   "node_id": "ng_f1xt0re000000000",
-  "workspaces": ["ws_f1xt0re000000000", "ws_f1xt0re000000001"],
   "events": {
     "url": "https://qory.example/v1/events",
     "types": ["*"]

@@ -212,18 +212,18 @@ func decode(name, schemaName string, b []byte, out any) error {
 }
 
 // Configuration is the configuration document the server answers discovery with:
-// the access key's node and workspaces, where events go and which, where runs
-// register, a secrets section for an access key allowed stored secrets, and the
-// server's keys. A section Forager does not know is ignored.
+// the access key's node, and a node's or node pool's workspace, where events go and
+// which, where runs register, a secrets section for an access key allowed stored
+// secrets, and the server's keys. A section Forager does not know is ignored.
 type Configuration struct {
 	Version int `json:"version"`
 	// NodeID is the id of the access key's node, nd_, node pool, np_, or gateway, ng_,
 	// for display; the ng_ prefix alone says the key is a gateway's.
 	NodeID string `json:"node_id"`
 	// Workspaces holds the workspace ids, ws_: for a node's or a node pool's key exactly
-	// one, the workspace the node or node pool belongs to; for a gateway's key one or
-	// more, the workspaces the gateway may serve.
-	Workspaces []string `json:"workspaces"`
+	// one, the workspace the node or node pool belongs to; a gateway's key has none,
+	// since a gateway takes each run's workspace from the run's run key.
+	Workspaces []string `json:"workspaces,omitempty"`
 	Events     Events   `json:"events"`
 	// Run is the run endpoint, which every discovered configuration has: a run
 	// registers with a POST to its URL, and its run configuration is fetched again at

@@ -346,6 +346,22 @@ func TestRefusalsAtTheStartPassOn(t *testing.T) {
 	}
 }
 
+// TestAGatewayKeyWithoutAnAddressRegistersNoWorkspace pins a gateway started with a
+// gateway's access key, whose discovery has no workspaces, and no address: a run on its
+// local link registers directly, and the server's refusal reaches the session, from
+// apiary, with no workspace to take from discovery.
+func TestAGatewayKeyWithoutAnAddressRegistersNoWorkspace(t *testing.T) {
+	c := newControl(t)
+	c.asGateway()
+	h := start(t, gateway.Config{Server: c.server()})
+	c.limit.Store(true)
+	_, err := h.tryOpen(server.LinkRunRequest{})
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) || r.Code != "instance_limit" || r.From != "apiary" || r.Status != http.StatusConflict {
+		t.Errorf("the server's refusal: %v", err)
+	}
+}
+
 // TestTheGatewayReloadsARun pins the reload: a server's answer that names another run
 // configuration makes the gateway fetch it and put it in force on the run's proxy; the
 // session's next answer carries another digest, and its reload GET the new policy.
