@@ -388,6 +388,9 @@ A program that needs custom code implements the interface.
     `QORY_HARNESS_HOME` to it.
   - `OnVariables` receives each name, its source and the values that lost, once, before
     the agent starts.
+- `SocketGrace` is how long the run socket keeps accepting after the runtime exits, so
+  a hook on its last event is still read. Zero or less means 200 ms. It is for tests:
+  production leaves it zero.
 - A run refused before it starts returns a `*session.Refusal`, with the contract's code
   and the names it concerns. `errors.As` finds it.
 - The stream that gets every event as well is the gateway's, `gateway.Config.Events`.
