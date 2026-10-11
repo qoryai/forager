@@ -143,6 +143,7 @@ func golden(t *testing.T, name, got string) {
 // it, and an engine in a virtual machine, where the proxy stays on loopback and the
 // relay reaches it by name.
 func TestDockerCommandLines(t *testing.T) {
+	t.Setenv("QORY_RUN_KEY", "qrk_not-a-real-one.sig")
 	for _, c := range []struct {
 		name        string
 		local       bool
@@ -172,10 +173,14 @@ func TestDockerCommandLines(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The docker command gets Forager's environment without the access key's
-			// variables; no engine is recorded here, so no selection replaces any.
+			// variables and the run key's; no engine is recorded here, so no selection
+			// replaces any.
 			if !slices.Equal(wrapped.Env, accesskey.WithoutVariables(os.Environ())) {
 				t.Errorf("the docker command gets an environment of %d variables of its own",
 					len(wrapped.Env))
+			}
+			if slices.ContainsFunc(wrapped.Env, func(kv string) bool { return strings.HasPrefix(kv, "QORY_RUN_KEY=") }) {
+				t.Error("the docker command gets QORY_RUN_KEY")
 			}
 			envFile := ""
 			for i, a := range wrapped.Args {
@@ -421,8 +426,9 @@ func TestDockerRefusesANestWithoutItsRuntime(t *testing.T) {
 
 // TestTheDockerCLIReceivesNoAccessKeyVariable pins that a command the wall runs on the
 // machine, the docker CLI and the credential helpers it starts, has Forager's
-// environment without the access key's variables.
+// environment without the access key's variables and the run key's.
 func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
+	t.Setenv("QORY_RUN_KEY", "qrk_not-a-real-one.sig")
 	t.Setenv("QORY_ACCESS_KEY_SECRET", "qak_not-a-real-one")
 	t.Setenv("QORY_ACCESS_KEY_ID", "ak_f1xt0re000000000")
 	t.Setenv("QORY_APIARY_PUBLIC_KEY", "[]")
@@ -431,7 +437,7 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out), "QORY_ACCESS_KEY_") || strings.Contains(string(out), "QORY_APIARY_") || !strings.Contains(string(out), "DOCKER_SEES=yes") {
+	if strings.Contains(string(out), "QORY_ACCESS_KEY_") || strings.Contains(string(out), "QORY_APIARY_") || strings.Contains(string(out), "QORY_RUN_KEY") || !strings.Contains(string(out), "DOCKER_SEES=yes") {
 		t.Errorf("the command's environment:\n%s", out)
 	}
 	// With the engine's selection, the same, Forager's DOCKER_CONTEXT replaced.
@@ -442,6 +448,7 @@ func TestTheDockerCLIReceivesNoAccessKeyVariable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(out), "QORY_ACCESS_KEY_") ||
+		strings.Contains(string(out), "QORY_RUN_KEY") ||
 		strings.Contains(string(out), "another-context") ||
 		!strings.Contains(string(out), "DOCKER_CONTEXT=pinned") ||
 		!strings.Contains(string(out), "DOCKER_SEES=yes") {

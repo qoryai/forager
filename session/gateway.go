@@ -78,8 +78,9 @@ type RemoteGateway struct {
 func (RemoteGateway) gateway() {}
 
 // EnvRunKey is the variable a runner passes a run's run key in. The session never reads
-// it, and no agent it starts receives it, whatever environment the agent has.
-const EnvRunKey = "QORY_RUN_KEY"
+// it, and no program it starts on the machine receives it: no agent, whatever
+// environment the agent has, and no command of its wall's, the docker CLI among them.
+const EnvRunKey = accesskey.EnvRunKey
 
 // key reads the run key, as a runner does: an unreadable one is an error that names the
 // part that is wrong, never the run key.

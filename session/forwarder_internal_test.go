@@ -148,10 +148,10 @@ func TestTheForwarderTakesOnlyTheRelaysHop(t *testing.T) {
 // TestTheUnwalledForwarderTakesOnlyItsPassword pins the password of an unwalled agent's
 // proxy URL behind a separate gateway: a connection whose first request carries no
 // Proxy-Authorization, another password, a prefix of the password, or two of them, or
-// whose head has a line too long, too many lines, or does not end in time, is closed,
-// and nothing of it reaches the gateway's proxy, not even a connection; one
-// that carries the password goes to the proxy without that header, and the proxy URL
-// carries the password and no other secret.
+// whose head has a line too long, too many lines, too many bytes in all, even in short
+// lines, or does not end in time, is closed, and nothing of it reaches the gateway's
+// proxy, not even a connection; one that carries the password goes to the proxy
+// without that header, and the proxy URL carries the password and no other secret.
 func TestTheUnwalledForwarderTakesOnlyItsPassword(t *testing.T) {
 	const password = "forwarder-password-0123456789abcdefghijklmn"
 	login := func(user, pw string) string {
@@ -188,7 +188,8 @@ func TestTheUnwalledForwarderTakesOnlyItsPassword(t *testing.T) {
 	}
 	const connect = "CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n"
 	// The head's bounds: a line longer than the forwarder reads, more lines than it
-	// reads, and a head that does not end in time, each with the password.
+	// reads, more bytes in all than it reads, in short lines, and a head that does not
+	// end in time, each with the password.
 	proxyHeadWait = 300 * time.Millisecond
 	t.Cleanup(func() { proxyHeadWait = link.PreambleWait })
 	slow, err := net.Dial("tcp", f.Addr())
@@ -208,8 +209,9 @@ func TestTheUnwalledForwarderTakesOnlyItsPassword(t *testing.T) {
 		"the password twice":       connect + login("qory", password) + login("qory", password) + "\r\n",
 		"another scheme":           connect + "Proxy-Authorization: Bearer " + password + "\r\n\r\n",
 		"no end of the head":       connect + login("qory", password),
-		"a line too long":          connect + login("qory", password) + "X-Long: " + strings.Repeat("a", maxProxyHead) + "\r\n\r\n",
+		"a line too long":          connect + login("qory", password) + "X-Long: " + strings.Repeat("a", maxProxyLine) + "\r\n\r\n",
 		"too many lines":           connect + login("qory", password) + strings.Repeat("X-Line: a\r\n", maxProxyLines) + "\r\n",
+		"a head too large":         connect + login("qory", password) + strings.Repeat("X-Line: "+strings.Repeat("a", 200)+"\r\n", maxProxyHead/200) + "\r\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if closed, answer := send(t, what); !closed || answer != "" {

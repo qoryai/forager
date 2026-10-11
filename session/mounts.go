@@ -224,7 +224,14 @@ func foragerFiles(spec Spec) []foragerFile {
 		out = append(out, foragerFile{dir, "where Forager lists the walled runs still going"})
 	}
 	// The directories the gateway keeps come last, after every file a session checked
-	// before the gateway was apart from it.
+	// before the gateway was apart from it. The pattern of the gateways' link
+	// directories, in the system's temporary directory, is among them whatever the
+	// run's gateway: a local gateway lists it with its own files, and behind a separate
+	// gateway another gateway's on this machine may be there.
+	links := foragerFile{filepath.Join(os.TempDir(), link.LinkDirPrefix+"*"), "where the gateways' links are made"}
+	if !slices.Contains(kept, links) {
+		kept = append(kept, links)
+	}
 	return append(out, kept...)
 }
 

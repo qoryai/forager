@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
 )
@@ -428,5 +429,36 @@ func TestAMountOfAnotherRunsPrivateDirectoriesIsNoRun(t *testing.T) {
 		if want := []string{c.mount, c.pattern}; !slices.Equal(r.Names, want) || !strings.Contains(r.Detail, c.how) {
 			t.Errorf("names %q, want %q, detail %q", r.Names, want, r.Detail)
 		}
+	}
+}
+
+// TestARemoteGatewaysRunRefusesAMountOfALinkDirectory pins that the private directories
+// gateways make their links in, in the system's temporary directory, are Forager's
+// files behind a separate gateway too, which hands the session no files of its own: a
+// mount of a local gateway's link directory on this machine, or of a file in one, is
+// refused, and the separate gateway is never contacted.
+func TestARemoteGatewaysRunRefusesAMountOfALinkDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	linkDir := filepath.Join(tmp, "qory-link-1234")
+	if err := os.Mkdir(linkDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	g := startRemote(t)
+	r := newSepRun(t, session.RemoteGateway{RunKey: g.RunKey(t, event.NewRunID())})
+	r.sp.Wall, r.sp.Image = &openWall{}, "example.com/agent:1"
+	pattern := filepath.Join(tmp, "qory-link-*")
+	for _, c := range []struct{ mount, how string }{
+		{linkDir, " is "},
+		{filepath.Join(linkDir, "sock"), " lies inside "},
+	} {
+		r.sp.Mounts = []wall.Mount{{Path: c.mount}}
+		got := mountRefusal(t, runErr(r.sp))
+		if want := []string{c.mount, pattern}; !slices.Equal(got.Names, want) || !strings.Contains(got.Detail, c.how) || !strings.HasSuffix(got.Detail, ", where the gateways' links are made") {
+			t.Errorf("names %q, want %q, detail %q", got.Names, want, got.Detail)
+		}
+	}
+	if len(g.Bearers()) != 0 || g.Bound() != 0 || r.started() {
+		t.Error("a refused mount reached the gateway, or the runtime started")
 	}
 }

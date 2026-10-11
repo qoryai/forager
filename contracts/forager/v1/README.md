@@ -1763,13 +1763,19 @@ secret of the link. The directory, mode `0700`, and the socket, mode `0600`, kee
 other user out. Every URL the link's discovery lists is `http://localhost` and a path,
 and the session sends every request over the link.
 
+The socket's peer uid is the whole of the local link's trust. A process of the same
+user that reaches the socket is served as a session is: knowing a local run's id, it can
+post a batch into that run, fetch the run's configuration again, or end the run with a
+batch that carries its `dev.qory.run.exited`.
+
 **In one process.** When the session and the gateway share one process, as `qory` runs
 them on one machine, the session reaches the gateway's link in memory and never dials
 the socket's path, where another process of the same user could listen in the
 gateway's place and pass the uid check. Each connection in memory carries the same
 bytes as one over the socket, HTTP/1.1 from its first byte; its peer is the process
-itself. The socket serves a session in another process; a gateway started without one,
-as `qory run` starts it, serves its link in memory alone.
+itself. The socket serves a session in another process. `gateway.Start` with
+`NoLinkSocket`, as `qory run` starts the gateway, serves no socket: the link in memory
+alone, which no other process reaches.
 
 **A separate gateway.** The session is given the run's run key, the one Qory Apiary
 answered the run's registration with (§The server, The run key), and reads it as a
