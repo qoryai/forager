@@ -2960,8 +2960,8 @@ files and need neither.
 engine that command reaches. It is supported where the suite passes. An engine in a
 virtual machine on a Mac is where a wall is developed, not a target: the suite passes
 there without the hook check (§Limits). The agent's image is the caller's; the wall
-builds none. A Docker of the agent's own is experimental, under `sysbox-runc`, where the
-suite passes with it: Forager's CI installs Sysbox on a Linux machine and runs the
+builds none. Nested Docker is experimental, under `sysbox-runc`, where the suite passes
+with it: Forager's CI installs Sysbox on a Linux machine and runs the
 suite in an enclosure with a daemon. The suite checks the list as the agent's user; what
 the enclosure's root reaches of the mounts the run lists is the open question that keeps
 the option experimental.
