@@ -1203,10 +1203,10 @@ the resolved gateway has no active access key, so no run could attach at it; `40
 for a registration whose run id the server already accepted from another node, even
 with the same bytes, or with other bytes: other labels or another body; then a `409`
 code of the server's own. The four codes of the resolution come before the limit, so a
-run that can go nowhere never takes a slot. For a reload, the server answers only for a run its node
-registered, under any of the node's active keys, or, for a run behind a gateway, for the
-gateway node that attached it, and anything else is `404`, so a run id cannot be
-probed.
+run that can go nowhere never takes a slot. For a reload, the server answers only for a
+run its node registered, under any of the node's active keys, or, for a run behind a
+gateway, for the gateway node that attached it, and anything else is `404`, so a run id
+cannot be probed.
 
 **Failure.** Every authentication failure is `401` with the body
 `{"error":"unauthorized"}` and nothing more, unsigned: a missing or empty
