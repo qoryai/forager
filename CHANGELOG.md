@@ -4,6 +4,15 @@ Every release of Forager, newest first, in the shape of [Keep a Changelog](https
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Core and contract
+
+#### Changed
+
+- The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
+  `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+
 ## [0.7.0] - 2026-10-12
 
 ### Core and contract
