@@ -4,12 +4,14 @@ Every release of Forager, newest first, in the shape of [Keep a Changelog](https
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-12
 
 ### Core and contract
 
 #### Upgrading
 
+- The module is `github.com/qoryai/forager`, no longer `github.com/qoryai/runner`, so
+  `go get github.com/qoryai/forager` and every import path start with it.
 - `link.Local.Files` is a list of `link.File`, each path with what it is, the phrase a
   refused mount names it by.
 - `policy.Covers` covers an IP literal by an identical entry alone, as `policy.Match`
@@ -738,8 +740,6 @@ release may change what an existing document does, and says so under Upgrading.
   `accesskey.UserAgent(version)` builds the `User-Agent` of every request to a server,
   `qory-forager/<version>`. The four batch fixtures under `fixtures/signed` are signed
   over their new bodies.
-  The module is `github.com/qoryai/forager`, so `go get github.com/qoryai/forager` and
-  every import path start with it.
 - Contract `v1` revision 1 is amended in place for the end of a session's run at the
   gateway. `dev.qory.run.started` has `opened_by`, required, whose one value is
   `session`, and requires `runtime`, `command`, `args`, `dir` and `interactive`.
@@ -2133,7 +2133,8 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/forager/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/qoryai/forager/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/qoryai/forager/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/qoryai/runner/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/qoryai/runner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qoryai/runner/compare/v0.4.1...v0.5.0
