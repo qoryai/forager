@@ -18,6 +18,14 @@ Forager added it in these versions:
 - **0.6.0**: it starts a run in the image of the machine's that its policy selects.
 - **0.6.0**, experimental: it starts nested Docker inside the container, under
   `sysbox-runc`.
+- **0.7.0**: it runs a run's containers on the engine it recorded as the run started,
+  and refuses a mount or workspace that lies inside a writable directory another run's
+  wall binds.
+- **0.7.0**: it refuses a requested host that is neither a plain name nor an IP address
+  in canonical form, and judges an address in `::/96` (other than `::1` and `::`),
+  `::ffff:0:0:0/96` or `64:ff9b::/96` by the IPv4 address it carries as well.
+- **0.7.0**, experimental: nested Docker has an isolated IPv6 network inside the
+  container, and needs Docker Engine 28 or later.
 
 To start and configure it: [the wall](wall.md#start-a-walled-run).
 
