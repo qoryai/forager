@@ -24,8 +24,9 @@ Forager added it in these versions:
 - **0.7.0**: it refuses a requested host that is neither a plain name nor an IP address
   in canonical form, and judges an address in `::/96` (other than `::1` and `::`),
   `::ffff:0:0:0/96` or `64:ff9b::/96` by the IPv4 address it carries as well.
-- **0.7.0**, experimental: nested Docker has an isolated IPv6 network inside the
-  container, and needs Docker Engine 28 or later.
+- **0.7.0**, experimental: with nested Docker, the wall's inside network has an IPv6
+  subnet in Docker's isolated gateway mode, and nested Docker needs Docker Engine 28 or
+  later.
 
 To start and configure it: [the wall](wall.md#start-a-walled-run).
 
