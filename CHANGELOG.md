@@ -14,6 +14,11 @@ release may change what an existing document does, and says so under Upgrading.
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
   ceiling, when any has them. The link's `applied` carries it too.
 
+#### Changed
+
+- The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
+  `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+
 ## [0.7.0] - 2026-10-12
 
 ### Core and contract

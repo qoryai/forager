@@ -52,7 +52,7 @@ secrets:
       paths: [/v1/*]
       auth: {scheme: header, header: x-api-key}
     - id: oauth_token
-      title: Claude OAuth credential
+      title: Claude OAuth token
       name: CLAUDE_CODE_OAUTH_TOKEN
       hosts: [api.anthropic.com]
       paths: [/v1/*]

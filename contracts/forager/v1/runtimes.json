@@ -48,7 +48,7 @@
         },
         {
           "id": "oauth_token",
-          "title": "Claude OAuth credential",
+          "title": "Claude OAuth token",
           "name": "CLAUDE_CODE_OAUTH_TOKEN",
           "hosts": [
             "api.anthropic.com"
