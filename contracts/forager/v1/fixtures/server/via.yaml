@@ -1,6 +1,6 @@
 # A keyed machine or a starter behind a gateway: every request to the server goes to
 # via.url's origin with its target unchanged, and the gateway relays it. url stays the
-# server's own. The gateway's certificate chains to the authorities of ca_file, and its
+# server's URL. The gateway's certificate chains to the authorities of ca_file, and its
 # public key is pinned besides.
 version: 1
 url: https://qory.example
