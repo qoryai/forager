@@ -12,7 +12,7 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
-  ceiling, when any has them. The link's `applied` carries it too.
+  ceiling that has any. The link's `applied` carries it too.
 
 #### Changed
 

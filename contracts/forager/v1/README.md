@@ -873,10 +873,10 @@ its `digest`, `sha256=` and the lower-case hex SHA-256 of the RFC 8785 serialisa
 that `policy.schema.json` document, and its `paths`, when it has any, so the record
 shows the path rules of the server's policy and of the node's; `ceiling_paths` lists
 those of each ceiling a caller put the run's policy file under with
-`gateway.Policy.Under`, by host, one object per ceiling, fixed for the run. `variables`
-lists the run's variables by name, never a value: each with the source whose value the
-run applies and the values that lost, with their sources and why (§Variables, the record
-of the variables).
+`gateway.Policy.Under`, by host, one object per ceiling that has any, fixed for the run.
+`variables` lists the run's variables by name, never a value: each with the source whose
+value the run applies and the values that lost, with their sources and why (§Variables,
+the record of the variables).
 `dev.qory.run.egress` records what becomes of the connection in `outcome`: `connected`,
 the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, the policy or
 the wall's guard denied it, or a reload closed it; no address the guard refuses is
