@@ -266,11 +266,12 @@ func judge(ctx context.Context, host string, ip net.IP) error {
 }
 
 // carriers are the IPv6 ranges whose addresses the guard also judges by the IPv4
-// address in their last 32 bits: ::/96, the IPv4-compatible addresses, and 64:ff9b::/96,
-// the well-known NAT64 prefix. An IPv4 address mapped into IPv6 is judged as IPv4
-// already.
+// address in their last 32 bits: ::/96, the IPv4-compatible addresses; ::ffff:0:0:0/96,
+// the IPv4-translated ones; and 64:ff9b::/96, the well-known NAT64 prefix. An IPv4
+// address mapped into IPv6 is judged as IPv4 already.
 var carriers = []netip.Prefix{
 	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 }
 

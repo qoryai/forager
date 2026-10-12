@@ -1004,8 +1004,8 @@ release may change what an existing document does, and says so under Upgrading.
   `::ffff:0:0/96`, `::ffff:0:0:0/96` or `64:ff9b::/96`, whatever the mode, with the rule
   `wall:host-form`.
 - The wall judges an IPv6 address with a zone by the address alone.
-- The wall also judges an address in `::/96` (other than `::1` and `::`) or
-  `64:ff9b::/96` by the IPv4 address in its last 32 bits.
+- The wall also judges an address in `::/96` (other than `::1` and `::`),
+  `::ffff:0:0:0/96` or `64:ff9b::/96` by the IPv4 address in its last 32 bits.
 
 #### Fixed
 

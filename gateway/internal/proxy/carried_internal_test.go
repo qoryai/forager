@@ -28,17 +28,22 @@ func carriedCases(t *testing.T) []carriedCase {
 	cases := []carriedCase{
 		{"::a9fe:a9fe", true, true},
 		{"::169.254.169.254", true, true},
+		{"::ffff:0:a9fe:a9fe", true, true},
+		{"::ffff:0:169.254.169.254", true, true},
 		{"64:ff9b::a9fe:a9fe", true, true},
 		{"64:ff9b::169.254.169.254", true, true},
 		{"::7f00:1", true, false},
+		{"::ffff:0:7f00:1", true, false},
 		{"64:ff9b::7f00:1", true, false},
 		{"::7f00:2", true, false},
 		{"64:ff9b::808:808", false, false},
 		{"::808:808", false, false},
+		{"::ffff:0:808:808", false, false},
 		{"64:ff9b::c000:201", false, false},
 		// The broadcast address is left as it is.
 		{"64:ff9b::ffff:ffff", false, false},
 		{"::ffff:ffff", false, false},
+		{"::ffff:0:ffff:ffff", false, false},
 		// ::1 and :: are this machine's as they are.
 		{"::1", true, false},
 		{"::", true, false},
@@ -47,8 +52,14 @@ func carriedCases(t *testing.T) []carriedCase {
 		{"64:ff9b:1::7f00:1", false, false},
 		{"2001:db8::a9fe:a9fe", false, false},
 		// Just above ::/96: not judged by the last 32 bits.
-		{"::ffff:0:a9fe:a9fe", false, false},
 		{"::1:a9fe:a9fe", false, false},
+		// Just outside ::ffff:0:0:0/96, below, above and around it: not judged by the
+		// last 32 bits.
+		{"::fffe:0:a9fe:a9fe", false, false},
+		{"::ffff:1:a9fe:a9fe", false, false},
+		{"::ffff:ffff:a9fe:a9fe", false, false},
+		{"::1:ffff:0:a9fe:a9fe", false, false},
+		{"::1:0:0:a9fe:a9fe", false, false},
 		// Mapped into IPv6: judged as the IPv4 address, as before.
 		{"::ffff:169.254.169.254", true, true},
 		{"::ffff:127.0.0.1", true, false},
@@ -57,6 +68,7 @@ func carriedCases(t *testing.T) []carriedCase {
 		{"::a9fe:a9fe%lo0", true, true},
 		{"64:ff9b::a9fe:a9fe%25eth0", true, true},
 		{"::7f00:1%lo0", true, false},
+		{"::ffff:0:7f00:1%lo0", true, false},
 		{"64:ff9b::7f00:1%1", true, false},
 		{"64:ff9b::808:808%eth0", false, false},
 	}
@@ -74,6 +86,7 @@ func carriedCases(t *testing.T) []carriedCase {
 		v4 := n.IP.To4()
 		cases = append(cases,
 			carriedCase{"::" + v4.String(), true, n.IP.IsLinkLocalUnicast()},
+			carriedCase{"::ffff:0:" + v4.String(), true, n.IP.IsLinkLocalUnicast()},
 			carriedCase{"64:ff9b::" + v4.String(), true, n.IP.IsLinkLocalUnicast()},
 		)
 	}
@@ -84,10 +97,10 @@ func carriedCases(t *testing.T) []carriedCase {
 }
 
 // TestTheWallJudgesTheIPv4AddressAnAddressCarries pins that behind a wall an address in
-// ::/96 or 64:ff9b::/96, other than ::1 and ::, is also judged by the IPv4 address in
-// its last 32 bits, at the guard and through the system's dialler: refused where that
-// IPv4 address would be, by the wall's refusal, and never connected; let through when
-// it would be.
+// ::/96 (other than ::1 and ::), ::ffff:0:0:0/96 or 64:ff9b::/96 is also judged by the
+// IPv4 address in its last 32 bits, at the guard and through the system's dialler:
+// refused where that IPv4 address would be, by the wall's refusal, and never connected;
+// let through when it would be.
 func TestTheWallJudgesTheIPv4AddressAnAddressCarries(t *testing.T) {
 	p, err := Listen("", policy.Observe, nil, nil, nil)
 	if err != nil {

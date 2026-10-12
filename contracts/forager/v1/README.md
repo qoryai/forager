@@ -2908,9 +2908,9 @@ reached by default. Two rules, in either mode, observe included:
   added, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
 
 An address is judged as itself, an IPv6 address without its zone, and one that does not
-read is refused. An address in `::/96` (other than `::1` and `::`) or `64:ff9b::/96` is
-also judged by the IPv4 address in its last 32 bits, and refused where that address
-would be.
+read is refused. An address in `::/96` (other than `::1` and `::`), `::ffff:0:0:0/96`
+or `64:ff9b::/96` is also judged by the IPv4 address in its last 32 bits, and refused
+where that address would be.
 
 A refusal the proxy can make without resolving, a literal address or `localhost`, is a
 `denied` `dev.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
