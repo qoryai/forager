@@ -68,7 +68,8 @@
         "tools": {"$ref": "events/run.policy_applied.schema.json#/properties/tools"},
         "image": {"$ref": "events/run.policy_applied.schema.json#/properties/image"},
         "terminated": {"$ref": "events/run.policy_applied.schema.json#/properties/terminated"},
-        "node_policy": {"$ref": "events/run.policy_applied.schema.json#/properties/node_policy"}
+        "node_policy": {"$ref": "events/run.policy_applied.schema.json#/properties/node_policy"},
+        "ceiling_paths": {"$ref": "events/run.policy_applied.schema.json#/properties/ceiling_paths"}
       }
     },
     "proxy_secret": {

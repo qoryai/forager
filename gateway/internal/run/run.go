@@ -301,6 +301,11 @@ func (r *Run) NodePaths() []map[string][]string {
 	return append(out, r.beside...)
 }
 
+// Beside are the sides of path rules [Policy.Under] put beside the node's policy, one
+// per ceiling that has any, in order, fixed for the run: dev.qory.run.policy_applied
+// lists them as ceiling_paths. Nil when there are none.
+func (r *Run) Beside() []map[string][]string { return slices.Clone(r.beside) }
+
 // Held are the credentials the run holds now.
 func (r *Run) Held() *credential.Held {
 	r.mu.Lock()

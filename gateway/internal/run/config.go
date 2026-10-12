@@ -105,7 +105,8 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // the ceiling's allow list, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
 // is. The credentials, the tools and the image are the policy's: a ceiling defines
-// them and selects none.
+// them and selects none. The run's record lists the ceiling's path rules in
+// dev.qory.run.policy_applied's ceiling_paths.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p

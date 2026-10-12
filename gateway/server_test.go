@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -428,6 +429,70 @@ func TestTheGatewayReloadsARun(t *testing.T) {
 	h.close()
 	if got := types(h.record(runID)); !slices.Equal(got[len(got)-2:], []string{event.RunHeartbeat, event.RunExited}) {
 		t.Errorf("record %v", got)
+	}
+}
+
+// TestARunUnderACeilingRecordsItsPaths pins ceiling_paths: a walled run whose policy
+// file is put under a ceiling with path rules has them in applied at the start, and
+// again in the reload's, where the server's new policy leaves them as they were; the
+// session's policy_applied of each is one the gateway gave the run, and the record
+// holds them. A run under a ceiling with no path rules has no ceiling_paths.
+func TestARunUnderACeilingRecordsItsPaths(t *testing.T) {
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"a.example", "b.example"}}}
+	ceiling := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Paths: map[string][]string{"a.example": {"/v1/*"}}}}
+	want := []any{map[string]any{"a.example": []any{"/v1/*"}}}
+	ceilingPaths := func(raw json.RawMessage) any {
+		var members map[string]any
+		json.Unmarshal(raw, &members)
+		return members["ceiling_paths"]
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Policy: node.Under(ceiling)})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if got := ceilingPaths(a.Applied); !reflect.DeepEqual(got, want) {
+		t.Errorf("at the start: ceiling_paths %v, applied %s", got, a.Applied)
+	}
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
+	eventually(t, "the reload", func() bool {
+		d := h.post(heartbeat(runID))
+		return d.Accepted() && d.Digests.RunConfiguration != first
+	})
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ceilingPaths(r.Applied); r.Digest == a.Digest || !reflect.DeepEqual(got, want) {
+		t.Errorf("after the reload: ceiling_paths %v, applied %s", got, r.Applied)
+	}
+	if d := h.post(applied(runID, r.Applied)); !d.Accepted() {
+		t.Errorf("the reload's policy_applied: %+v", d)
+	}
+	h.post(exited(runID))
+	h.close()
+	n := 0
+	for _, ev := range h.record(runID) {
+		if ev.Type == event.PolicyApplied {
+			n++
+			if !reflect.DeepEqual(ev.Data["ceiling_paths"], want) {
+				t.Errorf("the record's policy_applied %d: %v", n, ev.Data)
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("the record holds %d policy_applied, want 2", n)
+	}
+
+	plain := start(t, gateway.Config{Policy: node.Under(&gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe"}})})
+	if got := plain.open(server.LinkRunRequest{Wall: true}); ceilingPaths(got.Applied) != nil {
+		t.Errorf("a ceiling with no path rules: applied %s", got.Applied)
 	}
 }
 

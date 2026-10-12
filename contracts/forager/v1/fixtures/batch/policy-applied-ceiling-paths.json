@@ -1,0 +1,42 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "7e1c0000-0000-7000-8000-000000000003",
+    "source": "urn:qory:run:0193b1c2-8d3e-7f40-9b5c-6d7e8f9a0b1c",
+    "type": "dev.qory.run.policy_applied",
+    "subject": "0193b1c2-8d3e-7f40-9b5c-6d7e8f9a0b1c",
+    "time": "2026-09-16T12:00:00.125Z",
+    "sequence": "0000000003",
+    "dataschema": "https://qory.dev/contracts/forager/v1/events/run.policy_applied.schema.json",
+    "data": {
+      "mode": "enforce",
+      "allow": [
+        "api.example",
+        "git.example"
+      ],
+      "source": "config",
+      "digest": "5b1165e429a4d8ac5bbee19eaabad29c0efaa3585fe9decb079a87b4d352aa5f",
+      "paths": {
+        "api.example": [
+          "/v1/*"
+        ]
+      },
+      "ceiling_paths": [
+        {
+          "api.example": [
+            "/v1/models/*",
+            "/v1/messages"
+          ],
+          "git.example": [
+            "/example-namespace/*"
+          ]
+        }
+      ],
+      "terminated": [
+        "api.example",
+        "git.example"
+      ],
+      "variables": []
+    }
+  }
+]
