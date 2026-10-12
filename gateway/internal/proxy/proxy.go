@@ -11,8 +11,8 @@
 // refused with 403 in either mode before any list is read, with the rule [HostForm]. A host a deny entry matches is denied with 403 in either mode, and nothing is opened for it; past
 // that, in observe mode every decision allows, and in enforce mode a host no allow
 // entry matches is denied the same way. The session continues either way. A decision
-// says what became of the connection as its outcome: dialled, or not dialled because
-// it was refused, or dialled and failed.
+// says what became of the connection as its outcome: connected, refused, or allowed and
+// the dial failed; no address the guard refuses is dialled.
 //
 // The policy the proxy decides by is the one it was started with until [Proxy.SetPolicy]
 // replaces it: a run whose server sends a new run configuration reloads it this way,
