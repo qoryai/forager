@@ -877,11 +877,11 @@ variables by name, never a value: each with the source whose value the run appli
 the values that lost, with their sources and why (§Variables, the record of the
 variables).
 `dev.qory.run.egress` records what becomes of the connection in `outcome`: `connected`,
-the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, not dialled,
-because the policy or the wall's guard denied it, or closed by a reload. An event that
-is one request, a plain one or one inside a terminated connection, contains the proxy's
-`request_id` for it, and `status`, the status the host or the tool returned, when one
-did.
+the dial succeeded; `dial_failed`, allowed and the dial failed; `refused`, the policy or
+the wall's guard denied it, or a reload closed it; no address the guard refuses is
+dialled. An event that is one request, a plain one or one inside a terminated
+connection, contains the proxy's `request_id` for it, and `status`, the status the host
+or the tool returned, when one did.
 
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
 wrote it, terminal escapes included. On pipes the runtime's standard output and standard

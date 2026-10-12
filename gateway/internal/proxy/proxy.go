@@ -11,8 +11,8 @@
 // refused with 403 in either mode before any list is read, with the rule [HostForm]. A host a deny entry matches is denied with 403 in either mode, and nothing is opened for it; past
 // that, in observe mode every decision allows, and in enforce mode a host no allow
 // entry matches is denied the same way. The session continues either way. A decision
-// says what became of the connection as its outcome: dialled, or not dialled because
-// it was refused, or dialled and failed.
+// says what became of the connection as its outcome: connected, refused, or allowed and
+// the dial failed; no address the guard refuses is dialled.
 //
 // The policy the proxy decides by is the one it was started with until [Proxy.SetPolicy]
 // replaces it: a run whose server sends a new run configuration reloads it this way,
@@ -67,8 +67,8 @@ const (
 	Connected = "connected"
 	// DialFailed says the connection was allowed and the dial failed.
 	DialFailed = "dial_failed"
-	// Refused says nothing was dialled: the policy or the guard denied the connection,
-	// or a reload closed it.
+	// Refused says the policy or the guard denied the connection, or a reload closed it;
+	// no address the guard refuses is dialled.
 	Refused = "refused"
 )
 
@@ -681,7 +681,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// connect opens a tunnel, or refuses it with a 403 before anything is dialled.
+// connect opens a tunnel, or refuses it with a 403: a denial by the decision, before
+// anything is dialled, or the guard's at dial time.
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	host, portText, err := net.SplitHostPort(r.Host)
 	if err != nil || host == "" {
