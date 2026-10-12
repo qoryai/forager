@@ -67,8 +67,8 @@ const (
 	Connected = "connected"
 	// DialFailed says the connection was allowed and the dial failed.
 	DialFailed = "dial_failed"
-	// Refused says nothing was dialled: the policy or the guard denied the connection,
-	// or a reload closed it.
+	// Refused says the policy or the guard denied the connection, or a reload closed it;
+	// no address the guard refuses is dialled.
 	Refused = "refused"
 )
 
@@ -681,7 +681,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// connect opens a tunnel, or refuses it with a 403 before anything is dialled.
+// connect opens a tunnel, or refuses it with a 403: a denial by the decision, before
+// anything is dialled, or the guard's at dial time.
 func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	host, portText, err := net.SplitHostPort(r.Host)
 	if err != nil || host == "" {
