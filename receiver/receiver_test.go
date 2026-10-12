@@ -685,8 +685,17 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	h.Stop = func(run string) bool { return run == e.RunID() }
 	beat2, _ := e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}).JSON()
 	stop := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat2)+"]"))
+	count := store.Count()
 	if rec := serve(h, stop); rec.Code != http.StatusGone || rec.Body.Len() != 0 || !signedAnswer(stop, rec) {
 		t.Errorf("a delivery of a run it wants nothing more of: %d %s", rec.Code, rec.Body.String())
+	}
+	resent := signedPOST(receiver.DefaultEventsPath, fixtureKey, []byte("["+string(beat)+"]"))
+	if rec := serve(h, resent); rec.Code != http.StatusGone || rec.Body.Len() != 0 || !signedAnswer(resent, rec) ||
+		rec.Header().Get(server.HeaderRunConfiguration) != digestOf(run) {
+		t.Errorf("a resend of an accepted delivery of a run it wants nothing more of: %d %s %v, want the signed 410 with the digests", rec.Code, rec.Body.String(), rec.Header())
+	}
+	if store.Count() != count {
+		t.Errorf("the refused deliveries stored %d events, want none", store.Count()-count)
 	}
 	h.Stop = nil
 	if rec := serve(h, signedGET("/elsewhere", fixtureKey, "1700000000")); rec.Code != 404 {

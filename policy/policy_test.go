@@ -77,6 +77,45 @@ func TestInvalidPolicyIsAnError(t *testing.T) {
 	}
 }
 
+// TestReadHoldsEveryEntryToTheHostForm pins that a policy whose allow, deny or paths
+// entry naming a host is neither a host name nor an IPv4 address in canonical form is
+// refused when it is read, as a *policy.Error naming the document, and that one whose
+// entries all are reads.
+func TestReadHoldsEveryEntryToTheHostForm(t *testing.T) {
+	for _, egress := range []string{
+		`"mode":"observe","deny":["127.1"]`,
+		`"mode":"observe","deny":["0x7f.0.0.1"]`,
+		`"mode":"observe","deny":["2130706433"]`,
+		`"mode":"observe","deny":["0177.0.0.1"]`,
+		`"mode":"observe","deny":["127.000.0.1"]`,
+		`"mode":"observe","deny":["api.example","0x7f.1"]`,
+		`"mode":"enforce","allow":["127.0.0.1.1"]`,
+		`"mode":"enforce","allow":["api.1"]`,
+		`"mode":"enforce","allow":["example.0x1f"]`,
+		`"mode":"observe","deny":["example.0x"]`,
+		`"mode":"enforce","allow":["[::ffff:127.0.0.1]"]`,
+		`"mode":"enforce","allow":["::ffff:127.0.0.1"]`,
+		`"mode":"enforce","allow":["2001:0db8::1"]`,
+		`"mode":"enforce","allow":["2001:db8::1"]`,
+		`"mode":"enforce","allow":["api.example"],"paths":{"127.1":["/x"]}`,
+		`"mode":"enforce","allow":["api.example"],"paths":{"api.example":["/x"],"0x7f.0.0.1":[]}`,
+	} {
+		doc := `{"version":1,"egress":{` + egress + `}}`
+		_, err := policy.Read("policy", []byte(doc))
+		var pe *policy.Error
+		if !errors.As(err, &pe) || pe.Name != "policy" {
+			t.Errorf("%s: %v, want a *policy.Error", doc, err)
+		}
+		if _, err := policy.Parse("policy", []byte(doc)); err == nil {
+			t.Errorf("%s: parsed", doc)
+		}
+	}
+	doc := `{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","10.0.0.255","0x7f.example","127.example","*.example","*.1.example"],"deny":["192.168.0.1","deadbeef.example"],"paths":{"127.0.0.1":["/x"],"*.example":[]}}}`
+	if _, err := policy.Read("policy", []byte(doc)); err != nil {
+		t.Errorf("%s: %v", doc, err)
+	}
+}
+
 // TestMatchFollowsTheGrammar pins name, pattern and IP matching, and that a pattern
 // never matches its apex.
 func TestMatchFollowsTheGrammar(t *testing.T) {
@@ -99,6 +138,106 @@ func TestMatchFollowsTheGrammar(t *testing.T) {
 		rule, ok := policy.Match(allow, c.host)
 		if rule != c.rule || ok != c.ok {
 			t.Errorf("Match(%q) = %q, %v; want %q, %v", c.host, rule, ok, c.rule, c.ok)
+		}
+	}
+}
+
+// TestHostHasOneForm pins the form of a host: a name of ASCII letters, digits, hyphens
+// and dots, lower-cased, without one trailing dot and with no empty label; an IPv4
+// address of four decimal parts with no leading zero, where a host is read as one when
+// it ends in a number: its last label is all digits, or 0x and hex digits or none; an
+// IPv6 address in RFC 5952's form with no zone, and not in ::/96 (except ::1),
+// ::ffff:0:0/96, ::ffff:0:0:0/96 or 64:ff9b::/96. Any other host has none.
+func TestHostHasOneForm(t *testing.T) {
+	for _, c := range []struct{ host, form string }{
+		{"api.example", "api.example"},
+		{"API.Example.", "api.example"},
+		{"localhost", "localhost"},
+		{"a-b.example", "a-b.example"},
+		{"0x7f.example", "0x7f.example"},
+		{"127.example", "127.example"},
+		{"1.2.3.example", "1.2.3.example"},
+		{"deadbeef", "deadbeef"},
+		{"0x7g", "0x7g"},
+		{"1.2.3.0xg", "1.2.3.0xg"},
+		{"example.0x1g", "example.0x1g"},
+		{"0x1f.example", "0x1f.example"},
+		{"127.0.0.1", "127.0.0.1"},
+		{"127.0.0.1.", "127.0.0.1"},
+		{"10.0.0.255", "10.0.0.255"},
+		{"::1", "::1"},
+		{"2001:DB8::1", "2001:db8::1"},
+		{"::1:0:0", "::1:0:0"},
+		{"::fffe:ffff:ffff", "::fffe:ffff:ffff"},
+		{"::1:0:0:0", "::1:0:0:0"},
+		{"::ffff:1:0:0", "::ffff:1:0:0"},
+		{"::fffe:ffff:ffff:ffff", "::fffe:ffff:ffff:ffff"},
+		{"64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff", "64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff"},
+		{"64:ff9b::1:0:0", "64:ff9b::1:0:0"},
+		{"2002::", "2002::"},
+		{"2002:7f00:1::", "2002:7f00:1::"},
+		{"2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+		{"2600::1", "2600::1"},
+		{"2001::1", "2001::1"},
+		{"64:ff9b:1::1", "64:ff9b:1::1"},
+		{"64:ff9b:1::7f00:1", "64:ff9b:1::7f00:1"},
+		{"::", ""},
+		{"::2", ""},
+		{"::7f00:1", ""},
+		{"::ffff:ffff", ""},
+		{"::ffff:0.0.0.0", ""},
+		{"::ffff:255.255.255.255", ""},
+		{"::ffff:0:0:0", ""},
+		{"::ffff:0:7f00:1", ""},
+		{"::ffff:0:ffff:ffff", ""},
+		{"64:ff9b::", ""},
+		{"64:ff9b::7f00:1", ""},
+		{"64:FF9B::7F00:1", ""},
+		{"64:ff9b::ffff:ffff", ""},
+		{"", ""},
+		{".", ""},
+		{"api.example..", ""},
+		{".api.example", ""},
+		{"api..example", ""},
+		{"ａｐｉ.example", ""},
+		{"a­pi.example", ""},
+		{"Key.example", ""},
+		{"%EF%BD%81pi.example", ""},
+		{"%61pi.example", ""},
+		{"a_b.example", ""},
+		{"a b.example", ""},
+		{"api.example:443", ""},
+		{"127.1", ""},
+		{"2130706433", ""},
+		{"0x7f000001", ""},
+		{"0x7f", ""},
+		{"0X7F", ""},
+		{"0x7f.0.0.1", ""},
+		{"0x7f.1", ""},
+		{"0177.0.0.1", ""},
+		{"127.000.0.1", ""},
+		{"127.0.0.1.1", ""},
+		{"256.0.0.1", ""},
+		{"api.1", ""},
+		{"0x", ""},
+		{"0X1F", ""},
+		{"example.0x1f", ""},
+		{"example.0X1F", ""},
+		{"example.0x", ""},
+		{"example.0X.", ""},
+		{"1.2.3.0x4", ""},
+		{"::ffff:127.0.0.1", ""},
+		{"::FFFF:7f00:1", ""},
+		{"::1.2.3.4", ""},
+		{"0:0:0:0:0:0:0:1", ""},
+		{"2001:0db8::1", ""},
+		{"2001:db8:0:0:0:0:0:1", ""},
+		{"fe80::1%en0", ""},
+		{"[::1]", ""},
+	} {
+		form, ok := policy.Host(c.host)
+		if form != c.form || ok != (c.form != "") {
+			t.Errorf("Host(%q) = %q, %v; want %q", c.host, form, ok, c.form)
 		}
 	}
 }
@@ -463,5 +602,50 @@ func TestCanonicalIsTheRFC8785Digest(t *testing.T) {
 	want := "sha256=" + hex.EncodeToString(sum[:])
 	if js.Canonical != want || yaml.Canonical != want {
 		t.Errorf("JSON %s, YAML %s, want %s", js.Canonical, yaml.Canonical, want)
+	}
+}
+
+// TestHostPathsTakesTheMostSpecificEntry pins which entry of a policy's path rules
+// holds a host several entries match: the host's name itself before any "*." entry,
+// and of "*." entries the one with the longest suffix, whatever order a map is read
+// in; an empty list is held as no path; and a host no entry matches is held by none.
+func TestHostPathsTakesTheMostSpecificEntry(t *testing.T) {
+	paths := map[string][]string{
+		"example":         {"/apex/*"},
+		"*.example":       {"/v1/*"},
+		"api.example":     {"/v2/*"},
+		"*.api.example":   {"/v3/*"},
+		"*.b.api.example": {"/v4/*"},
+		"closed.example":  {},
+		"10.0.0.1":        {"/ip/*"},
+		"*.0.0.1":         {"/never/*"},
+	}
+	for range 200 {
+		for _, tc := range []struct{ host, entry, rule string }{
+			{"api.example", "api.example", "/v2/*"},
+			{"API.Example.", "api.example", "/v2/*"},
+			{"example", "example", "/apex/*"},
+			{"other.example", "*.example", "/v1/*"},
+			{"a.api.example", "*.api.example", "/v3/*"},
+			{"a.b.api.example", "*.b.api.example", "/v4/*"},
+			{"b.api.example", "*.api.example", "/v3/*"},
+			{"10.0.0.1", "10.0.0.1", "/ip/*"},
+		} {
+			entry, rules, ok := policy.HostPaths(paths, tc.host)
+			if !ok || entry != tc.entry || len(rules) != 1 || rules[0] != tc.rule {
+				t.Fatalf("%s: held by %q %v %v, want %q", tc.host, entry, rules, ok, tc.entry)
+			}
+		}
+		if entry, rules, ok := policy.HostPaths(paths, "closed.example"); !ok || entry != "closed.example" || rules == nil || len(rules) != 0 {
+			t.Fatalf("closed.example: held by %q %v %v", entry, rules, ok)
+		}
+		for _, host := range []string{"example.org", "10.0.0.2", "0.0.1"} {
+			if entry, _, ok := policy.HostPaths(paths, host); ok {
+				t.Fatalf("%s: held by %q", host, entry)
+			}
+		}
+	}
+	if _, _, ok := policy.HostPaths(nil, "api.example"); ok {
+		t.Error("no rules hold a host")
 	}
 }

@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -948,5 +949,78 @@ func TestCloseClosesEveryTunnel(t *testing.T) {
 	}
 	if !closed(inner) {
 		t.Error("the terminated tunnel is open after Close")
+	}
+}
+
+// TestAnUnaskedSwitchOnThePlainPathIsA502 pins the plain path against an origin that
+// answers 101 to a request that went without an Upgrade: the client gets a 502 with
+// the reason and its connection closed, the origin's connection is closed, and the
+// decision keeps the origin's 101.
+func TestAnUnaskedSwitchOnThePlainPathIsA502(t *testing.T) {
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	originClosed := make(chan error, 1)
+	go func() {
+		c, err := origin.Accept()
+		if err != nil {
+			originClosed <- err
+			return
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(10 * time.Second))
+		if _, err := http.ReadRequest(bufio.NewReader(c)); err != nil {
+			originClosed <- err
+			return
+		}
+		io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nafter the switch")
+		_, err = io.Copy(io.Discard, c)
+		originClosed <- err
+	}()
+	var o observer
+	p, err := proxy.Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, o.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	c, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	target := origin.Addr().String()
+	fmt.Fprintf(c, "GET http://%s/a HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "upstream: the host answered 101 Switching Protocols to a request that asked for no upgrade\n"
+	if resp.StatusCode != http.StatusBadGateway || string(body) != want || !resp.Close {
+		t.Errorf("an unasked 101 answered %d, close %v, %q", resp.StatusCode, resp.Close, body)
+	}
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	var ne net.Error
+	if n, err := br.Read(make([]byte, 1)); err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Errorf("the client's connection is open after the 502: read %d, %v", n, err)
+	}
+	select {
+	case err := <-originClosed:
+		if err != nil {
+			t.Errorf("the origin's connection: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("the origin's connection is open after the 502")
+	}
+	if d := o.last(t); !d.Allowed || d.Outcome != proxy.Connected || d.Status != http.StatusSwitchingProtocols {
+		t.Errorf("an unasked 101's decision %+v", d)
 	}
 }

@@ -59,6 +59,9 @@ const (
 	modeNest     = "nest"
 	modeInner    = "inner"
 	modeRecorder = "recorder"
+	// modeNeighbours is the probe in a container the agent started, privileged on the
+	// enclosure's own network, that looks for neighbours on the inside network.
+	modeNeighbours = "neighbours"
 )
 
 // RelayArgs are the arguments that make the helper run the relay.
@@ -118,7 +121,8 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
 // forwarder, the probe, the start of a Docker of the agent's own, the probe in a
-// container the agent started, or a recorder. It returns at once otherwise.
+// container the agent started, the search for neighbours in one, or a recorder. It
+// returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -146,6 +150,8 @@ func Main() {
 		os.Exit(1)
 	case modeInner:
 		os.Exit(innerProbe(os.Args[2:]))
+	case modeNeighbours:
+		os.Exit(neighboursProbe())
 	case modeRecorder:
 		os.Exit(serveRecorder())
 	}
@@ -305,7 +311,7 @@ func Run(t *testing.T, o Options) {
 			set, _ = d["credential"].(string)
 		}
 	}
-	check("the credential is set outside, on its own paths", set == "suite", fmt.Sprintf("the request inside the credential's paths is recorded with the credential %q", set))
+	check("the credential is set outside, on its paths", set == "suite", fmt.Sprintf("the request inside the credential's paths is recorded with the credential %q", set))
 	var invoked map[string]any
 	for _, e := range r.events {
 		if d, _ := e["data"].(map[string]any); e["type"] == "dev.qory.run.egress" && d["path"] == "/tool/inside" {
@@ -336,11 +342,11 @@ func Run(t *testing.T, o Options) {
 				others = append(others, s)
 			}
 		}
-		check("no container runtime socket but the enclosure's own daemon", len(others) == 0 && n.DaemonID != "" && n.DaemonID != o.EngineID, fmt.Sprintf("other sockets %v; the daemon inside is %q, the machine's engine %q", others, n.DaemonID, o.EngineID))
-		check("the agent reaches its own daemon, as its user", n.Ping == 200 && p.UID != 0, fmt.Sprintf("the daemon answered %d (%s) to uid %d", n.Ping, n.PingErr, p.UID))
+		check("no container runtime socket but the enclosure's daemon", len(others) == 0 && n.DaemonID != "" && n.DaemonID != o.EngineID, fmt.Sprintf("other sockets %v; the daemon inside is %q, the machine's engine %q", others, n.DaemonID, o.EngineID))
+		check("the agent reaches the nested Docker daemon, as its user", n.Ping == 200 && p.UID != 0, fmt.Sprintf("the daemon answered %d (%s) to uid %d", n.Ping, n.PingErr, p.UID))
 		check("nothing listens on the enclosure's network", len(n.Listening) == 0, n.Listening)
 		check("the daemon runs nothing of the run's PATH", len(n.Decoys) == 0, fmt.Sprintf("the programs of the workspace that ran, as uid and name: %q", n.Decoys))
-		check("the agent builds an image of its own", n.Image == "", n.Image)
+		check("the agent builds an image", n.Image == "", n.Image)
 		for _, k := range innerKinds {
 			c, ok := n.Containers[k.name]
 			check("a container the agent starts, "+k.name+", has no route out but the relay",
@@ -351,6 +357,9 @@ func Run(t *testing.T, o Options) {
 		check("a container the agent's docker command starts reaches the origin by the proxy of the agent's configuration, and nothing else",
 			c.Err == "" && c.Proxy != "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
 			fmt.Sprintf("%+v; the agent's configuration, as its user sees it: %v", c, n.Config))
+		problem := n.Neighbours.problem()
+		check("on the inside network only the enclosure and the relay answer a container the agent starts, privileged on the enclosure's network with IPv6 on, and nothing connects",
+			problem == "", problem)
 	}
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")

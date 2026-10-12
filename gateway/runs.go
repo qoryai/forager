@@ -353,7 +353,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 				rc, digest, err = g.client.Register(ask, conf.Run.URL, body)
 				return err
 			})
-			registered = map[string]any{"workspace": conf.Workspaces[0], "node_id": conf.NodeID, "instance_id": g.client.InstanceID, "forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}
+			// A gateway's key has no workspaces: a conforming server refuses its direct
+			// registration, and an acceptance fails run.registered's schema, not the
+			// gateway.
+			ws := ""
+			if len(conf.Workspaces) == 1 {
+				ws = conf.Workspaces[0]
+			}
+			registered = map[string]any{"workspace": ws, "node_id": conf.NodeID, "instance_id": g.client.InstanceID, "forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}
 		}
 		// A signed 200 whose run configuration Forager refuses is a registration the
 		// server accepted: the record gets its run.registered, then the run is refused
@@ -424,10 +431,11 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// narrows: a narrowing opens none of this machine's addresses.
 		lr.px.Guard(r.GuardNames())
 	}
-	// The node's path rules, beside a server's: fixed for the run, so a reload that
-	// brings a server's policy is narrowed by them as the start is.
-	if paths := r.NodePaths(); paths != nil {
-		lr.px.NodePaths(paths)
+	// The node's path rules, beside a server's, and those put beside the node's policy:
+	// fixed for the run, so a reload that brings a server's policy is narrowed by them
+	// as the start is.
+	if sides := r.NodePaths(); len(sides) > 0 {
+		lr.px.NodePaths(sides...)
 	}
 	var authority []byte
 	if r.NeedsCA() {

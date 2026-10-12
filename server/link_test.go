@@ -481,6 +481,30 @@ func TestTheRunAnswerNeverShowsItsProxySecret(t *testing.T) {
 	}
 }
 
+// TestTheRunAnswerNeverWritesItsProxySecretAsJSON pins that a run answer writes its
+// proxy secret redacted under encoding/json, nested in a value log/slog's JSONHandler
+// logs as well, and that a run answer read from the wire keeps it.
+func TestTheRunAnswerNeverWritesItsProxySecretAsJSON(t *testing.T) {
+	a := server.LinkRunAnswer{Version: 1, RunID: runID, ProxySecret: proxySecret}
+	var out bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&out, nil))
+	log.Info("nested", "both", struct {
+		A server.LinkRunAnswer
+		B *server.LinkRunAnswer
+	}{a, &a})
+	if strings.Contains(out.String(), proxySecret) || !strings.Contains(out.String(), `"proxy_secret":"[redacted]"`) {
+		t.Errorf("the nested log: %s", out.String())
+	}
+	b, err := json.Marshal(a)
+	if err != nil || string(b) != `{"version":1,"run_id":"`+runID+`","proxy_secret":"[redacted]"}` {
+		t.Errorf("json.Marshal of the run answer: %s, %v", b, err)
+	}
+	var back server.LinkRunAnswer
+	if err := json.Unmarshal([]byte(runAnswer), &back); err != nil || back.ProxySecret != proxySecret {
+		t.Errorf("the run answer read back: %v", err)
+	}
+}
+
 // TestALinkInMemoryNeverDialsItsSocket pins the client of a gateway in this process: each
 // connection is the Local's way in memory, it carries HTTP from its first byte, as
 // over the socket, and the socket's path is never dialled, whatever listens there. A

@@ -103,7 +103,7 @@ func TestTheRunExitedTheRuntimesExitDecides(t *testing.T) {
 		if d.Status != http.StatusBadRequest || d.End != "batch_refused" {
 			t.Errorf("%v: %+v", c.data, d)
 		}
-		line := "run " + a.RunID + ": the gateway refused a batch of its session's, " + c.why + "; the run ends: failed"
+		line := "run " + a.RunID + ": the gateway refused a batch from the run's session, " + c.why + "; the run ends: failed"
 		if !h.reported(line) {
 			t.Errorf("%v: not reported: %s", c.data, line)
 		}

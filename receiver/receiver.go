@@ -23,31 +23,38 @@
 // GET's timestamp or a POST's time outside the window, the unsigned 401; then each
 // endpoint's own.
 //
-// Discovery answers each access key with its own node: Configuration's document, with
-// node_id and workspaces those of the key's record, a gateway's being every workspace
-// it may serve. The run endpoint resolves each registration's gateway from the record of
-// the registering key's node or node pool, never from the body: Direct, Default, the
-// workspace's default gateway, else its organisation's, or a named gateway, ng_. It
-// keeps every registration it accepted by its run id, with the answer it gave, holding a
-// SHA-256 of each body rather than the body: the same bytes under any active key of the
-// same node get that answer again; a run the receiver wants nothing more of is a signed
-// 410; a gateway's own key, a signed 409 gateway_key; a body whose shape does not match
-// the node's resolved choice, node_is_direct or node_uses_gateway; a choice that
-// resolves to no gateway, no_default_gateway, gateway_not_serving or
-// gateway_without_key; a new instance it does not admit, instance_limit; and the same
-// run id from another node, even with the same bytes, or other bytes, run_id_used. A
-// direct run is answered its run configuration; a run through a gateway its run key,
-// signed under the receiver's key, which the gateway it names attaches with. The
+// Discovery answers each access key with the key's node: Configuration's document, with
+// node_id that of the key's record, workspaces a node's or node pool's one workspace,
+// and no workspaces for a gateway's key. The run endpoint resolves each registration's
+// gateway from the record of the registering key's node or node pool, never from the
+// body: Direct, Default, the workspace's default gateway, else its organisation's, or a
+// named gateway, ng_. It keeps every registration it accepted by its run id, with the
+// answer it gave, holding a SHA-256 of each body rather than the body: the same bytes
+// under any active key of the same node get that answer again; a run the receiver wants
+// nothing more of is a signed 410; a gateway's own key, a signed 409 gateway_key; a
+// body whose shape does not match the node's resolved choice, node_is_direct or
+// node_uses_gateway; a choice that resolves to no gateway, no_default_gateway,
+// gateway_not_serving or gateway_without_key; a new instance it does not admit,
+// instance_limit; and the same run id from another node, even with the same bytes, or
+// other bytes, run_id_used. A direct run is answered its run configuration; a run
+// through a gateway its run key, signed under the receiver's key, which the gateway it
+// names attaches with. The
 // [Handler.RunConfiguration] hook is handed each run's id, labels, about and placement,
 // and returns its run configuration or refuses the run; without it every run gets
 // {"version":1}, no policy. A run's reloads and batches are accepted from one node
-// alone: the node that registered a direct run, or the gateway node that attached a run
-// through a gateway, under any of its active keys; a reload from another is a signed
-// 404, and a batch a signed 409 wrong_node or wrong_gateway. The starter's outcome is
-// accepted from any active key of the registering node, once per run, and every 2xx to
-// a batch of the run then carries it as the end member until the batch that carries the
-// run's dev.qory.run.exited. A batch whose events are not all of one run is a signed
-// 400 invalid_request. A delivery it verified is deduplicated on each event's id,
+// alone, under any of its active keys: the node that registered a direct run, or the
+// gateway node that attached a run through a gateway, that run's reloads from the
+// instance id its attach was signed with alone, and its batches from that instance too
+// while the run is live; a reload from another is a signed 404, and a batch a signed 409
+// wrong_node or wrong_gateway. Once a run through a gateway is not live, its
+// dev.qory.run.exited accepted or its heartbeats gone quiet, a batch from any instance
+// of the attaching gateway node gets the answer the attaching instance would, and only
+// the attaching instance's heartbeat makes the run live again; until then, the
+// starter's outcome alone changes nothing of who may send. The starter's
+// outcome is accepted from any active key of the registering node, once per run, and
+// every 2xx to a batch of the run then carries it as the end member until the batch
+// that carries the run's dev.qory.run.exited. A batch whose events are not all of one
+// run is a signed 400 invalid_request. A delivery it verified is deduplicated on each event's id,
 // handed to a [Store], and answered 202 with the digests in force; it reads nothing of
 // an event's data but a heartbeat's time and the type. [File] is a store that appends
 // events to one JSON lines file and remembers the ids it holds. It keeps one store and
@@ -268,11 +275,10 @@ type Handler struct {
 	// Configuration answers discovery with the configuration document and the
 	// receiver's digest of it. The document lists version, node_id, workspaces, events,
 	// run, whose url is the run endpoint, and apiary_public_key, the receiver's public
-	// key. For an access key whose node or gateway the records hold, node_id and
-	// workspaces are replaced by its own, and the digest is sha256= and the hex SHA-256
-	// of the document served; a gateway's key whose gateway may serve no workspace the
-	// records hold has no document, and its discovery is a signed 500. Nil means
-	// discovery is not served.
+	// key. For an access key whose node or gateway the records hold, node_id is replaced
+	// by the key's, workspaces by a node's or node pool's one workspace, and a gateway's
+	// key gets no workspaces; the digest is then sha256= and the hex SHA-256 of the
+	// document served. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration decides the run configuration of a run: as it registers, as it
 	// is attached and reloaded by its id, and for the digest every answer to a delivery
@@ -290,8 +296,8 @@ type Handler struct {
 	Log func(string)
 	// Stop, when set, is called per run id to learn whether the receiver wants nothing
 	// more; true is a signed 410 without a code: to a registration, no run; to an
-	// attach, the run has ended; to a reload or a delivery, Forager sends no further
-	// batch and its run goes on. Nil means never.
+	// attach, the run has ended; to a reload or a delivery, a delivery already accepted
+	// included, Forager sends no further batch and its run goes on. Nil means never.
 	Stop func(runID string) bool
 	// Admit, when set, is called for every registration but one the receiver accepted
 	// with the same bytes under a key of the same node, to learn whether the instance
@@ -327,13 +333,16 @@ type registration struct {
 	// gateway, its attach, and interval the heartbeat interval announced there.
 	since    time.Time
 	interval time.Duration
-	// attached is the gateway node that attached the run, empty before the attach, and
-	// attachAnswer and attachDigest what it was answered.
+	// attached is the gateway node that attached the run and instance the instance id
+	// its attach was signed with, each empty before the attach, and attachAnswer and
+	// attachDigest what it was answered.
 	attached     string
+	instance     string
 	attachAnswer []byte
 	attachDigest string
-	// beats are the run's heartbeats accepted; exited says its dev.qory.run.exited
-	// arrived; outcome is its starter's outcome, nil before one.
+	// beats are the run's heartbeats accepted, through a gateway those the attaching
+	// instance stored alone; exited says its dev.qory.run.exited arrived; outcome is its
+	// starter's outcome, nil before one.
 	beats   []beat
 	exited  bool
 	outcome *outcome
@@ -367,10 +376,11 @@ func (reg *registration) sender() string {
 
 // live reports whether the run is live at now: until its dev.qory.run.exited arrives
 // or it has no recent heartbeat, none within 3 × its interval, counted from its
-// registration, or through a gateway from its attach; before the attach, until its
-// attach_by. A heartbeat is as recent as its own time, corrected by the run's clock
-// offset, the smallest arrival time less time over its heartbeats, plus the tolerance,
-// and never more recent than its arrival.
+// registration, or through a gateway from its attach, where the attaching instance's
+// heartbeats alone count; before the attach, until its attach_by. A heartbeat is as
+// recent as its own time, corrected by the run's clock offset, the smallest arrival
+// time less time over its heartbeats, plus the tolerance, and never more recent than
+// its arrival.
 func (reg *registration) live(now time.Time) bool {
 	if reg.exited {
 		return false
@@ -397,14 +407,42 @@ func (reg *registration) live(now time.Time) bool {
 	return !now.After(last.Add(3 * reg.interval))
 }
 
+// reloadable reports whether the run's reloads are accepted from a verified request:
+// from its sender, under any of its active keys, and for a run through a gateway from
+// the attaching instance alone.
+func (reg *registration) reloadable(v verified) bool {
+	return reg.sender() == v.node && (!reg.through() || reg.instance == v.instance)
+}
+
+// from reports whether the run's batches are accepted from a verified request at now:
+// from its sender, under any of its active keys, and for a run through a gateway, while
+// the run is live, from the attaching instance alone.
+func (reg *registration) from(v verified, now time.Time) bool {
+	if reg.sender() != v.node {
+		return false
+	}
+	return !reg.through() || reg.instance == v.instance || !reg.live(now)
+}
+
+// serving reports whether the run's batches and reloads may still be served: always for
+// a direct run, and for a run through a gateway while the gateway that attached it may
+// serve the run's workspace, by the attach's test and never by the node's current
+// choice. A run through a gateway not yet attached has no batches or reloads to refuse.
+func (reg *registration) serving(h *Handler) bool {
+	return !reg.through() || reg.attached == "" || h.serves(reg.attached, reg.run.Workspace)
+}
+
 // verified is a request that verified: its access key and id, the node it stands for,
-// and the signature an answer is bound to.
+// its signed instance id, and the signature an answer is bound to.
 type verified struct {
 	key AccessKey
 	id  string
 	// node is the access key's node, node pool or gateway, or its id for a key with
 	// no node.
-	node      string
+	node string
+	// instance is the instance id the request was signed with, as its
+	// X-Qory-Instance-Id contained it.
+	instance  string
 	signature string
 }
 
@@ -495,11 +533,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !h.fresh(r.Header.Get(server.HeaderTimestamp)):
 		refuse(w, http.StatusUnauthorized, "unauthorized")
 	case to == toDiscovery:
-		doc, digest, ok := h.configuration(v)
-		if !ok {
-			h.answer(w, v, http.StatusInternalServerError, nil)
-			return
-		}
+		doc, digest := h.configuration(v)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(server.HeaderConfiguration, digest)
 		h.answer(w, v, http.StatusOK, doc)
@@ -510,44 +544,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // configuration is discovery's document for a verified access key, with the
 // receiver's digest of it: Configuration's, and for a key whose node or node pool
-// Nodes holds, or whose gateway Gateways holds, with node_id that id and workspaces the
-// node's one workspace, or every workspace the gateway may serve, its digest then
-// sha256= and the hex SHA-256 of the document served. A gateway that may serve no
-// workspace the records hold has no document the schema accepts, which needs one: false,
-// and its key's discovery is a signed 500.
-func (h *Handler) configuration(v verified) ([]byte, string, bool) {
+// Nodes holds, or whose gateway Gateways holds, with node_id that id, workspaces the
+// node's one workspace and no workspaces for a gateway, its digest then sha256= and
+// the hex SHA-256 of the document served.
+func (h *Handler) configuration(v verified) ([]byte, string) {
 	doc, digest := h.Configuration()
-	var workspaces []string
-	if n, ok := h.Nodes[v.key.Node]; ok && v.key.Node != "" {
-		workspaces = []string{n.Workspace}
-	} else if _, ok := h.Gateways[v.key.Node]; ok && v.key.Node != "" {
-		if workspaces = h.served(v.key.Node); len(workspaces) == 0 {
-			return nil, "", false
-		}
-	} else {
-		return doc, digest, true
+	n, node := h.Nodes[v.key.Node]
+	_, gateway := h.Gateways[v.key.Node]
+	if v.key.Node == "" || !node && !gateway {
+		return doc, digest
 	}
 	var m map[string]json.RawMessage
 	if json.Unmarshal(doc, &m) != nil {
-		return doc, digest, true
+		return doc, digest
 	}
 	m["node_id"], _ = json.Marshal(v.key.Node)
-	m["workspaces"], _ = json.Marshal(workspaces)
+	if node {
+		m["workspaces"], _ = json.Marshal([]string{n.Workspace})
+	} else {
+		delete(m, "workspaces")
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return doc, digest, true
+		return doc, digest
 	}
 	sum := sha256.Sum256(b)
-	return b, "sha256=" + hex.EncodeToString(sum[:]), true
+	return b, "sha256=" + hex.EncodeToString(sum[:])
 }
 
 // setConfiguration sets on an answer the digest of the access key's discovery, when
-// discovery is served and has a document for the key.
+// discovery is served.
 func (h *Handler) setConfiguration(w http.ResponseWriter, v verified) {
 	if h.Configuration != nil {
-		if _, digest, ok := h.configuration(v); ok {
-			w.Header().Set(server.HeaderConfiguration, digest)
-		}
+		_, digest := h.configuration(v)
+		w.Header().Set(server.HeaderConfiguration, digest)
 	}
 }
 
@@ -787,23 +817,6 @@ func (h *Handler) serves(gateway, workspace string) bool {
 	return g.Workspace == workspace || g.Organisation != "" && h.Workspaces[workspace].Organisation == g.Organisation
 }
 
-// served lists the workspaces a gateway may serve, sorted: the one it lives at, or
-// every workspace of the organisation it lives at.
-func (h *Handler) served(gateway string) []string {
-	g := h.Gateways[gateway]
-	if g.Workspace != "" {
-		return []string{g.Workspace}
-	}
-	var out []string
-	for id, ws := range h.Workspaces {
-		if g.Organisation != "" && ws.Organisation == g.Organisation {
-			out = append(out, id)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
 // gatewayKeys are a gateway's active keys, the first two, current then next: of its
 // access keys, those Keys holds as the gateway's whose public key passes the key checks.
 func (h *Handler) gatewayKeys(gateway string) []accesskey.PublicKey {
@@ -830,14 +843,17 @@ type attachBody struct {
 // attach answers one verified attach of the run runID, in its order after the shared
 // one: a key that is not a gateway's, 409 not_a_gateway; a run key that does not verify
 // under the receiver's key, or whose run id is not the path's, 400 run_key_invalid; the
-// same gateway node attaching the same live run again, the stored answer; a run that
-// has ended, its dev.qory.run.exited arrived, an outcome given, lost after the attach,
-// one it wants nothing more of, or whose registration it does not hold, 410; past the
-// run key's attach_by and never attached, 409 run_key_expired; a run key that names
-// another gateway, 409 wrong_gateway; a gateway that may not serve the run's
-// workspace, 409 workspace_not_served; a run another gateway node attached, 409
-// run_attached; then the hook's refusal, or the run configuration with the
-// registration's labels and about, kept and answered 200.
+// same gateway node, under any of its active keys and the instance id its attach was
+// signed with, attaching the same live run again, the stored answer while the gateway
+// may serve the run's workspace, else 409 workspace_not_served; a run that has
+// ended, its dev.qory.run.exited arrived, an outcome given, lost after the attach, one
+// it wants nothing more of, or whose registration it does not hold, 410; past the run
+// key's attach_by and never attached, 409 run_key_expired; a run key that names another
+// gateway, 409 wrong_gateway; a gateway that may not serve the run's workspace, 409
+// workspace_not_served; a run another gateway node, or another instance of the same
+// node, attached, 409 run_attached; then the hook's refusal, or the run configuration
+// with the registration's labels and about, kept with the attaching node and instance
+// and answered 200.
 func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body []byte) {
 	var a attachBody
 	err := validate(attachSchema, body)
@@ -866,7 +882,11 @@ func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body [
 	}
 	ended := reg.exited || reg.outcome != nil || (h.Stop != nil && h.Stop(runID)) || (reg.attached != "" && !reg.live(now))
 	switch {
-	case reg.attached == v.node && !ended:
+	case reg.attached == v.node && reg.instance == v.instance && !ended:
+		if !h.serves(v.node, k.Workspace) {
+			h.refuseSigned(w, v, http.StatusConflict, "workspace_not_served")
+			return
+		}
 		h.answerAttach(w, v, reg.attachAnswer, reg.attachDigest)
 		return
 	case ended:
@@ -895,7 +915,7 @@ func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body [
 		h.answer(w, v, http.StatusInternalServerError, nil)
 		return
 	}
-	reg.attached, reg.attachAnswer, reg.attachDigest = v.node, answer, digest
+	reg.attached, reg.instance, reg.attachAnswer, reg.attachDigest = v.node, v.instance, answer, digest
 	reg.since, reg.interval = now, time.Duration(a.IntervalSeconds)*time.Second
 	h.answerAttach(w, v, answer, digest)
 }
@@ -975,17 +995,24 @@ func (h *Handler) outcome(w http.ResponseWriter, v verified, runID string, body 
 }
 
 // reload answers one verified reload of a run's configuration by its id: a run whose
-// reloads the request's node may not send, the node that registered a direct run or the
-// gateway node that attached a run through a gateway, or a run not registered, 404; a
-// run it wants nothing more of, 410; the hook's refusal; otherwise the run
-// configuration, 200.
+// reloads the request may not send, from the node that registered a direct run or the
+// gateway node that attached a run through a gateway, from the attaching instance
+// alone, before and after the run's end, or a run not registered, 404; a run through a
+// gateway that may no longer serve the run's workspace, decided as at the attach, 410
+// workspace_not_served with no digest headers; a run it wants nothing more of, 410; the
+// hook's refusal; otherwise the run configuration, 200.
 func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 	h.mu.Lock()
 	reg := h.runs[runID]
-	allowed := reg != nil && reg.sender() == v.node
+	allowed := reg != nil && reg.reloadable(v)
+	serving := allowed && reg.serving(h)
 	h.mu.Unlock()
 	if !allowed {
 		h.answer(w, v, http.StatusNotFound, nil)
+		return
+	}
+	if !serving {
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
 		return
 	}
 	if h.Stop != nil && h.Stop(runID) {
@@ -1123,7 +1150,7 @@ func (h *Handler) verify(r *http.Request, body []byte) (verified, bool) {
 	if node == "" {
 		node = id
 	}
-	return verified{key: key, id: id, node: node, signature: sig}, true
+	return verified{key: key, id: id, node: node, instance: req.InstanceID, signature: sig}, true
 }
 
 // fresh reports whether a GET's timestamp is a decimal integer within the window of
@@ -1168,13 +1195,17 @@ type head struct {
 
 // deliver answers one verified delivery, in the events endpoint's order: a batch that
 // is not one, or whose events are not all of one run, 400 invalid_request; a batch of a
-// run it holds the registration of from
-// another node than the one its batches are accepted from, 409 wrong_gateway for a run
-// through a gateway and wrong_node for a direct run; one whose events the store holds
-// every one of, 202 again; an event of a run it wants nothing more of, 410; otherwise
-// each new event stored and 202. Once the run's starter gave its outcome, a 202 carries
-// it as the end member, until the batch that carries the run's dev.qory.run.exited,
-// whose answer and every one after it holds none.
+// run it holds the registration of from another node than the one its batches are
+// accepted from, or, while a run through a gateway is live, from another instance than
+// the attaching one, 409 wrong_gateway for a run through a gateway and wrong_node for a
+// direct run; for a run through a gateway, once the gateway that attached it may no
+// longer serve the run's workspace, decided as at the attach, 410 workspace_not_served
+// with no digest headers; an event of a run it wants nothing more of, 410; each of the
+// two before deduplication, a batch already accepted included, and with nothing stored;
+// one whose events the store holds every one of, 202 again; otherwise each new event
+// stored and 202. Once the run's starter gave its outcome, a 202 carries it as the end
+// member, until the batch that carries the run's dev.qory.run.exited, whose answer and
+// every one after it holds none.
 func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 	var batch []json.RawMessage
 	if err := json.Unmarshal(body, &batch); err != nil || len(batch) == 0 {
@@ -1193,7 +1224,8 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	reg := h.runs[subject]
-	if reg != nil && reg.sender() != v.node {
+	now := h.now()
+	if reg != nil && !reg.from(v, now) {
 		code := "wrong_node"
 		if reg.through() {
 			code = "wrong_gateway"
@@ -1201,18 +1233,15 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 		h.refuseSigned(w, v, http.StatusConflict, code)
 		return
 	}
-	fresh := false
-	for _, hd := range heads {
-		if !h.Store.Seen(hd.ID) {
-			fresh = true
-		}
+	if reg != nil && !reg.serving(h) {
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
+		return
 	}
-	if fresh && h.Stop != nil && h.Stop(subject) {
+	if h.Stop != nil && h.Stop(subject) {
 		h.digests(w, v, reg)
 		h.answer(w, v, http.StatusGone, nil)
 		return
 	}
-	now := h.now()
 	stored, dup := 0, 0
 	for i, raw := range batch {
 		hd := heads[i]
@@ -1228,7 +1257,8 @@ func (h *Handler) deliver(w http.ResponseWriter, v verified, body []byte) {
 			return
 		}
 		stored++
-		if t, err := time.Parse(time.RFC3339Nano, hd.Time); err == nil && reg != nil && hd.Type == event.RunHeartbeat {
+		if t, err := time.Parse(time.RFC3339Nano, hd.Time); err == nil && reg != nil && hd.Type == event.RunHeartbeat &&
+			(!reg.through() || reg.instance == v.instance) {
 			reg.beats = append(reg.beats, beat{time: t, arrival: now})
 		}
 	}

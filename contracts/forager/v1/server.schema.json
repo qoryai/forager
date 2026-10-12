@@ -42,7 +42,7 @@
       }
     },
     "via": {
-      "description": "The gateway every request to the server goes through, for a keyed machine or a starter behind it: enrolment, discovery, the registration and the outcome each go to via.url's origin with the target, the path and the query, unchanged, discovery's absolute run.url rebased on it too, and the gateway relays them to the server and passes each answer back byte for byte, so every signature is the server's as without it. url stays the server's own, so records and texts name the real server. The chain of the gateway's certificate is always checked on a via connection, since a relayed registration's answer carries the run key. Absent, every request goes to url.",
+      "description": "The gateway every request to the server goes through, for a keyed machine or a starter behind it: enrolment, discovery, the registration and the outcome each go to via.url's origin with the target, the path and the query, unchanged, discovery's absolute run.url rebased on it too, and the gateway relays them to the server and passes each answer back byte for byte, so every signature is the server's as without it. url stays the server's, so records and texts name the real server. The chain of the gateway's certificate is always checked on a via connection, since a relayed registration's answer carries the run key. Absent, every request goes to url.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url"],

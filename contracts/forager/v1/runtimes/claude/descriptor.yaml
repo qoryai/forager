@@ -6,7 +6,7 @@
 # only the result line, which no hook reports: the outcome, the turns and the cost.
 # Its init line is not mapped, because SessionStart already produced session.started.
 #
-# Work in the background has no hook of its own. Its start is a tool call like any other,
+# Work in the background has no separate hook. Its start is a tool call like any other,
 # with run_in_background in the input and whatever the tool returned in the response, and
 # a subagent's start and end are the subagent hooks. After that the runtime reports the list of
 # what is still running, in the Stop and SubagentStop inputs, copied as background_tasks:

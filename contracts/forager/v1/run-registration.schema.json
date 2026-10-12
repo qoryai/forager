@@ -39,7 +39,7 @@
       "minimum": 1
     },
     "interval_seconds": {
-      "description": "The heartbeat interval the run uses, in seconds: heartbeats run from the accepted registration until the run's final event, so the server's liveness window follows the run's own value. A larger value fails the schema, a signed 400 invalid_request. In the direct shape alone, where it is required; behind a gateway the attach carries it.",
+      "description": "The heartbeat interval the run uses, in seconds: heartbeats run from the accepted registration until the run's final event, so the server's liveness window follows the run's value. A larger value fails the schema, a signed 400 invalid_request. In the direct shape alone, where it is required; behind a gateway the attach carries it.",
       "type": "integer",
       "minimum": 1,
       "maximum": 300

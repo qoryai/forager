@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"io"
 	"time"
 
@@ -75,6 +76,9 @@ type Config struct {
 	// opened, when not nil, is called once a run on the one address opened. Tests set
 	// it.
 	opened func()
+	// marked, when not nil, is called once the record of a run on the one address is
+	// marked answered, with the context of its run request. Tests set it.
+	marked func(context.Context)
 	// uid, when not nil, is the user the link serves in place of this process's: a test
 	// sets another, so that its own connections are a peer of another user's.
 	uid *int
@@ -123,8 +127,10 @@ type Server struct {
 	// which the caller reads. It is never logged.
 	AccessKey *accesskey.Key `json:"-"`
 	// InstanceID is this instance's id, sent in X-Qory-Instance-Id and signed into every
-	// request; it matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$. InstanceName is its display
-	// name, sent in X-Qory-Instance-Name, unsigned; empty sends none.
+	// request; it matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$; a separate gateway's caller
+	// keeps it across restarts; with another id, a restarted gateway's attach again is
+	// `run_attached`. InstanceName is its display name, sent in X-Qory-Instance-Name,
+	// unsigned; empty sends none.
 	InstanceID   string `json:"-"`
 	InstanceName string `json:"-"`
 }

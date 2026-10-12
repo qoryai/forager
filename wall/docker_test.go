@@ -33,6 +33,12 @@ type recorder struct {
 	uid      int
 	lines    []string
 	fail     string
+	// version is what docker version prints; empty prints 28.0.0. noIPv6 has the
+	// engine give a network created with --ipv6 no IPv6 subnet; ipv6 notes that the
+	// inside network was created with --ipv6.
+	version string
+	noIPv6  bool
+	ipv6    bool
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -53,6 +59,15 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	switch {
 	case r.fails(line):
 		return []byte("Error response from daemon: told to fail"), errors.New("exit status 1")
+	case strings.Contains(line, " version --format "):
+		if r.version == "" {
+			return []byte("28.0.0\n"), nil
+		}
+		return []byte(r.version), nil
+	case strings.Contains(line, "network create --internal --ipv6 "):
+		r.ipv6 = true
+	case strings.Contains(line, "{{.Subnet}}") && r.ipv6 && !r.noIPv6:
+		return []byte("10.89.0.0/24 fd8a:1b2c:3d4e:5f60::/64 \n"), nil
 	case strings.Contains(line, "{{.Subnet}}"):
 		return []byte("10.89.0.0/24 \n"), nil
 	case strings.Contains(line, "network inspect"):
@@ -343,33 +358,41 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 
 // TestTheRelayRunsNoHealthCheck pins that the relay's container is created without the
 // image's health check, which would run beside the relay's environment, and that the
-// agent's command is not changed by it.
+// agent's container runs none either, for any image and for one with a Docker of the
+// agent's own, where it would run as the enclosure's root.
 func TestTheRelayRunsNoHealthCheck(t *testing.T) {
-	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
-	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer e.Close(context.Background())
-	got, err := e.Wrap(context.Background(), launch())
-	if err != nil {
-		t.Fatal(err)
-	}
-	created := false
-	for _, line := range rec.lines {
-		if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
-			created = true
-			if !strings.Contains(line, " --read-only --no-healthcheck ") {
-				t.Errorf("the relay is created with the image's health check: %s", line)
+	for _, docker := range []bool{false, true} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+		req := Request{RunID: runID, Image: "i"}
+		if docker {
+			req.Runtime, req.Docker = "sysbox-runc", true
+		}
+		e, err := d.Prepare(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := e.Wrap(context.Background(), launch())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Close(context.Background())
+		created := false
+		for _, line := range rec.lines {
+			if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") {
+				created = true
+				if !strings.Contains(line, " --read-only --no-healthcheck ") {
+					t.Errorf("the relay is created with the image's health check: %s", line)
+				}
 			}
 		}
-	}
-	if !created {
-		t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
-	}
-	if slices.Contains(got.Args, "--no-healthcheck") {
-		t.Errorf("the agent's command changed: %s", words(got.Args))
+		if !created {
+			t.Fatalf("no relay was created:\n%s", strings.Join(rec.lines, "\n"))
+		}
+		entry := slices.Index(got.Args, "--entrypoint")
+		if !slices.Contains(got.Args[:max(entry, 0)], "--no-healthcheck") {
+			t.Errorf("with nested Docker %v, the agent runs the image's health check: %s", docker, words(got.Args))
+		}
 	}
 }
 
@@ -434,6 +457,96 @@ func TestDockerNestedCommandLine(t *testing.T) {
 		}
 	}
 	golden(t, "nested", strings.Join(rec.lines, "\n")+"\n\nwrapped:\n"+run+"\n")
+}
+
+// TestDockerGivesANestAnIsolatedIPv6Subnet pins the inside network of an enclosure with
+// nested Docker: created with an IPv6 subnet in the isolated gateway mode,
+// with the bridge's IPv4 address inhibited as for any image; the relay listening in both
+// of its subnets and taking no router advertisement; and the agent's container started
+// without the sysctl that turns IPv6 off for any image.
+func TestDockerGivesANestAnIsolatedIPv6Subnet(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i", Runtime: "sysbox-runc", Docker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.Proxy = "172.30.0.1:50123"
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Close(context.Background())
+	want := "docker network create --internal --ipv6 --opt com.docker.network.bridge.gateway_mode_ipv6=isolated --opt com.docker.network.bridge.inhibit_ipv4=true --label dev.qory.run=" + runID + " qory-" + runID + "-in"
+	if !slices.Contains(rec.lines, want) {
+		t.Errorf("the inside network is not created as\n%s\n%s", want, strings.Join(rec.lines, "\n"))
+	}
+	if rec.relayEnv != RelayInsideEnv+"=10.89.0.0/24,fd8a:1b2c:3d4e:5f60::/64\n"+RelayTokenEnv+"=not-a-real-token\n" {
+		t.Errorf("the relay's environment file holds %q", rec.relayEnv)
+	}
+	for _, line := range rec.lines {
+		if strings.HasPrefix(line, "docker create --name qory-"+runID+"-relay ") && !strings.Contains(line, " --sysctl net.ipv6.conf.all.accept_ra=0 --sysctl net.ipv6.conf.default.accept_ra=0 ") {
+			t.Errorf("the relay takes router advertisements: %s", line)
+		}
+	}
+	if run := words(wrapped.Args); strings.Contains(run, "disable_ipv6") {
+		t.Errorf("the agent's container turns IPv6 off: %s", run)
+	}
+}
+
+// TestDockerRefusesAnEngineANestCannotHave pins that nested Docker is refused before
+// anything is made without the docker command and Docker Engine 28 or later, with the
+// refusal's words; an engine at the floor or later is taken.
+func TestDockerRefusesAnEngineANestCannotHave(t *testing.T) {
+	for name, c := range map[string]struct {
+		command, version, fail, want string
+	}{
+		"podman":          {command: "podman", want: "wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not podman"},
+		"nerdctl by path": {command: "/usr/local/bin/nerdctl", want: "wall docker: nested Docker needs the docker command and Docker Engine 28 or later, not nerdctl"},
+		"27.5.1":          {version: "27.5.1\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine is 27.5.1"},
+		"26.1.4":          {version: "26.1.4\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine is 26.1.4"},
+		"empty":           {version: "\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
+		"garbage":         {version: "not a version\n", want: "wall docker: nested Docker needs Docker Engine 28 or later; the engine gave no Docker Engine version"},
+		"no engine":       {fail: " version ", want: "wall docker: docker version: exit status 1: Error response from daemon: told to fail"},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, version: c.version, fail: c.fail}
+		d := &Docker{Command: c.command, Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+		_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i", Runtime: "sysbox-runc", Docker: true})
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: %v, want %s", name, err, c.want)
+		}
+		for _, line := range rec.lines {
+			if !strings.Contains(line, " version --format ") {
+				t.Errorf("%s: a command ran before the refusal: %s", name, line)
+			}
+		}
+	}
+	for _, version := range []string{"28.0.0", "28.5.2", "29.4.0\n", "30.0.0-rc.1"} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, version: version}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i", Runtime: "sysbox-runc", Docker: true})
+		if err != nil {
+			t.Errorf("Docker Engine %q is refused: %v", version, err)
+			continue
+		}
+		e.Close(context.Background())
+	}
+}
+
+// TestDockerRefusesANestWhoseNetworkGotNoIPv6Subnet pins that an inside network the
+// engine gave no IPv6 subnet is refused for nested Docker, and that what was made is
+// removed.
+func TestDockerRefusesANestWhoseNetworkGotNoIPv6Subnet(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, noIPv6: true}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: []string{"nest"}, sys: rec}
+	_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i", Runtime: "sysbox-runc", Docker: true})
+	if want := "wall docker: the inside network got no IPv6 subnet"; err == nil || err.Error() != want {
+		t.Errorf("%v, want %s", err, want)
+	}
+	if got := strings.Join(rec.lines, "\n"); !strings.Contains(got, "network rm qory-"+runID+"-out") || !strings.Contains(got, "network rm qory-"+runID+"-in") {
+		t.Errorf("the networks were left:\n%s", got)
+	}
 }
 
 // TestDockerRefusesANestWithoutItsRuntime pins that a Docker of the agent's own is

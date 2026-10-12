@@ -17,7 +17,12 @@ jobs:
         part: [core, gateway, wall, session, e2e]
     runs-on: ubuntu-latest
     container:
-      image: public.ecr.aws/docker/library/golang:1.27
+      # Docker Hub's official golang:1.27, copied by digest to qoryai's public package,
+      # and pulled with the job's token.
+      image: ghcr.io/qoryai/ci-images:golang-1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Install node for the JavaScript actions
         # checkout@v7 runs on node 24; the image has none.
@@ -111,6 +116,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Show the engine's version
+        # Nested Docker needs Docker Engine 28 or later.
+        run: docker version
+
+      - name: Log in to ghcr.io
+        # The suite's busybox is a copy of Docker Hub's, by digest, in qoryai's public
+        # package; the machine's engine pulls it with the job's token.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
@@ -121,7 +137,7 @@ jobs:
         run: go test ./e2e -count=1 -v -run '^TestDockerConforms$'
 
   e2e-docker:
-    name: Wall conformance, a Docker of the agent's own
+    name: Wall conformance, nested Docker
     # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
     # container root is a user of the machine's that is not root. Sysbox is installed on
     # the machine, as a node's owner installs it.
@@ -147,15 +163,44 @@ jobs:
           # The package returns before sysbox-fs and sysbox-mgr listen, and a container
           # started before then fails. Wait up to 60 seconds for each socket. /run/sysbox
           # is open to root alone, so the check runs as root.
-          for sock in /run/sysbox/sysfs.sock /run/sysbox/sysmgr.sock; do
-            for _ in $(seq 60); do
-              sudo test -S "$sock" && continue 2
-              sleep 1
+          wait_for_sockets() {
+            for sock in /run/sysbox/sysfs.sock /run/sysbox/sysmgr.sock; do
+              for _ in $(seq 60); do
+                sudo test -S "$sock" && continue 2
+                sleep 1
+              done
+              missing=$sock
+              return 1
             done
+          }
+          # On GitHub's runners a socket has at times not come up at all, and a re-run of
+          # the job passed. So Sysbox is restarted once and the wait runs again; restarting
+          # sysbox restarts sysbox-fs and sysbox-mgr, which are part of it. The engine
+          # must still list sysbox-runc afterwards.
+          if ! wait_for_sockets; then
             systemctl status sysbox sysbox-fs sysbox-mgr --no-pager || true
-            echo "::error::Sysbox socket $sock is missing after 60 seconds"
-            exit 1
-          done
+            echo "::warning::Sysbox socket $missing is missing after 60 seconds, restarting Sysbox once"
+            sudo systemctl restart sysbox
+            docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
+            if ! wait_for_sockets; then
+              systemctl status sysbox sysbox-fs sysbox-mgr --no-pager || true
+              echo "::error::Sysbox socket $missing is missing after 60 seconds"
+              exit 1
+            fi
+          fi
+
+      - name: Show the engine's version
+        # Nested Docker needs Docker Engine 28 or later.
+        run: docker version
+
+      - name: Log in to ghcr.io
+        # The suite's busybox and docker:dind are copies of Docker Hub's, by digest, in
+        # qoryai's public package; the machine's engine pulls them with the job's token.
+        # The Docker inside the enclosure is not logged in: anything it pulls, it pulls
+        # without one.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Run the suite against Docker, with a Docker inside
         # QORY_WALL_REQUIRE turns a skip into a failure, as in the wall job.

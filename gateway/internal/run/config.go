@@ -1,6 +1,7 @@
 package run
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -13,7 +14,8 @@ import (
 
 // Policy is the run's policy document, contracts/forager/v1/policy.schema.json, as the
 // caller passes it to Forager. Forager validates it against the schema before
-// anything starts and pins it for the run with the digest of its canonical JSON.
+// anything starts, the path rules [Policy.Under] puts beside it included
+// ([CheckBeside]), and pins it for the run with the digest of its canonical JSON.
 type Policy struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
@@ -59,6 +61,12 @@ type PolicyEgress struct {
 	// Paths are the paths the session may ask of a host, by host. A host listed is one
 	// the proxy terminates TLS for.
 	Paths map[string][]string `json:"paths,omitempty"`
+	// beside are further sides of path rules, by host as Paths, each held apart from
+	// Paths and from one another: a request to a host a side lists must match an entry
+	// of that side as well as of every other side that lists the host. [Policy.Under]
+	// puts the ceiling's paths here. No document holds them: the schema has no such
+	// member, and JSON leaves them out.
+	beside []map[string][]string
 }
 
 // ReadPolicy reads a policy document from bytes, YAML or JSON by name's extension,
@@ -85,69 +93,82 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	return out, nil
 }
 
-// Under returns the policy as it stands under a ceiling, the machine's own: a policy
+// Under returns the policy as it stands under a ceiling, the machine's: a policy
 // narrows only. The deny lists of both hold whatever the modes, the ceiling's entries
-// first: a deny narrows, so neither side's is dropped. With that, a nil ceiling, or
-// one in mode observe, forbids nothing more and the policy stands as it is. Under a
-// ceiling in mode enforce the mode is enforce: a policy in mode observe asks for no
-// limit of its own and gets the ceiling, and one in mode enforce gets its entries the
+// first: a deny narrows, so neither side's is dropped. The path rules of each side
+// hold whatever the modes, kept apart as a node's paths are beside a server's policy:
+// the result's Paths are the policy's, and the ceiling's go beside them, so a request
+// to a host either side lists must match an entry of each side that lists it, and the
+// mode decides what a miss does. With that, a nil ceiling, or one in mode observe,
+// forbids nothing more and the policy's mode and allow list stand. Under a ceiling in
+// mode enforce the mode is enforce: a policy in mode observe limits no host and gets
+// the ceiling's allow list, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
-// is. Path rules narrow the same way: a host both name keeps the policy's paths the
-// ceiling's cover, and a host one of them names keeps its rules. The credentials, the
-// tools and the image are the policy's own: a ceiling defines them and selects none.
+// is. The credentials, the tools and the image are the policy's: a ceiling defines
+// them and selects none.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
 	}
 	deny := bothDeny(ceiling.Egress.Deny, p.Egress.Deny)
-	if ceiling.Egress.Mode != string(policy.Enforce) {
-		if len(ceiling.Egress.Deny) == 0 {
+	beside := sides(p.Egress.beside, []map[string][]string{ceiling.Egress.Paths}, ceiling.Egress.beside)
+	var out Policy
+	switch {
+	case ceiling.Egress.Mode != string(policy.Enforce):
+		if len(ceiling.Egress.Deny) == 0 && len(beside) == len(p.Egress.beside) {
 			return p
 		}
-		c := *p
-		c.Egress.Deny = deny
-		return &c
-	}
-	if p.Egress.Mode != string(policy.Enforce) {
-		c := *ceiling
-		c.Egress.Deny = deny
-		c.Credentials, c.Tools, c.Image = p.Credentials, p.Tools, p.Image
-		return &c
-	}
-	allow := []string{}
-	for _, entry := range p.Egress.Allow {
-		for _, above := range ceiling.Egress.Allow {
-			if policy.Covers(above, entry) {
-				allow = append(allow, entry)
-				break
-			}
-		}
-	}
-	paths := map[string][]string{}
-	for host, rules := range ceiling.Egress.Paths {
-		paths[host] = rules
-	}
-	for host, rules := range p.Egress.Paths {
-		above, both := ceiling.Egress.Paths[host]
-		if !both {
-			paths[host] = rules
-			continue
-		}
-		kept := []string{}
-		for _, r := range rules {
-			for _, a := range above {
-				if policy.CoversPath(a, r) {
-					kept = append(kept, r)
+		out = *p
+	case p.Egress.Mode != string(policy.Enforce):
+		out = *ceiling
+		out.Credentials, out.Tools, out.Image = p.Credentials, p.Tools, p.Image
+	default:
+		allow := []string{}
+		for _, entry := range p.Egress.Allow {
+			for _, above := range ceiling.Egress.Allow {
+				if policy.Covers(above, entry) {
+					allow = append(allow, entry)
 					break
 				}
 			}
 		}
-		paths[host] = kept
+		out = Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow}, Credentials: p.Credentials, Tools: p.Tools, Image: p.Image}
 	}
-	if len(paths) == 0 {
-		paths = nil
+	out.Egress.Deny, out.Egress.Paths, out.Egress.beside = deny, p.Egress.Paths, beside
+	return &out
+}
+
+// sides are the sides of path rules of each list, in order, but those that list no
+// host, which hold nothing.
+func sides(lists ...[]map[string][]string) []map[string][]string {
+	var out []map[string][]string
+	for _, list := range lists {
+		for _, side := range list {
+			if len(side) > 0 {
+				out = append(out, side)
+			}
+		}
 	}
-	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials, Tools: p.Tools, Image: p.Image}
+	return out
+}
+
+// CheckBeside validates each side of path rules beside the policy, [Policy.Under]'s,
+// against the schema as the paths of a policy document, as the policy is validated: a
+// side the schema refuses is a [*policy.Error] naming "policy", and no run.
+func CheckBeside(p *Policy) error {
+	if p == nil {
+		return nil
+	}
+	for _, side := range p.Egress.beside {
+		b, err := json.Marshal(Policy{Version: 1, Egress: PolicyEgress{Mode: string(policy.Observe), Paths: side}})
+		if err != nil {
+			return &policy.Error{Name: "policy", Err: err}
+		}
+		if _, err := policy.Read("policy", b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bothDeny is the deny list of a policy under a ceiling: the ceiling's entries, then
@@ -276,7 +297,7 @@ func (i Image) Check() error {
 		return fmt.Errorf("image %s: the reference is empty", i.Name)
 	}
 	if i.Docker && i.Runtime == "" {
-		return fmt.Errorf("image %s: a Docker of the agent's own needs a runtime that runs one without privileges, such as sysbox-runc", i.Name)
+		return fmt.Errorf("image %s: nested Docker needs a runtime that runs it without privileges, such as sysbox-runc", i.Name)
 	}
 	return nil
 }

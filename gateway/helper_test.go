@@ -98,7 +98,7 @@ type control struct {
 
 	mu sync.Mutex
 	// node and workspaces are what the configuration document lists: the test node and
-	// workspace unless asGateway made them a gateway key's.
+	// workspace unless asGateway made them a gateway key's, with no workspaces.
 	node       string
 	workspaces []string
 	// attaches are the body of every attach as it came, each try included, and
@@ -113,6 +113,10 @@ type control struct {
 	// the body of every registration as it came, each try included.
 	labels        map[string]string
 	registrations [][]byte
+
+	// attachInstances and deliveryInstances are the X-Qory-Instance-Id of every attach
+	// and of every request to the events endpoint, in the order they came.
+	attachInstances, deliveryInstances []string
 }
 
 // runsPath is the control's run endpoint.
@@ -192,6 +196,9 @@ func newControl(t *testing.T) *control {
 		}
 		gone := false
 		if r.URL.Path == "/v1/events" {
+			c.mu.Lock()
+			c.deliveryInstances = append(c.deliveryInstances, r.Header.Get(server.HeaderInstanceID))
+			c.mu.Unlock()
 			n := c.deliveries.Add(1)
 			gone = c.goneAfter.Load() != 0 && n > c.goneAfter.Load()
 		}
@@ -223,8 +230,12 @@ func (c *control) configuration() ([]byte, string) {
 	node, workspaces := c.node, c.workspaces
 	c.mu.Unlock()
 	pin, _ := json.Marshal(testPin)
-	ws, _ := json.Marshal(workspaces)
-	doc := `{"version":1,"node_id":"` + node + `","workspaces":` + string(ws) + `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+	doc := `{"version":1,"node_id":"` + node + `"`
+	if workspaces != nil {
+		ws, _ := json.Marshal(workspaces)
+		doc += `,"workspaces":` + string(ws)
+	}
+	doc += `,"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
 	doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
 	return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 }
@@ -233,11 +244,11 @@ func (c *control) configuration() ([]byte, string) {
 const testGateway = "ng_f1xt0re000000000"
 
 // asGateway makes the control's configuration document a gateway key's, testGateway,
-// serving the workspaces.
-func (c *control) asGateway(workspaces ...string) {
+// with no workspaces.
+func (c *control) asGateway() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.node, c.workspaces = testGateway, workspaces
+	c.node, c.workspaces = testGateway, nil
 }
 
 // attach answers an attach of the tests' access key, as Qory Apiary does: the run
@@ -247,6 +258,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	b, _ := io.ReadAll(r.Body)
 	c.mu.Lock()
 	c.attaches = append(c.attaches, b)
+	c.attachInstances = append(c.attachInstances, r.Header.Get(server.HeaderInstanceID))
 	doc, digest := c.run, c.digest
 	labels, about := c.attachLabels, c.attachAbout
 	c.mu.Unlock()
@@ -278,6 +290,7 @@ func (c *control) attach(w http.ResponseWriter, r *http.Request) {
 	body, _ := json.Marshal(m)
 	w.Header().Set(server.HeaderConfiguration, conf)
 	w.Header().Set(server.HeaderRunConfiguration, digest)
+	w.Header().Set("ETag", `"`+digest+`"`)
 	w.Header().Set(server.HeaderSignature, testSigner.SignAnswer(accesskey.Answer{Status: http.StatusOK, RequestSignature: sig, Body: body, Configuration: conf, RunConfiguration: digest}))
 	w.Write(body)
 }
@@ -287,6 +300,14 @@ func (c *control) attached() [][]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.attaches)
+}
+
+// instances are the X-Qory-Instance-Id of the attaches and of the deliveries the
+// control was sent.
+func (c *control) instances() (attaches, deliveries []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.attachInstances), slices.Clone(c.deliveryInstances)
 }
 
 // withEnd answers a delivery as the receiver does, and a 2xx with the end member e,

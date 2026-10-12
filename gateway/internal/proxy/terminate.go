@@ -80,11 +80,12 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
 }
 
-// NodePaths sets the path rules of the node's policy when it narrows a server's: a
-// request to a host they list must match one of them as well as the policy's own when
-// that lists the host too. They are fixed for the run; the caller sets them once,
-// before [Proxy.Terminate].
-func (p *Proxy) NodePaths(paths map[string][]string) { p.node = paths }
+// NodePaths sets the sides of path rules beside the policy's, each held apart: the
+// node's policy's when it narrows a server's, and those of a ceiling the node's policy
+// was put under. A request to a host a side lists must match an entry of it as well as
+// of every other side that lists the host, the policy's included. They are fixed for
+// the run; the caller sets them once, before [Proxy.Terminate].
+func (p *Proxy) NodePaths(sides ...map[string][]string) { p.node = sides }
 
 // Terminated reports the hosts, as configured, the proxy terminates TLS for: under the
 // policy set last, when one was.
@@ -111,7 +112,7 @@ func (p *Proxy) Terminated() []string {
 			}
 		}
 	}
-	for _, side := range []map[string][]string{t.paths, t.node} {
+	for _, side := range t.sides() {
 		for h := range side {
 			if !seen[h] {
 				seen[h] = true
@@ -127,9 +128,14 @@ type terminator struct {
 	ca    *CA
 	creds []Credential
 	paths map[string][]string
-	// node are the node's path rules, which narrow paths.
-	node  map[string][]string
+	// node are the sides of path rules beside paths, which narrow them.
+	node  []map[string][]string
 	tools []Tool
+}
+
+// sides are the policy's path rules, then each side beside them.
+func (t *terminator) sides() []map[string][]string {
+	return append([]map[string][]string{t.paths}, t.node...)
 }
 
 // tool is the tool that serves the host, if one does.
@@ -167,15 +173,13 @@ func (t *terminator) credentialName(host string) string {
 }
 
 // rules are the path rules for the host of each side that lists it: the policy's, then
-// the node's. A request must match an entry of each.
+// each beside it. Of each side, the entry [policy.HostPaths] picks holds the host. A
+// request must match an entry of each.
 func (t *terminator) rules(host string) [][]string {
 	var out [][]string
-	for _, side := range []map[string][]string{t.paths, t.node} {
-		for pattern, rules := range side {
-			if _, ok := policy.Match([]string{pattern}, host); ok {
-				out = append(out, rules)
-				break
-			}
+	for _, side := range t.sides() {
+		if _, rules, ok := policy.HostPaths(side, host); ok {
+			out = append(out, rules)
 		}
 	}
 	return out
@@ -373,7 +377,7 @@ func (c *Credential) header() (string, string, bool) {
 // against this machine's roots, dialled through the proxy's guarded dialler.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dial, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
+		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
 	})
 	return p.up
 }

@@ -63,12 +63,18 @@ func TestNestFindsTheAgentsIDs(t *testing.T) {
 
 // TestNestGivesTheInnerContainersTheProxyByAddress pins the agent's docker
 // configuration: the proxy the enclosure's environment names, its name resolved, since
-// the containers the agent starts do not resolve it, with NO_PROXY carried; nothing
-// when there is no proxy; an error when the name does not resolve.
+// the containers the agent starts do not resolve it, to its IPv4 address when it has
+// one, with NO_PROXY carried; nothing when there is no proxy; an error when the name
+// does not resolve.
 func TestNestGivesTheInnerContainersTheProxyByAddress(t *testing.T) {
 	resolve := func(name string) ([]string, error) {
-		if name == "qory-proxy" {
+		switch name {
+		case "qory-proxy":
 			return []string{"172.25.0.2"}, nil
+		case "qory-proxy-both":
+			return []string{"fd8a:1b2c:3d4e:5f60::2", "172.25.0.2"}, nil
+		case "qory-proxy-v6":
+			return []string{"fd8a:1b2c:3d4e:5f60::2"}, nil
 		}
 		return nil, errors.New("no such host")
 	}
@@ -99,6 +105,15 @@ func TestNestGivesTheInnerContainersTheProxyByAddress(t *testing.T) {
 	}
 	if p := proxies(b); p["httpsProxy"] != "http://10.0.0.5:3128" || p["noProxy"] != "" {
 		t.Errorf("an address is kept as it is: got %v", p)
+	}
+	for name, want := range map[string]string{"qory-proxy-both": "http://172.25.0.2:3128", "qory-proxy-v6": "http://[fd8a:1b2c:3d4e:5f60::2]:3128"} {
+		b, err = nestProxies(env(map[string]string{"HTTPS_PROXY": "http://" + name + ":3128"}), resolve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := proxies(b); p["httpsProxy"] != want {
+			t.Errorf("%s: the IPv4 address is taken first, else the first: got %v, want %s", name, p, want)
+		}
 	}
 	if b, err := nestProxies(env(nil), resolve); b != nil || err != nil {
 		t.Errorf("no proxy, and a configuration: %s %v", b, err)

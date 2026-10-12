@@ -42,7 +42,7 @@ const LinkContentType = "application/json"
 
 // EndCodes are the codes of a 410 on the link, the end of a run at the gateway: the
 // gateway closed the run, the run's starter ended it, the gateway heard nothing from the
-// session for too long, or it refused a batch of the session's. A 410 with another
+// session for too long, or it refused a batch from the run's session. A 410 with another
 // code, or none, is run_closed.
 var EndCodes = []string{event.ReasonRunClosed, event.ReasonStopped, event.ReasonSessionLost, event.ReasonBatchRefused}
 
@@ -159,7 +159,8 @@ type LinkImage struct {
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
 // contracts/forager/v1/link-run-answer.schema.json. A member Forager does not know is
-// ignored. Its ProxySecret is never printed: fmt and log/slog show it as [redacted].
+// ignored. Its ProxySecret is never printed: fmt, log/slog and encoding/json show it as
+// [redacted].
 type LinkRunAnswer struct {
 	Version int    `json:"version"`
 	RunID   string `json:"run_id"`
@@ -242,6 +243,11 @@ func (a LinkRunAnswer) LogValue() slog.Value {
 		slog.Any("reserved", a.Reserved),
 	)
 }
+
+// MarshalJSON is a as encoding/json writes a struct, with its ProxySecret redacted,
+// for a log or a dump that writes it so. The gateway writes the run answer from its
+// own struct; reading one back is as encoding/json reads a struct.
+func (a LinkRunAnswer) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // LinkReloadAnswer is what the gateway answers a reload with,
 // contracts/forager/v1/link-reload-answer.schema.json: the policy in force for the run

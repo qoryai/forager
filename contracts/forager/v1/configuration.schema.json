@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node and its workspace, where Forager posts its events, where a run registers, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, and for a node's or a node pool's key its workspace, where Forager posts its events, where a run registers, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["version", "node_id", "workspaces", "events", "run", "apiary_public_key"],
+  "required": ["version", "node_id", "events", "run", "apiary_public_key"],
   "if": {"properties": {"node_id": {"pattern": "^ng_"}}},
-  "then": {},
-  "else": {"properties": {"workspaces": {"maxItems": 1}}},
+  "then": {"properties": {"workspaces": false}},
+  "else": {"required": ["workspaces"], "properties": {"workspaces": {"maxItems": 1}}},
   "properties": {
     "version": {
       "description": "The document format. Forager refuses a version it does not read.",
@@ -20,7 +20,7 @@
       "pattern": "^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$"
     },
     "workspaces": {
-      "description": "The workspace ids, each ws_ followed by 16 lower-case Crockford base32 characters. For a node's or a node pool's key exactly one: the workspace the node or node pool belongs to. For a gateway's key, node_id ng_, one or more: the workspaces the gateway may serve, everything below its level. A document without workspaces, or with more than one for a key that is not a gateway's, is refused.",
+      "description": "The workspace ids, each ws_ followed by 16 lower-case Crockford base32 characters. For a node's or a node pool's key exactly one: the workspace the node or node pool belongs to. A gateway's key, node_id ng_, has none: a gateway is connected to the nodes and node pools whose choice resolves to it, and takes each run's workspace from the run's run key. A document of a node's or a node pool's key without workspaces or with more than one, or of a gateway's key with workspaces, is refused.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -79,7 +80,7 @@ func userNamespaced(uidMap string) error {
 		}
 		if inside == 0 {
 			if outside == 0 {
-				return errors.New("nest: the enclosure's root is the machine's root; a Docker of the agent's own needs a runtime that maps it to a user of the machine's that is not root, such as sysbox-runc")
+				return errors.New("nest: the enclosure's root is the machine's root; nested Docker needs a runtime that maps it to a user of the machine's that is not root, such as sysbox-runc")
 			}
 			return nil
 		}
@@ -120,7 +121,7 @@ func findDaemon(dirs []string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New("nest: the image holds no dockerd in " + strings.Join(dirs, ", ") + "; an image with a Docker of the agent's own carries the daemon")
+	return "", errors.New("nest: the image holds no dockerd in " + strings.Join(dirs, ", ") + "; an image with nested Docker carries the daemon")
 }
 
 // nestIDs are the agent's user and group, from uid:gid, or from the image's own users
@@ -194,7 +195,9 @@ func passwd(kind, key string) (int, int, bool) {
 
 // nestProxies is the agent's docker configuration: the proxy the enclosure's
 // environment names, by the address its name resolves to, for every container the
-// agent starts and every build. Empty when the environment names no proxy.
+// agent starts and every build. Empty when the environment names no proxy. Of the
+// addresses, the first IPv4 one is taken, since the containers the agent starts have
+// IPv4 alone; the first of any family when there is none.
 func nestProxies(env func(string) string, resolve func(string) ([]string, error)) ([]byte, error) {
 	raw := env("HTTPS_PROXY")
 	if raw == "" {
@@ -212,7 +215,14 @@ func nestProxies(env func(string) string, resolve func(string) ([]string, error)
 		if err != nil || len(addrs) == 0 {
 			return nil, fmt.Errorf("nest: the proxy's name %s does not resolve: %v", u.Hostname(), err)
 		}
-		u.Host = net.JoinHostPort(addrs[0], u.Port())
+		addr := addrs[0]
+		if i := slices.IndexFunc(addrs, func(a string) bool {
+			ip := net.ParseIP(a)
+			return ip != nil && ip.To4() != nil
+		}); i >= 0 {
+			addr = addrs[i]
+		}
+		u.Host = net.JoinHostPort(addr, u.Port())
 	}
 	p := map[string]string{"httpProxy": u.String(), "httpsProxy": u.String()}
 	if no := env("NO_PROXY"); no != "" {

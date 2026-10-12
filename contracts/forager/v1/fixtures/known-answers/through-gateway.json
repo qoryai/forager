@@ -84,11 +84,11 @@
         "200",
         "sDuz7tRXEQj8i4-STcotyqYRbDpP0qowbjAGByx_aOzQZx4sJyNMKubsfYq-nHdbBbTO6xaOHBMdKYW-mNJhDA",
         "706c3903c990de5e910c3690f1cf3cb835e27b143c6a14c68fc2bb61465f2f31",
-        "sha256=1fa00e65ff33a33337f58a577ff5af3b45dd25139b917278c8761aac6876b221",
+        "sha256=370d9207b8a35b02fb442884e7d53750d0505cfcb6c094885d9623d830f31531",
         "sha256=6629797938f27cafa91774f5095aded55cdde5843d35dd26df5747e845a805e5"
       ],
       "length": 322,
-      "signature": "MopswsjWUgQNEQLM4p3fF7j9Eeib_lOACDnlrLffaWfD_4FMI0Qd9zZzfc8mYEuan4RYBHNWtgow1yRC1MW1Cg"
+      "signature": "ijp_x5q5A1EfBrFYNjlhBuRHR72tJLhCt7ZkdD_63LNSLMMOLbOuvghAadOZn9JHtp4Qvd3TXyOGmLVGwSaQCg"
     },
     {
       "note": "200 to the outcome above, signed under the fixture signing key: {\"version\": 1}, with the X-Qory-Configuration of the fixture discovery and no run-configuration digest.",

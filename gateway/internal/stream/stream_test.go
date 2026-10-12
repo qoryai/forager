@@ -751,3 +751,53 @@ func TestReclaimReadsTheRecordUnderItsLock(t *testing.T) {
 		t.Errorf("no record: %v %v", ok, err)
 	}
 }
+
+// TestAnAnsweredRecordIsKept pins the mark that a run's first run request is answered:
+// MarkAnswered writes the empty file answered once, a second time an error; Reclaim
+// keeps a record that holds it, its registration alone; and Discard removes it with
+// the rest, so the run id opens again.
+func TestAnAnsweredRecordIsKept(t *testing.T) {
+	s := New(Config{Dir: t.TempDir()})
+	id := event.NewRunID()
+	r, err := s.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Registered(map[string]any{"workspace": "ws_example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkAnswered(); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(r.Dir(), answeredFile)); err != nil || len(b) != 0 {
+		t.Errorf("the mark: %q %v; want an empty file", b, err)
+	}
+	if err := r.MarkAnswered(); !errors.Is(err, os.ErrExist) {
+		t.Errorf("a second mark: %v; want it to exist already", err)
+	}
+	if _, err := r.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Reclaim(id); ok || err != nil {
+		t.Errorf("a record marked answered: %v %v; want it kept", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir(id), sink.EventsFile)); err != nil {
+		t.Errorf("the record marked answered is gone: %v", err)
+	}
+	r, err = s.Open(event.NewRunID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkAnswered(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Discard(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.Dir()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the discarded run's directory is left: %v", err)
+	}
+	if err := r.MarkAnswered(); !errors.Is(err, ErrClosed) {
+		t.Errorf("a mark of a closed run: %v", err)
+	}
+}

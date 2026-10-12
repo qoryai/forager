@@ -100,7 +100,7 @@ func TestTheReservedCodesAreTheContracts(t *testing.T) {
 	}
 	reason := doc.(map[string]any)["properties"].(map[string]any)["reason"].(map[string]any)
 	description := reason["description"].(string)
-	_, rest, _ := strings.Cut(description, "Forager's own codes are reserved: ")
+	_, rest, _ := strings.Cut(description, "Forager's codes are reserved: ")
 	listed, _, _ := strings.Cut(rest, ", which Forager never writes")
 	var want []string
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]+_[a-z0-9_]+|\btimeout\b|\binterrupted\b|\bquiet\b|\bstopped\b`).FindAllString(listed, -1) {

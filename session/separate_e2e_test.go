@@ -81,7 +81,7 @@ func (a *apiary) serve(policy string, digit byte) {
 // configuration is the apiary's discovery and its digest.
 func (a *apiary) configuration() ([]byte, string) {
 	pin, _ := json.Marshal(a.pin)
-	doc := []byte(`{"version":1,"node_id":"` + sepGateway + `","workspaces":["` + sepWorkspace + `"],"apiary_public_key":` + string(pin) +
+	doc := []byte(`{"version":1,"node_id":"` + sepGateway + `","apiary_public_key":` + string(pin) +
 		`,"events":{"url":"` + a.srv.URL + `/v1/events","types":["*"]},"run":{"url":"` + a.srv.URL + `/v1/runs"}}`)
 	sum := sha256.Sum256(doc)
 	return doc, "sha256=" + hex.EncodeToString(sum[:])
@@ -95,7 +95,7 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	run, digest := a.run, a.digest
 	a.mu.Unlock()
-	status, out, withRun := http.StatusOK, []byte(nil), true
+	status, out, withRun, attach := http.StatusOK, []byte(nil), true, false
 	switch rest, ok := strings.CutPrefix(r.URL.Path, "/v1/runs/"); {
 	case r.Method == http.MethodGet && r.URL.Path == server.WellKnown:
 		out, withRun = doc, false
@@ -104,6 +104,7 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(run, &m)
 		m["labels"] = json.RawMessage(`{"repository":"example-namespace/project"}`)
 		out, _ = json.Marshal(m)
+		attach = true
 		a.mu.Lock()
 		a.attaches++
 		a.mu.Unlock()
@@ -125,6 +126,9 @@ func (a *apiary) handle(w http.ResponseWriter, r *http.Request) {
 	if withRun {
 		answer.RunConfiguration = digest
 		w.Header().Set(server.HeaderRunConfiguration, digest)
+	}
+	if attach {
+		w.Header().Set("ETag", `"`+digest+`"`)
 	}
 	if out != nil {
 		w.Header().Set("Content-Type", "application/json")
