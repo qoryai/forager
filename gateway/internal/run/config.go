@@ -160,7 +160,13 @@ func CheckBeside(p *Policy) error {
 	if p == nil {
 		return nil
 	}
-	for _, side := range p.Egress.beside {
+	return checkSides(p.Egress.beside)
+}
+
+// checkSides validates each of sides as [CheckBeside] does. [Decide] gives it the run's
+// copy of the sides, the one the proxy and the record hold. Tests replace it.
+var checkSides = func(sides []map[string][]string) error {
+	for _, side := range sides {
 		b, err := json.Marshal(Policy{Version: 1, Egress: PolicyEgress{Mode: string(policy.Observe), Paths: side}})
 		if err != nil {
 			return &policy.Error{Name: "policy", Err: err}

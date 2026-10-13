@@ -23,9 +23,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- A run holds a copy of the path rules `gateway.Policy.Under` adds, taken when it
-  starts: the proxy and `ceiling_paths` keep them for the run whatever the caller's
-  `Policy` holds afterwards.
+- A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
+  when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
+  caller's `Policy` holds afterwards.
+- The gateway holds a copy of its `Config`'s credentials and tools, taken at `Start`
+  and checked there: every run keeps them whatever the caller's `Config` holds
+  afterwards.
 
 ## [0.7.0] - 2026-10-12
 

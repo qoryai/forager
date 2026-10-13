@@ -46,6 +46,24 @@ var (
 	testPin       = accesskey.Pin{{Alg: "ed25519", PublicKey: testSigner.PublicKey().String()}}
 )
 
+// envTool makes the test binary a tool when it is "serve": it listens where the gateway
+// says and answers every request with its arguments and the request's path.
+const envTool = "GATEWAY_TEST_TOOL"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(envTool) != "serve" {
+		os.Exit(m.Run())
+	}
+	ln, err := net.Listen("unix", os.Getenv(link.EnvToolListen))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Join(os.Args[1:], " ")+" "+r.URL.Path)
+	}))
+}
+
 func mustGenerate() *accesskey.Key {
 	k, err := accesskey.Generate()
 	if err != nil {

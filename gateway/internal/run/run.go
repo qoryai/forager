@@ -93,8 +93,8 @@ type Run struct {
 	tools  []tool.Definition
 	// node is the node's policy, nil when the run has none, and beside the sides of
 	// path rules [Policy.Under] put beside it, which no document holds: the run's copy
-	// of them, taken when it starts, so the proxy and the record hold them fixed for the
-	// run whatever the caller's [Policy] holds afterwards.
+	// of them, taken when it starts and checked as taken, so the proxy and the record
+	// hold them fixed for the run whatever the caller's [Policy] holds afterwards.
 	node   *policy.Loaded
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
@@ -147,11 +147,11 @@ func Decide(cfg Config) (*Run, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := CheckBeside(cfg.Node); err != nil {
+		r.beside = copySides(cfg.Node.Egress.beside)
+		if err := checkSides(r.beside); err != nil {
 			return nil, err
 		}
 		r.node, pol = node, node
-		r.beside = copySides(cfg.Node.Egress.beside)
 	}
 	if cfg.Fetched == nil {
 		r.guard = GuardNames(pol, cfg.Narrowing)
