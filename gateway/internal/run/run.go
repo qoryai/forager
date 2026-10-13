@@ -92,7 +92,9 @@ type Run struct {
 	defs   []credential.Definition
 	tools  []tool.Definition
 	// node is the node's policy, nil when the run has none, and beside the sides of
-	// path rules [Policy.Under] put beside it, which no document holds.
+	// path rules [Policy.Under] put beside it, which no document holds: the run's copy
+	// of them, taken when it starts, so the proxy and the record hold them fixed for the
+	// run whatever the caller's [Policy] holds afterwards.
 	node   *policy.Loaded
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
@@ -149,7 +151,7 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		r.node, pol = node, node
-		r.beside = cfg.Node.Egress.beside
+		r.beside = copySides(cfg.Node.Egress.beside)
 	}
 	if cfg.Fetched == nil {
 		r.guard = GuardNames(pol, cfg.Narrowing)
@@ -696,6 +698,23 @@ func inForce(fetched, node *policy.Loaded, url, digest string) (*policy.Loaded, 
 	}
 	out.URL, out.RunConfiguration = url, digest
 	return &out, nil
+}
+
+// copySides is a copy of sides of path rules that shares nothing with them: the list,
+// each side and each host's paths are new, so a change to the sides the copy was taken
+// from leaves the copy as it was. Nil when sides is.
+func copySides(sides []map[string][]string) []map[string][]string {
+	if sides == nil {
+		return nil
+	}
+	out := make([]map[string][]string, len(sides))
+	for i, side := range sides {
+		out[i] = make(map[string][]string, len(side))
+		for host, paths := range side {
+			out[i][host] = slices.Clone(paths)
+		}
+	}
+	return out
 }
 
 // nodePaths is how many hosts the node's path rules list beside a server's policy.

@@ -496,6 +496,68 @@ func TestARunUnderACeilingRecordsItsPaths(t *testing.T) {
 	}
 }
 
+// TestARunUnderACeilingRecordsItsPathsAsTheyStart pins that ceiling_paths are the
+// ceiling's path rules as they are when the run starts: a change to the ceiling's maps
+// after the start, a path of a host replaced, a path appended to a host's and a host
+// added, leaves them as they were in the reload's applied and in the record.
+func TestARunUnderACeilingRecordsItsPathsAsTheyStart(t *testing.T) {
+	paths := map[string][]string{"a.example": {"/v1/*", "/v3/*"}}
+	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"a.example", "b.example"}}}
+	ceiling := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe", Paths: paths}}
+	want := []any{map[string]any{"a.example": []any{"/v1/*", "/v3/*"}}}
+	ceilingPaths := func(raw json.RawMessage) any {
+		var members map[string]any
+		json.Unmarshal(raw, &members)
+		return members["ceiling_paths"]
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Policy: node.Under(ceiling)})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if got := ceilingPaths(a.Applied); !reflect.DeepEqual(got, want) {
+		t.Errorf("at the start: ceiling_paths %v, applied %s", got, a.Applied)
+	}
+	paths["a.example"][0] = "/v2/*"
+	paths["a.example"] = append(paths["a.example"], "/v4/*")
+	paths["b.example"] = []string{"/x/*"}
+	h.mu.Lock()
+	first := h.digests[len(h.digests)-1].RunConfiguration
+	h.mu.Unlock()
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
+	eventually(t, "the reload", func() bool {
+		d := h.post(heartbeat(runID))
+		return d.Accepted() && d.Digests.RunConfiguration != first
+	})
+	r, err := h.linkOf(runID).Reload(context.Background(), server.LocalOrigin+"/v1/run-configuration", runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ceilingPaths(r.Applied); !reflect.DeepEqual(got, want) {
+		t.Errorf("after the reload: ceiling_paths %v, applied %s", got, r.Applied)
+	}
+	if d := h.post(applied(runID, r.Applied)); !d.Accepted() {
+		t.Errorf("the reload's policy_applied: %+v", d)
+	}
+	h.post(exited(runID))
+	h.close()
+	n := 0
+	for _, ev := range h.record(runID) {
+		if ev.Type == event.PolicyApplied {
+			n++
+			if !reflect.DeepEqual(ev.Data["ceiling_paths"], want) {
+				t.Errorf("the record's policy_applied %d: %v", n, ev.Data)
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("the record holds %d policy_applied, want 2", n)
+	}
+}
+
 // tunnel opens a CONNECT tunnel to target through the run's proxy, as the run's
 // harness would.
 func tunnel(t *testing.T, addr, secret, target string) net.Conn {

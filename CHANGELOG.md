@@ -19,6 +19,14 @@ release may change what an existing document does, and says so under Upgrading.
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
 
+### Gateway
+
+#### Changed
+
+- A run holds a copy of the path rules `gateway.Policy.Under` adds, taken when it
+  starts: the proxy and `ceiling_paths` keep them for the run whatever the caller's
+  `Policy` holds afterwards.
+
 ## [0.7.0] - 2026-10-12
 
 ### Core and contract

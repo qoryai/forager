@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,13 @@ func serving(t *testing.T) string {
 // for the run behind a wall, with a tool serving pathHost; and what it records.
 func underProxy(t *testing.T, p *run.Policy, sock string) (*proxy.Proxy, func() proxy.Decision) {
 	t.Helper()
-	r := open(t, run.Config{RunID: runID, Node: p, Wall: true})
+	return proxyOf(t, open(t, run.Config{RunID: runID, Node: p, Wall: true}), sock)
+}
+
+// proxyOf is the proxy of a run as the gateway sets it up for the run behind a wall,
+// with a tool serving pathHost; and what it records.
+func proxyOf(t *testing.T, r *run.Run, sock string) (*proxy.Proxy, func() proxy.Decision) {
+	t.Helper()
 	pol := r.Policy()
 	var mu sync.Mutex
 	var last proxy.Decision
@@ -201,6 +208,39 @@ func TestUnderKeepsTheCeilingsPathsBesideThePolicys(t *testing.T) {
 	p := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: string(policy.Enforce), Allow: []string{pathHost}, Paths: ownPaths}}
 	if got := p.Under(&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: string(policy.Observe)}}); got != p {
 		t.Errorf("a ceiling with nothing to add changed the policy: %+v", got)
+	}
+}
+
+// TestARunHoldsItsCopyOfTheCeilingsPaths pins that a run holds the path rules a
+// ceiling puts beside its policy as they are when it starts: a change to the ceiling's
+// maps after the start, a path of a host replaced, a path appended to a host's and a
+// host added, leaves the run's sides, the proxy's rules and the sides the record lists
+// as they were, with a server and without.
+func TestARunHoldsItsCopyOfTheCeilingsPaths(t *testing.T) {
+	sock := serving(t)
+	want := []map[string][]string{{pathHost: {"/v1/*", "/v3/*"}}}
+	for _, fetched := range []*run.Fetched{nil, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, digest('1'))} {
+		paths := map[string][]string{pathHost: {"/v1/*", "/v3/*"}}
+		ceiling := &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"*.example"}, Paths: paths}}
+		under := (&run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{pathHost}}}).Under(ceiling)
+		r := open(t, run.Config{RunID: runID, Node: under, Wall: true, Fetched: fetched})
+		px, _ := proxyOf(t, r, sock)
+		paths[pathHost][0] = "/v2/*"
+		paths[pathHost] = append(paths[pathHost], "/v4/*")
+		paths["b.example"] = []string{"/x/*"}
+		if got := r.NodePaths(); !reflect.DeepEqual(got, want) {
+			t.Errorf("server %v: the run's sides %v, want %v", fetched != nil, got, want)
+		}
+		if got := r.Beside(); !reflect.DeepEqual(got, want) {
+			t.Errorf("server %v: the sides the record lists %v, want %v", fetched != nil, got, want)
+		}
+		for path, code := range map[string]int{"/v1/x": http.StatusOK, "/v3/x": http.StatusOK, "/v2/x": http.StatusForbidden, "/v4/x": http.StatusForbidden} {
+			w := httptest.NewRecorder()
+			px.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://"+pathHost+path, nil))
+			if w.Code != code {
+				t.Errorf("server %v: %s answered %d, want %d", fetched != nil, path, w.Code, code)
+			}
+		}
 	}
 }
 
