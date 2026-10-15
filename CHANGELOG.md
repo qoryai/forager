@@ -25,6 +25,9 @@ release may change what an existing document does, and says so under Upgrading.
   (node_kind `adapter`), in place of `qec_`, which is refused. `accesskey.CodeKind`
   reads the kind, and `EnrolmentRequest.VerifyAnswer` refuses a `201` of another kind
   with an `accesskey.KindError`.
+- A new instance id is `i_` and 26 lower-case Crockford base32 characters, no longer 22
+  base64url characters, so it can no longer contain an access key's or a run key's
+  prefix by chance.
 
 ### Gateway
 

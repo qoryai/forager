@@ -1042,9 +1042,9 @@ An instance is one running copy of `qory` with the access
 key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of every
 request, for display, audit, per-instance events and the instance limit; authorisation
 rests on the access key alone, and whoever holds the access key can claim any instance
-id. `qory` generates `i_` and 16 bytes from the system's random source in base64url, 24
-characters, and keeps the id in the file `instance-id`. It writes two lines, each ended
-by a line feed: the id, and the lower-case hex HMAC-SHA256, keyed with `qory
+id. `qory` generates `i_` and 16 bytes from the system's random source in lower-case
+Crockford base32, 26 characters, and keeps the id in the file `instance-id`. It writes
+two lines, each ended by a line feed: the id, and the lower-case hex HMAC-SHA256, keyed with `qory
 instance-id v1`, of the machine's identity, `/etc/machine-id` on Linux, `IOPlatformUUID`
 on macOS, else the host name, as machine-id(5) recommends, without the white space
 around it. It reads the two lines with or without the final line feed. A file that is
