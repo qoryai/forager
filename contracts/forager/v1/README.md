@@ -1232,9 +1232,10 @@ code an owner or administrator of the server created: a prefix, 26 Crockford bas
 characters, then `.` and the fingerprint of the server's key, and during a rotation of
 that key a second `.` and the next key's fingerprint. The prefix names the kind of key
 the code enrols: `qecn_` a node's, `qecp_` a node pool's, `qecg_` a gateway's and
-`qeci_` an adapter's. The server refuses a code whose prefix is not its node's kind. A
-code with another prefix is unknown to the server, which answers it as any unknown
-code, `401`. The body contains the code in its normalised form, the prefix in lower case
+`qeci_` an integration's. A code whose prefix names another kind than its node's is
+unknown to the server, which answers it `401` as any unknown code; a code with any
+other prefix is malformed, and the server refuses it as an invalid request, `400`. The
+body contains the code in its normalised form, the prefix in lower case
 and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and hyphens
 removed; a name for the access key; the raw public key; a timestamp; and
 `proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
@@ -1243,9 +1244,10 @@ timestamp in decimal. The request contains no `X-Qory-Access-Key-Id` and no requ
 signature: the code and the proof authenticate it. The server answers an enrolment in
 this order, unsigned until the code is accepted, the key passes the checks and the proof
 verifies under it: `413`; `415`; `400` `bad_request` for a header sent twice; `429` per
-source address; `400` `unsupported_contract_version`; `400` `invalid_request`; `401` for
-a code it did not issue or that is used, expired or cancelled, for a code whose
-fingerprints are not its keys', and for a timestamp outside ±300 seconds; `409`
+source address; `400` `unsupported_contract_version`; `400` `invalid_request`, a
+malformed code among them; `401` for a code it did not issue or that is used, expired
+or cancelled, for a code whose prefix names another kind than its node's, for a code
+whose fingerprints are not its keys', and for a timestamp outside ±300 seconds; `409`
 `key_invalid` for a key the checks refuse or a `proof` that does not verify under it,
 the key checked first. Then, signed: `429` `rate_limited` per code; `409` `key_invalid`
 for a key already enrolled, a revoked one included; `409` `key_limit`; and `201`. The
