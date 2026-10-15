@@ -170,8 +170,8 @@ func (r *EnrolmentRequest) VerifyProof() bool {
 }
 
 // EnrolmentAnswer is the server's 201 to an enrolment: the access key's id, the id of
-// its node, node pool or gateway with its kind, node, pool or gateway, its
-// stored-secrets flag and the server's keys. The key is active from the 201 on.
+// its node, node pool, gateway or adapter with its kind, node, pool, gateway or
+// adapter, its stored-secrets flag and the server's keys. The key is active from the 201 on.
 type EnrolmentAnswer struct {
 	Version       int    `json:"version"`
 	AccessKeyID   string `json:"access_key_id"`
@@ -273,7 +273,7 @@ func (a *EnrolmentAnswer) check() error {
 	if err := CheckNodeID(a.NodeID); err != nil {
 		return err
 	}
-	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
+	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
 		return fmt.Errorf("node_kind %q does not match the node id %s", a.NodeKind, a.NodeID)
 	}
 	if n := len(a.ApiaryPublicKey); n < 1 || n > 2 {
