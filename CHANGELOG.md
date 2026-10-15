@@ -18,6 +18,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+- A new instance id is `i_` and 26 lower-case Crockford base32 characters, no longer 22
+  base64url characters, so it can no longer contain an access key's or a run key's
+  prefix by chance.
 
 ### Gateway
 

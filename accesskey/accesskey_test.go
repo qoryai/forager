@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -719,7 +720,7 @@ func TestParsePin(t *testing.T) {
 	}
 }
 
-// TestInstanceID pins the instance id and its file: a new id is i_ and 24 characters
+// TestInstanceID pins the instance id and its file: a new id is i_ and 26 characters
 // and passes the pattern; the file is the id and the keyed hash of the machine's
 // identity; a file read on the same machine yields its id, and one copied to another
 // machine, or holding an id outside the pattern, yields none.
@@ -728,7 +729,7 @@ func TestInstanceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(id) != 24 || !strings.HasPrefix(id, "i_") || accesskey.CheckInstanceID(id) != nil {
+	if len(id) != 28 || !strings.HasPrefix(id, "i_") || accesskey.CheckInstanceID(id) != nil {
 		t.Errorf("instance id %q", id)
 	}
 	if again, _ := accesskey.NewInstanceID(); again == id {
@@ -769,6 +770,55 @@ func TestInstanceID(t *testing.T) {
 	}
 	if got := accesskey.DefaultName(strings.Repeat("a", 60) + ".example.internal"); got != strings.Repeat("a", 60) {
 		t.Errorf("DefaultName of a long host = %q", got)
+	}
+}
+
+// TestInstanceIDAlphabet pins the instance id's form: 10,000 new ids are each i_ and 26
+// lower-case Crockford base32 characters, pass the pattern and hold no underscore after
+// i_, so none holds an access key secret's or a run key's prefix.
+func TestInstanceIDAlphabet(t *testing.T) {
+	shape := regexp.MustCompile(`^i_[0-9a-hjkmnp-tv-z]{26}$`)
+	for range 10000 {
+		id, err := accesskey.NewInstanceID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !shape.MatchString(id) || strings.Contains(id[len(accesskey.InstancePrefix):], "_") || accesskey.CheckInstanceID(id) != nil {
+			t.Fatalf("instance id %q", id)
+		}
+	}
+}
+
+// TestInstanceIDKnownAnswers pins the encoding of 16 bytes in an instance id: the 128
+// bits big-endian in groups of 5, the last group filled with zero bits, no padding. The
+// fixture's bytes, which its instance id holds in base64url, are among them.
+func TestInstanceIDKnownAnswers(t *testing.T) {
+	fixture, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(keys(t).AccessKey.InstanceID, "i_"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := func(from byte) []byte {
+		b := make([]byte, 16)
+		for i := range b {
+			b[i] = from + byte(i)
+		}
+		return b
+	}
+	for _, c := range []struct {
+		b    []byte
+		want string
+	}{
+		{seq(0x80), "i_g20r50w4gp38f249ha5rs3cehw"},
+		{fixture, "i_g6187145gt3rh2cahe68v3mfj0"},
+		{seq(0x00), "i_000g40r40m30e209185gr38e1w"},
+		{bytes.Repeat([]byte{0xff}, 16), "i_zzzzzzzzzzzzzzzzzzzzzzzzzw"},
+	} {
+		if got := accesskey.InstanceIDOf(c.b); got != c.want || accesskey.CheckInstanceID(got) != nil {
+			t.Errorf("%x: %q, want %q", c.b, got, c.want)
+		}
+	}
+	if !bytes.Equal(fixture, seq(0x81)) {
+		t.Errorf("the fixture instance id holds %x", fixture)
 	}
 }
 
