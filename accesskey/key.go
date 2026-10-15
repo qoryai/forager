@@ -360,15 +360,14 @@ func CheckID(id string) error {
 	return nil
 }
 
-// nodeShape is a node's, a node pool's, a gateway's or an adapter's id.
-var nodeShape = regexp.MustCompile(`^n[dpga]_[0-9a-hjkmnp-tv-z]{16}$`)
+// nodeShape is a node's, a node pool's or a gateway's id.
+var nodeShape = regexp.MustCompile(`^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$`)
 
 // CheckNodeID refuses a node id that is not "nd_", for a node, "np_", for a node pool,
-// "ng_", for a gateway, or "na_", for an adapter, and 16 lower-case Crockford base32
-// characters.
+// or "ng_", for a gateway, and 16 lower-case Crockford base32 characters.
 func CheckNodeID(id string) error {
 	if !nodeShape.MatchString(id) {
-		return fmt.Errorf("the node id %s is not nd_, np_, ng_ or na_ and 16 lower-case Crockford base32 characters", shown(id))
+		return fmt.Errorf("the node id %s is not nd_, np_ or ng_ and 16 lower-case Crockford base32 characters", shown(id))
 	}
 	return nil
 }
