@@ -1249,8 +1249,8 @@ server signs an answer only to a proof that verifies under a key the checks pass
 proof no key made, such as one under a key of small order, which plain Ed25519
 verification accepts for any message, gets no signed answer. The `201` answer contains
 the access key id, `node_id` with `node_kind`, `node` for an `nd_` id, `pool` for an
-`np_` id and `gateway` for an `ng_` id, `stored_secrets`, true for an access key
-allowed stored secrets, and the server's keys,
+`np_` id, `gateway` for an `ng_` id and `adapter` for an `na_` id, `stored_secrets`,
+true for an access key allowed stored secrets, and the server's keys,
 signed as Signed answers describes under `qory-enrol-answer-ed25519-v1` with the
 request's `proof` as line 3; the machine verifies it under the listed key whose
 fingerprint the code carries first, and pins only the keys whose fingerprints the code

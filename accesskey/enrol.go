@@ -273,7 +273,7 @@ func (a *EnrolmentAnswer) check() error {
 	if err := CheckNodeID(a.NodeID); err != nil {
 		return err
 	}
-	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
+	if want := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}[a.NodeKind]; want == "" || !strings.HasPrefix(a.NodeID, want) {
 		return fmt.Errorf("node_kind %q does not match the node id %s", a.NodeKind, a.NodeID)
 	}
 	if n := len(a.ApiaryPublicKey); n < 1 || n > 2 {

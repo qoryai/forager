@@ -151,6 +151,7 @@ func TestSecretsFixturesValidate(t *testing.T) {
 		"fixtures/enrolment/request-gateway.json":                 {"enrolment.schema.json", "enrolment.schema.json#/$defs/request"},
 		"fixtures/enrolment/answer.json":                          {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/answer-gateway.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
+		"fixtures/enrolment/answer-adapter.json":                  {"enrolment.schema.json", "enrolment.schema.json#/$defs/answer"},
 		"fixtures/enrolment/refusal-key-limit.json":               {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-invalid.json":             {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
 		"fixtures/enrolment/refusal-key-limit-rotation.json":      {"enrolment.schema.json", "enrolment.schema.json#/$defs/refusal"},
@@ -185,6 +186,27 @@ func TestSecretsFixturesValidate(t *testing.T) {
 	request, _ := contracts.Document("fixtures/enrolment/request.json")
 	if schema("enrolment.schema.json#/$defs/answer")(request) == nil {
 		t.Error("the enrolment request passes as an answer")
+	}
+}
+
+// TestEnrolmentAnswerNodeKinds pins node_kind against node_id in the enrolment answer:
+// node with nd_, pool with np_, gateway with ng_ and adapter with na_ pass, and every
+// other pair is refused.
+func TestEnrolmentAnswerNodeKinds(t *testing.T) {
+	s := compile(t, "enrolment.schema.json")["enrolment.schema.json"]
+	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
+	for kind := range kinds {
+		for _, prefix := range kinds {
+			var doc map[string]any
+			if err := json.Unmarshal(read(t, "fixtures/enrolment/answer.json"), &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc["node_kind"], doc["node_id"] = kind, prefix+"f1xt0re000000000"
+			err := s.Validate(doc)
+			if want := kinds[kind] == prefix; want != (err == nil) {
+				t.Errorf("node_kind %s with an %s id: %v; want accepted %t", kind, prefix, err, want)
+			}
+		}
 	}
 }
 

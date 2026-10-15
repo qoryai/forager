@@ -70,7 +70,7 @@
     },
     "answer": {
       "title": "Enrolment answer",
-      "description": "The 201 answer: the new access key's id, its node, node pool or gateway, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
+      "description": "The 201 answer: the new access key's id, its node, node pool, gateway or adapter, its stored-secrets flag and the server's public keys. The access key is active from the 201 on. Every member is required.",
       "type": "object",
       "additionalProperties": false,
       "required": ["version", "access_key_id", "node_id", "node_kind", "stored_secrets", "apiary_public_key"],
@@ -85,14 +85,14 @@
           "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_id": {
-          "description": "The id of the access key's node, nd_, node pool, np_, or gateway, ng_, followed by 16 lower-case Crockford base32 characters.",
+          "description": "The id of the access key's node, nd_, node pool, np_, gateway, ng_, or adapter, na_, followed by 16 lower-case Crockford base32 characters.",
           "type": "string",
-          "pattern": "^n[dpg]_[0-9a-hjkmnp-tv-z]{16}$"
+          "pattern": "^n[dpga]_[0-9a-hjkmnp-tv-z]{16}$"
         },
         "node_kind": {
-          "description": "node for an nd_ id, pool for an np_ id, gateway for an ng_ id.",
+          "description": "node for an nd_ id, pool for an np_ id, gateway for an ng_ id, adapter for an na_ id.",
           "type": "string",
-          "enum": ["node", "pool", "gateway"]
+          "enum": ["node", "pool", "gateway", "adapter"]
         },
         "stored_secrets": {
           "description": "The access key's stored-secrets flag, fixed when the key is created.",
@@ -112,12 +112,16 @@
         {
           "if": {"properties": {"node_kind": {"const": "gateway"}}},
           "then": {"properties": {"node_id": {"pattern": "^ng_"}}}
+        },
+        {
+          "if": {"properties": {"node_kind": {"const": "adapter"}}},
+          "then": {"properties": {"node_id": {"pattern": "^na_"}}}
         }
       ]
     },
     "refusal": {
       "title": "Enrolment refusal",
-      "description": "The body of a signed 409 or 429 at enrolment: key_invalid, a 409 for a key already enrolled, a revoked one included; key_limit, a 409 for a node or node pool that already holds two keys; or rate_limited, a 429 per code, for too many attempts with one code. It lists apiary_public_key, the same list in the same order as a 201 at that moment, current key first and during a rotation the next key after it, so the machine verifies the refusal as it verifies the 201: under the entry whose fingerprint its code carries first. A refusal sent unsigned, the 401, the 409 key_invalid to a key the checks refuse or a proof that does not verify under it, and every answer before the code is accepted, lists no key, and a machine acts on none by its status.",
+      "description": "The body of a signed 409 or 429 at enrolment: key_invalid, a 409 for a key already enrolled, a revoked one included; key_limit, a 409 for a node, node pool or adapter that already holds two keys; or rate_limited, a 429 per code, for too many attempts with one code. It lists apiary_public_key, the same list in the same order as a 201 at that moment, current key first and during a rotation the next key after it, so the machine verifies the refusal as it verifies the 201: under the entry whose fingerprint its code carries first. A refusal sent unsigned, the 401, the 409 key_invalid to a key the checks refuse or a proof that does not verify under it, and every answer before the code is accepted, lists no key, and a machine acts on none by its status.",
       "type": "object",
       "additionalProperties": false,
       "required": ["error", "apiary_public_key"],
