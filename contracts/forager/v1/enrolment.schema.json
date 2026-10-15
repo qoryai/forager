@@ -42,7 +42,7 @@
           "const": 1
         },
         "code": {
-          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's and qeci_ an integration's, and the 201's node_kind is the prefix's kind. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
+          "description": "The enrolment code in its normalised form: a prefix in lower case and 26 Crockford base32 characters in upper case, then a dot and the fingerprint of the server's public key, and during a rotation of the server's key a second dot and the next key's fingerprint. A fingerprint is base64url(SHA-256(raw public key)[:16]). The prefix names the kind of key the code enrols: qecn_ a node's, qecp_ a node pool's, qecg_ a gateway's and qeci_ an integration's (node_kind adapter), and the 201's node_kind is the prefix's kind. A code whose prefix names another kind than its node's is unknown to the server, which answers it 401 as any unknown code; a code with any other prefix is malformed, and the server refuses it as an invalid request, 400.",
           "type": "string",
           "pattern": "^qec[npgi]_[0-9A-HJKMNP-TV-Z]{26}(\\.[A-Za-z0-9_-]{22}){1,2}$"
         },

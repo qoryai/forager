@@ -1232,11 +1232,11 @@ code an owner or administrator of the server created: a prefix, 26 Crockford bas
 characters, then `.` and the fingerprint of the server's key, and during a rotation of
 that key a second `.` and the next key's fingerprint. The prefix names the kind of key
 the code enrols: `qecn_` a node's, `qecp_` a node pool's, `qecg_` a gateway's and
-`qeci_` an integration's. A code whose prefix names another kind than its node's is
-unknown to the server, which answers it `401` as any unknown code; a code with any
-other prefix is malformed, and the server refuses it as an invalid request, `400`. The
-body contains the code in its normalised form, the prefix in lower case
-and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and hyphens
+`qeci_` an integration's (node_kind `adapter`). A code whose prefix names another kind
+than its node's is unknown to the server, which answers it `401` as any unknown code; a
+code with any other prefix is malformed, and the server refuses it as an invalid
+request, `400`. The body contains the code in its normalised form, the prefix in lower
+case and the 26 characters in upper case with `I` and `L` read as `1`, `O` as `0` and hyphens
 removed; a name for the access key; the raw public key; a timestamp; and
 `proof`, the Ed25519 signature under the new key of five lines joined by `\n`:
 `qory-enrol-ed25519-v1`, the code, the public key as in the body, the name, and the
