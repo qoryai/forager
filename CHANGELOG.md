@@ -18,8 +18,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
-- Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
-  `na_` id.
 
 ### Gateway
 

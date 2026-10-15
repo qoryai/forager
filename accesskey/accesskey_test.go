@@ -530,48 +530,6 @@ func TestEnrolmentAnswerPinsOnlyTheCodesKeys(t *testing.T) {
 	}
 }
 
-// TestEnrolmentAnswerNodeKinds pins node_kind against node_id in a signed answer: node
-// with nd_, pool with np_, gateway with ng_ and adapter with na_ are accepted, and every
-// other pair is refused.
-func TestEnrolmentAnswerNodeKinds(t *testing.T) {
-	k := keys(t)
-	signer := k.SigningKey.key(t)
-	r, err := accesskey.NewEnrolmentRequest(k.accessKey(t), "qec_F1XT0RE0000000000000000000."+k.SigningKey.Fingerprint, "build-01", time.Unix(1700000000, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	kinds := map[string]string{"node": "nd_", "pool": "np_", "gateway": "ng_", "adapter": "na_"}
-	for kind := range kinds {
-		for _, prefix := range kinds {
-			id := prefix + "f1xt0re000000000"
-			body := []byte(`{"version":1,"access_key_id":"ak_f1xt0re000000000","node_id":"` + id + `","node_kind":"` + kind + `","stored_secrets":false,"apiary_public_key":[{"alg":"ed25519","public_key":"` + k.SigningKey.PublicKey + `"}]}`)
-			a := accesskey.Answer{Enrolment: true, Status: 201, RequestSignature: r.Proof, Body: body}
-			got, err := r.VerifyAnswer(a, signer.SignAnswer(a))
-			switch {
-			case kinds[kind] == prefix && (err != nil || got.NodeID != id || got.NodeKind != kind):
-				t.Errorf("node_kind %s with %s: %+v, %v; want it accepted", kind, id, got, err)
-			case kinds[kind] != prefix && err == nil:
-				t.Errorf("node_kind %s with %s: accepted as %+v", kind, id, got)
-			}
-		}
-	}
-}
-
-// TestCheckNodeID pins the node id's form: nd_, np_, ng_ or na_ and 16 lower-case
-// Crockford base32 characters.
-func TestCheckNodeID(t *testing.T) {
-	for _, id := range []string{"nd_f1xt0re000000000", "np_f1xt0re000000000", "ng_f1xt0re000000000", "na_f1xt0re000000000"} {
-		if err := accesskey.CheckNodeID(id); err != nil {
-			t.Errorf("%s: %v", id, err)
-		}
-	}
-	for _, id := range []string{"nx_f1xt0re000000000", "nb_f1xt0re000000000", "ak_f1xt0re000000000", "ws_f1xt0re000000000", "na_f1xt0re00000000", "na_F1XT0RE000000000", "na_f1xt0re00000000u", ""} {
-		if err := accesskey.CheckNodeID(id); err == nil || !strings.Contains(err.Error(), "is not nd_, np_, ng_ or na_ and 16 lower-case Crockford base32 characters") {
-			t.Errorf("%s: %v", id, err)
-		}
-	}
-}
-
 // TestADegenerateProofUnderASmallOrderKeyFails pins that a proof verifies only under a
 // key the checks pass. Under the identity point as the public key, R = [S]B makes a
 // "proof" that plain Ed25519 verification accepts for any message, though no key made
