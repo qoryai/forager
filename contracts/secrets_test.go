@@ -212,8 +212,8 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 
 // TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
 // qecp_, qecg_ and qeci_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
-// and a prefix in upper case are refused. The refused codes are documents here and not
-// under fixtures/invalid: a server answers them as any unknown code, 401, not at decode.
+// and a prefix in upper case are refused, as a server refuses a malformed code, an
+// invalid request, 400. The refused codes are tested inline, as documents here.
 func TestEnrolmentCodePrefixes(t *testing.T) {
 	c, err := contracts.Compiler()
 	if err != nil {
