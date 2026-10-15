@@ -170,8 +170,8 @@ func (r *EnrolmentRequest) VerifyProof() bool {
 }
 
 // EnrolmentAnswer is the server's 201 to an enrolment: the access key's id, the id of
-// its node, node pool or gateway with its kind, node, pool or gateway, its
-// stored-secrets flag and the server's keys. The key is active from the 201 on.
+// its node, node pool, gateway or adapter with its kind, node, pool, gateway or
+// adapter, its stored-secrets flag and the server's keys. The key is active from the 201 on.
 type EnrolmentAnswer struct {
 	Version       int    `json:"version"`
 	AccessKeyID   string `json:"access_key_id"`
