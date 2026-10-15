@@ -22,8 +22,49 @@ import (
 // because the access key has no id yet.
 const EnrolmentPath = "/.well-known/qory-enrolment"
 
-// CodePrefix starts every enrolment code.
-const CodePrefix = "qec_"
+// The prefixes of an enrolment code, one for each kind of key it enrols. A prefix is
+// read in any case and written in lower case in the normalised form.
+const (
+	// CodePrefixNode starts the enrolment code of a node's access key.
+	CodePrefixNode = "qecn_"
+	// CodePrefixPool starts the enrolment code of a node pool's access key.
+	CodePrefixPool = "qecp_"
+	// CodePrefixGateway starts the enrolment code of a gateway's access key.
+	CodePrefixGateway = "qecg_"
+	// CodePrefixAdapter starts the enrolment code of an adapter's access key.
+	CodePrefixAdapter = "qeci_"
+)
+
+// codeKinds maps each prefix of an enrolment code to the node_kind of the key the code
+// enrols.
+var codeKinds = []struct{ prefix, kind string }{
+	{CodePrefixNode, "node"},
+	{CodePrefixPool, "pool"},
+	{CodePrefixGateway, "gateway"},
+	{CodePrefixAdapter, "adapter"},
+}
+
+// errCodeShape is the error of a code without one of the prefixes or without a dot,
+// the prefixes listed from codeKinds.
+var errCodeShape = func() error {
+	var list []string
+	for _, k := range codeKinds {
+		list = append(list, k.prefix)
+	}
+	return fmt.Errorf("an enrolment code is %s or %s, 26 characters, then a dot and a fingerprint",
+		strings.Join(list[:len(list)-1], ", "), list[len(list)-1])
+}()
+
+// codePrefix returns the prefix of codeKinds that starts head in any case, and the
+// kind it names.
+func codePrefix(head string) (prefix, kind string, ok bool) {
+	for _, k := range codeKinds {
+		if len(head) >= len(k.prefix) && strings.EqualFold(head[:len(k.prefix)], k.prefix) {
+			return k.prefix, k.kind, true
+		}
+	}
+	return "", "", false
+}
 
 // MaxAnswer is the most of an answer's body the client reads before it counts the
 // answer as unsigned: a refusal body is at most 64 KiB.
@@ -51,21 +92,23 @@ func crockford(c rune) (rune, bool) {
 }
 
 // NormaliseCode returns an enrolment code in the form the request sends and the proof
-// covers: "qec_", the 26 characters of the code in upper case with I and L read as 1,
-// O as 0 and hyphens removed, then "." and the fingerprint of the server's key, and
-// during a rotation of it a second "." and the next key's fingerprint, each as issued.
-// So a person may type the code in either case and in groups. U, and every character
-// outside Crockford's alphabet, is refused.
+// covers: its prefix in lower case, [CodePrefixNode], [CodePrefixPool],
+// [CodePrefixGateway] or [CodePrefixAdapter], the 26 characters of the code in upper
+// case with I and L read as 1, O as 0 and hyphens removed, then "." and the fingerprint
+// of the server's key, and during a rotation of it a second "." and the next key's
+// fingerprint, each as issued. So a person may type the code in either case and in
+// groups. Another prefix, U, and every character outside Crockford's alphabet, is
+// refused.
 func NormaliseCode(code string) (string, error) {
 	head, fingerprints, ok := strings.Cut(code, ".")
-	prefix := len(CodePrefix)
-	if !ok || len(head) < prefix || !strings.EqualFold(head[:prefix], CodePrefix) {
-		return "", errors.New("an enrolment code is qec_, 26 characters, then a dot and a fingerprint")
+	prefix, _, known := codePrefix(head)
+	if !ok || !known {
+		return "", errCodeShape
 	}
 	var b strings.Builder
-	b.WriteString(CodePrefix)
+	b.WriteString(prefix)
 	n := 0
-	for _, c := range head[prefix:] {
+	for _, c := range head[len(prefix):] {
 		if c == '-' {
 			continue
 		}
@@ -90,6 +133,17 @@ func NormaliseCode(code string) (string, error) {
 		b.WriteString("." + f)
 	}
 	return b.String(), nil
+}
+
+// CodeKind returns the node_kind of the key an enrolment code enrols, as its prefix
+// names it: node, pool, gateway or adapter. A code [NormaliseCode] refuses is an error.
+func CodeKind(code string) (string, error) {
+	normal, err := NormaliseCode(code)
+	if err != nil {
+		return "", err
+	}
+	_, kind, _ := codePrefix(normal)
+	return kind, nil
 }
 
 // CodeFingerprints returns the fingerprints of the server's keys an enrolment code
@@ -191,6 +245,21 @@ var enrolmentRefusals = map[int][]string{
 	http.StatusTooManyRequests: {CodeRateLimited},
 }
 
+// KindError is VerifyAnswer's error for a verified 201 whose node_kind is not the kind
+// its code's prefix names: the server enrolled the key, so the code is used and the key
+// is active, and the client does not install it.
+type KindError struct {
+	// Kind is the answer's node_kind; AccessKeyID and NodeID are the answer's.
+	Kind, AccessKeyID, NodeID string
+	// codeKind is the kind the code's prefix names.
+	codeKind string
+}
+
+// Error names the answer's node_kind and the kind the code's prefix names.
+func (e *KindError) Error() string {
+	return fmt.Sprintf("the enrolment answer: node_kind %q does not match the code's kind %q", e.Kind, e.codeKind)
+}
+
 // VerifyAnswer reads the server's answer to the request. A 201, a signed 409 and a
 // signed 429 are verified alike, as enrolment answers, under EnrolAnswerDomain with the
 // request's proof as the third line: each lists the server's keys in apiary_public_key,
@@ -198,7 +267,8 @@ var enrolmentRefusals = map[int][]string{
 // it is answer_unsigned. A 409 the server sends unsigned, to a key the checks refuse or
 // a proof that does not verify under it, is answer_unsigned too, and so is a 429 sent
 // unsigned, per source address. A 201's pin is then the entries whose fingerprints the
-// code carries. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit,
+// code carries. A verified 201 whose node_kind is not the kind the code's prefix names,
+// [CodeKind], is a [*KindError]. A verified 409 is a [*Refusal] with its code, key_invalid or key_limit,
 // and a verified 429 one with rate_limited, too many attempts with the code; a verified
 // refusal with another code is an error. A 401, unsigned, is unauthorized: the code was
 // used, has expired or was cancelled. Any other answer is answer_unsigned. A caller acts
@@ -250,6 +320,9 @@ func (r *EnrolmentRequest) VerifyAnswer(a Answer, signature string) (*EnrolmentA
 	}
 	if err := ans.check(); err != nil {
 		return nil, fmt.Errorf("the enrolment answer: %w", err)
+	}
+	if kind, _ := CodeKind(r.Code); ans.NodeKind != kind {
+		return nil, &KindError{Kind: ans.NodeKind, AccessKeyID: ans.AccessKeyID, NodeID: ans.NodeID, codeKind: kind}
 	}
 	for _, k := range ans.ApiaryPublicKey {
 		if pub, err := ParsePublicKey(k.PublicKey); err == nil && slices.Contains(fingerprints, pub.Fingerprint()) {

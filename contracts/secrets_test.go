@@ -210,6 +210,37 @@ func TestEnrolmentAnswerNodeKinds(t *testing.T) {
 	}
 }
 
+// TestEnrolmentCodePrefixes pins the prefixes of the enrolment request's code: qecn_,
+// qecp_, qecg_ and qeci_ in lower case pass, and qec_ alone, an unknown letter, qecx_,
+// and a prefix in upper case are refused. The refused codes are documents here and not
+// under fixtures/invalid: a server answers them as any unknown code, 401, not at decode.
+func TestEnrolmentCodePrefixes(t *testing.T) {
+	c, err := contracts.Compiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile(contracts.Base + "/enrolment.schema.json#/$defs/request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(code string) any {
+		var doc any
+		if err := json.Unmarshal([]byte(`{"version":1,"code":"`+code+`","name":"build-01","public_key":"ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ","timestamp":1700000000,"proof":"FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ"}`), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	for prefix, want := range map[string]bool{
+		"qecn_": true, "qecp_": true, "qecg_": true, "qeci_": true,
+		"qec_": false, "qecx_": false, "QECN_": false,
+	} {
+		err := s.Validate(request(prefix + "F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg"))
+		if (err == nil) != want {
+			t.Errorf("a code with %s: %v; want accepted %t", prefix, err, want)
+		}
+	}
+}
+
 // TestFixtureAccessKey pins the fixture access key and the fixture signing keys: each
 // public key and fingerprint from its seed, the X25519 private key as the clamped first
 // 32 bytes of SHA-512(seed), and the X25519 public key two ways, from the private key

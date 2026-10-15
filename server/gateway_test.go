@@ -902,7 +902,7 @@ func TestPostViaEnrolsThroughTheGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := accesskey.NewEnrolmentRequest(generate(t), "qec_F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
+	r, err := accesskey.NewEnrolmentRequest(generate(t), "qecp_F1XT0RE0000000000000000000."+signer.Fingerprint(), "build-01", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

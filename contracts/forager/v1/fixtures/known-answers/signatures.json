@@ -24,20 +24,20 @@
     {
       "note": "The proof of the enrolment request, under the fixture access key secret; the proof is the body's.",
       "body": "fixtures/enrolment/request.json",
-      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
-      "length": 139
+      "lines": ["qory-enrol-ed25519-v1", "qecn_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
+      "length": 140
     },
     {
       "note": "The proof of an enrolment request with a code made during a rotation of the server's key, carrying both fingerprints.",
       "body": "fixtures/enrolment/request-two-fingerprints.json",
-      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
-      "length": 162
+      "lines": ["qory-enrol-ed25519-v1", "qecn_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg.52vzzF--Ic7qH_eZWi5K2A", "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "build-01", "1700000000"],
+      "length": 163
     },
     {
       "note": "The proof of an enrolment request with a gateway's code, under the fixture gateway key; the proof is the body's.",
       "body": "fixtures/enrolment/request-gateway.json",
-      "lines": ["qory-enrol-ed25519-v1", "qec_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "iC0Oo7KGTnpYfz5pjOpEWZmDEuZV4F-l6LURnYuqyM0", "gateway-01", "1700000000"],
-      "length": 141
+      "lines": ["qory-enrol-ed25519-v1", "qecg_F1XT0RE0000000000000000000.uoES-kuj1vk0sq0qoGlmAg", "iC0Oo7KGTnpYfz5pjOpEWZmDEuZV4F-l6LURnYuqyM0", "gateway-01", "1700000000"],
+      "length": 142
     }
   ],
   "answers": [
@@ -61,49 +61,49 @@
       "note": "201 to the enrolment request, signed under the fixture signing key; line 3 is the request's proof.",
       "body": "fixtures/enrolment/answer.json",
       "body_length": 224,
-      "lines": ["qory-enrol-answer-ed25519-v1", "201", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "51905d711f27a1a67ddbfbdea1b86a6b9c6285039057275cc571f14d0f3c5970", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "201", "FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ", "51905d711f27a1a67ddbfbdea1b86a6b9c6285039057275cc571f14d0f3c5970", "", ""],
       "length": 186,
-      "signature": "mlolBZmEjfAvl4-JfERjGZyBKZLg3yVT-uq3z_AsUzv6fn_Gd6qTAcXrrd0Y8FMi0V8Nl9_Iw-xeZ5aOJhqFCA"
+      "signature": "Jo_alQnNy0_1uLB73vGVxnai1kvwhdsxQIAaYsjsQXb65CHUJMfrAR4WBQOXEukJOd7zTS5l2Y0sRclk5UyGCg"
     },
     {
       "note": "409 key_limit to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-limit.json",
       "body_length": 120,
-      "lines": ["qory-enrol-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "5dd044dde8d72f0fbe4172f2639c90d0e9226d4640f01bdc4019d20df020b8b9", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ", "5dd044dde8d72f0fbe4172f2639c90d0e9226d4640f01bdc4019d20df020b8b9", "", ""],
       "length": 186,
-      "signature": "dtByGGJnlokL_LtW39BLmDRHoryz6s5WIVkssrERfRR-fyknxsjmJ9NjEUHAK0K4aMlL5hMDwNSNXXsir_WsBQ"
+      "signature": "HhiLunB2xIjyEgJJorRKEuoXM0vPmrsPRvZRDAn0p77K-uQz_wLXGrm-3xEQxY2k7IKnA7OGkfMFgvVqlXnZBw"
     },
     {
       "note": "409 key_invalid to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-invalid.json",
       "body_length": 122,
-      "lines": ["qory-enrol-answer-ed25519-v1", "409", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "959e82a2392a8a909e4bff23270ea79e5c15fa10422bffefbe96b04002d8fd80", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ", "959e82a2392a8a909e4bff23270ea79e5c15fa10422bffefbe96b04002d8fd80", "", ""],
       "length": 186,
-      "signature": "v5AOuFDcMyRGIjFlPQ1XvhjRDqJMymEn2pau1mMdlGg3BLA7sdgGXRI9Bzbvk7ItLUYGqsYVSurHY7kZ-6j-Cw"
+      "signature": "N85-PvUYAajX0prOIh_i3Mo3eSbrDs5q6vtOe9rv8OOBQoVG2ThyB9mGBRGcC13izYkKqyhYHdB7uiCTf-X4DA"
     },
     {
       "note": "409 key_limit during a rotation of the server's key, to the request whose code carries both fingerprints: the body lists the current key, then the next, and the current key signs; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-limit-rotation.json",
       "body_length": 197,
-      "lines": ["qory-enrol-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "f8cd2d78468a7dc24af9ad49d26090c3225de539a52ef17db893cd3ba92f2415", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "qnZtk1VhnquyH63e13dregb6YdNMzjvuxXpM9Iki-QKeapap9AyoTtQ5E1rkt5JHamTHJ-PSLkHPFuqjh_eCBg", "f8cd2d78468a7dc24af9ad49d26090c3225de539a52ef17db893cd3ba92f2415", "", ""],
       "length": 186,
-      "signature": "GrbPliGIAWMeF5XpYLibjN33LALD0w1fCHFVtYCh8YigWzW6nhRbcpqj7xTHnZlveGm22-8l768REHwCpVrADg"
+      "signature": "TyZm7rUztfE6-N73TuGDbEYltbzJoGYPSLT0m5lYcB4_tqpRXwTm55Tzb_K8U_E1NPE15qnoP0Vg3Vf91CMQCw"
     },
     {
       "note": "409 key_invalid during a rotation of the server's key, to the request whose code carries both fingerprints: the body lists the current key, then the next, and the current key signs; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-key-invalid-rotation.json",
       "body_length": 199,
-      "lines": ["qory-enrol-answer-ed25519-v1", "409", "R2IX6Eyxs9kAClN3XbdGVUDglrdgsYrY8da3kitMtYg4uWsdQODpsQFv5Q22wCrHh9y6_f8ruU3YE2nIEBlhCg", "deb4a76a7f791485d555df881b81bb80b53005249d174df071362e0a9ef83f29", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "409", "qnZtk1VhnquyH63e13dregb6YdNMzjvuxXpM9Iki-QKeapap9AyoTtQ5E1rkt5JHamTHJ-PSLkHPFuqjh_eCBg", "deb4a76a7f791485d555df881b81bb80b53005249d174df071362e0a9ef83f29", "", ""],
       "length": 186,
-      "signature": "T66jEKg-BKLfrFVZotmlmGGp6v6lbtB8BD9hdqbtv8X1H8KuVYOrr2ttZucfPkplAbVo9qzNnx42_Q9n7BQADQ"
+      "signature": "nqczSQOMMZN20KgZxrHV8aLjO8Up73FtZuU2KmvGmNDPC7qNWfQVEQ_1AVH6Tv0wrmMUhbLfq9nglDyrETt1CQ"
     },
     {
       "note": "429 rate_limited per code to the enrolment request, signed under the fixture signing key, its body listing the server's key as the 201 does; line 3 is the request's proof.",
       "body": "fixtures/enrolment/refusal-rate-limited.json",
       "body_length": 123,
-      "lines": ["qory-enrol-answer-ed25519-v1", "429", "stcDcwasYMSLUxHX7A9AH-LXGRsRfpbHpMwGKd5ND6LI1WRsH10Rt4dhp8VmIYEau2sj31kCJSUzsDkSlCV8AQ", "01ddb169d4ea2fcf459a423a5c20d42010ea0c686b63415278cf5cc6f64005c4", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "429", "FpoHd4N0bTpTLiGcpfTyn3ax8g-BoPaa-V9Lm5y8P2yi_IKuftZb_AYwlpykH6PfqBASCuS9ZOfbZU-eIB83CQ", "01ddb169d4ea2fcf459a423a5c20d42010ea0c686b63415278cf5cc6f64005c4", "", ""],
       "length": 186,
-      "signature": "Fp4HSpmKWIdIqPCZEcGwB98PeYCM2rZpikfvXilxXHdo23g40RJxaDRJznxa6lLEzeDa4tGjG7XsllWvxoQRCw"
+      "signature": "dpFADwIGD0Y3Jwt1mZVGrbomYySm_7S3Q5_kgUueH8zQdqzg9F9k4rfKSm0BdRAVYQ2KbNQUmVUHYasPOxi0Bw"
     },
     {
       "note": "200 to the registration above, signed under the fixture signing key: the run configuration of fixtures/known-answers/registration-answer.json, with X-Qory-Run-Configuration, here sha256= and the hex SHA-256 of the body, and no configuration digest; line 3 is the registration's signature.",
@@ -117,9 +117,9 @@
       "note": "201 to the enrolment request with a gateway's code, signed under the fixture signing key; line 3 is that request's proof, and the answer names the fixture gateway key's id and a gateway's node.",
       "body": "fixtures/enrolment/answer-gateway.json",
       "body_length": 227,
-      "lines": ["qory-enrol-answer-ed25519-v1", "201", "j5qq5IDmJ2MAGFLT4lPFESkwWuBN12ysQSgZUXd1mkpDYMPaDcac3_uUxHZJSNaALH8LQagZys58_ylcVW2fDA", "86a221f5e867582c973fd57827caf604fe8cd1e7cdfd982fae8f06fb6c3d7c75", "", ""],
+      "lines": ["qory-enrol-answer-ed25519-v1", "201", "WAYuMOIwaqqrbAi0OQxGrmKFSalwNYE1PYq3YQOe0Ew8QszQUe0ubtL4-LvNrhGdy_J5sr2Fady0ZK9rOYi1Aw", "86a221f5e867582c973fd57827caf604fe8cd1e7cdfd982fae8f06fb6c3d7c75", "", ""],
       "length": 186,
-      "signature": "IGWC8c_sdsAUOohWEaf8zaBN5j0Kpo2Z8kO29qlESO8MynfcwY-C-HlYslzEZG_CjOp5JFX1b6kFdnasoe0yAA"
+      "signature": "UrnON1dSNy8j5Vcdwzrtb5nSBxEkgZRFCwpA87DfUmk5IOveRxA5UNbZC51B6q75m8DinzUAGta6ulOM8btnAA"
     }
   ]
 }

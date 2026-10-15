@@ -20,6 +20,11 @@ release may change what an existing document does, and says so under Upgrading.
   `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
   `na_` id.
+- Enrolment: an enrolment code's prefix names the kind of key it enrols, `qecn_` a
+  node's, `qecp_` a node pool's, `qecg_` a gateway's and `qeci_` an adapter's, in place
+  of `qec_`, which is refused. `accesskey.CodeKind` reads the kind, and
+  `EnrolmentRequest.VerifyAnswer` refuses a `201` of another kind with an
+  `accesskey.KindError`.
 
 ### Gateway
 
