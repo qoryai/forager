@@ -42,6 +42,8 @@ const defaultHeartbeat = 30 * time.Second
 // on its one address with [Config.Listen]: it opens each run, decides its connections by
 // its policy through its proxy, numbers its events and sends them to the server.
 type Gateway struct {
+	// cfg is the Config Start was given, with the copies of the Server, the credentials
+	// and the tools Start took and checked.
 	cfg      Config
 	report   func(string)
 	interval int
@@ -108,8 +110,9 @@ type Gateway struct {
 // in memory to a session in this process and, unless [Config.NoLinkSocket], on a socket
 // in a private directory of its own, and the shared proxy listener on loopback; with
 // Listen, its one address alone. It serves sessions until Close, and sends nothing more
-// before a session opens a run. It keeps its own copy of the Server and its pin: what
-// the caller changes in them later changes nothing.
+// before a session opens a run. It holds a copy of the Server and its pin, and a copy of
+// the credentials and the tools, every list of each definition included, which it
+// checks and every run reads: what the caller changes in them later changes nothing.
 //
 // Start refuses, before anything starts, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
@@ -122,6 +125,7 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		s.ApiaryPublicKey = slices.Clone(s.ApiaryPublicKey)
 		cfg.Server = &s
 	}
+	cfg.Credentials, cfg.Tools = copyCredentials(cfg.Credentials), copyTools(cfg.Tools)
 	cert, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
@@ -244,6 +248,39 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	go g.http.Serve(g.link)
 	ok = true
 	return g, nil
+}
+
+// copyCredentials is a copy of credentials that shares nothing with them: the list and
+// each definition's Adapter, Hosts, Paths and Placeholders are new, so a change to the
+// credentials the copy was taken from leaves the copy as it was. Nil when credentials
+// is, and each list nil where the definition's is.
+func copyCredentials(credentials []Credential) []Credential {
+	if credentials == nil {
+		return nil
+	}
+	out := make([]Credential, len(credentials))
+	for i, c := range credentials {
+		c.Adapter, c.Hosts, c.Paths = slices.Clone(c.Adapter), slices.Clone(c.Hosts), slices.Clone(c.Paths)
+		c.Placeholders = slices.Clone(c.Placeholders)
+		out[i] = c
+	}
+	return out
+}
+
+// copyTools is a copy of tools that shares nothing with them: the list and each
+// definition's Command, Serves and Placeholders are new, so a change to the tools the
+// copy was taken from leaves the copy as it was. Nil when tools is, and each list nil
+// where the definition's is.
+func copyTools(tools []Tool) []Tool {
+	if tools == nil {
+		return nil
+	}
+	out := make([]Tool, len(tools))
+	for i, t := range tools {
+		t.Command, t.Serves, t.Placeholders = slices.Clone(t.Command), slices.Clone(t.Serves), slices.Clone(t.Placeholders)
+		out[i] = t
+	}
+	return out
 }
 
 // listenLink makes the link's socket in a private directory of the gateway's. The

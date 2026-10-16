@@ -105,7 +105,8 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // the ceiling's allow list, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
 // is. The credentials, the tools and the image are the policy's: a ceiling defines
-// them and selects none.
+// them and selects none. The run's record lists the ceiling's path rules in
+// dev.qory.run.policy_applied's ceiling_paths.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
@@ -159,7 +160,13 @@ func CheckBeside(p *Policy) error {
 	if p == nil {
 		return nil
 	}
-	for _, side := range p.Egress.beside {
+	return checkSides(p.Egress.beside)
+}
+
+// checkSides validates each of sides as [CheckBeside] does. [Decide] gives it the run's
+// copy of the sides, the one the proxy and the record hold. Tests replace it.
+var checkSides = func(sides []map[string][]string) error {
+	for _, side := range sides {
 		b, err := json.Marshal(Policy{Version: 1, Egress: PolicyEgress{Mode: string(policy.Observe), Paths: side}})
 		if err != nil {
 			return &policy.Error{Name: "policy", Err: err}

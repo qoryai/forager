@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "policy": {
+    "version": 1,
+    "egress": {
+      "mode": "enforce",
+      "allow": [
+        "api.example",
+        "git.example"
+      ],
+      "paths": {
+        "api.example": [
+          "/v1/*"
+        ]
+      }
+    }
+  },
+  "digest": "5b1165e429a4d8ac5bbee19eaabad29c0efaa3585fe9decb079a87b4d352aa5f",
+  "applied": {
+    "mode": "enforce",
+    "allow": [
+      "api.example",
+      "git.example"
+    ],
+    "source": "config",
+    "url": "https://apiary.example/v1/run-configuration",
+    "digest": "5b1165e429a4d8ac5bbee19eaabad29c0efaa3585fe9decb079a87b4d352aa5f",
+    "run_configuration": "sha256=5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "paths": {
+      "api.example": [
+        "/v1/*"
+      ]
+    },
+    "ceiling_paths": [
+      {
+        "api.example": [
+          "/v1/models/*",
+          "/v1/messages"
+        ],
+        "git.example": [
+          "/example-namespace/*"
+        ]
+      }
+    ],
+    "terminated": [
+      "api.example",
+      "git.example"
+    ]
+  }
+}

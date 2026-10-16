@@ -4,6 +4,35 @@ Every release of Forager, newest first, in the shape of [Keep a Changelog](https
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Core and contract
+
+#### Added
+
+- `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
+  run's policy file was put under with `gateway.Policy.Under`, by host, one object per
+  ceiling that has any. The link's `applied` carries it too.
+
+#### Changed
+
+- The Claude runtime's `oauth_token` credential is titled "Claude OAuth token" in
+  `runtimes.json` and its descriptor, no longer "Claude OAuth credential".
+- A new instance id is `i_` and 26 lower-case Crockford base32 characters, no longer 22
+  base64url characters, so it can no longer contain an access key's or a run key's
+  prefix by chance.
+
+### Gateway
+
+#### Changed
+
+- A run holds a copy of the path rules `gateway.Policy.Under` adds, taken and checked
+  when it starts: the proxy and `ceiling_paths` keep them for the run whatever the
+  caller's `Policy` holds afterwards.
+- The gateway holds a copy of its `Config`'s credentials and tools, taken at `Start`
+  and checked there: every run keeps them whatever the caller's `Config` holds
+  afterwards.
+
 ## [0.7.0] - 2026-10-12
 
 ### Core and contract

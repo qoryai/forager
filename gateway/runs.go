@@ -686,7 +686,7 @@ type reloadAnswerDoc struct {
 // lr.mu held.
 func (lr *linkRun) refresh() {
 	pol := lr.r.Policy()
-	applied := appliedOf(pol, lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
+	applied := appliedOf(pol, lr.r.Beside(), lr.r.Held(), lr.r.Chosen(), lr.px.Terminated())
 	lr.given = append(lr.given, applied)
 	doc, digest := policyDocument(pol)
 	lr.reloadBody, _ = json.Marshal(reloadAnswerDoc{
@@ -765,9 +765,10 @@ func images(li *server.LinkImages) run.Images {
 
 // appliedOf is what dev.qory.run.policy_applied records of a policy that the gateway
 // decides, as today's session writes it: every member but the variables and the
-// harness's hosts, which are the session's. It is in JSON's types, as an event's data
-// decodes.
-func appliedOf(pol *policy.Loaded, held *credential.Held, chosen []tool.Chosen, terminated []string) map[string]any {
+// harness's hosts, which are the session's. beside are the sides of path rules
+// [Policy.Under] put beside the run's policy, its ceiling_paths. It is in JSON's types,
+// as an event's data decodes.
+func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credential.Held, chosen []tool.Chosen, terminated []string) map[string]any {
 	allow, deny := pol.Policy.Egress.Allow, pol.Policy.Egress.Deny
 	if allow == nil {
 		allow = []string{}
@@ -791,6 +792,9 @@ func appliedOf(pol *policy.Loaded, held *credential.Held, chosen []tool.Chosen, 
 	}
 	if len(pol.Policy.Egress.Paths) > 0 {
 		a["paths"] = pol.Policy.Egress.Paths
+	}
+	if len(beside) > 0 {
+		a["ceiling_paths"] = beside
 	}
 	if held != nil && len(held.Uses) > 0 {
 		uses := make([]map[string]any, len(held.Uses))

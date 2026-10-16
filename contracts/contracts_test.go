@@ -150,11 +150,11 @@ func namedSchema(s map[string]*jsonschema.Schema, f string) string {
 // wall, the names it passes and its images, and one with a narrowing as well, a run
 // answer with a wall, its placeholders, reserved names, image, applied and certificate
 // authority, one with a wall and an image but no certificate authority, one without a
-// wall and one without a policy, a reload answer with and without a policy, a batch of a
-// session's events without sequence, a batch of a run.refused with a session's own code,
-// a batch of a run.exited with timeout, and refusals from the gateway, two internal ones
-// among them, one whose message spans lines, two 410s with the state and the reason of
-// the run's end, and from apiary.
+// wall and one without a policy, a reload answer with and without a policy and one whose
+// applied has ceiling_paths, a batch of a session's events without sequence, a batch of
+// a run.refused with a session's own code, a batch of a run.exited with timeout, and
+// refusals from the gateway, two internal ones among them, one whose message spans
+// lines, two 410s with the state and the reason of the run's end, and from apiary.
 func TestLinkFixturesValidate(t *testing.T) {
 	s := compile(t, linkDiscovery, linkRunRequest, linkRunAnswer, linkReload, linkBatch, linkRefusal)
 	seen := map[string]bool{}

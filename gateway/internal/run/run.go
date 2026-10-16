@@ -92,7 +92,9 @@ type Run struct {
 	defs   []credential.Definition
 	tools  []tool.Definition
 	// node is the node's policy, nil when the run has none, and beside the sides of
-	// path rules [Policy.Under] put beside it, which no document holds.
+	// path rules [Policy.Under] put beside it, which no document holds: the run's copy
+	// of them, taken when it starts and checked as taken, so the proxy and the record
+	// hold them fixed for the run whatever the caller's [Policy] holds afterwards.
 	node   *policy.Loaded
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
@@ -145,11 +147,11 @@ func Decide(cfg Config) (*Run, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := CheckBeside(cfg.Node); err != nil {
+		r.beside = copySides(cfg.Node.Egress.beside)
+		if err := checkSides(r.beside); err != nil {
 			return nil, err
 		}
 		r.node, pol = node, node
-		r.beside = cfg.Node.Egress.beside
 	}
 	if cfg.Fetched == nil {
 		r.guard = GuardNames(pol, cfg.Narrowing)
@@ -300,6 +302,11 @@ func (r *Run) NodePaths() []map[string][]string {
 	}
 	return append(out, r.beside...)
 }
+
+// Beside are the sides of path rules [Policy.Under] put beside the node's policy, one
+// per ceiling that has any, in order, fixed for the run: dev.qory.run.policy_applied
+// lists them as ceiling_paths. Nil when there are none.
+func (r *Run) Beside() []map[string][]string { return slices.Clone(r.beside) }
 
 // Held are the credentials the run holds now.
 func (r *Run) Held() *credential.Held {
@@ -691,6 +698,23 @@ func inForce(fetched, node *policy.Loaded, url, digest string) (*policy.Loaded, 
 	}
 	out.URL, out.RunConfiguration = url, digest
 	return &out, nil
+}
+
+// copySides is a copy of sides of path rules that shares nothing with them: the list,
+// each side and each host's paths are new, so a change to the sides the copy was taken
+// from leaves the copy as it was. Nil when sides is.
+func copySides(sides []map[string][]string) []map[string][]string {
+	if sides == nil {
+		return nil
+	}
+	out := make([]map[string][]string, len(sides))
+	for i, side := range sides {
+		out[i] = make(map[string][]string, len(side))
+		for host, paths := range side {
+			out[i][host] = slices.Clone(paths)
+		}
+	}
+	return out
 }
 
 // nodePaths is how many hosts the node's path rules list beside a server's policy.

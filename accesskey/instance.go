@@ -5,7 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
+	"encoding/base32"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -19,13 +19,26 @@ const InstancePrefix = "i_"
 const InstanceHashKey = "qory instance-id v1"
 
 // NewInstanceID returns a new instance id: "i_" and 16 bytes from the system's random
-// source in base64url, 24 characters.
+// source in lower-case Crockford base32, 26 characters of 0-9 and a-z without i, l, o
+// and u, the alphabet of an access key id and a node id. The 128 bits are read
+// big-endian in groups of 5, the last group of 3 bits filled with 2 zero bits, without
+// padding. So the id holds no underscore after "i_", and never an access key secret's
+// or a run key's prefix, which [CheckInstanceID] refuses.
 func NewInstanceID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("the system's random source: %w", err)
 	}
-	return InstancePrefix + base64.RawURLEncoding.EncodeToString(b), nil
+	return instanceID(b), nil
+}
+
+// instanceEncoding is lower-case Crockford base32 without padding.
+var instanceEncoding = base32.NewEncoding("0123456789abcdefghjkmnpqrstvwxyz").WithPadding(base32.NoPadding)
+
+// instanceID returns the instance id of 16 bytes: "i_" and the bytes in
+// [instanceEncoding].
+func instanceID(b []byte) string {
+	return InstancePrefix + instanceEncoding.EncodeToString(b)
 }
 
 // CheckInstanceID refuses an instance id outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$,

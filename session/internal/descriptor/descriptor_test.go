@@ -76,7 +76,7 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 	}
 	want := []descriptor.Declaration{
 		{ID: "api_key", Title: "Anthropic API key", Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "header", Header: "x-api-key"}},
-		{ID: "oauth_token", Title: "Claude OAuth credential", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
+		{ID: "oauth_token", Title: "Claude OAuth token", Name: "CLAUDE_CODE_OAUTH_TOKEN", Hosts: []string{"api.anthropic.com"}, Paths: []string{"/v1/*"}, Auth: descriptor.Auth{Scheme: "bearer"}},
 	}
 	for i, w := range want {
 		if !reflect.DeepEqual(s.Declares[i], w) {
