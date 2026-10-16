@@ -97,7 +97,7 @@ func (d Definition) Check() error {
 		return fmt.Errorf("tool %s: the argument goes in the command's arguments, not in the program's name", d.Name)
 	}
 	if d.Argument != "" {
-		if _, err := regexp.Compile(d.Argument); err != nil {
+		if _, err := wholeMatch(d.Argument); err != nil {
 			return fmt.Errorf("tool %s: argument: %w", d.Name, err)
 		}
 	}
@@ -126,11 +126,26 @@ func (d Definition) check(argument string) error {
 	case d.Argument == "" && argument != "":
 		return fmt.Errorf("tool %s takes no argument and the policy gives %q", d.Name, argument)
 	case d.Argument != "":
-		if re := regexp.MustCompile(`^(?:` + d.Argument + `)$`); !re.MatchString(argument) {
+		re, err := wholeMatch(d.Argument)
+		if err != nil {
+			return fmt.Errorf("tool %s: argument: %w", d.Name, err)
+		}
+		if !re.MatchString(argument) {
 			return fmt.Errorf("tool %s: the argument %q is not one the machine provides for", d.Name, argument)
 		}
 	}
 	return nil
+}
+
+// wholeMatch compiles pattern as a run's argument is matched: anchored, so an argument
+// matches only when the pattern matches all of it. The error of a pattern that does not
+// compile alone is that one's; one that compiles alone and not anchored, such as a\Q,
+// whose quote takes the anchor's closing in, has the anchored form's.
+func wholeMatch(pattern string) (*regexp.Regexp, error) {
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, err
+	}
+	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
 // Chosen is a tool a run's policy selects, with its argument: what is started.

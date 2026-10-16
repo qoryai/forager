@@ -53,14 +53,15 @@ func def(name, argument string, serves ...string) Definition {
 // TestCheckRefusesWhatCannotBeATool pins the definition's own checks.
 func TestCheckRefusesWhatCannotBeATool(t *testing.T) {
 	for name, d := range map[string]Definition{
-		"a name outside the grammar":      {Name: "Files", Command: []string{"x"}, Serves: []string{"a.internal"}},
-		"no command":                      {Name: "files", Serves: []string{"a.internal"}},
-		"the argument in the program":     {Name: "files", Command: []string{"/opt/${argument}"}, Serves: []string{"a.internal"}},
-		"a pattern that does not compile": {Name: "files", Command: []string{"x"}, Argument: "(", Serves: []string{"a.internal"}},
-		"no host":                         {Name: "files", Command: []string{"x"}},
-		"a host with a port":              {Name: "files", Command: []string{"x"}, Serves: []string{"a.internal:443"}},
-		"an upper-case host":              {Name: "files", Command: []string{"x"}, Serves: []string{"A.internal"}},
-		"a placeholder not a variable":    {Name: "files", Command: []string{"x"}, Serves: []string{"a.internal"}, Placeholders: []string{"A-B"}},
+		"a name outside the grammar":                     {Name: "Files", Command: []string{"x"}, Serves: []string{"a.internal"}},
+		"no command":                                     {Name: "files", Serves: []string{"a.internal"}},
+		"the argument in the program":                    {Name: "files", Command: []string{"/opt/${argument}"}, Serves: []string{"a.internal"}},
+		"a pattern that does not compile":                {Name: "files", Command: []string{"x"}, Argument: "(", Serves: []string{"a.internal"}},
+		"a pattern that compiles alone and not anchored": {Name: "files", Command: []string{"x"}, Argument: `a\Q`, Serves: []string{"a.internal"}},
+		"no host":                      {Name: "files", Command: []string{"x"}},
+		"a host with a port":           {Name: "files", Command: []string{"x"}, Serves: []string{"a.internal:443"}},
+		"an upper-case host":           {Name: "files", Command: []string{"x"}, Serves: []string{"A.internal"}},
+		"a placeholder not a variable": {Name: "files", Command: []string{"x"}, Serves: []string{"a.internal"}, Placeholders: []string{"A-B"}},
 	} {
 		if err := d.Check(); err == nil {
 			t.Errorf("%s: accepted", name)
