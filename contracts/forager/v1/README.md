@@ -1493,7 +1493,7 @@ qory-run-key-ed25519-v1\n<payload bytes>
 | `gateway` | `^ng_…$` | the gateway the node's choice resolved to at this registration |
 | `gateway_url` | `https://host[:port]`, the origin alone | where the edge reaches the gateway, the only address the run key is ever sent to |
 | `gateway_public_key` | 1 or 2 of `{alg: "ed25519", public_key}` | the gateway's live keys, current then next |
-| `instance_id` | the instance id's pattern | the registration's signed instance id |
+| `instance_id` | the instance id's pattern | the registration's signed instance id; for a dispatched run, the run's `run_id`, so each dispatched run is a new instance |
 | `issued` | RFC 3339 in UTC, whole seconds | when Qory Apiary made it |
 | `attach_by` | RFC 3339 in UTC, whole seconds | the end of the attach window |
 
