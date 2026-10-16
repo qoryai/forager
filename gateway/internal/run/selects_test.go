@@ -137,7 +137,7 @@ func TestALabelsValueIsPrintedWithoutItsControlCharacters(t *testing.T) {
 	for name, c := range map[string]struct {
 		label, value, line string
 	}{
-		"the repository": {"repository", "a/b\nrun x: forged\x1b[2J", "the run's label repository=a/b run x: forged [2J is no argument github takes: it gets no github"},
+		"the repository": {"repository", "a/b\nrun x: forged\x1b[2J\u202edcba", "the run's label repository=a/b run x: forged [2J dcba is no argument github takes: it gets no github"},
 		"the forge":      {"forge", "git.example\nrun x: forged\x1b[2J", "the gateway selects github for the forge github.com, and the run's forge is git.example run x: forged [2J: it gets no github"},
 	} {
 		cfg, said := selectsConfig(t, `{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.model.example"]}}`)
@@ -147,8 +147,8 @@ func TestALabelsValueIsPrintedWithoutItsControlCharacters(t *testing.T) {
 			t.Errorf("%s: reported %q", name, said.said)
 		}
 		for _, l := range said.said {
-			if strings.ContainsAny(l, "\n\x1b") {
-				t.Errorf("%s: a line holds a control character: %q", name, l)
+			if strings.ContainsAny(l, "\n\x1b\u202e") {
+				t.Errorf("%s: a line holds a control or format character: %q", name, l)
 			}
 		}
 	}

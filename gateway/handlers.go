@@ -306,8 +306,8 @@ const codeInternal = "internal"
 const maxMessage = 8192
 
 // message is an error's text as a refusal's message holds it: tab and newline kept,
-// every other control character, C0, DEL and C1, a space, at most maxMessage
-// characters.
+// every other control character, C0, DEL and C1, and every format character, Cf, a
+// space, at most maxMessage characters.
 func message(text string) string {
 	out := []rune(run.Spaced(text, '\t', '\n'))
 	if len(out) > maxMessage {

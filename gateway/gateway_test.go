@@ -737,7 +737,7 @@ func TestRefuseOpen(t *testing.T) {
 			t.Errorf("%v: %d %s", c.err, w.Code, w.Body)
 		}
 	}
-	if got := gateway.MessageOf(errors.New("one\ttwo\nthree\rfour\x00five\x1bsix\x7fseven\u009beight\u0080nine\u009fend")); got != "one\ttwo\nthree four five six seven eight nine end" {
+	if got := gateway.MessageOf(errors.New("one\ttwo\nthree\rfour\x00five\x1bsix\x7fseven\u009beight\u0080nine\u009fend\u202eten\u200bend")); got != "one\ttwo\nthree four five six seven eight nine end ten end" {
 		t.Errorf("%q", got)
 	}
 	long := gateway.MessageOf(errors.New(strings.Repeat("é", 9000)))

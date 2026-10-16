@@ -263,12 +263,14 @@ func WholeMatch(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
-// Spaced is text with every control character, C0, DEL and C1, a space, but those of
-// keep: what a line the gateway prints or answers holds of a value it did not choose,
-// so the value can neither break the line nor send its reader's terminal an escape.
+// Spaced is text with every control character, C0, DEL and C1, and every format
+// character, Cf, the bidirectional overrides among them, a space, but those of keep:
+// what a line the gateway prints or answers holds of a value it did not choose, so the
+// value can neither break the line, send its reader's terminal an escape, nor show the
+// line in another order than it is written.
 func Spaced(text string, keep ...rune) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) && !slices.Contains(keep, r) {
+		if (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) && !slices.Contains(keep, r) {
 			return ' '
 		}
 		return r
