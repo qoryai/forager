@@ -315,6 +315,10 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		defer context.AfterFunc(how.request, stopAsk)()
 	}
 	var fetched *run.Fetched
+	// decideLabels are the labels the run is decided by: on the one address, those the
+	// attach's answer gives back of the starter's registration, which the run's selection
+	// takes its arguments from.
+	decideLabels := labels
 	if g.client != nil {
 		conf, confDigest := g.config()
 		var rc *server.RunConfiguration
@@ -323,7 +327,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The record's first line: the registration the server accepted, never posted.
 		var registered map[string]any
 		if remote {
-			rc, digest, registered, regErr = g.attach(ask, conf, req.RunID, how)
+			rc, digest, registered, decideLabels, regErr = g.attach(ask, conf, req.RunID, how)
 			var accepted *server.DocumentError
 			if registered == nil || (regErr != nil && !errors.As(regErr, &accepted)) {
 				// The run never attached: nothing of it is kept, so a later run request
@@ -397,9 +401,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if n := req.Narrowing; n != nil {
 		narrowing = &run.Narrowing{Allow: n.Egress.Allow, Deny: n.Egress.Deny}
 	}
+	var selects []run.Selection
+	if remote {
+		// The gateway's selection is for a run that attached with a run key alone.
+		selects = g.cfg.Selects
+	}
 	r, err := run.Decide(run.Config{
-		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: labels, Wall: req.Wall,
-		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
+		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
+		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
 		Narrowing: narrowing,
 	})
 	if err != nil {

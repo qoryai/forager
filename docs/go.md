@@ -163,6 +163,10 @@ link. Its `gateway.Config` sets it:
   sees the run keys they carry, in each attach and in each accepted registration answer
   the gateway relays; one that only tunnels them sees the server's host and port.
   `Listen` needs it.
+- `Selects`: behind a separate gateway, the credentials a walled run gets when the
+  server's policy selects none. An entry that takes an argument names the run's label
+  it takes, the forge the run's `forge` label must be, and the pattern the label's value
+  must match whole.
 
 A separate gateway runs no sessions on the gateway's machine: it makes no local link, in
 memory or on a socket, and no proxy listener on loopback, and a session that dials its

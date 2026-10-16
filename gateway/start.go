@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -42,8 +43,8 @@ const defaultHeartbeat = 30 * time.Second
 // on its one address with [Config.Listen]: it opens each run, decides its connections by
 // its policy through its proxy, numbers its events and sends them to the server.
 type Gateway struct {
-	// cfg is the Config Start was given, with the copies of the Server, the credentials
-	// and the tools Start took and checked.
+	// cfg is the Config Start was given, with the copies of the Server, the credentials,
+	// the tools and the gateway's selection Start took and checked.
 	cfg      Config
 	report   func(string)
 	interval int
@@ -111,10 +112,12 @@ type Gateway struct {
 // in a private directory of its own, and the shared proxy listener on loopback; with
 // Listen, its one address alone. It serves sessions until Close, and sends nothing more
 // before a session opens a run. It holds a copy of the Server and its pin, and a copy of
-// the credentials and the tools, every list of each definition included, which it
-// checks and every run reads: what the caller changes in them later changes nothing.
+// the credentials and the tools, every list of each definition included, and of
+// [Config.Selects], which it checks and every run reads: what the caller changes in
+// them later changes nothing.
 //
-// Start refuses, before anything starts, a Listen that is not host:port, a Listen
+// Start refuses, before anything starts, an entry of Selects that names no credential
+// of Credentials or whose pattern does not compile, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; and once discovery is read, a Listen whose
 // access key is not a gateway's, whose node id is not ng_, and a gateway's access key,
@@ -126,6 +129,8 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		cfg.Server = &s
 	}
 	cfg.Credentials, cfg.Tools = copyCredentials(cfg.Credentials), copyTools(cfg.Tools)
+	// A Selection holds strings alone: the list's copy shares nothing with it.
+	cfg.Selects = slices.Clone(cfg.Selects)
 	cert, err := checkService(&cfg)
 	if err != nil {
 		return nil, err
@@ -154,6 +159,14 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	for _, c := range cfg.Credentials {
 		if err := c.Check(); err != nil {
 			return nil, err
+		}
+	}
+	for _, s := range cfg.Selects {
+		if !slices.ContainsFunc(cfg.Credentials, func(c Credential) bool { return c.Name == s.Name }) {
+			return nil, fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", s.Name)
+		}
+		if _, err := regexp.Compile(s.Pattern); err != nil {
+			return nil, fmt.Errorf("gateway: Selects %s: the pattern does not compile: %v", s.Name, err)
 		}
 	}
 	for _, t := range cfg.Tools {

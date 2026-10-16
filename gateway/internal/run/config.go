@@ -232,6 +232,23 @@ type Credential struct {
 // configuration says so before any run selects it.
 func (c Credential) Check() error { return credential.Definition(c).Check() }
 
+// Selection is one credential the gateway selects, [Config.Selects]: behind a separate
+// gateway, a walled run gets it when the server's policy selects no credential. An
+// entry for a credential that takes no argument names the credential alone.
+type Selection struct {
+	// Name is the credential's, one of [Config.Credentials].
+	Name string
+	// Label is the run's label whose value is the credential's argument; empty for a
+	// credential that takes none.
+	Label string
+	// Forge, when set, is the value the run's forge label must be: a run with another
+	// gets no credential of the entry.
+	Forge string
+	// Pattern, when set, is a regular expression the label's value must match whole: a
+	// run whose value it does not match gets no credential of the entry.
+	Pattern string
+}
+
 // Tool is one tool as the machine defines it, [Config.Tools]: a program the gateway
 // starts for the run, outside the enclosure, that serves hosts. The proxy ends the
 // session's TLS for those hosts, decides the host and the path by the policy as for any

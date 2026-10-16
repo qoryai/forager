@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -185,15 +186,16 @@ func (g *Gateway) relayRun(c net.Conn, r *bufio.Reader, value string, admit func
 
 // attach attaches a run of the one address at the server under the gateway's access
 // key, its body built once, so every try sends the same bytes ([Gateway.tries]), and
-// returns the run's run configuration with its digest, and the record's first line,
+// returns the run's run configuration with its digest, the record's first line,
 // dev.qory.run.registered: the run key's workspace, node and instance, what the attach
 // announced, and the labels and about the attach's answer gives back of the starter's
-// registration. A run configuration Forager refuses is a [*server.DocumentError] with
-// the first line, an attach the server accepted; any other failure has none.
-func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID string, how opening) (*server.RunConfiguration, string, map[string]any, error) {
+// registration; and those labels, nil when it gives none. A run configuration Forager
+// refuses is a [*server.DocumentError] with the first line, an attach the server
+// accepted; any other failure has none.
+func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID string, how opening) (*server.RunConfiguration, string, map[string]any, map[string]string, error) {
 	body, err := server.Attach{RunKey: how.runKey, IntervalSeconds: g.interval, Events: conf.Events.Types, ForagerVersion: g.cfg.Version}.Body()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	var ans *server.AttachAnswer
 	var digest string
@@ -203,20 +205,22 @@ func (g *Gateway) attach(ctx context.Context, conf *server.Configuration, runID 
 	})
 	var refused *server.DocumentError
 	if err != nil && !errors.As(err, &refused) {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	k := how.key
 	registered := map[string]any{"workspace": k.Workspace, "node_id": k.NodeID, "instance_id": k.InstanceID, "forager_version": g.cfg.Version,
 		"events": slices.Clone(conf.Events.Types), "contract_version": server.Revision, "interval_seconds": g.interval}
 	var rc *server.RunConfiguration
+	var labels map[string]string
 	if ans != nil {
 		rc = ans.RunConfiguration
 		if len(ans.Labels) > 0 {
 			registered["labels"] = ans.Labels
+			labels = maps.Clone(ans.Labels)
 		}
 		if ans.About != nil {
 			registered["about"] = ans.About
 		}
 	}
-	return rc, digest, registered, err
+	return rc, digest, registered, labels, err
 }

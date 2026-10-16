@@ -24,7 +24,7 @@ var gatewaySurface = []string{
 	"Gateway.String", "Gateway.Format", "Gateway.GoString", "Gateway.LogValue",
 	"Resend", "ResendConfig", "Delivery", "ErrRunning", "ResendTorn", "ResendNoServer", "ResendNotOpened",
 	"Policy", "Policy.Under", "ReadPolicy", "PolicyEgress", "PolicyCredential", "PolicyTool",
-	"Credential", "Credential.Check", "Tool", "Tool.Check", "Discovery", "Image", "Image.Check",
+	"Credential", "Credential.Check", "Selection", "Tool", "Tool.Check", "Discovery", "Image", "Image.Check",
 }
 
 // What each rule requires, as every failure of it says.

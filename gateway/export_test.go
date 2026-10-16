@@ -79,6 +79,19 @@ func Held(g *Gateway) (runs, spent int) {
 	return len(g.runs), len(g.spent)
 }
 
+// Tokens are the tokens of the credentials g's run of runID holds now, which its proxy
+// sets, by the credential's name.
+func Tokens(g *Gateway, runID string) map[string]string {
+	g.mu.Lock()
+	lr := g.runs[runID]
+	g.mu.Unlock()
+	out := map[string]string{}
+	for _, u := range lr.r.Uses() {
+		out[u.Name] = u.Token()
+	}
+	return out
+}
+
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }
 
