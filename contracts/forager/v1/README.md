@@ -238,8 +238,10 @@ caller's id is a UUID in the canonical lower-case form, since it is every event'
 `subject` and the run directory's name, and anything else is no run. What else the caller
 identifies the run by, a key in its queue, a repository, an issue, goes in `labels` on
 `dev.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
-value of at most 256 bytes. Forager reads nothing into them. It copies them into
-`dev.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
+value of at most 256 bytes. Forager reads nothing into them, except that a separate
+gateway's selection of credentials can take a credential's argument from one. It copies
+them into `dev.qory.run.started`, and no other event repeats them: a receiver joins on
+`subject`.
 It sends them, all of them, in the body of the run's registration (§The server), never
 in a URL, and the server decides which labels identify what the run works on. The `qory` command, for one,
 labels a run in a git checkout with `forge` and `repository` from its origin remote, and
@@ -335,8 +337,10 @@ through an agent that writes its configuration for example, is easier to comprom
 than the server, so on a node connected to a server what the node contributes can only
 take away from the run. The node's policy is the policy document of the launch spec,
 `Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
-narrowing. Without a server's `security_policy` the node's policy is the run's; with a
-server's policy and no node policy, the server's applies as it is.
+narrowing. Without a server's `security_policy` the node's policy is the run's. One
+exception: for a walled run behind a separate gateway with a selection of credentials,
+the node policy's `credentials` member only caps that selection (the `credentials` row).
+With a server's policy and no node policy, the server's applies as it is.
 
 | Field | The run's |
 |---|---|
@@ -345,7 +349,7 @@ server's policy and no node policy, the server's applies as it is.
 | `egress.deny` | the union: a host either side's `deny` covers is denied, in either mode, and recorded with that entry as its rule |
 | `egress.paths` | a host either side lists is terminated, and a request to it must match an entry of every side that lists its host. The run's mode decides what a miss does: under `enforce` it is denied; under `observe` it passes; either way it is recorded with an empty `path_rule`. A request every such side matches is recorded with the narrowest entry that matched |
 | `tools` | the server's selection, narrowed by the node's `tools` member: absent, it leaves the selection as it is; present, each selected tool must be listed in it by name, and by argument when the node's entry has one, so `tools: []` allows none. A selected tool outside it is no run, `tool_unknown`, as a tool the node does not define |
-| `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run |
+| `credentials` | the server's selection, narrowed by the node's `credentials` member as `tools` is; a selected credential outside it is no run; behind a separate gateway, when the server's selects none, a walled run gets the gateway's selection: a credential that takes an argument takes it from the run's label the selection names, whose value must match whole the pattern it names, and only for a run whose `forge` label is the one it names |
 | `image` | when both sides select one, it must be the same, else no run, `image_unknown`; when one does, that one; else the node's default |
 | `variables` | the server's, over every source of the node's but the fixed names; the node's apply to the names the server leaves alone (§Variables) |
 
@@ -1340,7 +1344,8 @@ signed `POST <run.url>`, `Content-Type: application/json`, whose body is a
   the byte limit: a body with a value over 256 bytes is a signed `400`
   `invalid_request`, though the schema passes it. They travel in the body, never in a
   URL. The server decides which labels identify what the run works on and returns the
-  policy for that; Forager reads nothing into them.
+  policy for that; Forager reads nothing into them, except that a separate gateway's
+  selection of credentials can take a credential's argument from one.
 - `about`: what the run is about (§What a run is about); absent means none. It is for
   display: it never selects or changes a security policy.
 - `forager_version`, `contract_version`, `interval_seconds` and `events`, required: the
@@ -1432,8 +1437,9 @@ or a keyed machine's `qory` behind a gateway, sends the gateway shape of
 ```
 
 - `version`, `run_id` and `time`, required, as in the direct shape.
-- `labels` and `about`, optional, information alone: the server gives them back in the
-  attach's answer, and they select no policy.
+- `labels` and `about`, optional: the server gives them back in the attach's answer, and
+  they select no policy; a separate gateway's selection of credentials can take a
+  credential's argument from a label (the `credentials` row of the merge).
 - `attach_seconds`, optional: the attach window the run asks for. Absent means the
   server's default, 600 seconds; one above its ceiling, 3600 seconds, is clamped to the
   ceiling, and the run key's `attach_by` states the window granted; below 1, or not an
@@ -1515,11 +1521,13 @@ gateway's access key under `qory-request-ed25519-v1`, whose body is a
 The answer is a signed `200`, `run-attach-answer.schema.json`: the run's run
 configuration document, as a direct registration's answer carries it, with
 `X-Qory-Run-Configuration` and `ETag`, and two members more, `labels` and `about`, as the
-starter's registration gave them, information alone, each absent when the registration
-had none. A reload's answer stays a plain run configuration. The attach's refusals come
-after the shared order above, `time` among it. The organisation of the gateway's key is
-checked as every key's is, and the run's organisation once the run key verifies, each
-with the same refusal. Then the attach's checks, in order:
+starter's registration gave them, each absent when the registration had none; `about` is
+information alone, and a separate gateway's selection of credentials can take a
+credential's argument from a label. A reload's answer stays a plain run configuration.
+The attach's refusals come after the shared order above, `time` among it. The
+organisation of the gateway's key is checked as every key's is, and the run's
+organisation once the run key verifies, each with the same refusal. Then the attach's
+checks, in order:
 
 | # | Status | Code | When |
 |---|---|---|---|

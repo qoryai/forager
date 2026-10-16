@@ -23,6 +23,13 @@ type Config struct {
 	// among them by name. Each needs a wall.
 	Credentials []Credential
 	Tools       []Tool
+	// Selects are, behind a separate gateway, the credentials a walled run gets when the
+	// server's policy selects none, each one of Credentials by name. An entry that takes
+	// an argument names the run's label it takes, the forge the run's forge label must
+	// be, and the pattern the label's value must match whole; an entry the run's labels
+	// do not satisfy gives no credential, and the gateway reports why. An unwalled run
+	// gets none, and the gateway reports that once. Selects needs a Listen.
+	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".
 	Version string
@@ -155,6 +162,9 @@ func ReadPolicy(name string, b []byte) (*Policy, error) { return run.ReadPolicy(
 // Credential is one credential as the machine defines it, [Config.Credentials]. Its
 // Check refuses a definition that cannot be one.
 type Credential = run.Credential
+
+// Selection is one credential the gateway selects, [Config.Selects].
+type Selection = run.Selection
 
 // Tool is one tool as the machine defines it, [Config.Tools]. Its Check refuses a
 // definition that cannot be one.

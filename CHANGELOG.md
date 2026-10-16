@@ -28,8 +28,19 @@ release may change what an existing document does, and says so under Upgrading.
 - A new instance id is `i_` and 26 lower-case Crockford base32 characters, no longer 22
   base64url characters, so it can no longer contain an access key's or a run key's
   prefix by chance.
+- The `credentials` merge row: behind a separate gateway, a walled run gets the
+  gateway's selection when the server's selects none.
+- `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
+  run's label a gateway's selection took it from.
 
 ### Gateway
+
+#### Added
+
+- `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
+  no credential, a walled run gets the gateway's selection, a credential that takes an
+  argument taking it from a label of the run whose value matches the pattern named, for
+  a run whose `forge` label is the one named.
 
 #### Changed
 

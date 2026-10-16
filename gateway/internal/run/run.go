@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -47,7 +48,9 @@ type Config struct {
 	// Fetched is the run configuration the server answered for the run's labels; nil
 	// when the run has no server, or the server names no run configuration.
 	Fetched *Fetched
-	// Labels are the run's labels, as the run configuration is asked for by them.
+	// Labels are the run's labels: on the local link, those the run configuration is
+	// asked for by; behind a separate gateway, those the attach's answer gives back of
+	// the starter's registration, which the gateway's selection of credentials reads.
 	Labels map[string]string
 	// Wall says the run's agent runs behind a wall.
 	Wall bool
@@ -55,6 +58,12 @@ type Config struct {
 	// among them by name.
 	Credentials []Credential
 	Tools       []Tool
+	// Selects are the gateway's selection among Credentials, for a run that attached
+	// with a run key behind a separate gateway; nil on the local link. A walled run gets
+	// it, by its labels, when the run configuration's policy selects no credential, at
+	// the start and at every reload; an unwalled run gets none, and the run's user is
+	// told once.
+	Selects []Selection
 	// Images are the images the run's policy selects among, and the one it starts in
 	// when the policy selects none; they mean something only behind a wall.
 	Images Images
@@ -103,7 +112,10 @@ type Run struct {
 	img    Image
 	served map[string]string
 	server bool
-	chosen []tool.Chosen
+	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
+	// whose credential takes no argument.
+	patterns []*regexp.Regexp
+	chosen   []tool.Chosen
 	// terminates says the proxy holds the run's authority, from the start on.
 	terminates bool
 
@@ -140,6 +152,17 @@ func Decide(cfg Config) (*Run, error) {
 	for i, t := range cfg.Tools {
 		r.tools[i] = tool.Definition(t)
 	}
+	r.patterns = make([]*regexp.Regexp, len(cfg.Selects))
+	for i, s := range cfg.Selects {
+		if s.Label == "" {
+			continue
+		}
+		re, err := WholeMatch(s.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		r.patterns[i] = re
+	}
 	pol := policy.None()
 	if cfg.Node != nil {
 		b, _ := json.Marshal(cfg.Node)
@@ -171,6 +194,9 @@ func Decide(cfg Config) (*Run, error) {
 	if !cfg.Wall {
 		if err := needsWall(pol, len(r.beside) > 0); err != nil {
 			return nil, err
+		}
+		if len(cfg.Selects) > 0 {
+			cfg.Report(fmt.Sprintf("run %s: the gateway selects credentials for a walled run alone: this run has no wall and gets none", cfg.RunID))
 		}
 	}
 	if cfg.Wall {
@@ -400,8 +426,10 @@ func (r *Run) StartTools(ctx context.Context) (*tool.Set, error) {
 
 // Read reads a run configuration the server answered: the policy it puts in force,
 // beside its URL and digest. Without a security_policy it is the node's, or none. With
-// one, it is the server's, narrowed by the node's when the run has one. A
-// security_policy the schema refuses is run_configuration_invalid.
+// one, it is the server's, narrowed by the node's when the run has one. For a walled
+// run, when the server's side selects no credential, the run's credentials are the
+// gateway's selection, [Config.Selects], capped by the node's credentials member.
+// A security_policy the schema refuses is run_configuration_invalid.
 func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	var fetched *policy.Loaded
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
@@ -412,6 +440,9 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
+	if err == nil && r.cfg.Wall && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
+		err = r.selects(pol)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
 	}
@@ -423,6 +454,67 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	r.read[out] = GuardNames(pol, r.cfg.Narrowing)
 	r.mu.Unlock()
 	return out, nil
+}
+
+// selects puts the gateway's selection, [Config.Selects], in the credentials of pol, a
+// policy [Run.Read] made whose server's side selects none, narrowed by the node's
+// credentials member whenever the node's policy has one, beside a server's policy or
+// alone in force, as the server's selection is: a selected credential the member does
+// not list is no run. An entry for a credential that takes an argument gives none when
+// the run's labels do not satisfy it, and the run's user is told why: a label it takes
+// that the run does not have, the forge label among them, a forge label of another
+// value, or a value outside its pattern. Nothing is resolved here: the policy's
+// credentials are resolved as any are, the argument checked against the definition's
+// pattern before its adapter runs.
+func (r *Run) selects(pol *policy.Loaded) error {
+	id := r.cfg.RunID
+	var selected []policy.Selected
+	for i, s := range r.cfg.Selects {
+		if s.Label == "" {
+			selected = append(selected, policy.Selected{Name: s.Name})
+			continue
+		}
+		forge, ok := r.labels["forge"]
+		if !ok {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, "forge", s.Name))
+			continue
+		}
+		if forge != s.Forge {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, s.Name, Spaced(s.Forge), Spaced(forge), s.Name))
+			continue
+		}
+		value, ok := r.labels[s.Label]
+		if !ok {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, Spaced(s.Label), s.Name))
+			continue
+		}
+		if !r.patterns[i].MatchString(value) {
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(value), s.Name, s.Name))
+			continue
+		}
+		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
+	}
+	if r.node != nil && r.node.Policy.Credentials != nil {
+		var out []string
+		for _, sel := range selected {
+			if !slices.ContainsFunc(r.node.Policy.Credentials, func(b policy.Selected) bool {
+				return b.Name == sel.Name && (b.Argument == "" || b.Argument == sel.Argument)
+			}) {
+				out = append(out, sel.Name)
+			}
+		}
+		if len(out) > 0 {
+			return fmt.Errorf("the gateway selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
+		}
+	}
+	if len(selected) > 0 || len(pol.Policy.Credentials) > 0 {
+		// The selection is the run's credentials. With the node's policy alone in force,
+		// its credentials member is the selection's cap, as beside a server's policy, and
+		// not the run's; a member that lists none is kept as written when nothing is
+		// selected.
+		pol.Policy.Credentials = selected
+	}
+	return nil
 }
 
 // takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken; the
