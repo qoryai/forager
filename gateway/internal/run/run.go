@@ -48,9 +48,9 @@ type Config struct {
 	// Fetched is the run configuration the server answered for the run's labels; nil
 	// when the run has no server, or the server names no run configuration.
 	Fetched *Fetched
-	// Labels are the run's labels, as the run configuration is asked for by them: behind
-	// a separate gateway, those the attach's answer gives back of the starter's
-	// registration.
+	// Labels are the run's labels: on the local link, those the run configuration is
+	// asked for by; behind a separate gateway, those the attach's answer gives back of
+	// the starter's registration, which the gateway's selection of credentials reads.
 	Labels map[string]string
 	// Wall says the run's agent runs behind a wall.
 	Wall bool

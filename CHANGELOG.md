@@ -30,8 +30,8 @@ release may change what an existing document does, and says so under Upgrading.
   prefix by chance.
 - The `credentials` merge row: behind a separate gateway, a walled run gets the
   gateway's selection when the server's selects none.
-- `dev.qory.run.policy_applied`'s `credentials` carry the label a gateway's selection
-  took its argument from.
+- `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
+  run's label a gateway's selection took it from.
 
 ### Gateway
 

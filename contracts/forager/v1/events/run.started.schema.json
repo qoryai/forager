@@ -32,7 +32,7 @@
     "container_runtime": {"description": "The container runtime the wall started the image under, as the machine's definition sets it: sysbox-runc. Absent means the engine's default.", "type": "string", "minLength": 1},
     "docker": {"description": "True when the enclosure has nested Docker, a Docker daemon inside the wall, separate from the machine's, started by the wall before the runtime. Absent otherwise.", "const": true},
     "labels": {
-      "description": "The caller's names for the run, its key in a queue, a repository, an issue, as the command that started the run received them. Forager copies them and reads nothing into them. Only this event contains them among the events, and the gateway's registration of the run sends them in its body, never in a URL; a receiver keeps them with the run it creates on it.",
+      "description": "The caller's names for the run, its key in a queue, a repository, an issue, as the command that started the run received them. Forager copies them and reads nothing into them, except that a separate gateway's selection of credentials can take a credential's argument from one. Only this event contains them among the events, and the gateway's registration of the run sends them in its body, never in a URL; a receiver keeps them with the run it creates on it.",
       "type": "object",
       "maxProperties": 16,
       "propertyNames": {"pattern": "^[a-z0-9_.-]{1,64}$"},

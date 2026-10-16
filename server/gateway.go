@@ -34,7 +34,8 @@ type GatewayRegistration struct {
 	Version int `json:"version"`
 	// RunID is the run's id: a UUID in the canonical lower-case form.
 	RunID string `json:"run_id"`
-	// Labels are the run's labels, information alone; none is left out.
+	// Labels are the run's labels; a separate gateway's selection of credentials can take
+	// a credential's argument from one. None is left out.
 	Labels map[string]string `json:"labels,omitempty"`
 	// About is what the run is about, information alone; nil is left out.
 	About *About `json:"about,omitempty"`
@@ -308,8 +309,9 @@ func (a Attach) MarshalJSON() ([]byte, error) { return json.Marshal(a.shown()) }
 
 // AttachAnswer is the server's signed 200 to an attach, run-attach-answer.schema.json:
 // the run's run configuration, as a direct registration's answer carries it, and the
-// labels and what the run is about, as the starter's registration gave them,
-// information alone, each absent when the registration had none.
+// labels and what the run is about, as the starter's registration gave them, each
+// absent when the registration had none; a separate gateway's selection of credentials
+// can take a credential's argument from a label.
 type AttachAnswer struct {
 	RunConfiguration *RunConfiguration
 	Labels           map[string]string

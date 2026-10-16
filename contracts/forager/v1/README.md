@@ -238,8 +238,10 @@ caller's id is a UUID in the canonical lower-case form, since it is every event'
 `subject` and the run directory's name, and anything else is no run. What else the caller
 identifies the run by, a key in its queue, a repository, an issue, goes in `labels` on
 `dev.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
-value of at most 256 bytes. Forager reads nothing into them. It copies them into
-`dev.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
+value of at most 256 bytes. Forager reads nothing into them, except that a separate
+gateway's selection of credentials can take a credential's argument from one. It copies
+them into `dev.qory.run.started`, and no other event repeats them: a receiver joins on
+`subject`.
 It sends them, all of them, in the body of the run's registration (§The server), never
 in a URL, and the server decides which labels identify what the run works on. The `qory` command, for one,
 labels a run in a git checkout with `forge` and `repository` from its origin remote, and
@@ -1340,7 +1342,8 @@ signed `POST <run.url>`, `Content-Type: application/json`, whose body is a
   the byte limit: a body with a value over 256 bytes is a signed `400`
   `invalid_request`, though the schema passes it. They travel in the body, never in a
   URL. The server decides which labels identify what the run works on and returns the
-  policy for that; Forager reads nothing into them.
+  policy for that; Forager reads nothing into them, except that a separate gateway's
+  selection of credentials can take a credential's argument from one.
 - `about`: what the run is about (§What a run is about); absent means none. It is for
   display: it never selects or changes a security policy.
 - `forager_version`, `contract_version`, `interval_seconds` and `events`, required: the
@@ -1432,8 +1435,9 @@ or a keyed machine's `qory` behind a gateway, sends the gateway shape of
 ```
 
 - `version`, `run_id` and `time`, required, as in the direct shape.
-- `labels` and `about`, optional, information alone: the server gives them back in the
-  attach's answer, and they select no policy.
+- `labels` and `about`, optional: the server gives them back in the attach's answer, and
+  they select no policy; a separate gateway's selection of credentials can take a
+  credential's argument from a label (the `credentials` row of the merge).
 - `attach_seconds`, optional: the attach window the run asks for. Absent means the
   server's default, 600 seconds; one above its ceiling, 3600 seconds, is clamped to the
   ceiling, and the run key's `attach_by` states the window granted; below 1, or not an
@@ -1515,8 +1519,9 @@ gateway's access key under `qory-request-ed25519-v1`, whose body is a
 The answer is a signed `200`, `run-attach-answer.schema.json`: the run's run
 configuration document, as a direct registration's answer carries it, with
 `X-Qory-Run-Configuration` and `ETag`, and two members more, `labels` and `about`, as the
-starter's registration gave them, information alone, each absent when the registration
-had none. A reload's answer stays a plain run configuration. The attach's refusals come
+starter's registration gave them, each absent when the registration had none; `about` is
+information alone, and a separate gateway's selection of credentials can take a
+credential's argument from a label. A reload's answer stays a plain run configuration. The attach's refusals come
 after the shared order above, `time` among it. The organisation of the gateway's key is
 checked as every key's is, and the run's organisation once the run key verifies, each
 with the same refusal. Then the attach's checks, in order:
