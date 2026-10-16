@@ -195,11 +195,11 @@ and likewise a `Forge` or a `Pattern`, that leaves out any of the three for one 
 takes an argument, "gateway: Selects <name>: <name> takes an argument, so it needs
 Label, Forge and Pattern", or whose pattern does not compile as a label's value is
 matched, whole, "gateway: Selects <name>: the pattern does not compile: <reason>"; and
-once discovery is read, an access key that is not a gateway's, "the access key's node <node id> is not a gateway,
-ng_: the gateway's address <address> needs a gateway's access key". Without `Listen`,
-once discovery is read, it refuses a gateway's access key, "the access key's node
-<node id> is a gateway, ng_: a gateway without an address needs a node's access key,
-nd_ or np_".
+once discovery is read, an access key that is not a gateway's, "the access key's node
+<node id> is not a gateway, ng_: the gateway's address <address> needs a gateway's
+access key". Without `Listen`, once discovery is read, it refuses a gateway's access
+key, "the access key's node <node id> is a gateway, ng_: a gateway without an address
+needs a node's access key, nd_ or np_".
 
 ### The session behind a separate gateway
 

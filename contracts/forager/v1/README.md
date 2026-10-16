@@ -337,8 +337,10 @@ through an agent that writes its configuration for example, is easier to comprom
 than the server, so on a node connected to a server what the node contributes can only
 take away from the run. The node's policy is the policy document of the launch spec,
 `Spec.Policy` in Go. A fetched `security_policy` and the node's policy combine by
-narrowing. Without a server's `security_policy` the node's policy is the run's; with a
-server's policy and no node policy, the server's applies as it is.
+narrowing. Without a server's `security_policy` the node's policy is the run's. One
+exception: for a walled run behind a separate gateway with a selection of credentials,
+the node policy's `credentials` member only caps that selection (the `credentials` row).
+With a server's policy and no node policy, the server's applies as it is.
 
 | Field | The run's |
 |---|---|
@@ -1521,10 +1523,11 @@ configuration document, as a direct registration's answer carries it, with
 `X-Qory-Run-Configuration` and `ETag`, and two members more, `labels` and `about`, as the
 starter's registration gave them, each absent when the registration had none; `about` is
 information alone, and a separate gateway's selection of credentials can take a
-credential's argument from a label. A reload's answer stays a plain run configuration. The attach's refusals come
-after the shared order above, `time` among it. The organisation of the gateway's key is
-checked as every key's is, and the run's organisation once the run key verifies, each
-with the same refusal. Then the attach's checks, in order:
+credential's argument from a label. A reload's answer stays a plain run configuration.
+The attach's refusals come after the shared order above, `time` among it. The
+organisation of the gateway's key is checked as every key's is, and the run's
+organisation once the run key verifies, each with the same refusal. Then the attach's
+checks, in order:
 
 | # | Status | Code | When |
 |---|---|---|---|
