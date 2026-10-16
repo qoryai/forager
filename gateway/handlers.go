@@ -11,16 +11,15 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
@@ -310,12 +309,7 @@ const maxMessage = 8192
 // every other control character, C0, DEL and C1, a space, at most maxMessage
 // characters.
 func message(text string) string {
-	out := []rune(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) && r != '\t' && r != '\n' {
-			return ' '
-		}
-		return r
-	}, text))
+	out := []rune(run.Spaced(text, '\t', '\n'))
 	if len(out) > maxMessage {
 		out = out[:maxMessage]
 	}

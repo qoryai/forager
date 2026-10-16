@@ -113,7 +113,7 @@ type Run struct {
 	served map[string]string
 	server bool
 	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
-	// with none.
+	// whose credential takes no argument.
 	patterns []*regexp.Regexp
 	chosen   []tool.Chosen
 	// terminates says the proxy holds the run's authority, from the start on.
@@ -154,10 +154,10 @@ func Decide(cfg Config) (*Run, error) {
 	}
 	r.patterns = make([]*regexp.Regexp, len(cfg.Selects))
 	for i, s := range cfg.Selects {
-		if s.Pattern == "" {
+		if s.Label == "" {
 			continue
 		}
-		re, err := regexp.Compile(`^(?:` + s.Pattern + `)$`)
+		re, err := WholeMatch(s.Pattern)
 		if err != nil {
 			return nil, err
 		}
@@ -427,7 +427,8 @@ func (r *Run) StartTools(ctx context.Context) (*tool.Set, error) {
 // Read reads a run configuration the server answered: the policy it puts in force,
 // beside its URL and digest. Without a security_policy it is the node's, or none. With
 // one, it is the server's, narrowed by the node's when the run has one. For a walled
-// run, one that selects no credential gets the gateway's selection, [Config.Selects].
+// run, when the server's side selects no credential, the run's credentials are the
+// gateway's selection, [Config.Selects], capped by the node's credentials member.
 // A security_policy the schema refuses is run_configuration_invalid.
 func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	var fetched *policy.Loaded
@@ -439,7 +440,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
-	if err == nil && r.cfg.Wall && len(r.cfg.Selects) > 0 && len(pol.Policy.Credentials) == 0 {
+	if err == nil && r.cfg.Wall && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
 		err = r.selects(pol)
 	}
 	if err != nil {
@@ -456,45 +457,44 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 }
 
 // selects puts the gateway's selection, [Config.Selects], in the credentials of pol, a
-// policy [Run.Read] made that selects none, narrowed by the node's credentials member
-// when the node's policy narrows a server's, as the server's selection is: a selected
-// credential the member does not list is no run. An entry the run's labels do not
-// satisfy gives no credential, and the run's user is told why: a label the entry takes
+// policy [Run.Read] made whose server's side selects none, narrowed by the node's
+// credentials member whenever the node's policy has one, beside a server's policy or
+// alone in force, as the server's selection is: a selected credential the member does
+// not list is no run. An entry for a credential that takes an argument gives none when
+// the run's labels do not satisfy it, and the run's user is told why: a label it takes
 // that the run does not have, the forge label among them, a forge label of another
-// value, or a value outside the entry's pattern. Nothing is resolved here: the policy's
+// value, or a value outside its pattern. Nothing is resolved here: the policy's
 // credentials are resolved as any are, the argument checked against the definition's
 // pattern before its adapter runs.
 func (r *Run) selects(pol *policy.Loaded) error {
 	id := r.cfg.RunID
 	var selected []policy.Selected
 	for i, s := range r.cfg.Selects {
-		if s.Forge != "" {
-			forge, ok := r.labels["forge"]
-			if !ok {
-				r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, "forge", s.Name))
-				continue
-			}
-			if forge != s.Forge {
-				r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, s.Name, s.Forge, forge, s.Name))
-				continue
-			}
-		}
 		if s.Label == "" {
 			selected = append(selected, policy.Selected{Name: s.Name})
 			continue
 		}
-		value, ok := r.labels[s.Label]
+		forge, ok := r.labels["forge"]
 		if !ok {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, s.Label, s.Name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, "forge", s.Name))
 			continue
 		}
-		if re := r.patterns[i]; re != nil && !re.MatchString(value) {
-			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, s.Label, value, s.Name, s.Name))
+		if forge != s.Forge {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, s.Name, Spaced(s.Forge), Spaced(forge), s.Name))
+			continue
+		}
+		value, ok := r.labels[s.Label]
+		if !ok {
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, s.Name, Spaced(s.Label), s.Name))
+			continue
+		}
+		if !r.patterns[i].MatchString(value) {
+			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(s.Label), Spaced(value), s.Name, s.Name))
 			continue
 		}
 		selected = append(selected, policy.Selected{Name: s.Name, Argument: value})
 	}
-	if pol.Node != nil && r.node.Policy.Credentials != nil {
+	if r.node != nil && r.node.Policy.Credentials != nil {
 		var out []string
 		for _, sel := range selected {
 			if !slices.ContainsFunc(r.node.Policy.Credentials, func(b policy.Selected) bool {
@@ -507,7 +507,11 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			return fmt.Errorf("the gateway selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
-	if len(selected) > 0 {
+	if len(selected) > 0 || len(pol.Policy.Credentials) > 0 {
+		// The selection is the run's credentials. With the node's policy alone in force,
+		// its credentials member is the selection's cap, as beside a server's policy, and
+		// not the run's; a member that lists none is kept as written when nothing is
+		// selected.
 		pol.Policy.Credentials = selected
 	}
 	return nil

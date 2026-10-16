@@ -1,6 +1,7 @@
 package run_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -119,11 +120,86 @@ func TestAnEntryMatchesTheWholeValue(t *testing.T) {
 		if uses := r.Uses(); len(uses) != 1 || uses[0].Name != "model" {
 			t.Errorf("%q: uses %v", value, uses)
 		}
-		if !said.reported("run " + runID + ": the run's label repository=" + value + " is no argument github takes: it gets no github") {
+		shown := strings.ReplaceAll(value, "\n", " ")
+		if !said.reported("run " + runID + ": the run's label repository=" + shown + " is no argument github takes: it gets no github") {
 			t.Errorf("%q: reported %v", value, said.said)
 		}
 		if strings.Contains(strings.Join(said.said, "\n"), "minted") {
 			t.Errorf("%q: a report holds a token", value)
+		}
+	}
+}
+
+// TestALabelsValueIsPrintedWithoutItsControlCharacters pins the lines that print a
+// label's value: a newline and an escape in it come out as spaces, so the value can
+// neither start a line of its own nor reach the reader's terminal as an escape.
+func TestALabelsValueIsPrintedWithoutItsControlCharacters(t *testing.T) {
+	for name, c := range map[string]struct {
+		label, value, line string
+	}{
+		"the repository": {"repository", "a/b\nrun x: forged\x1b[2J", "the run's label repository=a/b run x: forged [2J is no argument github takes: it gets no github"},
+		"the forge":      {"forge", "git.example\nrun x: forged\x1b[2J", "the gateway selects github for the forge github.com, and the run's forge is git.example run x: forged [2J: it gets no github"},
+	} {
+		cfg, said := selectsConfig(t, `{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.model.example"]}}`)
+		cfg.Labels[c.label] = c.value
+		open(t, cfg)
+		if !said.reported("run " + runID + ": " + c.line) {
+			t.Errorf("%s: reported %q", name, said.said)
+		}
+		for _, l := range said.said {
+			if strings.ContainsAny(l, "\n\x1b") {
+				t.Errorf("%s: a line holds a control character: %q", name, l)
+			}
+		}
+	}
+}
+
+// TestTheNodesCredentialsCapTheGatewaysSelection pins the node's credentials member as
+// the cap of the gateway's selection, the same whether the server's run configuration
+// has a security_policy that selects none or has none, the node's policy then the
+// run's: a member that lists none, and one that does not list a selected credential,
+// are no run, with the same refusal; no member caps nothing.
+func TestTheNodesCredentialsCapTheGatewaysSelection(t *testing.T) {
+	const text = "the gateway selects the credentials github, which the node's policy does not list"
+	sides := map[string]*run.Fetched{
+		"a server's policy that selects none": served(`{"version":1,"egress":{"mode":"enforce","allow":["git.example","api.model.example"]}}`, digest('1')),
+		"no server's policy":                  document(t, `{"version":1}`, digest('1')),
+	}
+	for side, fetched := range sides {
+		for name, c := range map[string]struct {
+			credentials []run.PolicyCredential
+			refused     string
+			uses        []string
+		}{
+			"no member":               {nil, "", []string{"github", "model"}},
+			"a member listing none":   {[]run.PolicyCredential{}, "the gateway selects the credentials github, model, which the node's policy does not list", nil},
+			"a member without github": {[]run.PolicyCredential{{Name: "model"}}, text, nil},
+		} {
+			cfg, _ := selectsConfig(t, "")
+			cfg.Fetched = fetched
+			cfg.Node = &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "enforce", Allow: []string{"git.example", "api.model.example"}}, Credentials: c.credentials}
+			r, err := run.Open(context.Background(), cfg)
+			if c.refused != "" {
+				if err == nil || !strings.Contains(err.Error(), c.refused) {
+					t.Errorf("%s, %s: %v; want %q", side, name, err, c.refused)
+				}
+				if err == nil {
+					r.Close()
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s, %s: %v", side, name, err)
+				continue
+			}
+			var got []string
+			for _, u := range r.Uses() {
+				got = append(got, u.Name)
+			}
+			if !slices.Equal(got, c.uses) {
+				t.Errorf("%s, %s: uses %v, want %v", side, name, got, c.uses)
+			}
+			r.Close()
 		}
 	}
 }

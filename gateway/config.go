@@ -28,7 +28,7 @@ type Config struct {
 	// an argument names the run's label it takes, the forge the run's forge label must
 	// be, and the pattern the label's value must match whole; an entry the run's labels
 	// do not satisfy gives no credential, and the gateway reports why. An unwalled run
-	// gets none, and the gateway reports that once. A run on the local link gets none.
+	// gets none, and the gateway reports that once. Selects needs a Listen.
 	Selects []Selection
 	// Version is Forager's version, reported in each run's registration and in the user
 	// agent of every request to the Server; empty means "dev".

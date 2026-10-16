@@ -224,38 +224,68 @@ func TestTheNodesPolicyNarrowsTheGatewaysSelection(t *testing.T) {
 	}
 }
 
-// TestALocalGatewaysRunGetsNoSelection pins the local link: a walled run there gets no
-// credential of the gateway's selection.
-func TestALocalGatewaysRunGetsNoSelection(t *testing.T) {
+// TestALocalGatewayTakesNoSelection pins the local link: a gateway without an address
+// has no runs a selection is for, so Start refuses one, and nothing starts.
+func TestALocalGatewayTakesNoSelection(t *testing.T) {
 	s := newSelecting(t)
 	c := newControl(t)
 	c.serve(selectedPolicy, 'a')
-	h := start(t, gateway.Config{Server: c.server(), Credentials: s.creds, Selects: s.selects})
-	h.secrets = append(h.secrets, "model-value-of-the-test")
-	a := h.open(server.LinkRunRequest{Wall: true, Labels: map[string]string{"repository": "example/repo", "forge": "github.com"}})
-	if got := members(a.Applied)["credentials"]; got != nil {
-		t.Errorf("applied credentials %v", got)
+	_, err := gateway.Start(context.Background(), gateway.Config{Server: c.server(), Dir: t.TempDir(), Credentials: s.creds, Selects: s.selects})
+	const text = "gateway: Selects is for the runs on the gateway's address, and it has no Listen"
+	if err == nil || err.Error() != text {
+		t.Errorf("%v; want %q", err, text)
 	}
-	if got := s.asked(t); got != nil {
-		t.Errorf("the adapter was asked for %v", got)
+	if n := c.fetches.Load(); n != 0 {
+		t.Errorf("%d requests to the run endpoint", n)
 	}
 }
 
-// TestStartRefusesASelectionItCannotHold pins Start's check of Selects: an entry that
-// names no credential of Credentials, and one whose pattern does not compile.
+// TestStartRefusesASelectionItCannotHold pins Start's check of each entry of Selects: a
+// name that is no credential of Credentials, a name twice, a Label, a Forge or a
+// Pattern for a credential that takes no argument, an entry for one that takes an
+// argument without all three, and a pattern that does not compile, alone or as a
+// label's value is matched, whole. Each is refused before anything starts.
 func TestStartRefusesASelectionItCannotHold(t *testing.T) {
 	s := newSelecting(t)
+	github := gateway.Selection{Name: "github", Label: "repository", Forge: "github.com", Pattern: oneRepository}
+	with := func(change func(*gateway.Selection)) gateway.Selection {
+		sel := github
+		change(&sel)
+		return sel
+	}
 	for _, c := range []struct {
-		sel  gateway.Selection
+		sels []gateway.Selection
 		text string
 	}{
-		{gateway.Selection{Name: "nobody"}, "gateway: Selects names nobody, which is no credential of Credentials"},
-		{gateway.Selection{Name: "github", Label: "repository", Forge: "github.com", Pattern: "(a"},
+		{[]gateway.Selection{{Name: "nobody"}}, "gateway: Selects names nobody, which is no credential of Credentials"},
+		{[]gateway.Selection{{Name: "model"}, github, {Name: "model"}}, "gateway: Selects names model twice"},
+		{[]gateway.Selection{{Name: "model", Label: "repository"}}, "gateway: Selects model: model takes no argument, so Label does not apply"},
+		{[]gateway.Selection{{Name: "model", Forge: "github.com"}}, "gateway: Selects model: model takes no argument, so Forge does not apply"},
+		{[]gateway.Selection{{Name: "model", Pattern: oneRepository}}, "gateway: Selects model: model takes no argument, so Pattern does not apply"},
+		{[]gateway.Selection{{Name: "github"}}, "gateway: Selects github: github takes an argument, so it needs Label, Forge and Pattern"},
+		{[]gateway.Selection{with(func(s *gateway.Selection) { s.Label = "" })}, "gateway: Selects github: github takes an argument, so it needs Label, Forge and Pattern"},
+		{[]gateway.Selection{with(func(s *gateway.Selection) { s.Forge = "" })}, "gateway: Selects github: github takes an argument, so it needs Label, Forge and Pattern"},
+		{[]gateway.Selection{with(func(s *gateway.Selection) { s.Pattern = "" })}, "gateway: Selects github: github takes an argument, so it needs Label, Forge and Pattern"},
+		{[]gateway.Selection{with(func(s *gateway.Selection) { s.Pattern = "(a" })},
 			"gateway: Selects github: the pattern does not compile: error parsing regexp: missing closing ): `(a`"},
+		// A pattern that compiles alone and not as a label's value is matched, whole.
+		{[]gateway.Selection{with(func(s *gateway.Selection) { s.Pattern = `a\Q` })},
+			"gateway: Selects github: the pattern does not compile: error parsing regexp: missing closing ): `^(?:a\\Q)$`"},
 	} {
-		_, err := gateway.Start(context.Background(), gateway.Config{Dir: t.TempDir(), Credentials: s.creds, Selects: []gateway.Selection{c.sel}})
+		c0 := gatewayControl(t)
+		certFile, keyFile, _ := testCertificate(t, t.TempDir())
+		g, err := gateway.Start(context.Background(), gateway.Config{
+			Listen: "127.0.0.1:0", TLS: &gateway.TLS{CertFile: certFile, KeyFile: keyFile}, Server: c0.server(),
+			Dir: t.TempDir(), Credentials: s.creds, Selects: c.sels,
+		})
+		if err == nil {
+			g.Close(context.Background())
+		}
 		if err == nil || err.Error() != c.text {
-			t.Errorf("%+v: %v; want %q", c.sel, err, c.text)
+			t.Errorf("%+v: %v; want %q", c.sels, err, c.text)
+		}
+		if n := c0.fetches.Load(); n != 0 {
+			t.Errorf("%+v: %d requests to the run endpoint", c.sels, n)
 		}
 	}
 }

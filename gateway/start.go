@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -116,12 +115,14 @@ type Gateway struct {
 // [Config.Selects], which it checks and every run reads: what the caller changes in
 // them later changes nothing.
 //
-// Start refuses, before anything starts, an entry of Selects that names no credential
-// of Credentials or whose pattern does not compile, a Listen that is not host:port, a Listen
+// Start refuses, before anything starts, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
-// do not match, and TLS without a Listen; and once discovery is read, a Listen whose
-// access key is not a gateway's, whose node id is not ng_, and a gateway's access key,
-// ng_, without a Listen.
+// do not match, and TLS without a Listen; Selects without a Listen, and an entry of
+// Selects that names no credential of Credentials or one another entry names, names a
+// Label, a Forge or a Pattern for a credential that takes no argument, leaves out any of
+// them for one that takes an argument, or whose pattern does not compile; and once
+// discovery is read, a Listen whose access key is not a gateway's, whose node id is not
+// ng_, and a gateway's access key, ng_, without a Listen.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Server != nil {
 		s := *cfg.Server
@@ -161,13 +162,8 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 			return nil, err
 		}
 	}
-	for _, s := range cfg.Selects {
-		if !slices.ContainsFunc(cfg.Credentials, func(c Credential) bool { return c.Name == s.Name }) {
-			return nil, fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", s.Name)
-		}
-		if _, err := regexp.Compile(s.Pattern); err != nil {
-			return nil, fmt.Errorf("gateway: Selects %s: the pattern does not compile: %v", s.Name, err)
-		}
+	if err := checkSelects(&cfg); err != nil {
+		return nil, err
 	}
 	for _, t := range cfg.Tools {
 		if err := t.Check(); err != nil {
@@ -261,6 +257,41 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	go g.http.Serve(g.link)
 	ok = true
 	return g, nil
+}
+
+// checkSelects refuses a [Config.Selects] the gateway cannot hold: a selection without
+// a Listen, whose runs alone it is for; and an entry that names no credential of
+// Credentials, or one another entry names; that names a Label, a Forge or a Pattern for
+// a credential that takes no argument; that leaves out any of them for one that takes
+// an argument; or whose pattern does not compile as a label's value is matched, whole.
+func checkSelects(cfg *Config) error {
+	if len(cfg.Selects) > 0 && cfg.Listen == "" {
+		return errors.New("gateway: Selects is for the runs on the gateway's address, and it has no Listen")
+	}
+	for i, s := range cfg.Selects {
+		j := slices.IndexFunc(cfg.Credentials, func(c Credential) bool { return c.Name == s.Name })
+		if j < 0 {
+			return fmt.Errorf("gateway: Selects names %s, which is no credential of Credentials", s.Name)
+		}
+		if slices.ContainsFunc(cfg.Selects[:i], func(o Selection) bool { return o.Name == s.Name }) {
+			return fmt.Errorf("gateway: Selects names %s twice", s.Name)
+		}
+		if cfg.Credentials[j].Argument == "" {
+			for _, f := range []struct{ name, value string }{{"Label", s.Label}, {"Forge", s.Forge}, {"Pattern", s.Pattern}} {
+				if f.value != "" {
+					return fmt.Errorf("gateway: Selects %s: %s takes no argument, so %s does not apply", s.Name, s.Name, f.name)
+				}
+			}
+			continue
+		}
+		if s.Label == "" || s.Forge == "" || s.Pattern == "" {
+			return fmt.Errorf("gateway: Selects %s: %s takes an argument, so it needs Label, Forge and Pattern", s.Name, s.Name)
+		}
+		if _, err := run.WholeMatch(s.Pattern); err != nil {
+			return fmt.Errorf("gateway: Selects %s: the pattern does not compile: %v", s.Name, err)
+		}
+	}
+	return nil
 }
 
 // copyCredentials is a copy of credentials that shares nothing with them: the list and
