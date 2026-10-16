@@ -1195,11 +1195,13 @@ gateway that attached it may no longer serve the run's workspace, decided as at 
 attach; then `410` for an event of a run the server wants nothing more of, a delivery
 already accepted included; then deduplication, so a batch whose delivery id or event
 ids the server already accepted gets the same `2xx` again.
-The run endpoint's checks, for a registration, in order: the same
-bytes under any active key of the node or node pool that registered the run get the
-stored answer again, the same run key included, so a key replaced while the run waits
-keeps working; `410`, signed, with any code or none: the server takes no run here; `409`
-`gateway_key`, signed, for a gateway's key, which registers no run; `409`
+The run endpoint's checks, for a registration, in order: a signed `409` `run_id_used`
+comes first, before the stored answer and the limit, for a run id the server gave a
+dispatch (a run the server starts itself and hands to a node pool's job), under any key;
+then the same bytes under any active key of the node or node pool that registered the
+run get the stored answer again, the same run key included, so a key replaced while the
+run waits keeps working; `410`, signed, with any code or none: the server takes no run
+here; `409` `gateway_key`, signed, for a gateway's key, which registers no run; `409`
 `node_is_direct` or `node_uses_gateway`, signed, for a body whose shape does not match
 the node's resolved choice (Through a gateway, below); `409` `no_default_gateway`, the
 node's choice is the default and no default resolves for its workspace; `409`
@@ -1208,11 +1210,12 @@ node's choice is the default and no default resolves for its workspace; `409`
 attach at it; `409` `instance_limit` for a new instance id beyond its node's limit; then
 `409` `run_id_used` for a registration whose run id the server already accepted from
 another node, even with the same bytes, or with other bytes: other labels or another
-body; then a `409` code the server defines. The four codes of the resolution come before
-the limit, so a run that can go nowhere never takes a slot. For a reload, the server
-answers only for a run its node registered, under any of the node's active keys, or, for
-a run behind a gateway, for the gateway node that attached it, and anything else is
-`404`, so a run id cannot be probed.
+body; then a `409` code the server defines. A dispatched run keeps no stored
+registration bytes, so the replay can never hand out its run key. The four codes of the
+resolution come before the limit, so a run that can go nowhere never takes a slot. For a
+reload, the server answers only for a run its node registered, under any of the node's
+active keys, or, for a run behind a gateway, for the gateway node that attached it, and
+anything else is `404`, so a run id cannot be probed.
 
 **Failure.** Every authentication failure is `401` with the body
 `{"error":"unauthorized"}` and nothing more, unsigned: a missing or empty
