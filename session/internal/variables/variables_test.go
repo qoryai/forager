@@ -252,6 +252,59 @@ func TestRefusalsComeFirst(t *testing.T) {
 	want(t, "unwalled", record(got.Applied), []string{"QORY_HARNESS_HOME run:denied", "QORY_X run:denied"})
 }
 
+// TestTheServerSetsTheRunsSystemAndRepositories pins the two QORY_ names the server's
+// variables may set, QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES: the server's values of
+// them apply, in a walled run and in an unwalled one under accept, by these names
+// exactly, and the runtime's denies and the node's entries still leave them out. Every
+// other QORY_ name of the server's, QORY_RUN_KEY and a near miss among them, is denied
+// as before; under ignore an unwalled run leaves them out as any server variable; and
+// any other source that sets one is held to the rules of any QORY_ name.
+func TestTheServerSetsTheRunsSystemAndRepositories(t *testing.T) {
+	server := map[string]string{
+		"QORY_RUN_SYSTEM": "a system", "QORY_RUN_REPOSITORIES": "a b",
+		"QORY_RUN_KEY": "x", "QORY_RUN_SYSTEMX": "x", "QORY_RUN_SYSTEM_X": "x", "qory_run_system": "x", "QORY_ACCESS_KEY_SECRET": "x",
+	}
+	for _, walled := range []bool{true, false} {
+		in := claude
+		in.Walled, in.Unwalled, in.Server = walled, variables.Accept, server
+		got := resolve(t, in)
+		want(t, "env", got.Env, []string{"QORY_RUN_REPOSITORIES=a b", "QORY_RUN_SYSTEM=a system"})
+		want(t, "record", record(got.Applied), []string{
+			"QORY_ACCESS_KEY_SECRET apiary:denied", "QORY_RUN_KEY apiary:denied", "QORY_RUN_REPOSITORIES<-apiary",
+			"QORY_RUN_SYSTEM<-apiary", "QORY_RUN_SYSTEMX apiary:denied", "QORY_RUN_SYSTEM_X apiary:denied", "qory_run_system apiary:denied",
+		})
+	}
+	// The node's entries and the runtime's denies still apply to them.
+	in := claude
+	in.Walled, in.Server = true, server
+	in.Deny = []string{"QORY_RUN_SYS*"}
+	in.RuntimeDenies = []string{"QORY_RUN_REPOSITORIES"}
+	got := resolve(t, in)
+	want(t, "env with the run's entries", got.Env, nil)
+	// Under ignore an unwalled run takes neither.
+	in = claude
+	in.Server = server
+	got = resolve(t, in)
+	want(t, "env under ignore", got.Env, nil)
+	// Any other source is held to the rules of a QORY_ name: refused behind a wall,
+	// denied without one, and the server's value wins over the run's.
+	for _, in := range []variables.Inputs{
+		{Walled: true, Run: []string{"QORY_RUN_SYSTEM=x"}},
+		{Walled: true, Machine: []string{"QORY_RUN_REPOSITORIES=x"}},
+		{Walled: true, Defaults: []string{"QORY_RUN_SYSTEM=x"}},
+		{Walled: true, Fixed: []string{"QORY_RUN_REPOSITORIES=x"}},
+		{Walled: true, Shell: []string{"QORY_RUN_SYSTEM=x"}},
+		{Walled: true, Server: server, Run: []string{"QORY_RUN_SYSTEM=x"}},
+	} {
+		var r *accesskey.Refusal
+		if _, err := variables.Resolve(in); !errors.As(err, &r) || r.Code != refusal.VariableReserved {
+			t.Errorf("%+v: %v, want variable_reserved", in, err)
+		}
+	}
+	got = resolve(t, variables.Inputs{Run: []string{"QORY_RUN_SYSTEM=x"}, Machine: []string{"QORY_RUN_REPOSITORIES=x"}})
+	want(t, "unwalled", record(got.Applied), []string{"QORY_RUN_REPOSITORIES machine:denied", "QORY_RUN_SYSTEM run:denied"})
+}
+
 // TestDenyEntries pins the grammar of the node's deny entries and the matching rule: a
 // whole name, regardless of case, * matching any run of characters, the empty one
 // included, anywhere in the entry.

@@ -50,6 +50,15 @@ const (
 	envSocket = "QORY_RUN_SOCKET"
 )
 
+// The QORY_ names the server's variables may set, by these names exactly: the system
+// and the repositories a run's preparation may use, as the server sets them. The
+// built-in deny list leaves the server's values of them in; every other source that
+// sets one is held to the rules of any QORY_ name.
+const (
+	envRunSystem       = "QORY_RUN_SYSTEM"
+	envRunRepositories = "QORY_RUN_REPOSITORIES"
+)
+
 // The sources of a variable, the highest rung first, as the record names them.
 const (
 	FromFixed   = "fixed"
@@ -143,7 +152,9 @@ type Loss struct {
 // Then, name by name, the highest rung that sets it wins. The fixed names win over
 // every other source. The server's value is left out in an unwalled run under
 // [Ignore], when the deny list matches the name, and when the runtime declares or
-// reserves it or a value of the machine's is read from it. A value of the run, the
+// reserves it or a value of the machine's is read from it; of QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES, only the runtime's denies and the node's entries of the deny
+// list leave it out, not the built-in list. A value of the run, the
 // machine or the harness's defaults is left out when the deny list matches it. A value
 // of the harness's computed ones is left out when the built-in list matches it; the
 // runtime's denies and the node's entries leave it in. The inherited environment's
@@ -159,10 +170,13 @@ func Resolve(in Inputs) (Resolved, error) {
 	if err := Check(passed, in.Walled, in.Placeholders, in.ReadFrom); err != nil {
 		return Resolved{}, err
 	}
-	deny, err := List(append(slices.Clone(in.Deny), in.RuntimeDenies...))
+	added := append(slices.Clone(in.Deny), in.RuntimeDenies...)
+	deny, err := List(added)
 	if err != nil {
 		return Resolved{}, err
 	}
+	// The server's two QORY_ names are matched against the entries the run adds alone.
+	serverDeny := entriesOf(added)
 	builtin, err := List(nil)
 	if err != nil {
 		return Resolved{}, err
@@ -217,7 +231,13 @@ func Resolve(in Inputs) (Resolved, error) {
 		switch {
 		case !in.Walled && in.Unwalled != Accept:
 			why = WhyUnwalled
-		case deny.Matches(name) || slices.Contains(setOtherwise, name):
+		case slices.Contains(setOtherwise, name):
+			why = WhyDenied
+		case name == envRunSystem || name == envRunRepositories:
+			if serverDeny.Matches(name) {
+				why = WhyDenied
+			}
+		case deny.Matches(name):
 			why = WhyDenied
 		}
 		take(FromApiary, v, ok, why)
@@ -315,8 +335,14 @@ func List(entries []string) (*Deny, error) {
 	if err != nil {
 		return nil, err
 	}
+	return entriesOf(slices.Concat(builtin.Names, builtin.Patterns, entries)), nil
+}
+
+// entriesOf is the deny list of the names and patterns given alone, without the
+// built-in ones.
+func entriesOf(list []string) *Deny {
 	d := &Deny{names: map[string]bool{}}
-	for _, e := range slices.Concat(builtin.Names, builtin.Patterns, entries) {
+	for _, e := range list {
 		e = strings.ToUpper(e)
 		if strings.Contains(e, "*") {
 			d.patterns = append(d.patterns, e)
@@ -324,7 +350,7 @@ func List(entries []string) (*Deny, error) {
 			d.names[e] = true
 		}
 	}
-	return d, nil
+	return d
 }
 
 // Matches reports whether an entry of the list matches the whole name, regardless of

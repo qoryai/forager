@@ -636,8 +636,9 @@ machine's is read from, into the enclosure is no run, `variable_reserved`; `QORY
 and `QORY_RUN_SOCKET` are exempt. So `--env QORY_X` or `wall.env: [QORY_X]` behind a wall
 stops the run. A run that passes a value for a placeholder is no run,
 `placeholder_conflict`, with or without a wall. These are the only refusals of the
-variables. `QORY_HARNESS_HOME` is one of Forager's names when the launch spec has a
-harness home, and the session sets it after the check. Behind a wall, a value any node
+variables. The server's values are never refused; its `QORY_` names are left out by
+the deny list, apart from two (below). `QORY_HARNESS_HOME` is one of Forager's names
+when the launch spec has a harness home, and the session sets it after the check. Behind a wall, a value any node
 source passes for it is `variable_reserved`, as any `QORY_` name is. Without a wall, the
 deny list leaves out a value of the server, the run, the machine or the harness for it,
 and Forager's value wins over the one the run inherits: the record lists that one as
@@ -664,7 +665,7 @@ and the runtime's `denies`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
-| `QORY_*` | Forager's names |
+| `QORY_*`, apart from the server's values of `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES` | Forager's names |
 | `*_PROXY`, `NO_PROXY` included, in any case | the session sets the proxy variables (§Sequence step 5), and any other routes around the proxy |
 | `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO` | the wall points them at the run's bundle (§The wall), and another value would replace it |
 | `SSL_CERT_DIR`, `GIT_SSL_CAPATH` | they point the same programs at another store beside the bundle the wall sets |
@@ -673,6 +674,16 @@ and the runtime's `denies`, which `runtimes.json` lists.
 | `DOCKER_CONFIG` | the wall sets it for nested Docker |
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
 | the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
+
+**The run's system and repositories.** The server's variables may set two `QORY_`
+names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
+run's preparation may use (§The wall), as the server sets them. Forager reads nothing
+into their values. The built-in `QORY_*` entry leaves the server's values of them in,
+by these names exactly, in upper case: a name that only begins with one, such as
+`QORY_RUN_SYSTEMX`, or one in lower case, is denied as any `QORY_` name. The runtime's
+`denies` and the node's entries still apply to them, and an unwalled run takes them as
+it takes any server variable. A value of either from any other source is held to the
+rules of any `QORY_` name: `variable_reserved` behind a wall, denied without one.
 
 **Also left out.** A value of any source below the fixed names for a fixed name is left
 out and recorded as `fixed`: the fixed value applies. The server's value of a variable

@@ -12,6 +12,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
   when the run has one.
+- The server's variables may set `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`, the
+  system and the repositories a run's preparation may use: the built-in `QORY_*` deny
+  entry leaves the server's values of these two names in, by these names exactly. Set
+  by any other source, they stay reserved as any `QORY_` name.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
   ceiling that has any. The link's `applied` carries it too.

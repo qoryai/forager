@@ -176,7 +176,11 @@ checks every value the node passes: `Env`, `LaunchFixed`, `LaunchDefaults`,
 | a value for a placeholder | any run | `placeholder_conflict` |
 
 `QORY_RUN_ID` and `QORY_RUN_SOCKET` are exempt from the first. Without a wall, a
-`QORY_` value of the server, the run, the machine or the harness is denied instead.
+`QORY_` value of the server, the run, the machine or the harness is denied instead. A
+server's `QORY_` value is denied in any run, apart from `QORY_RUN_SYSTEM` and
+`QORY_RUN_REPOSITORIES`, the system and the repositories a run's preparation may use,
+which the server's variables may set and which reach the agent as any server variable
+does. Set by the node, they are `QORY_` names like any other.
 
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value

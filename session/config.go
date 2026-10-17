@@ -19,10 +19,14 @@ import (
 // variable_reserved; any run refuses a value for a placeholder, placeholder_conflict.
 // The deny list, the contract's denied-variables.json, the runtime's denies and Deny,
 // then leaves out a value of the server, Run, Machine or LaunchDefaults; the built-in
-// list alone leaves out one of LaunchFixed. The server's are left out of a run without
-// a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out and the
-// run starts; dev.qory.run.policy_applied records each name, its source and what lost,
-// never a value, and [Spec.OnVariables] receives the same.
+// list alone leaves out one of LaunchFixed. The server's values of QORY_RUN_SYSTEM and
+// QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use,
+// as the server sets them, are the two QORY_ names it leaves in, by these names
+// exactly: the runtime's denies and Deny still apply to them, and a value of any other
+// source is held to the rules of any QORY_ name. The server's are left out of a run
+// without a wall unless Unwalled is [UnwalledAccept]. A value that loses is left out
+// and the run starts; dev.qory.run.policy_applied records each name, its source and
+// what lost, never a value, and [Spec.OnVariables] receives the same.
 type Variables struct {
 	// Run are the run's own variables, NAME=value: for qory, --env. They apply with or
 	// without a wall.
