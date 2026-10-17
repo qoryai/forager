@@ -265,6 +265,11 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if req.Pull && !numericUser(user) {
 		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %q, which the image's /etc/passwd or /etc/group would resolve", user)
 	}
+	// The relay of a run in an image by reference starts from the machine's image, never
+	// from the run's, which may be anything.
+	if req.Pull && req.RelayImage == "" {
+		return nil, errors.New("wall docker: an image a run names by its reference needs the machine's image for the relay, RelayImage")
+	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
 		env: d.selected()}
 	if req.Docker {

@@ -230,6 +230,20 @@ func TestDockerNeedsANumericUserForAnImageByReference(t *testing.T) {
 	}
 }
 
+// TestDockerNeedsTheMachinesImageForTheRelay pins that a run in an image by reference
+// without RelayImage is refused before any command: its relay would otherwise start
+// from the run's image.
+func TestDockerNeedsTheMachinesImageForTheRelay(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, Pull: true}); err == nil || !strings.Contains(err.Error(), "RelayImage") {
+		t.Errorf("an image by reference without RelayImage: %v", err)
+	}
+	if len(rec.lines) != 0 {
+		t.Errorf("commands before the refusal:\n%s", strings.Join(rec.lines, "\n"))
+	}
+}
+
 // TestDockerStopsReadingAFileOverTheLimit pins the reads out of a container of the
 // run's image: an /etc/passwd whose docker cp writes without end is read no further
 // than the limit and its tar headers, the command stopped, and the user it would map
