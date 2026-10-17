@@ -104,7 +104,9 @@ run returns the error the gateway's message says. The contract describes each.
 ## The session's events
 
 The runtime reports what happens in its session, through its hooks and its structured
-output. A **descriptor** maps those reports to events:
+output, from inside the enclosure: in an image by reference, which a repository may have
+built, the image can change or forge these events, while Forager's `dev.qory.run.*`
+records come from outside. A **descriptor** maps those reports to events:
 
 | Type                                 | When                                  |
 | ------------------------------------ | ------------------------------------- |

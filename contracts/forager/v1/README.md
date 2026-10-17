@@ -130,7 +130,9 @@ Stated so a receiver reads the record for what it is.
   transport is the local socket (§The local socket).
 - The runtime's session events are what the runtime reports through its hooks and its
   structured output. A runtime that reports nothing produces no session events; the log
-  and the egress record come from Forager and are always there.
+  and the egress record come from Forager and are always there. In an image by
+  reference the image can change or forge the session events, and the runtime's
+  settings and hooks are no boundary (§Images).
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a Forager change, never a configuration change.
 - The server is trusted with what it is sent. The access key authenticates Forager to
@@ -598,8 +600,9 @@ tool's name, `request_id`, and, once the tool answers, `status`. A request a pat
 refuses contains the tool it did not reach, with `decision: denied`; a connection the
 policy refuses by its host, by the deny list, the guard or the allow list, contains
 none. The gateway reads no body, so what an invocation does beyond its method and its
-path is not read by the gateway, and the tool checks it; the runtime's hooks report the MCP call an agent makes
-(`dev.qory.session.tool_started`).
+path is not read by the gateway, and the tool checks it; the runtime's hooks report the
+MCP call an agent makes (`dev.qory.session.tool_started`), as the runtime reports it
+from inside, which an image by reference can change (§Images).
 
 ## Variables
 
@@ -695,9 +698,12 @@ the node passes for a variable the runtime declares or reserves reaches the runt
 passed. Behind a wall, every variable the runtime declares or reserves that neither a
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
 inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it
-empty, which a program may read as set. So is every name the runtime `denies` or the node's deny list
-removes, by its exact name, that nothing sets: a pattern unsets none, and a name
-Forager, the wall or the preparation sets keeps its value (§The wall).
+empty, which a program may read as set. So is every name the runtime `denies` or the
+node's deny list removes, by its exact name, that nothing sets: a pattern unsets none,
+and a name Forager, the wall or the preparation sets keeps its value. One exception
+limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value
+in the enclosure's environment, the image's included, takes the place of the wall's
+docker configuration (§The wall, Nested Docker).
 
 **Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
 variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
@@ -2794,11 +2800,17 @@ as that image first.
 **An image by reference** starts as the machine's default does: under the default's
 runtime, with no daemon, as the wall's user, which for such an image is a uid and a gid
 in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
-`/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is refused
-before anything is made. The wall fetches it before the run starts and refuses one whose
-user is root. The relay always starts from the machine's default image, never from the
-run's. The run sees its workspace at `/workspace`, not at its path on the machine
-(below).
+`/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is
+refused before anything is made. The wall fetches it before the run starts and refuses
+one whose user is root. The relay always starts from the machine's default image, never
+from the run's. The run sees its workspace at `/workspace`, not at its path on the
+machine (below).
+
+Against an image by reference, which a repository may have built, what holds is what
+Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
+proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
+settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+runtime reports from inside, are not that boundary: the image can change or forge them.
 
 A run configuration may name the image too, by reference only, beside its
 `security_policy`. The run configuration, the server's policy and the node's policy must
@@ -2850,8 +2862,9 @@ of the server's, of `--env` or of the machine passes as it is. The working folde
 be a full repository: a git worktree's `.git` file names the main checkout by its path
 on the machine, which is not inside. An image that brings a tree for the run keeps it at
 `/qory/seed`, and `qory` copies it into the workspace; Forager copies none of it.
-`/qory/hooks` works as in every walled run. Every other run sees its workspace at the
-same path as on the machine.
+`/qory/hooks` works as in every walled run, and what reaches it is what the runtime
+reports from inside, which such an image can change or forge (§Images). Every other run
+sees its workspace at the same path as on the machine.
 
 **The record.** `dev.qory.run.started` contains `image`, the reference, and when the image
 is one the machine defines `image_name`, `container_runtime` when the definition sets
@@ -2905,14 +2918,18 @@ Forager's helper, the caller's binary, at the front of everything the launch sta
 run's preparation and Claude Code's approval of its key included, and after the wall's
 programs: `exec --unset NAME … -- program args…`, which removes the names from its
 environment and executes the program, found in `PATH`. A program found only through `.`
-or an empty entry of `PATH` is not run, and ends the run with 127. The names are those
-a source does not set and win with (§Variables); a name Forager, the wall or the
-preparation sets for the run is never one of them, the nested daemon's `DOCKER_CONFIG`
-included; a name the wall sets only for a run with an authority, such as a CA bundle's,
-counts as set only when the run has one. A name outside a variable's grammar is
-refused, and a program it does not find or cannot execute ends the run with 127 or
-126, as a shell's would. A run with no names to unset starts its launch as it is.
-`dev.qory.run.started` reports the launch without the helper.
+or an empty entry of `PATH` is not run, and ends the run with 127. The names are those a
+source does not set and win with (§Variables); a name Forager, the wall or the
+preparation sets for the run is never one of them; a name the wall sets only for a run
+with an authority, such as a CA bundle's, counts as set only when the run has one. So an
+image's `ENV` cannot set a name that is unset, with one exception: with nested Docker,
+`DOCKER_CONFIG` is never unset, and a non-empty value in the environment, the image's
+included, takes the place of the wall's docker configuration (Nested Docker, below).
+Only an image the machine defines has nested Docker; an image by reference never does. A
+name outside a variable's grammar is refused, and a program it does not find or cannot
+execute ends the run with 127 or 126, as a shell's would. A run with no names to unset
+starts its launch as it is. `dev.qory.run.started` reports the launch without the
+helper.
 
 **Forager's files.** A walled run, one without a server included, refuses a mount,
 or the workspace, that is, contains or lies inside one of Forager's files: no run,

@@ -128,8 +128,10 @@ release may change what an existing document does, and says so under Upgrading.
 - Behind a wall, the runtime's declared and reserved variables that nothing sets are
   unset inside, where they went in empty, which a program may read as set; and so is
   every name the runtime denies or the node's `Variables.Deny` removes, by its exact
-  name, that nothing sets, so an image's `ENV` cannot set one. A name Forager, the wall
-  or the preparation sets is never unset, the nested daemon's `DOCKER_CONFIG` included.
+  name, that nothing sets, so an image's `ENV` cannot set one, with one exception: with
+  nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value, the image's
+  included, takes the place of the wall's docker configuration, as the contract's
+  §The wall says. A name Forager, the wall or the preparation sets is never unset.
 
 ### e2e and CI
 

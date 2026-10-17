@@ -214,8 +214,11 @@ When a walled run has names to unset, its launch starts through `Exec`, the help
 `exec` mode, which calls `os.Exit(session.Exec(os.Args[2:], os.Stderr))`: it unsets the
 runtime's declared, reserved and denied variables and the node's denied ones that
 nothing sets, so a value the image's `ENV` gives one never reaches the runtime, and
-neither does an empty one. A name Forager or the wall sets, the nested daemon's
-`DOCKER_CONFIG` included, is never unset. A `Wall` needs an `Exec`.
+neither does an empty one. A name Forager or the wall sets is never unset. One
+exception limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a
+non-empty value, the image's included, takes the place of the wall's docker
+configuration, as [Nested Docker](#nested-docker) says. Only an image the machine
+defines has nested Docker. A `Wall` needs an `Exec`.
 
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
@@ -480,7 +483,13 @@ under it; the paths Forager puts inside name it there, and values from the serve
 worktree's `.git` file names the main checkout by its path on the machine, which is not
 inside. An image that brings a tree for the run keeps it at `/qory/seed`, and `qory`
 copies it into the workspace; Forager copies none of it. Hooks reach the session through
-`/qory/hooks` as in every walled run.
+`/qory/hooks` as in every walled run, reporting what the runtime reports from inside.
+
+Against an image by reference, which a repository may have built, what holds is what
+Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
+proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
+settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
+runtime reports from inside, are not that boundary: the image can change or forge them.
 
 ## Nested Docker
 

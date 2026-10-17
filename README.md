@@ -65,7 +65,8 @@ them under its state directory and prints the path:
 
 Forager writes its events: the start, the policy, each connection, each chunk of output,
 a heartbeat every 30 seconds, and the exit. The agent's hooks and output add the
-session's events: prompts, tool calls, subagents, turns. A **descriptor** maps them.
+session's events: prompts, tool calls, subagents, turns, as the runtime reports them
+from inside, which an image a repository built can change. A **descriptor** maps them.
 Forager ships one for Claude Code.
 
 More: [docs/events.md](docs/events.md).

@@ -222,6 +222,11 @@ func (w *settingWall) Sets() []string { return w.sets }
 // wall's programs, never unsets a name the wall sets: the nested daemon's DOCKER_CONFIG
 // in a run with nested Docker, though the node's deny list names it, which a run
 // without nested Docker unsets; and a name the runtime declares that the wall sets.
+// DOCKER_CONFIG is the one exception to an image's ENV never setting a name that is
+// unset: with nested Docker, wall.Nest keeps a non-empty value it finds, the image's
+// included, in place of the wall's configuration, as the contract's §The wall says, so
+// unsetting it after Nest would take the wall's value away and before would change
+// that rule.
 func TestANameTheWallSetsIsNeverUnset(t *testing.T) {
 	for _, c := range []struct {
 		image string
