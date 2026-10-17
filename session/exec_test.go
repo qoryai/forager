@@ -64,8 +64,9 @@ func contains(lines []string, line string) bool {
 // TestTheHelpersExecRefusesWhatItCannotRun pins the helper's exec's failures, each
 // with its reason and no program started: arguments it cannot read, and a name that is
 // not a variable's, quoted nowhere, exit 2, a NUL, which no argument carries, being
-// parseExec's test; a program it does not find, 127; and one it cannot execute, a file
-// without the execute bit, one that is no program and a directory, 126.
+// parseExec's test; a program it does not find, or finds only through . or an empty
+// entry of PATH, 127; and one it cannot execute, a file without the execute bit, one
+// that is no program and a directory, 126.
 func TestTheHelpersExecRefusesWhatItCannotRun(t *testing.T) {
 	env := []string{"PATH=" + os.Getenv("PATH")}
 	for _, args := range [][]string{
@@ -88,6 +89,18 @@ func TestTheHelpersExecRefusesWhatItCannotRun(t *testing.T) {
 		t.Errorf("a program not found: exit %d, %q; want 127", code, out)
 	}
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "here"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".", ":" + os.Getenv("PATH")} {
+		cmd := exec.Command(os.Args[0], "exec", "--", "here")
+		cmd.Env, cmd.Dir = []string{"PATH=" + path}, dir
+		out, err := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 127 || !strings.Contains(string(out), "found only through .") {
+			t.Errorf("a program found through PATH=%q: %v, %q; want 127", path, err, out)
+		}
+	}
 	plain := filepath.Join(dir, "plain")
 	if err := os.WriteFile(plain, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
 		t.Fatal(err)

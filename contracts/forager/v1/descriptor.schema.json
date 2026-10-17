@@ -160,7 +160,7 @@
           }
         },
         "reserves": {
-          "description": "Variables the runtime reads a credential from beside the declared ones. Behind a wall, a declared or reserved variable that neither a placeholder, the run nor the runtime's preparation sets goes in empty.",
+          "description": "Variables the runtime reads a credential from beside the declared ones. Behind a wall, a declared or reserved variable that nothing sets, neither a placeholder, the run, the runtime's preparation, Forager nor the wall, is unset inside.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,

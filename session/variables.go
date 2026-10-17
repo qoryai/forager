@@ -87,10 +87,11 @@ func passes(spec Spec) []string {
 // variables the agent sees in place of what the gateway holds, and reserved the names
 // the gateway sets for the run, what a value of the machine's is read from. It returns the
 // resolution and, for a walled run, the names to unset inside, which [Exec] takes out
-// of the launch's environment: the runtime's declared and reserved variables that
-// neither a placeholder, the run nor the runtime's preparation sets, and the names the
-// runtime denies or the node's deny list removes that nothing sets.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string) (variables.Resolved, []string, error) {
+// of the launch's environment: the runtime's declared and reserved variables and the
+// names the runtime denies or the node's deny list removes, that nothing sets. Forager,
+// the wall and the preparation set names too, [wall.Nest] among them for a run with
+// nested Docker, docker, so none of theirs is ever unset.
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string, docker bool) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -123,14 +124,18 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	if err != nil {
 		return variables.Resolved{}, nil, err
 	}
-	// Behind a wall, a variable the runtime declares or reserves that neither a
-	// placeholder, the run nor the runtime's preparation sets is unset inside, so an
-	// image's value for it does not reach the runtime, and neither does an empty one,
-	// which a program may read as set. A value the run passes for one stays the
-	// agent's, and one the preparation sets stays the runtime's.
+	// Behind a wall, a variable the runtime declares or reserves that nothing sets is
+	// unset inside, so an image's value for it does not reach the runtime, and neither
+	// does an empty one, which a program may read as set. A value the run passes for
+	// one stays the agent's, one the preparation sets stays the runtime's, and a name
+	// Forager or the wall sets, the nested daemon's DOCKER_CONFIG among them, keeps the
+	// value they give it, since the helper's exec runs after them.
 	var unset []string
 	if spec.Wall != nil {
-		set := slices.Concat(names(spec.Env), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames)
+		set := slices.Concat(names(spec.Env), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, own)
+		if docker {
+			set = append(set, wall.NestSets()...)
+		}
 		for _, name := range runtimeNames {
 			if !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)
@@ -140,7 +145,6 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		// image's value for it does not reach the runtime either. A value that wins with
 		// it stays, and so does a name Forager, the wall or the preparation sets. A
 		// pattern names no variable to unset.
-		set = slices.Concat(set, own)
 		for _, name := range slices.Concat(decl.Denies, spec.Variables.Deny) {
 			if variableShape.MatchString(name) && !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)

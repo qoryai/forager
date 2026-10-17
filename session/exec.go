@@ -46,14 +46,15 @@ func withExec(helper, unset []string, command string, args []string) (string, []
 // denied names and the node's denied ones, so a value the image gives one never
 // reaches the runtime, and neither does an empty one, which a program may read as
 // set. It removes the names from its environment and executes the program, found in
-// PATH as the launch's command is, in its place, with every other variable as it is.
+// PATH by [exec.LookPath], in its place, with every other variable as it is: a program
+// found only through . or an empty entry of PATH, which LookPath refuses, is not run.
 //
 // Its arguments are --unset NAME, any number of times, then -- and the program and
 // its arguments, which no option of its reaches. A NAME is a variable's name: letters,
 // digits and underscores, starting with a letter or an underscore. It returns only on
 // an error, the exit status, as a shell does: 2 for arguments it cannot read, 127 for
-// a program it does not find and 126 for one it cannot execute, its reason written to
-// stderr.
+// a program it does not find, or finds only through . or an empty entry of PATH, and
+// 126 for one it cannot execute, its reason written to stderr.
 func Exec(args []string, stderr io.Writer) int {
 	names, argv, err := parseExec(args)
 	if err != nil {
@@ -65,6 +66,9 @@ func Exec(args []string, stderr io.Writer) int {
 	}
 	path, err := exec.LookPath(argv[0])
 	switch {
+	case errors.Is(err, exec.ErrDot):
+		fmt.Fprintf(stderr, "exec: %s: found only through . or an empty entry of PATH, which is not run\n", argv[0])
+		return 127
 	case errors.Is(err, fs.ErrPermission), errors.Is(err, syscall.EISDIR):
 		fmt.Fprintf(stderr, "exec: %s: cannot be executed: %v\n", argv[0], err)
 		return 126

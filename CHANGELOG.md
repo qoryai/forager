@@ -102,10 +102,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
   its arguments. It unsets the names and executes the program, found in `PATH`; a name
-  outside a variable's grammar exits 2, a program it does not find 127 and one it cannot
-  execute 126. A walled run's launch starts through it, in front of the preparation and
-  the runtime's approval script, and `dev.qory.run.started` reports the launch without
-  it.
+  outside a variable's grammar exits 2, a program it does not find, or finds only
+  through `.` or an empty entry of `PATH`, 127 and one it cannot execute 126. A walled
+  run's launch starts through it when the run has names to unset, in front of the
+  preparation and the runtime's approval script, and `dev.qory.run.started` reports the
+  launch without it.
 - `session.Spec.ImagesAllow`, the machine's `images.allow`: the prefixes of the
   references a policy may name its image by. A run in an image by reference starts
   under the default's runtime, with no nested Docker, its workspace at `/workspace`
@@ -125,7 +126,8 @@ release may change what an existing document does, and says so under Upgrading.
 - Behind a wall, the runtime's declared and reserved variables that nothing sets are
   unset inside, where they went in empty, which a program may read as set; and so is
   every name the runtime denies or the node's `Variables.Deny` removes, by its exact
-  name, that nothing sets, so an image's `ENV` cannot set one.
+  name, that nothing sets, so an image's `ENV` cannot set one. A name Forager, the wall
+  or the preparation sets is never unset, the nested daemon's `DOCKER_CONFIG` included.
 
 ### e2e and CI
 

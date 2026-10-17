@@ -188,7 +188,7 @@ func TestAnUnwalledRun(t *testing.T) {
 // TestWhichNamesTheRecordLists pins the names in the record: every name the server,
 // the run, the machine or the harness's defaults set; a fixed name only when it won
 // over one of those; a name of the inherited environment only when one of those set
-// it too; a variable the runtime declares, which behind a wall goes in empty when
+// it too; a variable the runtime declares, which behind a wall is unset inside when
 // nothing applies, only when a source set it, with no source that won.
 func TestWhichNamesTheRecordLists(t *testing.T) {
 	in := claude

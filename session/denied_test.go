@@ -39,14 +39,37 @@ func unsetIn(t *testing.T, l wall.Launch) (names, launch []string) {
 	return names, args[1:]
 }
 
+// imageWall is an open wall whose enclosure gives the launch the variables of env as
+// an image's ENV does: each a name the run's environment holds no entry for.
+type imageWall struct {
+	openWall
+	env []string
+}
+
+func (w *imageWall) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *imageWall) Wrap(ctx context.Context, l wall.Launch) (wall.Launch, error) {
+	out, err := w.openWall.Wrap(ctx, l)
+	for _, kv := range w.env {
+		if name, _, _ := strings.Cut(kv, "="); len(entriesOf(out.Env, name)) == 0 {
+			out.Env = append(out.Env, kv)
+		}
+	}
+	return out, err
+}
+
 // TestAWalledLaunchStartsThroughTheHelpersExec pins that behind a wall the launch
 // starts through the helper's exec, in front of everything else, with the runtime's
 // declared, reserved and denied names that nothing sets, which the environment the wall
 // gets holds no entry for, empty or not; that the launch after it is the one
 // dev.qory.run.started records, which names no word of the helper's; and that the
-// agent sees the names unset.
+// agent sees the names unset, though the enclosure gives each a value, as an image's
+// ENV does.
 func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
-	w := &openWall{}
+	w := &imageWall{env: []string{"ANTHROPIC_BASE_URL=https://image.invalid/", "CLAUDE_CONFIG_DIR=/image", "ANTHROPIC_API_KEY="}}
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
@@ -77,6 +100,11 @@ func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
 	for _, name := range names {
 		if value, ok := env[name]; ok {
 			t.Errorf("%s=%q reached the agent; want it unset", name, value)
+		}
+	}
+	for _, kv := range w.env {
+		if name, _, _ := strings.Cut(kv, "="); !slices.Contains(names, name) {
+			t.Errorf("%s, which the enclosure sets, is not unset: %q", name, names)
 		}
 	}
 }
@@ -177,5 +205,46 @@ func TestExecIsAWallsAlone(t *testing.T) {
 	sp.Exec = nil
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("a run without a wall and without Exec: %v, %+v", err, res)
+	}
+}
+
+// settingWall is an open wall that sets the names it lists itself, as a [wall.Setter].
+type settingWall struct {
+	openWall
+	sets []string
+}
+
+func (w *settingWall) Sets() []string { return w.sets }
+
+// TestANameTheWallSetsIsNeverUnset pins that the helper's exec, which runs after the
+// wall's programs, never unsets a name the wall sets: the nested daemon's DOCKER_CONFIG
+// in a run with nested Docker, though the node's deny list names it, which a run
+// without nested Docker unsets; and a name the runtime declares that the wall sets.
+func TestANameTheWallSetsIsNeverUnset(t *testing.T) {
+	for _, c := range []struct {
+		image string
+		unset bool
+	}{{"with-docker", false}, {"base", true}} {
+		w := &openWall{}
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		selecting(g, c.image)
+		sp.Wall, sp.Image, sp.Images = w, "base", images
+		sp.Variables.Deny = []string{"DOCKER_CONFIG"}
+		if _, err := session.Run(context.Background(), sp); err != nil {
+			t.Fatalf("%s: %v", c.image, err)
+		}
+		if names, _ := unsetIn(t, w.got); slices.Contains(names, "DOCKER_CONFIG") != c.unset {
+			t.Errorf("%s: unset %q; want DOCKER_CONFIG among them %v", c.image, names, c.unset)
+		}
+	}
+	w := &settingWall{sets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	names, _ := unsetIn(t, w.got)
+	if slices.Contains(names, "CLAUDE_CODE_OAUTH_TOKEN") || !slices.Contains(names, "ANTHROPIC_API_KEY") {
+		t.Errorf("unset %q; want the runtime's names but the one the wall sets", names)
 	}
 }

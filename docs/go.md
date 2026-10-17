@@ -375,7 +375,7 @@ A program that needs custom code implements the interface.
   socket whose address is in the environment.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go). A walled
   run needs `Exec`, the command that calls `session.Exec` inside the enclosure, which
-  the launch starts through.
+  the launch starts through when the run has names to unset.
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
 - `Preparation` is the run's preparation, the program and then its arguments: the

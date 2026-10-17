@@ -157,8 +157,9 @@ type Spec struct {
 	Forwarder []string
 	// Exec is the command, a path inside the enclosure, that makes the caller's binary
 	// run [Exec] there: {wall.HelperPath, "exec"} for a binary that runs it in its exec
-	// mode. Behind a wall the session starts the launch through it, in front of
-	// everything else the launch starts, with the names the run has that nothing sets
+	// mode. Behind a wall the session starts the launch through it when the run has
+	// names to unset, in front of everything else the launch starts, after the wall's
+	// programs, with the names the run has that nothing sets
 	// and wins with, the runtime's declared, reserved and denied names and the node's
 	// denied ones, so the runtime sees them unset, never as the image's values or empty.
 	// dev.qory.run.started reports the launch without it. A Wall needs one.
@@ -723,7 +724,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, unset, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved)
+	vars, unset, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved, img.Docker)
 	if err != nil {
 		return fail(err)
 	}
@@ -823,7 +824,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// preparation sets and Forager's own, each over the ones before, and behind a
 	// wall the placeholders. The resolution has left out every value of a fixed name, so
 	// what wins here by position is what the record says. Behind a wall the launch
-	// starts through Exec, which unsets the runtime's declared, reserved and denied
+	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
 	// variables and the node's denied ones that nothing sets, so an image's value for
 	// one does not reach the runtime; the record names the launch without it.
 	ownEnv := []string{EnvRunID + "=" + runID}

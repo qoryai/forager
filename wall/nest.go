@@ -30,6 +30,11 @@ const (
 	nestConfig = "/run/qory/docker"
 )
 
+// NestSets lists the variables [Nest] sets in the agent's environment for a run with
+// nested Docker: DOCKER_CONFIG, the agent's docker configuration, unless the run sets a
+// non-empty one.
+func NestSets() []string { return []string{"DOCKER_CONFIG"} }
+
 // nestWait is how long the daemon has to answer on its socket.
 const nestWait = 2 * 60
 

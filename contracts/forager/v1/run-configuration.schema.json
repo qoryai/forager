@@ -16,7 +16,7 @@
       "$ref": "policy.schema.json"
     },
     "image": {
-      "description": "The image the run starts in, a reference pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, which the machine runs only under one of its images.allow prefixes. Any other value, a tag, upper case, no digest or the machine's name for an image, is refused, run_configuration_invalid, before the schema reads it. The run configuration, the server's policy and the node's policy name the same image wherever two of them name one. Fixed when the run starts. Absent, the run's policy selects the image.",
+      "description": "The image the run starts in, a reference pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, which the machine runs only under one of its images.allow prefixes. Any other value is refused, run_configuration_invalid: a value that is no string by the schema, and a string that is no reference pinned by digest, with a tag, in upper case, without a digest or the machine's name for an image, by Forager's check before the schema reads it. The run configuration, the server's policy and the node's policy name the same image wherever two of them name one. Fixed when the run starts. Absent, the run's policy selects the image.",
       "$ref": "policy.schema.json#/$defs/image_reference"
     },
     "variables": {

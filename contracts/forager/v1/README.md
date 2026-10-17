@@ -693,9 +693,9 @@ one a value of the machine's is read from, such as a credential's `env` (§Crede
 whose value stays outside the enclosure, is left out and recorded as `denied`. A value
 the node passes for a variable the runtime declares or reserves reaches the runtime as
 passed. Behind a wall, every variable the runtime declares or reserves that neither a
-placeholder, a source nor the runtime's preparation sets is unset inside the enclosure,
-so an image's `ENV` cannot set one, and the runtime never sees it empty, which a
-program may read as set. So is every name the runtime `denies` or the node's deny list
+placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
+inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it
+empty, which a program may read as set. So is every name the runtime `denies` or the node's deny list
 removes, by its exact name, that nothing sets: a pattern unsets none, and a name
 Forager, the wall or the preparation sets keeps its value (§The wall).
 
@@ -2900,14 +2900,18 @@ for all of them.
   host's network from the daemon has left the wall. A mount that is a socket, or a
   directory containing a runtime's, is refused.
 
-**Names unset inside.** The launch of a walled run starts through Forager's helper, the
-caller's binary, at the front of everything the launch starts, the run's preparation and
-Claude Code's approval of its key included: `exec --unset NAME … -- program args…`,
-which removes the names from its environment and executes the program, found in `PATH`
-as the launch's command is. The names are those a source does not set and win with
-(§Variables). A name outside a variable's grammar is refused, and a program it does not
-find or cannot execute ends the run with 127 or 126, as a shell's would.
-`dev.qory.run.started` reports the launch without the helper.
+**Names unset inside.** When a walled run has names to unset, its launch starts through
+Forager's helper, the caller's binary, at the front of everything the launch starts, the
+run's preparation and Claude Code's approval of its key included, and after the wall's
+programs: `exec --unset NAME … -- program args…`, which removes the names from its
+environment and executes the program, found in `PATH`. A program found only through `.`
+or an empty entry of `PATH` is not run, and ends the run with 127. The names are those
+a source does not set and win with (§Variables); a name Forager, the wall or the
+preparation sets is never one of them, the nested daemon's `DOCKER_CONFIG` included. A
+name outside a variable's grammar is refused, and a program it does not find or cannot
+execute ends the run with 127 or 126, as a shell's would. A run with no names to unset
+starts its launch as it is. `dev.qory.run.started` reports the launch without the
+helper.
 
 **Forager's files.** A walled run, one without a server included, refuses a mount,
 or the workspace, that is, contains or lies inside one of Forager's files: no run,
