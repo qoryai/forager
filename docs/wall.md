@@ -506,9 +506,10 @@ wall, separate from the machine's:
   `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`: these are the daemon's `PATH`.
 - Of the run's environment, the daemon gets the proxy and, when the run has one, the
   run's certificate bundle.
-- Unless the run sets a non-empty `DOCKER_CONFIG`, the agent's docker configuration is
-  `/run/qory/docker` and its `config.json`, the agent's, 0700 and 0600, in a `/run/qory`
-  that is root's, mode 0755. A link at either path stops the run.
+- Unless the enclosure's environment has a non-empty `DOCKER_CONFIG`, the image's
+  included, the agent's docker configuration is `/run/qory/docker` and its
+  `config.json`, the agent's, 0700 and 0600, in a `/run/qory` that is root's, mode
+  0755. A link at either path stops the run.
 - It needs the `docker` command and Docker Engine 28 or later; with podman, nerdctl or an
   earlier engine the run is refused before anything is made.
 - Its inside network has an IPv6 subnet, the engine's choice, in Docker's isolated
