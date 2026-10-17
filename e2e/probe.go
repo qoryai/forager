@@ -91,6 +91,10 @@ type report struct {
 	// and PreparedErr why there was nothing to read.
 	Prepared    *preparedReport `json:"prepared,omitempty"`
 	PreparedErr string          `json:"prepared_err"`
+	// Workdir is the probe's working directory, and HostWorkspace whether the
+	// workspace's path on the machine exists inside.
+	Workdir       string `json:"workdir"`
+	HostWorkspace bool   `json:"host_workspace"`
 }
 
 // preparedFile is where in the workspace the run's preparation leaves its report.
@@ -236,6 +240,10 @@ func probe(args []string) int {
 	sort.Strings(r.EnvNames)
 	if _, err := os.Stat(os.Getenv("PROBE_HOST_FILE")); err == nil {
 		r.HostFile = true
+	}
+	r.Workdir, _ = os.Getwd()
+	if _, err := os.Stat(os.Getenv("PROBE_HOST_WORKSPACE")); err == nil {
+		r.HostWorkspace = true
 	}
 	r.Namespaces = map[string]string{}
 	for _, ns := range []string{"net", "pid", "mnt", "ipc", "uts"} {

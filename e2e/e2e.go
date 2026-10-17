@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -43,8 +44,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes/claude"
 	"github.com/qoryai/forager/wall"
@@ -219,6 +222,15 @@ type Options struct {
 	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
 	// not be.
 	EngineID string
+	// Reference is an image pinned by its digest, with a shell at sh, whose user is not
+	// root, and RootReference one whose user is root: the cases of a run whose policy
+	// names its image by reference run in them. Allow is the machine's images.allow
+	// prefix that covers both. Without Reference those cases are skipped, and said so.
+	Reference, RootReference, Allow string
+	// RelayImage, when not nil, is the image the relay of the run of the id was created
+	// from, as the engine reports it while the run goes; the case of the relay's image
+	// asks it. Nil skips that case.
+	RelayImage func(runID string) (string, error)
 	// Recorders are three recorders: the first acts as the host of a runtime's API key,
 	// the second as the host of its OAuth credential, the third as a host the policy
 	// allows with no credential. Without them the checks of a runtime's key are skipped,
@@ -420,6 +432,8 @@ func Run(t *testing.T, o Options) {
 		left, err := o.Leftovers(r.res.RunID)
 		check("Close removes everything", err == nil && len(left) == 0, fmt.Sprint(left, err))
 	}
+
+	byReference(t, o, origin, outside)
 
 	t.Run("the terminal crosses and a named host on this machine is reached", func(t *testing.T) {
 		origin.named = true
@@ -664,9 +678,131 @@ type result struct {
 	out, errs, reports string
 }
 
+// byReference checks a run whose policy names its image by its reference pinned by
+// digest: one under no prefix of images.allow is refused before anything is made; one
+// whose user is root is refused by the wall, which leaves nothing; and one the machine
+// allows starts, with its relay from the machine's default and its workspace at
+// /workspace, whatever its path on the machine.
+func byReference(t *testing.T, o Options, h hosts, outside string) {
+	t.Run("a digest outside images.allow is refused", func(t *testing.T) {
+		runID := event.NewRunID()
+		outsideAllow := "registry.invalid/walltest/app@sha256:" + strings.Repeat("0", 64)
+		_, err := runIn(t, o, variant{image: outsideAllow, allow: []string{"registry.invalid/other/"}, runID: runID}, false, h, outside)
+		var r *session.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageNotAllowed {
+			t.Errorf("the run: %v, want image_not_allowed", err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the refused run left %v (%v)", left, err)
+			}
+		}
+	})
+	if o.Reference == "" {
+		// A plain skip, also where the wall is required: an adapter's test that cannot
+		// make an image of a registry's leaves these cases to one that can.
+		reason := "the adapter's test names no image by reference"
+		if o.Docker {
+			reason = "an image by reference starts with no Docker inside, which the run of the suite without one checks"
+		}
+		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace"} {
+			t.Run(name, func(t *testing.T) { t.Skip(reason) })
+		}
+		return
+	}
+	t.Run("an image whose user is root is refused", func(t *testing.T) {
+		runID := event.NewRunID()
+		_, err := runIn(t, o, variant{image: o.RootReference, allow: []string{o.Allow}, runID: runID}, false, h, outside)
+		var r *session.Refusal
+		if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
+			t.Errorf("the run: %v, want image_user_root", err)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the refused run left %v (%v)", left, err)
+			}
+		}
+	})
+	runID := event.NewRunID()
+	relay := make(chan string, 1)
+	v := variant{image: o.Reference, allow: []string{o.Allow}, runID: runID}
+	if o.RelayImage != nil {
+		v.started = func(ctx context.Context) {
+			// The relay exists from the wrap of the launch to the wall's close: the first
+			// answer while the run goes is its image.
+			for {
+				if image, err := o.RelayImage(runID); err == nil && image != "" {
+					relay <- image
+					return
+				}
+				select {
+				case <-ctx.Done():
+					relay <- ""
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		}
+	}
+	r, err := runIn(t, o, v, false, h, outside)
+	t.Run("the relay's image is the machine's", func(t *testing.T) {
+		if o.RelayImage == nil {
+			t.Skip("the adapter's test cannot say what its relay was created from")
+		}
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		if got := <-relay; got != o.Image {
+			t.Errorf("the relay was created from %q, want the machine's default %q", got, o.Image)
+		}
+	})
+	t.Run("the workspace is at /workspace", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		var started map[string]any
+		for _, e := range r.events {
+			if e["type"] == "dev.qory.run.started" {
+				started = e["data"].(map[string]any)
+			}
+		}
+		fetched, _ := started["image_fetch_ms"].(float64)
+		written, werr := os.ReadFile(filepath.Join(r.dir, "probe-was-here"))
+		if r.probe.Workdir != "/workspace" || r.probe.HostWorkspace || werr != nil || string(written) != "inside" || r.res.ExitCode != 7 ||
+			started["dir"] != "/workspace" || started["image"] != o.Reference || started["image_name"] != nil || fetched < 0 || started["image_fetch_ms"] == nil {
+			t.Errorf("the probe ran in %q, the workspace's path here seen inside %v, wrote %q (%v), exited %d; run.started %v",
+				r.probe.Workdir, r.probe.HostWorkspace, written, werr, r.res.ExitCode, started)
+		}
+		if o.Leftovers != nil {
+			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
+				t.Errorf("the run left %v (%v)", left, err)
+			}
+		}
+	})
+}
+
+// variant is what a run of the suite changes: the image its policy selects or names,
+// the machine's images.allow, the run's id, and what to do while the run goes.
+type variant struct {
+	image   string
+	allow   []string
+	runID   string
+	started func(ctx context.Context)
+}
+
 // run runs the probe as the runtime of a session behind the wall and reads what it
 // reported and what the session recorded.
 func run(t *testing.T, o Options, interactive bool, h hosts, outside string) result {
+	t.Helper()
+	r, err := runIn(t, o, variant{}, interactive, h, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// runIn is run of a variant, which returns why the run did not start.
+func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outside string) (result, error) {
 	t.Helper()
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	var out, errs, reports bytes.Buffer
@@ -706,6 +842,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		"PROBE_DENIED=http://denied.invalid/",
 		"PROBE_OWN=" + h.own,
 		"PROBE_HOST_PORT=" + strconv.Itoa(h.port),
+		"PROBE_HOST_WORKSPACE=" + dir,
 	}
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
@@ -730,6 +867,9 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		images = []session.Image{{Name: "suite", Ref: o.Image, Runtime: o.Runtime, Docker: o.Docker}}
 		selected = "suite"
 	}
+	if v.image != "" {
+		selected = v.image
+	}
 	report := func(l string) {
 		t.Log("report:", l)
 		reportsMu.Lock()
@@ -747,7 +887,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Version:     "walltest",
 		Report:      report,
 	}, runs)
-	res, err := session.Run(ctx, session.Spec{
+	spec := session.Spec{
 		Runtime:        rt,
 		Command:        o.Probe,
 		Args:           []string{modeProbe, "--settings", settings},
@@ -763,13 +903,22 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,
+		ImagesAllow:    v.allow,
+		RunID:          v.runID,
 		Preparation:    append([]string{o.Probe, modePrepare}, preparationWords...),
 		ForagerVersion: "walltest",
 		Report:         report,
-	})
+	}
+	if v.started != nil {
+		going, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); v.started(going) }()
+		defer func() { stop(); <-done }()
+	}
+	res, err := session.Run(ctx, spec)
 	closeGateway()
 	if err != nil {
-		t.Fatalf("the run did not start: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
+		return result{}, fmt.Errorf("the run did not start: %w\nstdout:\n%s\nstderr:\n%s", err, out.String(), errs.String())
 	}
 	reportsMu.Lock()
 	r := result{res: res, dir: dir, runs: runs, out: out.String(), errs: errs.String(),
@@ -802,5 +951,5 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		}
 		r.events = append(r.events, m)
 	}
-	return r
+	return r, nil
 }

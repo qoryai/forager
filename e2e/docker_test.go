@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -135,16 +136,31 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	if e := w.Engine(context.Background()); e.ID != strings.TrimSpace(string(engine)) {
 		t.Fatalf("the engine recorded: %+v", e)
 	}
+	// An image by reference runs with no Docker inside, so the run of the suite with one
+	// leaves its cases to the run without.
+	var reference, rootReference, allow string
+	var relayImage func(string) (string, error)
+	if !docker {
+		reference, rootReference, allow = referenceImages(t, command, image)
+		relayImage = func(runID string) (string, error) {
+			out, err := exec.Command(command, "inspect", "--format", "{{.Config.Image}}", "qory-"+runID+"-relay").Output()
+			return strings.TrimSpace(string(out)), err
+		}
+	}
 	e2e.Run(t, e2e.Options{
-		Origin:    "http://" + strings.TrimSpace(string(ip)) + ":8080/",
-		Wall:      w,
-		Image:     image,
-		Runtime:   rt,
-		Docker:    docker,
-		EngineID:  strings.TrimSpace(string(engine)),
-		Recorders: recorders,
-		Forwarder: []string{wall.HelperPath, "forward"},
-		Probe:     wall.HelperPath,
+		Reference:     reference,
+		RootReference: rootReference,
+		Allow:         allow,
+		RelayImage:    relayImage,
+		Origin:        "http://" + strings.TrimSpace(string(ip)) + ":8080/",
+		Wall:          w,
+		Image:         image,
+		Runtime:       rt,
+		Docker:        docker,
+		EngineID:      strings.TrimSpace(string(engine)),
+		Recorders:     recorders,
+		Forwarder:     []string{wall.HelperPath, "forward"},
+		Probe:         wall.HelperPath,
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file
 		// share.
 		Hooks: runtime.GOOS == "linux",
@@ -172,6 +188,64 @@ func conform(t *testing.T, image, rt string, docker bool) {
 	} else {
 		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
 	}
+}
+
+// registry is the image of the registry an image by reference is fetched from, one of
+// the test's on this machine, so that nothing is published.
+const registry = "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+
+// pushedDigest is the digest docker push prints for the manifest it pushed.
+var pushedDigest = regexp.MustCompile(`digest: (sha256:[0-9a-f]{64})`)
+
+// referenceImages starts a registry of the test's on this machine and pushes two images
+// to it, built from base: one whose user is 1000:1000 and one whose user is root. It
+// returns their references pinned by digest and the images.allow prefix that covers
+// both. Everything it made is removed, by name, when the test ends.
+func referenceImages(t *testing.T, command, base string) (nonroot, root, allow string) {
+	t.Helper()
+	name := fmt.Sprintf("qory-walltest-registry-%d", os.Getpid())
+	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		// The store in memory, not in a volume, which a run's leftovers would count.
+		"--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
+		t.Fatalf("the registry: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	out, err := exec.Command(command, "port", name, "5000/tcp").Output()
+	if err != nil {
+		t.Fatalf("the registry's port: %v", err)
+	}
+	_, port, ok := strings.Cut(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), "127.0.0.1:")
+	if !ok {
+		t.Fatalf("the registry's port: %q", out)
+	}
+	allow = "localhost:" + port + "/walltest/"
+	push := func(repository, user string) string {
+		tag := fmt.Sprintf("%s%s:%d", allow, repository, os.Getpid())
+		build := exec.Command(command, "build", "--quiet", "--tag", tag, "-")
+		build.Stdin = strings.NewReader("FROM " + base + "\n" + user)
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("the image %s: %v: %s", tag, err, out)
+		}
+		t.Cleanup(func() { exec.Command(command, "image", "rm", tag).Run() })
+		// The registry takes a moment to listen.
+		var out []byte
+		var err error
+		for range 50 {
+			if out, err = exec.Command(command, "push", tag).CombinedOutput(); err == nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		m := pushedDigest.FindSubmatch(out)
+		if err != nil || m == nil {
+			t.Fatalf("the push of %s: %v: %s", tag, err, out)
+		}
+		ref := allow + repository + "@" + string(m[1])
+		// The wall's pull names the image by its digest too.
+		t.Cleanup(func() { exec.Command(command, "image", "rm", ref).Run() })
+		return ref
+	}
+	return push("nonroot", "USER 1000:1000\n"), push("root", ""), allow
 }
 
 // busybox is the image the relay's own tests start from.
