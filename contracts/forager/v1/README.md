@@ -1190,19 +1190,21 @@ absent or outside its pattern, signed; `400` `unsupported_contract_version`; `40
 `interval_seconds` above 300 or a label value over 256 bytes, and a batch whose events
 are not all of one run, included; `401` for a GET's timestamp, or a registration's
 `time`, outside ±300 seconds; then each endpoint's checks. The events endpoint's checks,
-in order: a signed `409` `run_id_used` comes first, under any key, for a batch of a run
-id the server gave a dispatch while the server holds no run for it: the dispatch is
-waiting, claimed, or ended before its run was handed to the node pool's job; once the
-run is handed over, the server holds it and the checks that follow apply. Then, for a
-run the server holds, a batch from a key outside the one node its batches are accepted
-from, a signed `409` `wrong_gateway` or `wrong_node` (After the attach, below); for a
-run behind a gateway, then the run's organisation and workspace, as a key of them would
-be: `401` while either is out of use; then, for a run behind a gateway, a signed `410`
-`workspace_not_served`, with no digest headers, when the gateway that attached it may no
-longer serve the run's workspace, decided as at the attach; then `410` for an event of a
-run the server wants nothing more of, a delivery already accepted included; then
-deduplication, so a batch whose delivery id or event ids the server already accepted
-gets the same `2xx` again.
+in order: a signed `409` `run_id_used` comes first for a batch of a run id the server
+gave a dispatch, under a key that does not reach the run. Until the run is handed to
+the node pool's job no key reaches it, since the server holds no run for it while the
+dispatch is waiting, claimed, or ended before the handover. Once the run is handed over,
+a key reaches it when it is the key of a node or node pool of the run's workspace, of
+the gateway that attached the run, or of a gateway that serves the run's workspace; such
+a key gets the checks that follow. Then, for a run the server holds, a batch from a key
+outside the one node its batches are accepted from, a signed `409` `wrong_gateway` or
+`wrong_node` (After the attach, below); for a run behind a gateway, then the run's
+organisation and workspace, as a key of them would be: `401` while either is out of use;
+then, for a run behind a gateway, a signed `410` `workspace_not_served`, with no digest
+headers, when the gateway that attached it may no longer serve the run's workspace,
+decided as at the attach; then `410` for an event of a run the server wants nothing more
+of, a delivery already accepted included; then deduplication, so a batch whose delivery
+id or event ids the server already accepted gets the same `2xx` again.
 The run endpoint's checks, for a registration, in order: a signed `409` `run_id_used`
 comes first, before the stored answer and the limit, for a run id the server gave a
 dispatch (a run the server starts itself and hands to a node pool's job), under any key;
@@ -1559,8 +1561,10 @@ from the attaching instance alone, and its batches and heartbeats from it too wh
 run is live; a batch from any other key, the node pool's among them, or while the run is
 live from another instance of that node, is a signed `409` `wrong_gateway`; for a direct
 run, the node or node pool that registered it, under any of its active keys, and a batch
-from another node's key is a signed `409` `wrong_node`. A reload from any other key is
-`404` in both cases, and so is one from another instance of the gateway node. The
+from another node's key is a signed `409` `wrong_node`. For a run the server gave a
+dispatch, a batch from a key that does not reach the run is a signed `409` `run_id_used`
+instead (the events endpoint's checks, above). A reload from any other key is `404` in
+both cases, and so is one from another instance of the gateway node. The
 organisation of the gateway's key is checked at batches, heartbeats and reloads, as
 every key's is; the run's organisation and workspace are checked at batches once the
 sender is (the events endpoint's checks, above), with the refusal a key of them would
