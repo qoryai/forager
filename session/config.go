@@ -1,9 +1,11 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/session/internal/variables"
 )
 
@@ -99,8 +101,9 @@ const (
 )
 
 // Image is one image as the machine defines it, [Spec.Images]: what an agent's
-// enclosure is started from, and how. A run's policy selects images by name and names
-// no reference, so a repository never chooses what it runs under.
+// enclosure is started from, and how. A run's policy selects one by name, or names one
+// by its reference pinned by digest under one of [Spec.ImagesAllow], so a repository
+// chooses what it runs under only among what the machine allows.
 type Image struct {
 	// Name is what a policy, or [Spec.Image], selects it by.
 	Name string
@@ -135,8 +138,10 @@ var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // checkImages refuses the machine's image table when it cannot be one, before the run
 // request is sent: a definition that cannot be one, a Docker of the agent's own without
-// a runtime among them, and a name defined twice. The gateway resolves the policy's
-// selection against the table; these checks have no code.
+// a runtime among them, a name defined twice, an entry of ImagesAllow that cannot be
+// one, an empty one, *, or one that is not the start of a reference in lower case, and
+// an ImagesAllow without a default Image. The gateway resolves the policy's selection
+// against the table; these checks have no code.
 func checkImages(spec Spec) error {
 	for _, d := range spec.Images {
 		if err := d.Check(); err != nil {
@@ -149,6 +154,14 @@ func checkImages(spec Spec) error {
 			return fmt.Errorf("the image %s is defined twice", d.Name)
 		}
 		seen[d.Name] = true
+	}
+	for _, entry := range spec.ImagesAllow {
+		if err := policy.CheckImagePrefix(entry); err != nil {
+			return err
+		}
+	}
+	if len(spec.ImagesAllow) > 0 && spec.Image == "" {
+		return errors.New("images.allow needs a default image, whose runtime an image by reference starts under")
 	}
 	return nil
 }

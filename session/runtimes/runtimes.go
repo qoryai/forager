@@ -81,6 +81,12 @@ type Attach struct {
 	// enclosure, and a tool's, whose host the tool serves outside it. Empty without a
 	// wall.
 	Placeholders []string
+	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
+	// in a string that may hold one: a runtime applies it to what it copies into the
+	// run directory of the caller's, so a path it names still leads where it led. The
+	// session sets it for a run whose workspace is at /workspace inside. Nil leaves
+	// every path as it is.
+	Inside func(string) string
 }
 
 // Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that

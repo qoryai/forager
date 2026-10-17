@@ -433,9 +433,78 @@ type mountPlan struct {
 	// Dir is the working directory inside: the workspace, reached through the bind
 	// that holds it.
 	Dir string
+	// root is the path of the bind that holds the workspace, as Mounts lists it.
+	root string
 	// sources are the binds as the registry of walled runs lists them.
 	sources []bindSource
 }
+
+// workspaceInside is where a run whose policy names its image by its reference sees the
+// bind that holds its workspace: the working directory is workspaceInside, or a
+// directory under it, whatever its path on this machine.
+const workspaceInside = "/workspace"
+
+// atWorkspace is the plan of a run whose policy names its image by its reference: the
+// bind that holds the workspace shown at [workspaceInside], the working directory under
+// it, and inside, which writes a path of that bind's as the enclosure sees it, at
+// whole components ([translate]). Every other bind stays at its own path; one whose
+// path is, holds or lies under workspaceInside, the run directory's among them, is
+// refused, with no code.
+func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
+	if p.root == "" || p.root == string(filepath.Separator) {
+		return mountPlan{}, nil, fmt.Errorf("the workspace is reached through %q, which cannot be shown at %s", p.root, workspaceInside)
+	}
+	out := p
+	out.Mounts = slices.Clone(p.Mounts)
+	for i, m := range out.Mounts {
+		if m.Path == p.root {
+			out.Mounts[i].Target = workspaceInside
+			continue
+		}
+		if under(workspaceInside, m.Path) || under(m.Path, workspaceInside) {
+			return mountPlan{}, nil, fmt.Errorf("%s is shown at its own path, which overlaps %s, where a run "+
+				"whose image its policy names by reference sees its workspace", m.Path, workspaceInside)
+		}
+	}
+	inside := func(s string) string { return translate(s, p.root, workspaceInside) }
+	out.Dir = inside(p.Dir)
+	return out, inside, nil
+}
+
+// translate is s with every occurrence of the absolute path from, at whole components,
+// written as to: where from starts s or follows a separator of words, and ends s or is
+// followed by a slash or such a separator. /work/app becomes /workspace/app for /work,
+// and /workshop, /a/work and work stay as they are. A separator of words is a space, a
+// quote, a colon, as in a list of paths, an equals sign, as in --flag=path, or one of
+// the shell's characters that end a word.
+func translate(s, from, to string) string {
+	if from == "" || from == to {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(s); {
+		j := strings.Index(s[i:], from)
+		if j < 0 {
+			break
+		}
+		j += i
+		end := j + len(from)
+		if (j == 0 || wordEnd(s[j-1])) && (end == len(s) || s[end] == '/' || wordEnd(s[end])) {
+			b.WriteString(s[last:j])
+			b.WriteString(to)
+			last, i = end, end
+			continue
+		}
+		i = j + 1
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// wordEnd reports whether c separates a path from what is beside it in a word or a
+// line: see [translate].
+func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c) >= 0 }
 
 // checkMounts refuses a caller's Forager file that is not an absolute path and, behind a
 // wall, the places the run lists that it cannot bind as they are, and returns what the
@@ -604,7 +673,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 		seen[root] = true
 		root = outer[root]
 	}
-	plan.Dir = places[ws].bound
+	plan.Dir, plan.root = places[ws].bound, places[root].bound
 	if root != ws {
 		if rest, ok := within(places[root].at, places[ws].at); ok {
 			plan.Dir = filepath.Join(append([]string{places[root].bound}, rest...)...)

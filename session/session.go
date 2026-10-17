@@ -117,6 +117,15 @@ type Spec struct {
 	// image a run starts in is fixed when it starts. The run request carries them, so
 	// the gateway resolves the policy's selection against them.
 	Images []Image
+	// ImagesAllow are the prefixes of the references pinned by digest a run's policy may
+	// name its image by, for qory images.allow: an entry covers a reference that starts
+	// with it when the entry ends in / or @, or the reference's next character is / or
+	// @. Nil allows no reference. A list needs an Image, the default: an image by
+	// reference starts under the default's runtime, with no nested Docker,
+	// as the wall's user, its workspace at /workspace inside, and the wall fetches it
+	// and refuses one whose user is root, image_user_root. A reference no entry covers
+	// is no run, image_not_allowed.
+	ImagesAllow []string
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another
 	// one of the same mode is reached through the outer one, which alone is bound; one of
@@ -651,9 +660,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// authority and the members of policy_applied it decides.
 	// An answer without an image is a machine whose default names none: the wall is
 	// asked for none, and refuses it as it always has.
+	// An image the policy names by its reference starts as the default does, and the
+	// relay starts from the machine's default whatever the run's image is.
 	var img Image
+	byReference, relayImage := false, ""
 	if spec.Wall != nil && answer.Image != nil {
 		img = Image{Name: answer.Image.Name, Ref: answer.Image.Ref, Runtime: answer.Image.Runtime, Docker: answer.Image.Docker}
+		byReference, relayImage = answer.Image.Reference, answer.RelayImage
+	}
+	// A run whose policy names its image by its reference sees its workspace at
+	// /workspace, whatever its path here, and every path Forager puts inside is written
+	// as the enclosure sees it. What the server, the run or the machine set is theirs,
+	// and left as it is. Any other run sees each place at its own path.
+	shown, inside := plan, func(s string) string { return s }
+	if byReference {
+		if shown, inside, err = plan.atWorkspace(); err != nil {
+			return fail(err)
+		}
 	}
 	members, err := appliedMembers(answer.Applied)
 	if err != nil {
@@ -674,15 +697,22 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Wall != nil {
 		attach.Placeholders = slices.Clone(answer.Placeholders)
 	}
+	if byReference {
+		attach.Inside = inside
+	}
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", rt.Name(), err))
 	}
 	// The run's preparation runs inside, after the runtime's, and starts the launch as
 	// the runtime prepared it.
-	if prepared, err = withPreparation(dir, spec.Preparation, prepared); err != nil {
+	if prepared, err = withPreparation(dir, insideAll(spec.Preparation, inside), prepared); err != nil {
 		return fail(err)
 	}
-	vars, emptied, err := resolve(spec, rt, answer.Values(), prepared, answer.Placeholders, reserved)
+	prepared.Command, prepared.Args, prepared.Env = inside(prepared.Command), insideAll(prepared.Args, inside), insideValues(prepared.Env, inside)
+	// The harness's values are Forager's to write as the enclosure sees them.
+	harness := spec
+	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
+	vars, emptied, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved)
 	if err != nil {
 		return fail(err)
 	}
@@ -708,7 +738,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// run key inside TLS.
 	bind, secret, relayToken := link.Loopback, answer.ProxySecret, answer.ProxySecret
 	if spec.Wall != nil {
-		if enclosure, err = spec.Wall.Prepare(runCtx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
+		req := wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker, RelayImage: relayImage, Pull: byReference}
+		if enclosure, err = spec.Wall.Prepare(runCtx, req); err != nil {
 			return fail(err)
 		}
 		defer func() {
@@ -785,7 +816,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// is what the record says.
 	ownEnv := []string{EnvRunID + "=" + runID}
 	if spec.HarnessHome != "" {
-		ownEnv = append(ownEnv, EnvHarnessHome+"="+spec.HarnessHome)
+		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
 	}
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
@@ -815,10 +846,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			return fail(err)
 		}
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
-			Command: command, Args: args, Dir: plan.Dir, Interactive: interactive,
+			Command: command, Args: args, Dir: shown.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders), emptied),
 			CA:    authority,
-			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: plan.Mounts, Limits: spec.Limits,
+			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,
 		})
 		if err != nil {
@@ -835,6 +866,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	started := map[string]any{
 		"opened_by": event.OpenedBySession, "runtime": rt.Name(), "command": command, "args": args,
 		"dir": spec.Dir, "interactive": interactive, "forager_version": spec.ForagerVersion, "host": hostname(),
+	}
+	if byReference {
+		started["dir"] = shown.Dir
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
@@ -861,6 +895,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		if img.Docker {
 			started["docker"] = true
+		}
+		if f, ok := enclosure.(wall.Fetcher); ok {
+			if took, fetched := f.ImageFetch(); fetched {
+				started["image_fetch_ms"] = took.Milliseconds()
+			}
 		}
 	}
 	// The labels are the run's as the gateway holds them. Behind a separate gateway
@@ -1056,7 +1095,7 @@ func linkImages(spec Spec) *server.LinkImages {
 	if spec.Image == "" && len(spec.Images) == 0 {
 		return nil
 	}
-	out := &server.LinkImages{Default: spec.Image}
+	out := &server.LinkImages{Default: spec.Image, Allow: spec.ImagesAllow}
 	for _, d := range spec.Images {
 		out.Definitions = append(out.Definitions, server.LinkImage{Name: d.Name, Ref: d.Ref, Runtime: d.Runtime, Docker: d.Docker})
 	}
@@ -1104,6 +1143,33 @@ func withDefaults(spec Spec) Spec {
 		spec.ForagerVersion = "dev"
 	}
 	return spec
+}
+
+// insideAll are words, each written as inside writes it.
+func insideAll(words []string, inside func(string) string) []string {
+	if words == nil {
+		return nil
+	}
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = inside(w)
+	}
+	return out
+}
+
+// insideValues are NAME=value entries, each value written as inside writes it.
+func insideValues(env []string, inside func(string) string) []string {
+	if env == nil {
+		return nil
+	}
+	out := make([]string, len(env))
+	for i, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if out[i] = kv; ok {
+			out[i] = name + "=" + inside(value)
+		}
+	}
+	return out
 }
 
 // placeholders are the variables a program wants set before it starts, with a value

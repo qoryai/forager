@@ -25,7 +25,7 @@ const SettingsInstaller = "claude-settings"
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Inside)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -33,7 +33,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	return approve(a, launch)
 }
 
-func settingsArgs(events []string, args []string, dir string, forwarder []string) ([]string, error) {
+func settingsArgs(events []string, args []string, dir string, forwarder []string, inside func(string) string) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -58,6 +58,9 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
 			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+		}
+		if inside != nil {
+			settings = insideValues(settings, inside).(map[string]any)
 		}
 	}
 	groups, _ := settings["hooks"].(map[string]any)
@@ -84,6 +87,29 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		return args, nil
 	}
 	return append(append([]string(nil), args...), "--settings", path), nil
+}
+
+// insideValues is v with every string in it, at any depth, written as inside writes
+// it: the settings' paths, a hook's command say, as the enclosure sees them. Names of
+// members are left as they are.
+func insideValues(v any, inside func(string) string) any {
+	switch v := v.(type) {
+	case string:
+		return inside(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = insideValues(e, inside)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = insideValues(e, inside)
+		}
+		return out
+	}
+	return v
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.
