@@ -55,6 +55,10 @@ func must[T any](v T, err error) T {
 // FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the forwarder,
 // and with FAKE_PREPARATION set as a preparation.
 func TestMain(m *testing.M) {
+	// The helper's exec, as the caller's binary runs it in its exec mode.
+	if len(os.Args) > 1 && os.Args[1] == "exec" {
+		os.Exit(session.Exec(os.Args[2:], os.Stderr))
+	}
 	switch {
 	case os.Getenv("FAKE_PREPARATION") != "":
 		os.Exit(fakePreparation())
@@ -201,6 +205,7 @@ func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
 		Stderr:         &errs,
 		Gateway:        session.LocalGateway(g.Local()),
 		Forwarder:      []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
+		Exec:           []string{os.Args[0], "exec"},
 		ForagerVersion: "test",
 		Report:         func(l string) { t.Log("report:", l) },
 	}, g

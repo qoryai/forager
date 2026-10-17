@@ -184,9 +184,9 @@ One run, on a developer machine, with a server configured:
    alone, which the forwarder checks (§The gateway's link, Agent traffic). It opens the
    local socket and sets `QORY_RUN_SOCKET` to its path, `QORY_RUN_ID` to the run id, and
    `QORY_HARNESS_HOME` to the harness's home when the launch spec has one. Nothing else
-   of Forager's enters the environment but the variables (§Variables), the placeholders
-   and, in a walled run, the runtime's declared and reserved variables nothing else
-   sets, as empty.
+   of Forager's enters the environment but the variables (§Variables) and the
+   placeholders; in a walled run the runtime's declared, reserved and denied variables
+   and the node's denied ones that nothing sets are unset inside (§The wall).
 6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
    Forager's forwarder as a command hook for each event the runtime lists. For Claude
    Code that is a copy of the settings file the launch passes, written as
@@ -688,16 +688,16 @@ rules of any `QORY_` name: `variable_reserved` behind a wall, denied without one
 
 **Also left out.** A value of any source below the fixed names for a fixed name is left
 out and recorded as `fixed`: the fixed value applies. The server's value of a variable
-the run's runtime declares or reserves, where the stand-in or an empty value goes, and of
+the run's runtime declares or reserves, where the stand-in goes or which is unset, and of
 one a value of the machine's is read from, such as a credential's `env` (§Credentials),
 whose value stays outside the enclosure, is left out and recorded as `denied`. A value
 the node passes for a variable the runtime declares or reserves reaches the runtime as
 passed. Behind a wall, every variable the runtime declares or reserves that neither a
-placeholder, a source nor the runtime's preparation sets goes into the enclosure as an
-empty value, so an image's `ENV` cannot set one. So does every name the runtime
-`denies` or the node's deny list removes, by its exact name, that nothing sets: a
-pattern empties none, and a name Forager, the wall or the preparation sets keeps its
-value.
+placeholder, a source nor the runtime's preparation sets is unset inside the enclosure,
+so an image's `ENV` cannot set one, and the runtime never sees it empty, which a
+program may read as set. So is every name the runtime `denies` or the node's deny list
+removes, by its exact name, that nothing sets: a pattern unsets none, and a name
+Forager, the wall or the preparation sets keeps its value (§The wall).
 
 **Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
 variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With
@@ -2676,7 +2676,7 @@ the runtime reads a credential from beside the declared ones; `denies`, variable
 session always leaves out of the server's set for the runtime; `credential_files`, files
 in which the runtime keeps its credential, `~` being the home of the user Forager runs
 as. Behind a wall, a declared or reserved variable that neither a placeholder, the run
-nor the runtime's preparation sets goes in empty (§Variables). The session checks
+nor the runtime's preparation sets is unset inside (§Variables). The session checks
 `secrets` when it reads the descriptor: the schema, that ids are distinct, and that
 every id of a group is declared and in one group at most.
 
@@ -2879,6 +2879,15 @@ for all of them.
 - never the container runtime's socket: a process that can request a container on the
   host's network from the daemon has left the wall. A mount that is a socket, or a
   directory containing a runtime's, is refused.
+
+**Names unset inside.** The launch of a walled run starts through Forager's helper, the
+caller's binary, at the front of everything the launch starts, the run's preparation and
+Claude Code's approval of its key included: `exec --unset NAME … -- program args…`,
+which removes the names from its environment and executes the program, found in `PATH`
+as the launch's command is. The names are those a source does not set and win with
+(§Variables). A name outside a variable's grammar is refused, and a program it does not
+find or cannot execute ends the run with 127 or 126, as a shell's would.
+`dev.qory.run.started` reports the launch without the helper.
 
 **Forager's files.** A walled run, one without a server included, refuses a mount,
 or the workspace, that is, contains or lies inside one of Forager's files: no run,

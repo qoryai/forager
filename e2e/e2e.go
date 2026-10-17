@@ -57,6 +57,7 @@ import (
 const (
 	modeRelay    = "relay"
 	modeForward  = "forward"
+	modeExec     = "exec"
 	modeProbe    = "probe"
 	modeTool     = "tool"
 	modeNest     = "nest"
@@ -68,6 +69,13 @@ const (
 	// enclosure's own network, that looks for neighbours on the inside network.
 	modeNeighbours = "neighbours"
 )
+
+// ExecArgs are the arguments that make the helper run [session.Exec].
+var ExecArgs = []string{modeExec}
+
+// imageDeniedVar is a name the Claude runtime denies, which the suite's image by
+// reference sets in its ENV: the run sees it unset.
+const imageDeniedVar = "ANTHROPIC_BASE_URL"
 
 // RelayArgs are the arguments that make the helper run the relay.
 var RelayArgs = []string{modeRelay}
@@ -141,6 +149,8 @@ func Main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case modeExec:
+		os.Exit(session.Exec(os.Args[2:], os.Stderr))
 	case modeForward:
 		if err := session.Forward(context.Background(), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, "forward:", err)
@@ -202,6 +212,9 @@ type Options struct {
 	// Forwarder is the hook forwarder's command inside the enclosure: the adapter's
 	// helper path, then "forward".
 	Forwarder []string
+	// Exec is the helper's exec inside the enclosure, which a walled run starts through:
+	// the adapter's helper path, then [ExecArgs].
+	Exec []string
 	// Probe is the helper's path inside the enclosure.
 	Probe string
 	// Hooks says the adapter carries the hook socket across on this machine. Where it
@@ -705,7 +718,8 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 		if o.Docker {
 			reason = "an image by reference starts with no Docker inside, which the run of the suite without one checks"
 		}
-		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace"} {
+		for _, name := range []string{"an image whose user is root is refused", "the relay's image is the machine's", "the workspace is at /workspace",
+			"a name the image sets and the runtime denies is unset"} {
 			t.Run(name, func(t *testing.T) { t.Skip(reason) })
 		}
 		return
@@ -777,6 +791,14 @@ func byReference(t *testing.T, o Options, h hosts, outside string) {
 			if left, err := o.Leftovers(runID); err != nil || len(left) != 0 {
 				t.Errorf("the run left %v (%v)", left, err)
 			}
+		}
+	})
+	t.Run("a name the image sets and the runtime denies is unset", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("the run did not start: %v", err)
+		}
+		if r.probe.ImageDenied != "unset" {
+			t.Errorf("the probe sees %s, which the image's ENV sets, %s; want it unset", imageDeniedVar, r.probe.ImageDenied)
 		}
 	})
 }
@@ -900,6 +922,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		Stderr:         &errs,
 		Gateway:        g,
 		Forwarder:      o.Forwarder,
+		Exec:           o.Exec,
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,

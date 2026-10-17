@@ -2,10 +2,13 @@ package session_test
 
 import (
 	"context"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // entriesOf are the entries of env for the name, in order.
@@ -19,12 +22,71 @@ func entriesOf(env []string, name string) []string {
 	return out
 }
 
-// TestADeniedNameIsEmptiedBehindAWall pins that behind a wall a name the runtime denies
-// or the node's deny list removes, which nothing sets, goes to the wall empty, so an
-// image's value for it does not show through; that a pattern of the deny list empties
-// nothing; and that a name a source sets and wins with, or one the session sets for
-// the run, keeps its value, once.
-func TestADeniedNameIsEmptiedBehindAWall(t *testing.T) {
+// unsetIn reads the launch a walled run gave the wall: the helper's exec, as the
+// spec's Exec names it, with the names it unsets, then -- and the launch it starts.
+func unsetIn(t *testing.T, l wall.Launch) (names, launch []string) {
+	t.Helper()
+	if l.Command != os.Args[0] || len(l.Args) == 0 || l.Args[0] != "exec" {
+		t.Fatalf("the launch does not start with the helper's exec: %s %q", l.Command, l.Args)
+	}
+	args := l.Args[1:]
+	for len(args) >= 2 && args[0] == "--unset" {
+		names, args = append(names, args[1]), args[2:]
+	}
+	if len(args) < 2 || args[0] != "--" {
+		t.Fatalf("the helper's exec has no -- and launch: %q", l.Args)
+	}
+	return names, args[1:]
+}
+
+// TestAWalledLaunchStartsThroughTheHelpersExec pins that behind a wall the launch
+// starts through the helper's exec, in front of everything else, with the runtime's
+// declared, reserved and denied names that nothing sets, which the environment the wall
+// gets holds no entry for, empty or not; that the launch after it is the one
+// dev.qory.run.started records, which names no word of the helper's; and that the
+// agent sees the names unset.
+func TestAWalledLaunchStartsThroughTheHelpersExec(t *testing.T) {
+	w := &openWall{}
+	sp := spec(t)
+	out := dumpsEnv(t, &sp)
+	sp.Wall, sp.Image = w, "example.com/agent:1"
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, launch := unsetIn(t, w.got)
+	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("%s is not unset: %q", name, names)
+		}
+	}
+	for _, name := range names {
+		if got := entriesOf(w.got.Env, name); len(got) != 0 {
+			t.Errorf("the wall's environment has %q for %s, which is unset", got, name)
+		}
+	}
+	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	recorded := append([]string{started["command"].(string)}, anyStrings(started["args"])...)
+	if !slices.Equal(launch, recorded) {
+		t.Errorf("the helper's exec starts %q, and the record says %q", launch, recorded)
+	}
+	if slices.Contains(recorded, "--unset") || slices.Contains(recorded, "exec") {
+		t.Errorf("the record names the helper's words: %q", recorded)
+	}
+	env := envOf(t, out)
+	for _, name := range names {
+		if value, ok := env[name]; ok {
+			t.Errorf("%s=%q reached the agent; want it unset", name, value)
+		}
+	}
+}
+
+// TestADeniedNameIsUnsetBehindAWall pins that behind a wall a name the runtime denies
+// or the node's deny list removes, which nothing sets, is unset inside, so an image's
+// value for it does not show through; that a pattern of the deny list unsets nothing;
+// and that a name a source sets and wins with, or one the session or the wall sets for
+// the run, keeps its value and is never unset.
+func TestADeniedNameIsUnsetBehindAWall(t *testing.T) {
 	w := &openWall{}
 	sp := spec(t, "INHERITED_DENIED=from-the-shell")
 	sp.Wall, sp.Image = w, "example.com/agent:1"
@@ -33,22 +95,19 @@ func TestADeniedNameIsEmptiedBehindAWall(t *testing.T) {
 	if _, err := session.Run(context.Background(), sp); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{
-		"APP_SECRET":        "APP_SECRET=",
-		"CLAUDE_ENV_FILE":   "CLAUDE_ENV_FILE=",
-		"CLAUDE_CODE_SHELL": "CLAUDE_CODE_SHELL=",
-		"INHERITED_DENIED":  "INHERITED_DENIED=from-the-shell",
-	} {
-		if got := entriesOf(w.got.Env, name); len(got) != 1 || got[0] != want {
-			t.Errorf("the wall's environment has %q for %s, want %q once", got, name, want)
+	names, _ := unsetIn(t, w.got)
+	for _, name := range []string{"APP_SECRET", "CLAUDE_ENV_FILE", "CLAUDE_CODE_SHELL"} {
+		if !slices.Contains(names, name) || len(entriesOf(w.got.Env, name)) != 0 {
+			t.Errorf("%s: unset %q, the wall's environment %q; want it unset alone", name, names, entriesOf(w.got.Env, name))
 		}
 	}
-	if got := entriesOf(w.got.Env, "APP_*"); len(got) != 0 {
-		t.Errorf("a pattern was emptied: %q", got)
+	for _, name := range []string{"APP_*", "INHERITED_DENIED", "HTTPS_PROXY", session.EnvRunID} {
+		if slices.Contains(names, name) {
+			t.Errorf("%s is unset: %q", name, names)
+		}
 	}
-	// The wall sets the proxy's names inside, and the session the run's id.
-	if got := entriesOf(w.got.Env, "HTTPS_PROXY"); len(got) != 0 {
-		t.Errorf("the wall's environment has %q for HTTPS_PROXY, which the wall sets", got)
+	if got := entriesOf(w.got.Env, "INHERITED_DENIED"); !slices.Equal(got, []string{"INHERITED_DENIED=from-the-shell"}) {
+		t.Errorf("the wall's environment has %q for INHERITED_DENIED, want the inherited value once", got)
 	}
 	if got := entriesOf(w.got.Env, session.EnvRunID); len(got) != 1 || strings.HasSuffix(got[0], "=") {
 		t.Errorf("the wall's environment has %q for %s, want the session's value once", got, session.EnvRunID)
@@ -57,19 +116,19 @@ func TestADeniedNameIsEmptiedBehindAWall(t *testing.T) {
 
 // TestAFixedValueOfADeniedNameStays pins CLAUDE_CONFIG_DIR, which the Claude runtime
 // denies and the built-in list does not: the harness's fixed value reaches the wall
-// once and is never emptied; without one the name goes empty; and a value of the
-// server's or the run's for it is still denied, so the wall gets it empty, never with
-// that value.
+// once and is never unset; without one the name is unset; and a value of the server's
+// or the run's for it is still denied, so the wall never gets it with that value, and
+// the name is unset.
 func TestAFixedValueOfADeniedNameStays(t *testing.T) {
 	const name = "CLAUDE_CONFIG_DIR"
 	for _, tc := range []struct {
-		what, fixed, want string
-		passed            bool
+		what, fixed  string
+		passed, gone bool
 	}{
-		{"fixed", name + "=/tmp/agent-home", name + "=/tmp/agent-home", false},
-		{"fixed, with the server's and the run's", name + "=/tmp/agent-home", name + "=/tmp/agent-home", true},
-		{"none", "", name + "=", false},
-		{"the server's and the run's alone", "", name + "=", true},
+		{"fixed", name + "=/tmp/agent-home", false, false},
+		{"fixed, with the server's and the run's", name + "=/tmp/agent-home", true, false},
+		{"none", "", false, true},
+		{"the server's and the run's alone", "", true, true},
 	} {
 		w := &openWall{}
 		sp, g := specGateway(t)
@@ -84,8 +143,39 @@ func TestAFixedValueOfADeniedNameStays(t *testing.T) {
 		if _, err := session.Run(context.Background(), sp); err != nil {
 			t.Fatalf("%s: %v", tc.what, err)
 		}
-		if got := entriesOf(w.got.Env, name); len(got) != 1 || got[0] != tc.want {
-			t.Errorf("%s: the wall's environment has %q, want %q once", tc.what, got, tc.want)
+		names, _ := unsetIn(t, w.got)
+		got := entriesOf(w.got.Env, name)
+		switch {
+		case tc.gone && (!slices.Contains(names, name) || len(got) != 0):
+			t.Errorf("%s: unset %q, the wall's environment %q; want it unset alone", tc.what, names, got)
+		case !tc.gone && (slices.Contains(names, name) || !slices.Equal(got, []string{tc.fixed})):
+			t.Errorf("%s: unset %q, the wall's environment %q; want %q once", tc.what, names, got, tc.fixed)
 		}
+	}
+}
+
+// TestExecIsAWallsAlone pins that a walled run needs the helper's exec, refused before
+// anything starts without one, and that a run without a wall needs none and starts its
+// launch as it is.
+func TestExecIsAWallsAlone(t *testing.T) {
+	sp, g := specGateway(t)
+	sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", nil
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "Exec") {
+		t.Errorf("a walled run without Exec: %v", err)
+	}
+	if len(g.Requests()) > 0 {
+		t.Error("the gateway was asked")
+	}
+	for _, exec := range [][]string{{""}, {os.Args[0], "a\x00b"}} {
+		sp := spec(t)
+		sp.Wall, sp.Image, sp.Exec = &openWall{}, "example.com/agent:1", exec
+		if _, err := session.Run(context.Background(), sp); err == nil {
+			t.Errorf("Exec %q was taken", exec)
+		}
+	}
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Exec = nil
+	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("a run without a wall and without Exec: %v, %+v", err, res)
 	}
 }

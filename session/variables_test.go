@@ -116,7 +116,7 @@ func answerVariables(g *linktest.Fake, doc string) {
 // highest source of each name is in the agent's environment and every value that lost
 // is not, the record lists each name with its source and its losses and no value, and
 // OnVariables receives the same once, before the agent starts. Behind a wall the
-// runtime's declared variables nothing applies are there empty, and so is a name it
+// runtime's declared variables nothing applies are unset there, and so is a name it
 // denies whose value lost. Without a wall, and
 // without accept, none of the server's is there and the run's own apply.
 func TestVariablesReachTheAgentByRung(t *testing.T) {
@@ -195,21 +195,17 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 				}
 			}
 			for _, name := range []string{"APP_REGION", "ANTHROPIC_BASE_URL", "DOCKER_HOST"} {
-				// Behind a wall a name the runtime denies goes in empty.
-				if value, ok := env[name]; ok && (!tc.walled || name != "ANTHROPIC_BASE_URL" || value != "") {
+				if value, ok := env[name]; ok {
 					t.Errorf("%s=%q reached the agent, a value that lost", name, value)
 				}
-			}
-			if value, ok := env["ANTHROPIC_BASE_URL"]; tc.walled && (!ok || value != "") {
-				t.Errorf("ANTHROPIC_BASE_URL: %q, set %v; want set and empty behind a wall", value, ok)
 			}
 			if _, ok := env["NODE_ENV"]; !server && ok {
 				t.Errorf("NODE_ENV=%q reached an unwalled run that ignores the server", env["NODE_ENV"])
 			}
+			// Behind a wall too, where they are unset inside.
 			for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
-				value, ok := env[name]
-				if tc.walled != ok || value != "" {
-					t.Errorf("%s: %q, set %v; want set and empty behind a wall alone", name, value, ok)
+				if value, ok := env[name]; ok {
+					t.Errorf("%s=%q reached the agent, which nothing sets it for", name, value)
 				}
 			}
 			events, _ := os.ReadFile(filepath.Join(res.Dir, "session.jsonl"))
@@ -333,7 +329,7 @@ func TestTheHarnessHome(t *testing.T) {
 // TestAWalledRunPassesTheRuntimesKeyItLists pins the walled run that passes the
 // runtime's credential as the machine's variable, as wall.env does: the value reaches
 // the agent as passed, and the runtime's other declared and reserved variables, which
-// neither a placeholder nor the run sets, are there empty.
+// neither a placeholder nor the run sets, are unset there.
 func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
@@ -351,8 +347,8 @@ func TestAWalledRunPassesTheRuntimesKeyItLists(t *testing.T) {
 		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN=%q, want the value the run passed", env["CLAUDE_CODE_OAUTH_TOKEN"])
 	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
-		if value, ok := env[name]; !ok || value != "" {
-			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
+		if value, ok := env[name]; ok {
+			t.Errorf("%s=%q reached the agent; want it unset", name, value)
 		}
 	}
 }
@@ -369,11 +365,11 @@ func (p preparing) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
 
 func (p preparing) Secrets() runtimes.Declarations { return p.Runtime.(runtimes.Secrets).Secrets() }
 
-// TestWhatThePreparationSetsIsNotEmptied pins that behind a wall a variable the
+// TestWhatThePreparationSetsIsNotUnset pins that behind a wall a variable the
 // runtime reserves and its preparation sets keeps the preparation's value, over a
 // value the harness computes and one of the machine's, which the record lists as
-// fixed, while the declared ones nothing sets are there empty.
-func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
+// fixed, while the declared ones nothing sets are unset there.
+func TestWhatThePreparationSetsIsNotUnset(t *testing.T) {
 	sp := spec(t)
 	out := dumpsEnv(t, &sp)
 	sp.Runtime = preparing{claudeCode(t)}
@@ -395,8 +391,8 @@ func TestWhatThePreparationSetsIsNotEmptied(t *testing.T) {
 		t.Errorf("the record %q, want %q", got, want)
 	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
-		if value, ok := env[name]; !ok || value != "" {
-			t.Errorf("%s: %q, set %v; want set and empty", name, value, ok)
+		if value, ok := env[name]; ok {
+			t.Errorf("%s=%q reached the agent; want it unset", name, value)
 		}
 	}
 }

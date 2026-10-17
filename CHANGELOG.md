@@ -91,8 +91,20 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Session
 
+#### Upgrading
+
+- A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
+  run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
+  runs it in its `exec` mode; a `Wall` without one is refused before the run starts.
+
 #### Added
 
+- `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
+  its arguments. It unsets the names and executes the program, found in `PATH`; a name
+  outside a variable's grammar exits 2, a program it does not find 127 and one it cannot
+  execute 126. A walled run's launch starts through it, in front of the preparation and
+  the runtime's approval script, and `dev.qory.run.started` reports the launch without
+  it.
 - `session.Spec.ImagesAllow`, the machine's `images.allow`: the prefixes of the
   references a policy may name its image by. A run in an image by reference starts
   under the default's runtime, with no nested Docker, its workspace at `/workspace`
@@ -106,9 +118,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
-- Behind a wall, every name the runtime denies or the node's `Variables.Deny` removes,
-  by its exact name, goes into the enclosure empty when nothing sets it, as the
-  runtime's declared and reserved names do, so an image's `ENV` cannot set one.
+- Behind a wall, the runtime's declared and reserved variables that nothing sets are
+  unset inside, where they went in empty, which a program may read as set; and so is
+  every name the runtime denies or the node's `Variables.Deny` removes, by its exact
+  name, that nothing sets, so an image's `ENV` cannot set one.
 
 ### e2e and CI
 
@@ -118,8 +131,9 @@ release may change what an existing document does, and says so under Upgrading.
   through the proxy.
 - The conformance suite checks a run in an image by reference: refused outside
   `images.allow` and for a root user, leaving nothing, its relay from the machine's
-  default, and its workspace at `/workspace`. The Docker adapter's test pushes the
-  images to a registry it starts on the machine.
+  default, its workspace at `/workspace`, and a name its image's `ENV` sets that the
+  runtime denies unset. The Docker adapter's test pushes the images to a registry it
+  starts on the machine.
 
 ## [0.7.0] - 2026-10-12
 

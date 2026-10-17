@@ -160,6 +160,7 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		EngineID:      strings.TrimSpace(string(engine)),
 		Recorders:     recorders,
 		Forwarder:     []string{wall.HelperPath, "forward"},
+		Exec:          append([]string{wall.HelperPath}, e2e.ExecArgs...),
 		Probe:         wall.HelperPath,
 		// A socket crosses a bind mount on a Linux host and not a virtual machine's file
 		// share.
@@ -198,9 +199,9 @@ const registry = "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58a
 var pushedDigest = regexp.MustCompile(`digest: (sha256:[0-9a-f]{64})`)
 
 // referenceImages starts a registry of the test's on this machine and pushes two images
-// to it, built from base: one whose user is 1000:1000 and one whose user is root. It
-// returns their references pinned by digest and the images.allow prefix that covers
-// both. Everything it made is removed, by name, when the test ends.
+// to it, built from base: one whose user is 1000:1000, which sets ANTHROPIC_BASE_URL in
+// its ENV, and one whose user is root. It returns their references pinned by digest and
+// the images.allow prefix that covers both. Everything it made is removed, by name, when the test ends.
 func referenceImages(t *testing.T, command, base string) (nonroot, root, allow string) {
 	t.Helper()
 	name := fmt.Sprintf("qory-walltest-registry-%d", os.Getpid())
@@ -245,7 +246,8 @@ func referenceImages(t *testing.T, command, base string) (nonroot, root, allow s
 		t.Cleanup(func() { exec.Command(command, "image", "rm", ref).Run() })
 		return ref
 	}
-	return push("nonroot", "USER 1000:1000\n"), push("root", ""), allow
+	// The non-root image sets a name the runtime denies, which the run sees unset.
+	return push("nonroot", "USER 1000:1000\nENV ANTHROPIC_BASE_URL=https://image.invalid/\n"), push("root", ""), allow
 }
 
 // busybox is the image the relay's own tests start from.

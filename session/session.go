@@ -155,6 +155,14 @@ type Spec struct {
 	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
 	Forwarder []string
+	// Exec is the command, a path inside the enclosure, that makes the caller's binary
+	// run [Exec] there: {wall.HelperPath, "exec"} for a binary that runs it in its exec
+	// mode. Behind a wall the session starts the launch through it, in front of
+	// everything else the launch starts, with the names the run has that nothing sets
+	// and wins with, the runtime's declared, reserved and denied names and the node's
+	// denied ones, so the runtime sees them unset, never as the image's values or empty.
+	// dev.qory.run.started reports the launch without it. A Wall needs one.
+	Exec []string
 	// ForagerVersion is reported in the events.
 	ForagerVersion string
 	// RunID is the run's id when a parent already made one; empty means a new one, or
@@ -412,6 +420,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	if err := checkPreparation(spec); err != nil {
+		return nil, err
+	}
+	if err := checkExec(spec); err != nil {
 		return nil, err
 	}
 	runID := spec.RunID
@@ -712,7 +723,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The harness's values are Forager's to write as the enclosure sees them.
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
-	vars, emptied, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved)
+	vars, unset, err := resolve(harness, rt, answer.Values(), prepared, answer.Placeholders, reserved)
 	if err != nil {
 		return fail(err)
 	}
@@ -810,10 +821,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// enclosure reaches them on. The environment is what the run inherits, then the
 	// variables as resolved, the harness's computed values, what the runtime's
 	// preparation sets and Forager's own, each over the ones before, and behind a
-	// wall the placeholders and, empty, the runtime's declared and reserved variables
-	// nothing sets, so an image's own value for one does not reach the runtime. The
-	// resolution has left out every value of a fixed name, so what wins here by position
-	// is what the record says.
+	// wall the placeholders. The resolution has left out every value of a fixed name, so
+	// what wins here by position is what the record says. Behind a wall the launch
+	// starts through Exec, which unsets the runtime's declared, reserved and denied
+	// variables and the node's denied ones that nothing sets, so an image's value for
+	// one does not reach the runtime; the record names the launch without it.
 	ownEnv := []string{EnvRunID + "=" + runID}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
@@ -845,9 +857,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if err := listed.update(append(again.sources, binds...)); err != nil {
 			return fail(err)
 		}
+		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
-			Command: command, Args: args, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders), emptied),
+			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(answer.Placeholders)),
 			CA:    authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,

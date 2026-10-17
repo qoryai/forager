@@ -141,6 +141,7 @@ func (r claudeRun) check(t *testing.T, c claudeCredential, interactive bool) {
 		RunsDir:        runs,
 		Gateway:        g,
 		Forwarder:      []string{wall.HelperPath, "forward"},
+		Exec:           append([]string{wall.HelperPath}, ExecArgs...),
 		Wall:           &wall.Docker{Command: r.command, Helper: r.helper, RelayArgs: RelayArgs, NestArgs: NestArgs},
 		Image:          r.image,
 		ForagerVersion: "walltest",

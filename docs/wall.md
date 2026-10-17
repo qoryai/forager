@@ -205,9 +205,16 @@ res, err := session.Run(ctx, session.Spec{
 		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
 	Forwarder: []string{wall.HelperPath, "forward"},
+	Exec:      []string{wall.HelperPath, "exec"},  // the mode of it that calls session.Exec
 	Gateway:   session.LocalGateway(g.LocalLink()), // the gateway on this machine, with the policy and the credentials
 })
 ```
+
+A walled run starts its launch through `Exec`, the helper's `exec` mode, which calls
+`session.Exec(os.Args[2:], os.Stderr)`: it unsets the runtime's declared, reserved and
+denied variables and the node's denied ones that nothing sets, so a value the image's
+`ENV` gives one never reaches the runtime, and neither does an empty one. A `Wall`
+needs an `Exec`.
 
 Sizes are written the way Docker writes them: a number, and optionally `b`, `k`, `m` or
 `g`, in either case. A number alone is bytes. So `8g` is 8 GB. `8GB` or `8GiB` is
