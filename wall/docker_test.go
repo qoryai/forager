@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,6 +47,12 @@ type recorder struct {
 	// docker cp reads out of a container, by the path inside.
 	user  string
 	files map[string]string
+	// endless is the file of a container whose docker cp writes without end, a header
+	// for an enormous file and then zeros; streamed counts what was read of it, and
+	// stopped says the reader closed it before its end.
+	endless  string
+	streamed int64
+	stopped  bool
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -104,6 +111,41 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 	}
 	return nil, errors.New("no such file")
 }
+
+func (r *recorder) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {
+	if _, inside, _ := strings.Cut(argv[len(argv)-2], ":"); r.endless != "" && inside == r.endless {
+		r.lines, r.envs = append(r.lines, words(argv)), append(r.envs, env)
+		var head bytes.Buffer
+		w := tar.NewWriter(&head)
+		w.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1 << 40})
+		w.Flush()
+		return &endless{r: r, rest: io.MultiReader(&head, zeros{})}, nil
+	}
+	out, err := r.output(ctx, argv, env)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(out)), nil
+}
+
+// endless is a docker cp that never ends, counted into its recorder.
+type endless struct {
+	r    *recorder
+	rest io.Reader
+}
+
+func (e *endless) Read(b []byte) (int, error) {
+	n, err := e.rest.Read(b)
+	e.r.streamed += int64(n)
+	return n, err
+}
+
+func (e *endless) Close() error { e.r.stopped = true; return nil }
+
+// zeros is an endless stream of zero bytes.
+type zeros struct{}
+
+func (zeros) Read(b []byte) (int, error) { clear(b); return len(b), nil }
 
 // tarred is a tar stream of one file, as docker cp writes one.
 func tarred(content string) []byte {

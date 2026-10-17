@@ -117,6 +117,10 @@ type system interface {
 	run(ctx context.Context, argv, env []string) ([]byte, error)
 	// output runs a command and returns its standard output alone; env is as for run.
 	output(ctx context.Context, argv, env []string) ([]byte, error)
+	// stdout starts a command and returns its standard output as it comes; env is as
+	// for run. Close waits for the command, and kills it first when its output was not
+	// read to the end, so a reader that stops early stops the command too.
+	stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
@@ -519,17 +523,58 @@ func passwdUID(passwd []byte, name string) (string, bool) {
 }
 
 // imageFile is a file of the run's image, read out of a container created from it and
-// never started, on no network, at most as much as [firstFile] reads. The container is
-// created once, and removed with the enclosure.
+// never started, on no network, by [copyOut]: a file over [fileLimit] is an error. The
+// container is created once, and removed with the enclosure.
 func (e *dockerEnclosure) imageFile(ctx context.Context, p string) ([]byte, error) {
 	if err := e.createImage(ctx); err != nil {
 		return nil, err
 	}
-	out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.image() + ":" + p, "-"}, e.env)
-	if err != nil {
+	b, over, err := e.copyOut(ctx, e.image(), p)
+	switch {
+	case err != nil:
 		return nil, err
+	case over:
+		return nil, fmt.Errorf("wall docker: %s of the image is over %d bytes", p, fileLimit)
 	}
-	return firstFile(out)
+	return b, nil
+}
+
+// fileLimit is the most of a file the wall reads out of a container, and tarAllowance
+// what docker cp may write around it, its tar headers and padding.
+const (
+	fileLimit    = 16 << 20
+	tarAllowance = 64 << 10
+)
+
+// copyWait is how long a read of a file out of a container may take.
+const copyWait = time.Minute
+
+// copyOut reads the file at p out of the container with docker cp, under [copyWait],
+// and returns the first [fileLimit] bytes of its content, and whether it is longer. It
+// reads at most fileLimit and [tarAllowance] bytes of what docker cp writes, and stops
+// the command there, so an image cannot make the wall hold more, whatever the file's
+// size or how well it compresses.
+func (e *dockerEnclosure) copyOut(ctx context.Context, container, p string) ([]byte, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, copyWait)
+	defer cancel()
+	r, err := e.sys.stdout(ctx, []string{e.command(), "cp", "--follow-link", container + ":" + p, "-"}, e.env)
+	if err != nil {
+		return nil, false, err
+	}
+	stream, readErr := io.ReadAll(io.LimitReader(r, fileLimit+tarAllowance+1))
+	closeErr := r.Close()
+	over := len(stream) > fileLimit+tarAllowance
+	if !over && readErr != nil {
+		return nil, false, readErr
+	}
+	if !over && closeErr != nil {
+		return nil, false, closeErr
+	}
+	b, size, err := firstFile(stream)
+	if err != nil {
+		return nil, false, err
+	}
+	return b, over || size > fileLimit, nil
 }
 
 // createImage creates the container of the run's image that is never started, once,
@@ -768,14 +813,10 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 	if e.relayImage() != e.req.Image {
 		from = e.image()
 	}
+	// A bundle over [fileLimit] is read up to it, as before the read was bounded.
 	var image []byte
 	for _, p := range imageBundles {
-		argv := []string{e.command(), "cp", "--follow-link", from + ":" + p, "-"}
-		out, err := e.sys.output(ctx, argv, e.env)
-		if err != nil {
-			continue
-		}
-		if b, err := firstFile(out); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
+		if b, _, err := e.copyOut(ctx, from, p); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
 			image = b
 			break
 		}
@@ -793,16 +834,23 @@ func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error)
 	return mount(file, BundlePath, true)
 }
 
-// firstFile is the content of the first file in a tar stream, what docker cp writes.
-func firstFile(stream []byte) ([]byte, error) {
+// firstFile is the content of the first file in a tar stream, what docker cp writes,
+// at most [fileLimit] bytes of it, and the size its header gives. A stream cut short
+// gives what it holds of the file.
+func firstFile(stream []byte) ([]byte, int64, error) {
 	r := tar.NewReader(bytes.NewReader(stream))
 	for {
 		h, err := r.Next()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if h.Typeflag == tar.TypeReg {
-			return io.ReadAll(io.LimitReader(r, 16<<20))
+			b, err := io.ReadAll(io.LimitReader(r, fileLimit))
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				// A stream cut at the read's limit holds the start of the file.
+				err = nil
+			}
+			return b, h.Size, err
 		}
 	}
 }
@@ -1038,6 +1086,52 @@ func (hostSystem) run(ctx context.Context, argv, env []string) ([]byte, error) {
 
 func (hostSystem) output(ctx context.Context, argv, env []string) ([]byte, error) {
 	return selectedCommand(ctx, argv, env).Output()
+}
+
+func (hostSystem) stdout(ctx context.Context, argv, env []string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	cmd := selectedCommand(ctx, argv, env)
+	out, err := cmd.StdoutPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &piped{r: out, cmd: cmd, cancel: cancel}, nil
+}
+
+// piped is a command's standard output as it comes. Close kills the command when the
+// output was not read to its end, and waits for it.
+type piped struct {
+	r      io.Reader
+	cmd    *exec.Cmd
+	cancel context.CancelFunc
+	ended  bool
+}
+
+// Read reads the command's output, and notes its end.
+func (p *piped) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if err == io.EOF {
+		p.ended = true
+	}
+	return n, err
+}
+
+// Close kills the command when its output was not read to the end, and waits for it.
+func (p *piped) Close() error {
+	if !p.ended {
+		p.cancel()
+	}
+	err := p.cmd.Wait()
+	p.cancel()
+	if !p.ended {
+		// Stopped by the reader: what the command says of being killed is not news.
+		return nil
+	}
+	return err
 }
 
 // selectedCommand is hostCommand, with the engine's selection in place of Forager's

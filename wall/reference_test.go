@@ -229,3 +229,38 @@ func TestDockerNeedsANumericUserForAnImageByReference(t *testing.T) {
 		e.Close(context.Background())
 	}
 }
+
+// TestDockerStopsReadingAFileOverTheLimit pins the reads out of a container of the
+// run's image: an /etc/passwd whose docker cp writes without end is read no further
+// than the limit and its tar headers, the command stopped, and the user it would map
+// refused as one that cannot be checked; and a bundle that does is read no further
+// either, and the run goes on without it.
+func TestDockerStopsReadingAFileOverTheLimit(t *testing.T) {
+	const most = fileLimit + tarAllowance + 1
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"app"`, endless: "/etc/passwd"}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
+		t.Errorf("an endless /etc/passwd: %v, want image_user_root", err)
+	}
+	if !rec.stopped || rec.streamed > most+64<<10 {
+		t.Errorf("the read went on: %d bytes, stopped %v", rec.streamed, rec.stopped)
+	}
+
+	rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000, endless: "/etc/ssl/certs/ca-certificates.crt"}
+	d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:2", RelayImage: "example.com/agent:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := launch()
+	l.CA = []byte("-----BEGIN CERTIFICATE-----\nRUN\n-----END CERTIFICATE-----\n")
+	if _, err := e.Wrap(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.stopped || rec.streamed > most+64<<10 {
+		t.Errorf("the bundle's read went on: %d bytes, stopped %v", rec.streamed, rec.stopped)
+	}
+}
