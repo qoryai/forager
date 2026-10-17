@@ -13,6 +13,7 @@
     "command": {"description": "The program started, as the runtime prepared it.", "type": "string", "minLength": 1},
     "args": {"description": "Its arguments, as the runtime prepared them. Environment is never reported.", "type": "array", "items": {"type": "string"}},
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
+    "preparation": {"description": "The run's preparation, as the caller gave it: the program and then its arguments, which the session runs inside the wall before the runtime, in dir, with the runtime's environment and through the run's proxy. The runtime starts once it exits 0; a preparation that exits otherwise ends the run with its exit status, and the runtime never starts. command and args are then the script the session starts the runtime through, which runs the preparation first. Present with wall when the run has one, absent otherwise.", "type": "array", "minItems": 1, "items": {"type": "string"}},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "terminal": {
       "description": "The size of the pseudo-terminal the runtime starts on: Forager's terminal's when it has one, 80 by 24 otherwise. Present when interactive is true, absent on pipes. Every change after that is one dev.qory.run.resized.",

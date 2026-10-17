@@ -59,6 +59,8 @@ const (
 	modeNest     = "nest"
 	modeInner    = "inner"
 	modeRecorder = "recorder"
+	// modePrepare is the run's preparation, which runs inside before the probe.
+	modePrepare = "prepare"
 	// modeNeighbours is the probe in a container the agent started, privileged on the
 	// enclosure's own network, that looks for neighbours on the inside network.
 	modeNeighbours = "neighbours"
@@ -120,9 +122,9 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder, the probe, the start of a Docker of the agent's own, the probe in a
-// container the agent started, the search for neighbours in one, or a recorder. It
-// returns at once otherwise.
+// forwarder, the run's preparation, the probe, the start of a Docker of the agent's
+// own, the probe in a container the agent started, the search for neighbours in one, or
+// a recorder. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -141,6 +143,8 @@ func Main() {
 			fmt.Fprintln(os.Stderr, "forward:", err)
 		}
 		os.Exit(0)
+	case modePrepare:
+		os.Exit(prepare(os.Args[2:]))
 	case modeProbe:
 		os.Exit(probe(os.Args[2:]))
 	case modeTool:
@@ -286,7 +290,8 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	want := "[" + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
+	// The preparation reaches the origin first, before the probe starts.
+	want := "[" + originHost + " allowed " + originHost + " " + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
 	if len(origin.recorders) == 3 {
 		// A runtime's two credentials to their hosts, then the other host plainly and
 		// through a tunnel.
@@ -384,6 +389,24 @@ func Run(t *testing.T, o Options) {
 		t.Errorf("no session.ended among the events; the hook said: %s", p.Hook)
 	})
 	check("the exit status is the runtime's", r.res.ExitCode == 7, r.res.ExitCode)
+	// The preparation left its report in the workspace before the probe started, from
+	// the probe's namespaces, as its user, with its words as given, and reached the
+	// origin through the proxy, first; the record names it.
+	pr := p.Prepared
+	if pr == nil {
+		pr = &preparedReport{}
+	}
+	var preparation any
+	for _, e := range r.events {
+		if e["type"] == "dev.qory.run.started" {
+			preparation = e["data"].(map[string]any)["preparation"]
+		}
+	}
+	check("the preparation runs inside, before the runtime, through the proxy",
+		p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
+			fmt.Sprint(pr.Args) == fmt.Sprint(preparationWords) && len(egress) > 1 && egress[0] == originHost+" allowed "+originHost &&
+			fmt.Sprint(preparation) == fmt.Sprint(append([]string{o.Probe, modePrepare}, preparationWords...)),
+		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside its own namespaces %v and uid %d; the first egress %v; run.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
 	for _, e := range r.events {
 		if e["type"] == "dev.qory.run.started" {
 			d := e["data"].(map[string]any)
@@ -740,6 +763,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Wall:           o.Wall,
 		Image:          o.Image,
 		Images:         images,
+		Preparation:    append([]string{o.Probe, modePrepare}, preparationWords...),
 		ForagerVersion: "walltest",
 		Report:         report,
 	})

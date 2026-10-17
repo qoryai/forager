@@ -94,6 +94,21 @@ type Spec struct {
 	// Command, Args and Forwarder are then paths inside the enclosure. Nil means no wall:
 	// the runtime is this machine's process, and enforcement is cooperative.
 	Wall wall.Wall
+	// Preparation is the run's preparation, the program and then its arguments, which
+	// the session runs inside the wall before the runtime: after the runtime's
+	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
+	// the run's proxy and with its placeholders, so it reaches what the policy allows
+	// with the credentials the policy selects. The session starts the runtime through a
+	// script it writes into the run directory, PreparationScript, with /bin/sh, so an
+	// image for such a run contains /bin/sh. The script runs the preparation with no
+	// input and its output where the runtime's goes, and starts the runtime once the
+	// preparation exits 0. A preparation that exits otherwise ends the run with its exit
+	// status, and the runtime never starts. A stop during the preparation asks it to
+	// leave with SIGTERM, whatever the stop signal, and the runtime never starts.
+	// dev.qory.run.started reports the preparation as given, and the script as its
+	// command and args. Empty means none. A preparation needs a Wall and a program that
+	// is not empty.
+	Preparation []string
 	// Image is the agent's image under a Wall when the policy selects none: the name
 	// of one of Images, or a reference.
 	Image string
@@ -156,9 +171,9 @@ type Spec struct {
 	// Behind a RemoteGateway what the run is about is its starter's registration's:
 	// About is neither sent nor reported.
 	About *About
-	// Timeout is how long the runtime may run; zero means no limit. At the limit the
-	// runtime is stopped the way the context ending stops it, and run.exited carries
-	// the reason.
+	// Timeout is how long the runtime may run, the run's preparation included; zero
+	// means no limit. At the limit the runtime is stopped the way the context ending
+	// stops it, and run.exited carries the reason.
 	Timeout time.Duration
 	// StopSignal is the signal that asks the runtime to leave when the session stops it,
 	// at the Timeout or the context's end: one CheckStopSignal passes. A runtime may
@@ -385,6 +400,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	if err := checkHarnessHome(spec.HarnessHome); err != nil {
+		return nil, err
+	}
+	if err := checkPreparation(spec); err != nil {
 		return nil, err
 	}
 	runID := spec.RunID
@@ -659,6 +677,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if prepared, err = rt.Prepare(attach); err != nil {
 		return fail(fmt.Errorf("runtime %s: %w", rt.Name(), err))
 	}
+	// The run's preparation runs inside, after the runtime's, and starts the launch as
+	// the runtime prepared it.
+	if prepared, err = withPreparation(dir, spec.Preparation, prepared); err != nil {
+		return fail(err)
+	}
 	vars, emptied, err := resolve(spec, rt, answer.Values(), prepared, answer.Placeholders, reserved)
 	if err != nil {
 		return fail(err)
@@ -815,6 +838,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
+	}
+	if len(spec.Preparation) > 0 {
+		started["preparation"] = spec.Preparation
 	}
 	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
 	// a full-screen program over each other: the size it starts with here, each change

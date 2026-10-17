@@ -10,6 +10,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.run.started` has `preparation`, the run's preparation as the caller gave it,
+  when the run has one.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
   ceiling that has any. The link's `applied` carries it too.
@@ -50,6 +52,24 @@ release may change what an existing document does, and says so under Upgrading.
 - The gateway holds a copy of its `Config`'s credentials and tools, taken at `Start`
   and checked there: every run keeps them whatever the caller's `Config` holds
   afterwards.
+
+### Session
+
+#### Added
+
+- `session.Spec.Preparation`, a run's preparation: the program and then its arguments,
+  which the session runs inside the wall before the runtime, after the runtime's
+  preparation, with the runtime's environment and through the run's proxy, from
+  `preparation.sh` in the run directory. The runtime starts once it exits 0; one that
+  exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
+  refused.
+
+### e2e and CI
+
+#### Added
+
+- The conformance suite checks that a run's preparation runs inside, before the runtime,
+  through the proxy.
 
 ## [0.7.0] - 2026-10-12
 

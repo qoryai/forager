@@ -50,11 +50,14 @@ func must[T any](v T, err error) T {
 	return v
 }
 
-// TestMain lets the test binary stand in for a runtime and for the hook forwarder, so
-// no real runtime and no shell script are needed: with FAKE_RUNTIME set it acts as a
-// runtime, and with QORY_TEST_FORWARD set as the forwarder.
+// TestMain lets the test binary stand in for a runtime, for the hook forwarder and for
+// a run's preparation, so no real runtime and no shell script are needed: with
+// FAKE_RUNTIME set it acts as a runtime, with QORY_TEST_FORWARD set as the forwarder,
+// and with FAKE_PREPARATION set as a preparation.
 func TestMain(m *testing.M) {
 	switch {
+	case os.Getenv("FAKE_PREPARATION") != "":
+		os.Exit(fakePreparation())
 	case os.Getenv("QORY_TEST_FORWARD") != "":
 		if err := socket.Forward(context.Background(), os.Getenv(session.EnvSocket), os.Stdin); err != nil {
 			fmt.Fprintln(os.Stderr, err)

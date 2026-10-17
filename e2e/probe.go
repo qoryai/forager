@@ -87,6 +87,43 @@ type report struct {
 	KeySeen []string `json:"key_seen"`
 	// Environs is how many of the processes' environments under /proc were read.
 	Environs int `json:"environs"`
+	// Prepared is what the run's preparation left in the workspace as the probe started,
+	// and PreparedErr why there was nothing to read.
+	Prepared    *preparedReport `json:"prepared,omitempty"`
+	PreparedErr string          `json:"prepared_err"`
+}
+
+// preparedFile is where in the workspace the run's preparation leaves its report.
+const preparedFile = "prepared-was-here"
+
+// preparationWords are the words the run's preparation is given after its mode, one
+// with a space and one with what a shell would expand.
+var preparationWords = []string{"a word", "it's $HOME `id`"}
+
+// preparedReport is what the run's preparation found: what the origin answered through
+// the proxy, its network and mount namespaces, its user and the words it was given.
+type preparedReport struct {
+	Allowed    int      `json:"allowed"`
+	AllowedErr string   `json:"allowed_err"`
+	Net        string   `json:"net"`
+	Mnt        string   `json:"mnt"`
+	UID        int      `json:"uid"`
+	Args       []string `json:"args"`
+}
+
+// prepare is the run's preparation: it reaches the origin through the proxy and leaves
+// what it found in the workspace, for the probe to read as it starts.
+func prepare(args []string) int {
+	r := preparedReport{Args: args, UID: os.Getuid()}
+	r.Allowed, r.AllowedErr = get(os.Getenv("PROBE_ALLOWED"))
+	r.Net, _ = os.Readlink("/proc/self/ns/net")
+	r.Mnt, _ = os.Readlink("/proc/self/ns/mnt")
+	b, _ := json.Marshal(r)
+	if err := os.WriteFile(preparedFile, b, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "prepare: the workspace:", err)
+		return 1
+	}
+	return 0
 }
 
 // wait is how long an attempt that must fail is given to fail.
@@ -97,6 +134,12 @@ const wait = 3 * time.Second
 // as told.
 func probe(args []string) int {
 	var r report
+	// First, so what the preparation left is what it left before the probe started.
+	if b, err := os.ReadFile(preparedFile); err != nil {
+		r.PreparedErr = err.Error()
+	} else if err := json.Unmarshal(b, &r.Prepared); err != nil {
+		r.PreparedErr = err.Error()
+	}
 	r.OutsideAddress = dial("1.1.1.1:443")
 	r.Metadata = dial("169.254.169.254:80")
 	ctx, cancel := context.WithTimeout(context.Background(), wait)

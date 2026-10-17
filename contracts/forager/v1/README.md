@@ -757,7 +757,7 @@ The types, one namespace. Forager's:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
-| `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has one (§The wall); and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
@@ -2694,7 +2694,10 @@ content to a temporary file beside the configuration, copies it over the configu
 through a link when it is one, and removes the temporary file; whatever fails, the
 configuration keeps its content and Claude Code starts. The entry is always the
 placeholder value's. A headless session, and an OAuth credential in either mode, need no
-approval, and Claude Code starts as it is.
+approval, and Claude Code starts as it is. A run's preparation (§The wall) is started
+the same way, through a script the session writes into the run directory,
+`preparation.sh`, which then starts the launch as the runtime prepared it, through
+`approve-key.sh` when the runtime prepared that.
 
 **`runtimes.json`** lists, for a server to vendor, every descriptor this contract ships,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
@@ -2961,6 +2964,24 @@ the engine in a virtual machine the network's gateway is the virtual machine's, 
 host's. It forwards no packet between its two networks: IP forwarding is off in its
 namespace, so what it passes on is the connections it copies and nothing routed
 through it.
+
+**A run's preparation.** A walled run may have a preparation: a program and its
+arguments, which the session runs inside the enclosure before the runtime, after the
+runtime's preparation (§The runtime), as the runtime's user, in its working directory,
+with its environment, through the relay and the proxy: it reaches what the policy
+allows, with the run's placeholders where the gateway sets the run's credentials.
+Forager reads nothing into what it does. The session writes `preparation.sh` into the
+run directory, each word of the preparation in single quotes, and starts the runtime
+through it with `/bin/sh`, so an image for such a run contains `/bin/sh`. The script
+runs the preparation with no input and its output where the runtime's goes, and starts
+the runtime, as the runtime prepared it, once the preparation exits 0. A preparation
+that exits otherwise is the run's exit status, and the runtime never starts;
+`dev.qory.run.exited` records it as it records a runtime's exit. The run's time limit
+counts the preparation. A stop during the preparation, by any of the run's stop
+signals, asks it to leave with `SIGTERM`, and the runtime never starts; a preparation
+that does not leave within the stop grace is killed as a runtime is.
+`dev.qory.run.started` contains it as `preparation`, as given, with the script as
+`command` and `args`. A run without a wall has no preparation.
 
 **Nested Docker.** *Experimental.* Under the nested runtime the enclosure has a root,
 and whether that root reaches the mounts the run lists as the machine's root is

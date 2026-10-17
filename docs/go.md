@@ -376,6 +376,11 @@ A program that needs custom code implements the interface.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
+- `Preparation` is the run's preparation, the program and then its arguments: the
+  session runs it inside the wall before the runtime, through the run's proxy, and
+  starts the runtime once it exits 0. A preparation that exits otherwise is the run's
+  exit status, and the runtime never starts. It needs a `Wall`, and `Timeout` counts
+  it. See [the contract](../contracts/forager/v1/README.md#the-wall).
 - `Gateway` is the gateway the run speaks to, `session.LocalGateway(l)` with the local
   link the gateway hands out, `(*gateway.Gateway).LocalLink()`, or a
   `session.RemoteGateway` on a separate machine (see
