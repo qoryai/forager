@@ -447,7 +447,7 @@ const workspaceInside = "/workspace"
 // atWorkspace is the plan of a run whose policy names its image by its reference: the
 // bind that holds the workspace shown at [workspaceInside], the working directory under
 // it, and inside, which writes a path of that bind's as the enclosure sees it, at
-// whole components ([translate]). Every other bind stays at its own path; one whose
+// whole components ([translate]). Every other bind stays at the same path; one whose
 // path is, holds or lies under workspaceInside, the run directory's among them, is
 // refused, with no code.
 func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
@@ -462,7 +462,7 @@ func (p mountPlan) atWorkspace() (mountPlan, func(string) string, error) {
 			continue
 		}
 		if under(workspaceInside, m.Path) || under(m.Path, workspaceInside) {
-			return mountPlan{}, nil, fmt.Errorf("%s is shown at its own path, which overlaps %s, where a run "+
+			return mountPlan{}, nil, fmt.Errorf("%s is shown at the same path inside, which overlaps %s, where a run "+
 				"whose image its policy names by reference sees its workspace", m.Path, workspaceInside)
 		}
 	}

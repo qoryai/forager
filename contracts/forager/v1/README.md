@@ -2282,7 +2282,9 @@ document:
   `runtime` the default's, `name` absent and `reference: true`. Present when the
   request's `wall` is true. The session's `dev.qory.run.started` reports it (§Images).
 - `relay_image`: the reference of the machine's default image, which the relay starts
-  from whatever image the run gets. Present when the request's `wall` is true.
+  from whatever image the run gets. Present when the request's `wall` is true and the
+  machine has a default image; without one the relay starts from the run's image, one
+  the machine defines, since an image by reference needs a default.
 - `applied`, required: the members of `dev.qory.run.policy_applied` the gateway decides
   for the policy in force, every member but `variables` and `harness_hosts`, each
   present exactly when the gateway's is, under the rules of
@@ -2382,7 +2384,8 @@ its events:
   run, so a batch in flight during a reload is not refused;
 - is a `dev.qory.run.refused` whose `code` is not one the session decides itself, the
   codes of `refusal.Decides`: `run_configuration_invalid`, `tool_unknown`,
-  `image_unknown`, `variable_reserved`, `placeholder_conflict`,
+  `image_unknown`, `image_not_allowed`, `image_user_root`, `variable_reserved`,
+  `placeholder_conflict`,
   `mount_contains_forager_files`, `mount_mode_conflict`, `mount_shared_with_run`,
   `mount_through_link` and `engine_unreachable`. So a gateway's code `run_id_used`, the
   old codes `run_credential_refused`, `target_differs_from_credential` and
@@ -2820,8 +2823,8 @@ name the image's `/etc/passwd` maps to uid 0. A user given by a name the image's
 is refused the same way: such an image gives its user as a uid. Root is
 `image_user_root`, with the reference as its name: "the image <ref> runs as root; a
 run's image runs as the wall's user". The image's user decides nothing else: the agent
-runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves nothing the
-wall made for it.
+runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves no
+container or network of the run's; an image the engine pulled stays in its store.
 
 **The workspace at `/workspace`.** A run whose policy names its image by reference sees
 the bind that holds its workspace, the outermost, at `/workspace`, and the working

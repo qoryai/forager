@@ -63,7 +63,7 @@ release may change what an existing document does, and says so under Upgrading.
 - The gateway decides an image a policy names by reference: refused with
   `image_not_allowed` under none of the request's `images.allow`, and otherwise the
   run's image under the default's runtime. The answer carries `relay_image`, the
-  default's reference, for every walled run.
+  default's reference, for every walled run on a machine with a default image.
 
 #### Changed
 
@@ -81,13 +81,14 @@ release may change what an existing document does, and says so under Upgrading.
 - `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, under
   a timeout, and refuses with `image_user_root` an image whose user is root, a uid of 0
   or a name its `/etc/passwd` maps to uid 0, or a name it cannot map. A pull that fails
-  leaves nothing. `wall.Fetcher` reports how long the pull took.
+  leaves no container or network. `wall.Fetcher` reports how long the pull took.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
   that is not absolute or that overlaps `/qory`.
 
 #### Changed
 
-- The relay now starts from the machine's default image, never from the run's.
+- The relay now starts from the machine's default image, never from the run's, when the
+  machine has a default image.
 
 ### Session
 
@@ -130,10 +131,10 @@ release may change what an existing document does, and says so under Upgrading.
 - The conformance suite checks that a run's preparation runs inside, before the runtime,
   through the proxy.
 - The conformance suite checks a run in an image by reference: refused outside
-  `images.allow` and for a root user, leaving nothing, its relay from the machine's
-  default, its workspace at `/workspace`, and a name its image's `ENV` sets that the
-  runtime denies unset. The Docker adapter's test pushes the images to a registry it
-  starts on the machine.
+  `images.allow` and for a root user, leaving no container or network, its relay from
+  the machine's default, its workspace at `/workspace`, and a name its image's `ENV`
+  sets that the runtime denies unset. The Docker adapter's test pushes the images to a
+  registry it starts on the machine.
 
 ## [0.7.0] - 2026-10-12
 

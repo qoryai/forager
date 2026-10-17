@@ -693,9 +693,9 @@ type result struct {
 
 // byReference checks a run whose policy names its image by its reference pinned by
 // digest: one under no prefix of images.allow is refused before anything is made; one
-// whose user is root is refused by the wall, which leaves nothing; and one the machine
-// allows starts, with its relay from the machine's default and its workspace at
-// /workspace, whatever its path on the machine.
+// whose user is root is refused by the wall, which leaves no container or network; and
+// one the machine allows starts, with its relay from the machine's default and its
+// workspace at /workspace, whatever its path on the machine.
 func byReference(t *testing.T, o Options, h hosts, outside string) {
 	t.Run("a digest outside images.allow is refused", func(t *testing.T) {
 		runID := event.NewRunID()

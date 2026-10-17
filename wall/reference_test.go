@@ -63,8 +63,9 @@ func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 
 // TestDockerRefusesAnImageWhoseUserIsRoot pins the user check of an image by reference:
 // no user, unset or empty, root, a uid of 0 in any spelling, with or without a group,
-// and a name the image's /etc/passwd maps to uid 0 are image_user_root, and so is a name
-// it cannot map; any other user passes. A refusal makes no network and leaves nothing.
+// and a name the image's /etc/passwd maps to uid 0 are image_user_root, and so is a
+// name it cannot map; any other user passes. A refusal makes no network and leaves no
+// container.
 func TestDockerRefusesAnImageWhoseUserIsRoot(t *testing.T) {
 	const passwd = "root:x:0:0:root:/root:/bin/sh\ntoor:x:00:0::/:/bin/sh\napp:x:1000:1000::/srv/app:/bin/sh\n"
 	for _, c := range []struct {
