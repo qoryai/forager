@@ -36,7 +36,8 @@ nothing.
   its subnets, and takes a connection only from an address in those subnets.
 - So every connection is the proxy's to decide and record.
 - The checkout and the composed home are each mounted at the same path as on the
-  machine. The workspace is the working directory inside. The run's record is mounted
+  machine, except in an image a run's policy names by reference, where the checkout is
+  at `/workspace` ([Images](#images)). The workspace is the working directory inside. The run's record is mounted
   read-only, from a runs directory outside every mount.
 - In a git worktree the repository's data lies in the main checkout; git inside the
   container works only with that directory mounted.
@@ -443,6 +444,32 @@ names the image. Without a selection, the run starts in `Image`.
 `qory` reads `wall.images` from `forager.yaml`: named images, each with a `ref`, and a
 `runtime` and `docker` when it needs them. It reads `wall.image` too, the image a run
 starts in when its policy selects none.
+
+A policy may also name an image by its reference pinned by digest, `NAME@sha256:` and 64
+lower-case hexadecimal digits, with no tag. The machine runs one only under a prefix of
+`Spec.ImagesAllow`, its `images.allow`: an entry such as `registry.example/agents/` or
+`registry.example/agents` covers the references that start with it at a whole part;
+without a list no reference runs. Any other reference is refused with
+`image_not_allowed`, and one with a tag or in upper case with
+`run_configuration_invalid`. `images.allow` needs a default image, `Image`.
+
+An image by reference starts as the default does: under the default's runtime, with no
+nested Docker, as the node's user. The wall pulls it before it makes anything else for
+the run, and refuses with `image_user_root` an image whose user is root: no user,
+`root`, uid 0, or a name the image's `/etc/passwd` maps to uid 0. An image whose user
+is a name its `/etc/passwd` does not map, or that has no `/etc/passwd`, is refused the
+same way, since its user cannot be checked: give the user as a uid. The relay always
+starts from the default image, never from the run's, and the authorities the run
+trusts are read out of the run's image. `dev.qory.run.started` reports
+`image_fetch_ms`, how long the pull took.
+
+In such an image the checkout is mounted at `/workspace` and the working directory is
+under it; the paths Forager puts inside name it there, and values from the server,
+`--env` and the machine pass as they are. The checkout must be a full repository: a git
+worktree's `.git` file names the main checkout by its path on the machine, which is not
+inside. An image that brings a tree for the run keeps it at `/qory/seed`, and `qory`
+copies it into the workspace; Forager copies none of it. Hooks reach the session through
+`/qory/hooks` as in every walled run.
 
 ## Nested Docker
 

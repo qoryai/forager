@@ -19,6 +19,19 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.policy_applied` has `ceiling_paths`: the path rules of each ceiling a
   run's policy file was put under with `gateway.Policy.Under`, by host, one object per
   ceiling that has any. The link's `applied` carries it too.
+- A policy's `image` may name an image by its reference pinned by digest,
+  `NAME@sha256:` and 64 lower-case hexadecimal digits, as well as select one of the
+  machine's by name. A reference with a tag, without a digest or in upper case is
+  `run_configuration_invalid`, in a node's policy file and in a run configuration alike.
+  `policy.CheckImage`, `policy.CheckImagePrefix` and `policy.ImageAllowed` hold the
+  grammar and the prefix rule.
+- The refusals `image_not_allowed`, a reference under none of the machine's
+  `images.allow` prefixes, and `image_user_root`, an image whose user is root, both in
+  `refusal.Decides`.
+- `dev.qory.run.started` has `image_fetch_ms`, how long the wall's fetch of an image by
+  reference took.
+- The link's run request has `images.allow`; its answer has `relay_image`, the image the
+  relay starts from, and `reference: true` on an `image` the policy names by reference.
 
 #### Changed
 
@@ -47,6 +60,10 @@ release may change what an existing document does, and says so under Upgrading.
   no credential, a walled run gets the gateway's selection, a credential that takes an
   argument taking it from a label of the run whose value matches the pattern named, for
   a run whose `forge` label is the one named.
+- The gateway decides an image a policy names by reference: refused with
+  `image_not_allowed` under none of the request's `images.allow`, and otherwise the
+  run's image under the default's runtime. The answer carries `relay_image`, the
+  default's reference, for every walled run.
 
 #### Changed
 
@@ -57,9 +74,29 @@ release may change what an existing document does, and says so under Upgrading.
   and checked there: every run keeps them whatever the caller's `Config` holds
   afterwards.
 
+### Wall
+
+#### Added
+
+- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, under
+  a timeout, and refuses with `image_user_root` an image whose user is root, a uid of 0
+  or a name its `/etc/passwd` maps to uid 0, or a name it cannot map. A pull that fails
+  leaves nothing. `wall.Fetcher` reports how long the pull took.
+- `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
+  that is not absolute or that overlaps `/qory`.
+
+#### Changed
+
+- The relay now starts from the machine's default image, never from the run's.
+
 ### Session
 
 #### Added
+
+- `session.Spec.ImagesAllow`, the machine's `images.allow`: the prefixes of the
+  references a policy may name its image by. A run in an image by reference starts
+  under the default's runtime, with no nested Docker, its workspace at `/workspace`
+  and the paths the session puts inside written there.
 
 - `session.Spec.Preparation`, a run's preparation: the program and then its arguments,
   which the session runs inside the wall before the runtime, after the runtime's
@@ -74,6 +111,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The conformance suite checks that a run's preparation runs inside, before the runtime,
   through the proxy.
+- The conformance suite checks a run in an image by reference: refused outside
+  `images.allow` and for a root user, leaving nothing, its relay from the machine's
+  default, and its workspace at `/workspace`. The Docker adapter's test pushes the
+  images to a registry it starts on the machine.
 
 ## [0.7.0] - 2026-10-12
 

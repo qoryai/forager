@@ -23,12 +23,12 @@ Forager observes and enforces egress through a proxy it owns.
 
 Behind a wall, a policy does more:
 
-| Field          | What it does                              |
-| -------------- | ----------------------------------------- |
-| `egress.paths` | Limits a host to paths                    |
-| `credentials`  | Selects the machine's credentials by name |
-| `tools`        | Selects the machine's tools by name       |
-| `image`        | Selects the machine's image by name       |
+| Field          | What it does                                                       |
+| -------------- | ------------------------------------------------------------------ |
+| `egress.paths` | Limits a host to paths                                             |
+| `credentials`  | Selects the machine's credentials by name                          |
+| `tools`        | Selects the machine's tools by name                                |
+| `image`        | Selects the machine's image by name, or an allowed image by digest |
 
 The machine defines the credentials, the tools and the images. A policy selects among
 them. See [credentials](credentials.md), [tools](credentials.md#tools) and

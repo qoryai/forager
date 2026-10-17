@@ -256,7 +256,8 @@ pipes; the proxy and socket variables inside contain the addresses the enclosure
 them on. After step 9 it closes the wall, which removes everything it created, and stops
 the tools.
 `dev.qory.run.started` contains `wall` and `image`, and `image_name`, `container_runtime`
-and `docker` when the image is one the machine defines (§Images).
+and `docker` when the image is one the machine defines, and `image_fetch_ms` when the
+policy names it by reference (§Images).
 
 When the session and the gateway are two processes, the requests of steps 3 and 8 go
 to the gateway over its link, unsigned, and the gateway is the node toward the server
@@ -330,7 +331,7 @@ egress:
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. A host several entries cover is held to the most specific one: its name itself, else the `*.` entry with the longest suffix. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
-| `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy contains no reference and defines no image (§Images) |
+| `image` | the image the run starts in: the machine's name for one of its images, or a reference pinned by digest, `NAME@sha256:` and 64 lower-case hexadecimal digits, under one of the machine's `images.allow` prefixes; absent is the machine's default. A policy defines no image (§Images) |
 
 **A node narrows a server's policy.** The server leads; the node only narrows. A node,
 through an agent that writes its configuration for example, is easier to compromise
@@ -768,7 +769,7 @@ The types, one namespace. Forager's:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.run.registered` | the server accepted the run's registration, or behind a separate gateway its attach: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's. Behind a separate gateway `workspace`, `node_id` and `instance_id` are the run key's, the other four the attach's, and `labels` and `about` the attach answer's, each absent when the starter's registration had none |
-| `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, and `preparation` when the run has one (§The wall); and `labels` when the caller passes any, and `about` when the caller passes one |
+| `dev.qory.run.started` | the run is open: the runtime is about to start; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `forager_version`, `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`, for an image by reference `image_fetch_ms`, and `preparation` when the run has one (§The wall); and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size takes effect; never on pipes | `cols`, `rows` |
@@ -2142,7 +2143,8 @@ and `about` are the starter's registration's, and the run request carries neithe
   against (§Images): `default`, the machine's default, the name of one of `definitions`
   or a reference; and `definitions`, the images the machine defines, each with `name`,
   `ref`, its reference, `runtime` when the definition sets one, and `docker: true` for
-  nested Docker. A reference is not secret, but it may carry a registry's credentials in
+  nested Docker; and `allow`, the machine's `images.allow`, the prefixes of the
+  references a policy may name. A reference is not secret, but it may carry a registry's credentials in
   its user information: the gateway never logs or reports one. Absent means none.
 - `narrowing`, behind a separate gateway alone: the session's narrowing of the policy,
   `egress` with `allow`, `deny` or both, each in the grammar of the policy's
@@ -2204,13 +2206,14 @@ on one machine today, in the same order, and before it sets anything: the policy
 force, from the node's policy and the run configuration, `run_configuration_invalid` for
 a run configuration it refuses; what needs a wall, refused without one with
 `wall_required`; the run's image among `images`, `image_unknown` for a name the machine
-does not define; the credentials it resolves, `placeholder_conflict` for a credential's
+does not define and `image_not_allowed` for a reference under none of `allow`; the
+credentials it resolves, `placeholder_conflict` for a credential's
 placeholder in `passes`; and the tools it chooses beside the credentials (§Tools),
 `placeholder_conflict` for a tool's placeholder in `passes`. A refusal with a code of
 `refusal.Decides` is a `403` with that code and its names, `from: gateway`, as the
 session gives them today; a refusal of the server's passes through with its status and
 `from: apiary`. The checks of the session's image table and runtime, an image defined
-twice or a daemon without a runtime, have no code: the session makes them before it
+twice, a daemon without a runtime or an `allow` that cannot be one, have no code: the session makes them before it
 sends the request, as today. A refused run opens nothing: the gateway holds no
 credential, starts no tool and makes no proxy secret for it. A run that fails to open
 for a reason without a code is a `500` with `error: internal` and `from: gateway`. Every
@@ -2272,8 +2275,11 @@ document:
   its value left out, as today. Absent means none.
 - `image`: the image the run gets, as a definition of `images` has it, `ref` required:
   the one the policy in force selects, or the machine's default, `name` absent when the
-  default is a reference. Present when the request's `wall` is true. The session's
-  `dev.qory.run.started` reports it (§Images).
+  default is a reference. For a reference the policy names, `ref` is that reference,
+  `runtime` the default's, `name` absent and `reference: true`. Present when the
+  request's `wall` is true. The session's `dev.qory.run.started` reports it (§Images).
+- `relay_image`: the reference of the machine's default image, which the relay starts
+  from whatever image the run gets. Present when the request's `wall` is true.
 - `applied`, required: the members of `dev.qory.run.policy_applied` the gateway decides
   for the policy in force, every member but `variables` and `harness_hosts`, each
   present exactly when the gateway's is, under the rules of
@@ -2740,9 +2746,11 @@ descriptor's rules. The socket is removed when the run ends.
 
 The agent's image is the machine's to choose, and a run's to select among. The machine
 defines images by name, and a run's policy selects one by that name, as it selects
-credentials and tools; it contains no reference and defines no image, so a repository never
-chooses what it runs under. A run whose policy selects none starts in the machine's
-default. Images need a wall: without one the runtime is a process on the machine.
+credentials and tools, or names one by its reference pinned by digest, which the machine
+runs only when the reference starts with one of its allowed prefixes, `images.allow`. A
+policy defines no image, so a repository chooses what it runs under only among what the
+machine allows. A run whose policy selects none starts in the machine's default. Images
+need a wall: without one the runtime is a process on the machine.
 
 | Definition | Meaning |
 |---|---|
@@ -2759,19 +2767,75 @@ egress:
 image: with-docker
 ```
 
+```yaml
+version: 1
+egress:
+  mode: enforce
+  allow: [api.anthropic.com]
+image: registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+```
+
 The machine's default is the name of one of its images, or a reference, which starts
 under the engine's default runtime with no daemon. A name the machine defines is read
 as that image first.
 
+**An image by reference** starts as the machine's default does: under the default's
+runtime, with no daemon, as the wall's user. The wall fetches it before the run starts
+and refuses one whose user is root. The relay always starts from the machine's default
+image, never from the run's. The run sees its workspace at `/workspace`, not at its path
+on the machine (below).
+
+**`images.allow`** lists the prefixes of the references the machine runs. An entry is
+the start of a reference pinned by digest, in lower case, up to a whole part of it: a
+registry, a name or a path, which may end in `/`, or a name and its `@`. An entry
+covers a reference that starts with it when the entry ends in `/` or `@`, or the
+reference's next character is one of them: `registry.example/agents` covers
+`registry.example/agents/app@sha256:…` and `registry.example/agents@sha256:…`, and
+neither `registry.example/agents-other/app@sha256:…` nor
+`registry.example:5000/agents/app@sha256:…`. Nothing is normalised: an entry covers the
+references written under it alone. No list allows no reference.
+
 **Refused before the run starts:** a name the machine does not define, a selection
-without a wall, an image defined twice, a daemon without a runtime. The image a run
-starts in is fixed when it starts: a run configuration that selects another is refused,
-and the policy in force stays.
+without a wall, an image defined twice, a daemon without a runtime; an empty entry of
+`images.allow`, `*`, an entry that is not the start of a reference, and `images.allow`
+on a machine with no default image, whose runtime an image by reference starts under. A
+reference that is not pinned by digest, one with a tag, without a digest or in upper
+case, is `run_configuration_invalid`, in a node's policy file and in a run configuration
+alike. A reference under none of the machine's prefixes is `image_not_allowed`, with the
+reference as its name: "the image <ref> is under none of the machine's allowed prefixes
+(images.allow)". The image a run starts in is fixed when it starts: a run configuration
+that selects another is refused, and the policy in force stays.
+
+**The user of an image by reference.** The wall fetches the image with the engine's
+pull, before it makes anything else for the run, and reads the image's user. No user,
+`root`, and a uid of 0 in any spelling, with or without a group, are root, and so is a
+name the image's `/etc/passwd` maps to uid 0. A user given by a name the image's
+`/etc/passwd` does not map, or in an image with no `/etc/passwd`, cannot be checked and
+is refused the same way: such an image gives its user as a uid. Root is
+`image_user_root`, with the reference as its name: "the image <ref> runs as root; a
+run's image runs as the wall's user". A fetch that fails is no run, and leaves nothing
+the wall made for it.
+
+**The workspace at `/workspace`.** A run whose policy names its image by reference sees
+the bind that holds its workspace, the outermost, at `/workspace`, and the working
+directory under it where it lies in that bind. Another bind whose path inside is
+`/workspace`, holds it or lies under it is refused before the wall is asked. Forager
+names the workspace at `/workspace`, by whole path components, in what it puts inside:
+the working directory, the runtime's command, arguments and variables, the preparation's
+words, `QORY_HARNESS_HOME`, the harness's fixed and default values, and the settings the
+runtime copies; `dir` of `dev.qory.run.started` is the working directory inside. A value
+of the server's, of `--env` or of the machine passes as it is. The working folder must
+be a full repository: a git worktree's `.git` file names the main checkout by its path
+on the machine, which is not inside. An image that brings a tree for the run keeps it at
+`/qory/seed`, and `qory` copies it into the workspace; Forager copies none of it.
+`/qory/hooks` works as in every walled run. Every other run sees its workspace at the
+same path as on the machine.
 
 **The record.** `dev.qory.run.started` contains `image`, the reference, and when the image
 is one the machine defines `image_name`, `container_runtime` when the definition sets
-one, and `docker: true` when the enclosure has nested Docker.
-`dev.qory.run.policy_applied` contains `image` when the policy selects one.
+one, and `docker: true` when the enclosure has nested Docker; for an image by reference,
+`image_fetch_ms`, how long the wall's fetch took, in milliseconds.
+`dev.qory.run.policy_applied` contains `image` when the policy selects or names one.
 
 **What an image provides.** The wall builds no image and changes none. An image runs:
 
@@ -2860,7 +2924,10 @@ up in its parent, so two binds of one root are allowed:
 - the enclosure binds the outermost of the places the run lists, the mounts and the
   workspace, each once, and the run directory, read-only. The workspace is writable and
   is the working directory inside, through the bind that holds it, or bound at the same
-  path as on the machine when no mount holds it. The session passes the wall every bind,
+  path as on the machine when no mount holds it; a run whose policy names its image by
+  reference sees the bind that holds it at `/workspace` (§Images), and a wall binds a
+  mount at the path the session gives it inside, never one that overlaps `/qory`. The
+  session passes the wall every bind,
   each path clean, and the working directory lies in one of them by its names, or the
   run fails; a wall binds nothing of the caller's the launch does not list;
 - a place inside another one, or the same, of the same mode is reached through the
@@ -3075,7 +3142,7 @@ the option experimental.
 
 | Directory | Contains | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have, and enforce with an image named by its reference pinned by digest | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the fixture access key id and the fixture signing key as the pin, one of them with `via`, its `ca_file` and its pin | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server returns: with its events and run endpoints, with a section this revision does not define, with `secrets` and two keys of a rotation, a gateway key's, with no `workspaces` | `configuration.schema.json` |
 | `fixtures/run-registration/` | registration bodies: one without labels or `about`, and one with labels and an `about` of every member; and in the gateway shape, one with labels, `about` and `attach_seconds`, and one with `version`, `run_id` and `time` alone | `run-registration.schema.json` |
@@ -3085,9 +3152,9 @@ the option experimental.
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
-| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, and one behind a wall that reaches a tool started with an argument, with a credential an adapter mints | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state` and `exit_code` |
+| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace` and the fetch's time | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state` and `exit_code` |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
-| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels and `proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
+| `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, one with `images.allow` and a policy that names its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels and `proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
 | `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
