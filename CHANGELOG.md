@@ -97,7 +97,6 @@ release may change what an existing document does, and says so under Upgrading.
   references a policy may name its image by. A run in an image by reference starts
   under the default's runtime, with no nested Docker, its workspace at `/workspace`
   and the paths the session puts inside written there.
-
 - `session.Spec.Preparation`, a run's preparation: the program and then its arguments,
   which the session runs inside the wall before the runtime, after the runtime's
   preparation, with the runtime's environment and through the run's proxy, from
