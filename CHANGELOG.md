@@ -98,12 +98,6 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Session
 
-#### Upgrading
-
-- A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
-  run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
-  runs it in its `exec` mode; a `Wall` without one is refused before the run starts.
-
 #### Added
 
 - `session.Exec`, the helper's `exec`: `--unset NAME …`, then `--` and the program and
@@ -125,6 +119,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
+  run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
+  runs it in its `exec` mode; a `Wall` without one is refused before the run starts.
 - Behind a wall, the runtime's declared and reserved variables that nothing sets are
   unset inside, where they went in empty, which a program may read as set; and so is
   every name the runtime denies or the node's `Variables.Deny` removes, by its exact
