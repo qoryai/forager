@@ -287,7 +287,7 @@ func TestTheServerSetsTheRunsSystemAndRepositories(t *testing.T) {
 	got = resolve(t, in)
 	want(t, "env under ignore", got.Env, nil)
 	// Any other source is held to the rules of a QORY_ name: refused behind a wall,
-	// denied without one, and the server's value wins over the run's.
+	// denied without one, and a run's value is refused even when the server sets the name.
 	for _, in := range []variables.Inputs{
 		{Walled: true, Run: []string{"QORY_RUN_SYSTEM=x"}},
 		{Walled: true, Machine: []string{"QORY_RUN_REPOSITORIES=x"}},
