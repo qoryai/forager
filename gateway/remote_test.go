@@ -1711,3 +1711,44 @@ func validEvents(t *testing.T, rec []recorded) {
 		}
 	}
 }
+
+// TestARunConfigurationNamesAnImageByReference pins how an image by reference reaches a
+// dispatched run: through the server's signed run configuration, whose security_policy
+// names it, attached by the run's run key, the node's policy naming no image. Under
+// the request's images.allow the answer gives it as a reference, with the default's
+// reference for the relay; under none of its prefixes the gateway refuses the run,
+// image_not_allowed, from the gateway and not the server, and opens nothing for it.
+func TestARunConfigurationNamesAnImageByReference(t *testing.T) {
+	ref := "registry.example/agents/app@sha256:" + strings.Repeat("b", 64)
+	base := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
+	c := gatewayControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"},"image":"`+ref+`"}`, 'a')
+	r := startRemote(t, c, gateway.Config{})
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: base, Runtime: "sysbox-runc"}},
+		Allow: []string{"registry.example/agents/"}}
+	a := r.tryOpen(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{Wall: true, Images: images})
+	if a.status != http.StatusOK {
+		t.Fatalf("the run request: %d %s", a.status, a.body)
+	}
+	validDocument(t, "link-run-answer.schema.json", a.body)
+	var ans server.LinkRunAnswer
+	if err := json.Unmarshal(a.body, &ans); err != nil {
+		t.Fatal(err)
+	}
+	if ans.Image == nil || *ans.Image != (server.LinkImage{Ref: ref, Runtime: "sysbox-runc", Reference: true}) || ans.RelayImage != base {
+		t.Errorf("the image %+v, the relay's %q", ans.Image, ans.RelayImage)
+	}
+
+	images.Allow = []string{"registry.example/other/"}
+	a = r.tryOpen(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{Wall: true, Images: images})
+	refused(t, "a reference under no prefix", a, http.StatusForbidden, "image_not_allowed", "gateway",
+		"the image "+ref+" is under none of the machine's allowed prefixes (images.allow): image_not_allowed: "+ref)
+	if names := anyStrings(a.refusal()["names"]); !slices.Equal(names, []string{ref}) {
+		t.Errorf("the refusal's names %q", names)
+	}
+	for _, m := range []string{"proxy_secret", "image", "relay_image", "certificate_authority", "placeholders"} {
+		if _, ok := a.refusal()[m]; ok {
+			t.Errorf("the refusal holds %s: %s", m, a.body)
+		}
+	}
+}

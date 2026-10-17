@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/gateway"
 	"github.com/qoryai/forager/internal/linktest"
 	refusals "github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
@@ -238,4 +239,26 @@ func anyStrings(v any) []string {
 		out = append(out, e.(string))
 	}
 	return out
+}
+
+// TestTheServersImageByReferenceIsTheOneTheWallPulls pins a run whose image the
+// server's run configuration names by reference, the node's policy naming none, through
+// a real gateway: the request the session gives the wall is that reference, to pull,
+// with the default's image for the relay, so the policy of the server's answer is in
+// force before the wall fetches anything.
+func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"observe"},"image":"`+pinned+`"}`, 'a')
+	w := &targetWall{}
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
+	rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rg.close(t)
+	if want := (wall.Request{RunID: res.RunID, Image: pinned, RelayImage: "example.com/agent:1", Pull: true}); w.req != want {
+		t.Errorf("the wall was asked for %+v, want %+v", w.req, want)
+	}
 }
