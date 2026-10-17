@@ -61,13 +61,13 @@ const (
 // --internal and on nothing else, so it has no route out and its resolver knows only
 // that network; the network's bridge gets no address, so the engine's host is not on it
 // either. For any image the network has no IPv6 subnet, and the agent's container
-// starts with no IPv6 address but loopback's. With a Docker of the agent's own, which
-// needs the docker command and Docker Engine 28 or later, the network has an IPv6
-// subnet, the engine's choice, in Docker's isolated gateway mode: the bridge has IPv6
-// off and no address. The relay's container is on that network and on an ordinary one;
-// it runs [Relay], forwarding one port to the gateway, listens on its addresses on the
-// internal network alone, and is the one peer the agent can reach. Both run as a user
-// that is not root, with every capability dropped and no new privileges.
+// starts with no IPv6 address but loopback's. With nested Docker, which needs the
+// docker command and Docker Engine 28 or later, the network has an IPv6 subnet, the
+// engine's choice, in Docker's isolated gateway mode: the bridge has IPv6 off and no
+// address. The relay's container is on that network and on an ordinary one; it runs
+// [Relay], forwarding one port to the gateway, listens on its addresses on the internal
+// network alone, and is the one peer the agent can reach. Both run as a user that is
+// not root, with every capability dropped and no new privileges.
 type Docker struct {
 	// Command is the program to run; empty means docker.
 	Command string
