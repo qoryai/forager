@@ -25,6 +25,8 @@ release may change what an existing document does, and says so under Upgrading.
   `run_configuration_invalid`, in a node's policy file and in a run configuration alike.
   `policy.CheckImage`, `policy.CheckImagePrefix` and `policy.ImageAllowed` hold the
   grammar and the prefix rule.
+- A run configuration's `image`: the image a run starts in, named by digest beside its
+  `security_policy` and run only under the machine's `images.allow`.
 - The refusals `image_not_allowed`, a reference under none of the machine's
   `images.allow` prefixes, and `image_user_root`, an image whose user is root, both in
   `refusal.Decides`.
@@ -64,6 +66,10 @@ release may change what an existing document does, and says so under Upgrading.
   `image_not_allowed` under none of the request's `images.allow`, and otherwise the
   run's image under the default's runtime. The answer carries `relay_image`, the
   default's reference, for every walled run on a machine with a default image.
+- The gateway reads a run configuration's `image`, `server.RunConfiguration.Image`, as
+  the policy's image: the server's policy and the node's must name the same wherever
+  they name one, else `image_unknown`, and a reload that names another, or none in its
+  place, is refused. `server.CheckConfigurationImage` holds its rule.
 
 #### Changed
 

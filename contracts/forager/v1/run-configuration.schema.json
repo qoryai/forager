@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/run-configuration.schema.json",
   "title": "Run configuration",
-  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it is the server's, and opaque to Forager. A member Forager does not recognise is ignored.",
+  "description": "What a server answers, a signed 200, to a run's registration, the signed POST to its run endpoint, and to a reload by the run's id, the signed GET of the run endpoint followed by a slash and the run id: the server's policy for the run, the image it starts in and the variables the agent's process receives, chosen by the server for the run, by the labels its registration sent. The registration's about never selects or changes a security policy. {\"version\": 1} is an answer of no policy. The digest the server sends beside it is the server's, and opaque to Forager. A member Forager does not recognise is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version"],
@@ -14,6 +14,10 @@
     "security_policy": {
       "description": "The server's policy for the run, a policy document in the same shape as the machine's local policy. The policy the command passes, when there is one, narrows it: the node only takes away. Absent, the node's policy is the run's.",
       "$ref": "policy.schema.json"
+    },
+    "image": {
+      "description": "The image the run starts in, a reference pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, which the machine runs only under one of its images.allow prefixes. Any other value, a tag, upper case, no digest or the machine's name for an image, is refused, run_configuration_invalid, before the schema reads it. The run configuration, the server's policy and the node's policy name the same image wherever two of them name one. Fixed when the run starts. Absent, the run's policy selects the image.",
+      "$ref": "policy.schema.json#/$defs/image_reference"
     },
     "variables": {
       "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",

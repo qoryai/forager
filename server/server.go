@@ -266,8 +266,8 @@ func (c *Configuration) Wants(typ string) bool {
 }
 
 // RunConfiguration is the run configuration document: the server's policy for the run,
-// as the server's raw section, which the policy package reads, and the server's
-// variables.
+// as the server's raw section, which the policy package reads, the server's variables
+// and the image the run starts in.
 type RunConfiguration struct {
 	Version int `json:"version"`
 	// SecurityPolicy is nil when the document has none: the node's policy is then the
@@ -275,6 +275,9 @@ type RunConfiguration struct {
 	SecurityPolicy json.RawMessage `json:"security_policy,omitzero"`
 	// Variables are the server's variables, by name; nil when the document has none.
 	Variables map[string]Variable `json:"variables,omitzero"`
+	// Image is the image the run starts in, a reference pinned by digest; empty when
+	// the document names none, and the run's policy selects the image.
+	Image string `json:"image,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is

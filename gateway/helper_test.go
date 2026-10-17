@@ -359,6 +359,14 @@ func (c *control) serve(policy string, digest byte) {
 	c.run, c.digest = []byte(`{"version":1,"security_policy":`+policy+`}`), "sha256="+strings.Repeat(string(digest), 64)
 }
 
+// serveDocument makes the control serve the run configuration document doc, under a
+// digest as serve's.
+func (c *control) serveDocument(doc string, digest byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.run, c.digest = []byte(doc), "sha256="+strings.Repeat(string(digest), 64)
+}
+
 func (c *control) server() *gateway.Server {
 	return &gateway.Server{Version: 1, URL: c.srv.URL, AccessKeyID: testKey, ApiaryPublicKey: testPin, AccessKey: testAccessKey, InstanceID: testInstance}
 }

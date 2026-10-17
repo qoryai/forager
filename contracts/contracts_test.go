@@ -245,7 +245,8 @@ const beyondLinkSchema = "-beyond-schema-"
 // endpoint, without workspaces or with two, or whose run endpoint has a query, a fragment
 // or a trailing slash, a batch that holds a
 // run.registered, a run registration with a member it does not define, with an interval over
-// 300 seconds or with a time that is not UTC in whole seconds, a run.registered whose
+// 300 seconds or with a time that is not UTC in whole seconds, a run configuration
+// whose image has a tag or is the machine's name for one, a run.registered whose
 // interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, or opened by a session without its command,
 // a run.exited without state, with a state other than the three, with a reason that is

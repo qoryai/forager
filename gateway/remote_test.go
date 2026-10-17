@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -1713,17 +1714,30 @@ func validEvents(t *testing.T, rec []recorded) {
 }
 
 // TestARunConfigurationNamesAnImageByReference pins how an image by reference reaches a
-// dispatched run: through the server's signed run configuration, whose security_policy
-// names it, attached by the run's run key, the node's policy naming no image. Under
-// the request's images.allow the answer gives it as a reference, with the default's
-// reference for the relay; under none of its prefixes the gateway refuses the run,
-// image_not_allowed, from the gateway and not the server, and opens nothing for it.
+// dispatched run: through the server's signed run configuration, whose image member
+// names it, with no security_policy, attached by the run's run key, the node's policy
+// naming no image. The node's policy stays in force as it is, its credentials and tools
+// among it, with the image its selection. Under the request's images.allow the answer
+// gives it as a reference, with the default's reference for the relay; under none of
+// its prefixes the gateway refuses the run, image_not_allowed, from the gateway and not
+// the server, and opens nothing for it.
 func TestARunConfigurationNamesAnImageByReference(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_SECRET", "s3cret-value-of-the-test")
+	t.Setenv(envTool, "serve")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ref := "registry.example/agents/app@sha256:" + strings.Repeat("b", 64)
 	base := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
 	c := gatewayControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"observe"},"image":"`+ref+`"}`, 'a')
-	r := startRemote(t, c, gateway.Config{})
+	c.serveDocument(`{"version":1,"image":"`+ref+`"}`, 'a')
+	r := startRemote(t, c, gateway.Config{
+		Credentials: []gateway.Credential{{Name: "api", Env: "GATEWAY_TEST_SECRET", Hosts: []string{"api.example"}, Scheme: "bearer", Placeholders: []string{"API_TOKEN"}}},
+		Tools:       []gateway.Tool{{Name: "svc", Command: []string{exe, "first"}, Serves: []string{"svc.example"}}},
+		Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"api.example", "svc.example"}},
+			Credentials: []gateway.PolicyCredential{{Name: "api"}}, Tools: []gateway.PolicyTool{{Name: "svc"}}},
+	})
 	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: base, Runtime: "sysbox-runc"}},
 		Allow: []string{"registry.example/agents/"}}
 	a := r.tryOpen(t, runKeyFor(t, event.NewRunID(), nil), server.LinkRunRequest{Wall: true, Images: images})
@@ -1737,6 +1751,24 @@ func TestARunConfigurationNamesAnImageByReference(t *testing.T) {
 	}
 	if ans.Image == nil || *ans.Image != (server.LinkImage{Ref: ref, Runtime: "sysbox-runc", Reference: true}) || ans.RelayImage != base {
 		t.Errorf("the image %+v, the relay's %q", ans.Image, ans.RelayImage)
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(ans.Applied, &applied); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"credentials": []any{map[string]any{"name": "api", "hosts": []any{"api.example"}, "scheme": "bearer"}},
+		"tools":       []any{map[string]any{"name": "svc", "hosts": []any{"svc.example"}}},
+		"terminated":  []any{"api.example", "svc.example"},
+		"image":       ref,
+	}
+	for m, v := range want {
+		if !reflect.DeepEqual(applied[m], v) {
+			t.Errorf("applied's %s is %v, want %v", m, applied[m], v)
+		}
+	}
+	if applied["source"] != "config" || applied["mode"] != "enforce" || !slices.Equal(anyStrings(applied["allow"]), []string{"api.example", "svc.example"}) || !slices.Equal(ans.Placeholders, []string{"API_TOKEN"}) {
+		t.Errorf("the node's policy is not in force as it is: %s, placeholders %q", ans.Applied, ans.Placeholders)
 	}
 
 	images.Allow = []string{"registry.example/other/"}

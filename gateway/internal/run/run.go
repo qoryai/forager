@@ -107,9 +107,11 @@ type Run struct {
 	node   *policy.Loaded
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
-	// img is the image it resolved to, fixed too.
+	// img is the image it resolved to, fixed too, and named the image its run
+	// configuration named, empty when it named none.
 	start *policy.Loaded
 	img   Image
+	named string
 	// relay is the reference of the machine's default image, which the wall starts the
 	// run's relay from whatever image the run gets.
 	relay  string
@@ -127,9 +129,11 @@ type Run struct {
 	// digest of the run configuration in force, empty when none was fetched.
 	pol *policy.Loaded
 	// guard are the names the guard opens under pol ([Run.GuardNames]), and read those
-	// of each policy Read made that a reload has not decided yet.
+	// of each policy Read made that a reload has not decided yet, and images the image
+	// its run configuration named, when it named one.
 	guard     []string
 	read      map[*policy.Loaded][]string
+	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
 }
@@ -139,7 +143,8 @@ type Run struct {
 // A run without a wall refuses a policy that selects credentials or tools or has path
 // rules, the node's beside a server's and a ceiling's the node's policy was put under
 // included, and one that selects an image, a [*refusal.NeedsWall]. Behind a wall the
-// policy's image is resolved among [Config.Images]: a definition that cannot be
+// policy's image, or the one the run configuration names, is resolved among
+// [Config.Images]: a definition that cannot be
 // one, a name defined twice, an allow list that cannot be one, a name the machine does
 // not define, image_unknown, a reference not pinned by digest, run_configuration_invalid,
 // and one under none of the allowed prefixes, image_not_allowed, are no run.
@@ -189,7 +194,7 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		pol = fetched
-		r.guard = r.takeGuard(fetched)
+		r.guard, r.named = r.takeGuard(fetched), r.takeNamed(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
@@ -434,10 +439,13 @@ func (r *Run) StartTools(ctx context.Context) (*tool.Set, error) {
 
 // Read reads a run configuration the server answered: the policy it puts in force,
 // beside its URL and digest. Without a security_policy it is the node's, or none. With
-// one, it is the server's, narrowed by the node's when the run has one. For a walled
+// one, it is the server's, narrowed by the node's when the run has one. An image the
+// run configuration names is the policy's image selection, which the server's policy
+// and the node's must name as well when they name one, else image_unknown. For a walled
 // run, when the server's side selects no credential, the run's credentials are the
 // gateway's selection, [Config.Selects], capped by the node's credentials member.
-// A security_policy the schema refuses is run_configuration_invalid.
+// A security_policy the schema refuses, and an image that is not a reference pinned by
+// digest, are run_configuration_invalid.
 func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	var fetched *policy.Loaded
 	if f.Document != nil && f.Document.SecurityPolicy != nil {
@@ -448,6 +456,11 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
+	named := ""
+	if err == nil && f.Document != nil && f.Document.Image != "" {
+		named = f.Document.Image
+		err = nameImage(pol, fetched, r.node, named)
+	}
 	if err == nil && r.cfg.Wall && len(r.cfg.Selects) > 0 && (fetched == nil || len(fetched.Policy.Credentials) == 0) {
 		err = r.selects(pol)
 	}
@@ -460,8 +473,35 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		r.read = map[*policy.Loaded][]string{}
 	}
 	r.read[out] = GuardNames(pol, r.cfg.Narrowing)
+	if named != "" {
+		if r.images == nil {
+			r.images = map[*policy.Loaded]string{}
+		}
+		r.images[out] = named
+	}
 	r.mu.Unlock()
 	return out, nil
+}
+
+// nameImage puts the image a run configuration names in pol, the policy it puts in
+// force, as the policy's image selection. It refuses an image that is not a reference
+// pinned by digest, run_configuration_invalid, and one that the server's policy,
+// fetched, or the node's selects another image than, image_unknown: a name and a
+// reference of one image are two.
+func nameImage(pol, fetched, node *policy.Loaded, image string) error {
+	if err := server.CheckConfigurationImage(image); err != nil {
+		return err
+	}
+	for _, side := range []struct {
+		what string
+		pol  *policy.Loaded
+	}{{"server's", fetched}, {"node's", node}} {
+		if side.pol != nil && side.pol.Policy.Image != "" && side.pol.Policy.Image != image {
+			return refusal.New(refusal.ImageUnknown, []string{image}, "the run configuration names the image %s, and the %s policy the image %s", image, side.what, side.pol.Policy.Image)
+		}
+	}
+	pol.Policy.Image = image
+	return nil
 }
 
 // selects puts the gateway's selection, [Config.Selects], in the credentials of pol, a
@@ -536,6 +576,16 @@ func (r *Run) takeGuard(p *policy.Loaded) []string {
 	}
 	delete(r.read, p)
 	return names
+}
+
+// takeNamed is the image the run configuration of a policy [Run.Read] made named,
+// empty when it named none, and forgets it.
+func (r *Run) takeNamed(p *policy.Loaded) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	named := r.images[p]
+	delete(r.images, p)
+	return named
 }
 
 // GuardNames are the names a guarded proxy opens, this machine's own addresses
@@ -653,16 +703,18 @@ func (d *Decision) Discard() {
 // an image without a wall, a credential that does not resolve, fails the reload, and
 // the policy in force stays; and the run's tools and image are fixed when it starts.
 // The image compared is the one the selection resolves to, so naming the machine's
-// default, or no longer naming it, is no change. Path rules
+// default, or no longer naming it, is no change; an image the run configuration names
+// is fixed by the string, so one that differs from the start's, appears or disappears
+// is refused. Path rules
 // the proxy cannot hold, for want of the run's authority, take their hosts out of the
 // allow list instead, so they are not reached on every path, and the caller's user is
 // told.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
-	guard := r.takeGuard(next)
+	guard, named := r.takeGuard(next), r.takeNamed(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
-	d, err := r.decide(ctx, next)
+	d, err := r.decide(ctx, next, named)
 	if d != nil {
 		d.Guard = guard
 	}
@@ -672,8 +724,9 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 	return d, nil
 }
 
-// decide is the reload's check of one policy.
-func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error) {
+// decide is the reload's check of one policy, whose run configuration named the image
+// named, empty when it named none.
+func (r *Run) decide(ctx context.Context, next *policy.Loaded, named string) (*Decision, error) {
 	in := *next
 	if !sameSelection(in.Policy.Tools, r.start.Policy.Tools) {
 		return nil, errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
@@ -682,6 +735,8 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error
 		if in.Policy.Image != "" {
 			return nil, fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
 		}
+	} else if named != r.named {
+		return nil, r.imageMoved(named)
 	} else if next, err := r.cfg.Images.resolve(in.Policy.Image); err != nil {
 		return nil, err
 	} else if next != r.img {
@@ -710,6 +765,19 @@ func (r *Run) decide(ctx context.Context, next *policy.Loaded) (*Decision, error
 		Image:              r.img,
 		CredentialsChanged: !sameSelection(in.Policy.Credentials, r.Policy().Policy.Credentials),
 	}, nil
+}
+
+// imageMoved refuses a reload whose run configuration names the image named, or none,
+// when the start's named another, or none: the image a run starts in is fixed.
+func (r *Run) imageMoved(named string) error {
+	started := r.img.Ref
+	if r.img.Name != "" {
+		started = r.img.Name
+	}
+	if named == "" {
+		return fmt.Errorf("the run configuration names no image, and the run started in %s, which its run configuration named", started)
+	}
+	return fmt.Errorf("the run configuration names the image %s, and the run started in %s", named, started)
 }
 
 // Commit puts a decision the caller set on the proxy in force: its policy and its

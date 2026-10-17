@@ -75,7 +75,10 @@ server, so what the node contributes can only narrow the run:
 
 - A tool the node's `tools` does not list is no run, `tool_unknown`. `tools: []` allows
   none.
-- Two different images are no run, `image_unknown`.
+- Two different images are no run, `image_unknown`. The server's run configuration may
+  name the image too, by reference only, in its `image` member beside its
+  `security_policy`: the run configuration, the server's policy and the node's policy
+  name the same image wherever two of them name one, else `image_unknown`.
 - The record reports the policy the table computes, and the node's policy as
   `node_policy`: its digest and its paths.
 

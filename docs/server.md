@@ -46,8 +46,9 @@ The gateway reports to the server; the session never speaks to it. A
    about never selects a policy. The registration opens the run at the server, which
    decides `instance_limit` there;
 3. reads the answer, the run's run configuration. Its `security_policy`, narrowed by
-   the node's policy, is the run's policy. Its `variables` are the server's variables
-   for the run. A server with no policy answers `{"version":1}`. The gateway answers
+   the node's policy, is the run's policy. Its `image`, a reference pinned by digest,
+   is the image the run starts in when it names one. Its `variables` are the server's
+   variables for the run. A server with no policy answers `{"version":1}`. The gateway answers
    the session's run request with what follows of them;
 4. posts the events the document selects to the URL it defines, signed: the session's,
    which it receives on its link and numbers, and the gateway's.

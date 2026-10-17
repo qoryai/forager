@@ -5,12 +5,14 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 )
 
@@ -19,12 +21,13 @@ import (
 const MaxVariableValue = 4096
 
 // readRunConfiguration reads a run configuration document: through encoding/json/v2
-// first, which refuses a member name that appears twice and invalid UTF-8, then against
-// the schema, then against the limits the schema cannot state. Every refusal is a
-// refusal with [refusal.RunConfigurationInvalid] whose message contains where
-// in the document it is and which rule refused it, and never a value: a variable's
-// value may be anything the server holds, and no decoder's own message is wrapped,
-// since those quote what they refuse.
+// first, which refuses a member name that appears twice and invalid UTF-8, then its
+// image ([CheckConfigurationImage]), then against the schema, then against the limits
+// the schema cannot state. Every refusal is a refusal with
+// [refusal.RunConfigurationInvalid] whose message contains where in the document it is
+// and which rule refused it, and never a value but the image's: a variable's value may
+// be anything the server holds, and no decoder's message is wrapped, since those quote
+// what they refuse.
 func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	invalid := func(format string, a ...any) error {
 		return refusal.New(refusal.RunConfigurationInvalid, nil, "the document is refused: "+format, a...)
@@ -40,6 +43,13 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 	doc, err := contracts.Decode("run-configuration.json", body)
 	if err != nil {
 		return nil, invalid("it is not JSON")
+	}
+	if m, _ := doc.(map[string]any); m != nil {
+		if image, ok := m["image"].(string); ok {
+			if err := CheckConfigurationImage(image); err != nil {
+				return nil, err
+			}
+		}
 	}
 	schema, err := contracts.Compile("run-configuration.schema.json")
 	if err != nil {
@@ -62,6 +72,22 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 		}
 	}
 	return &rc, nil
+}
+
+// CheckConfigurationImage refuses a run configuration's image that is not a reference
+// pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, with
+// run_configuration_invalid: a reference with a tag or without a digest, one in upper
+// case, and the machine's name for an image, which a run configuration never names.
+// The refusal names the image, as printable ASCII when it is, quoted otherwise.
+func CheckConfigurationImage(image string) error {
+	if policy.ImageReference(image) {
+		return nil
+	}
+	shown := image
+	if strings.ContainsFunc(image, func(r rune) bool { return r <= ' ' || r > '~' }) || image == "" {
+		shown = strconv.Quote(image)
+	}
+	return refusal.New(refusal.RunConfigurationInvalid, nil, "the image %s is not a reference pinned by digest", shown)
 }
 
 // leaves are the places the schema refused, each as the JSON pointer of the value and

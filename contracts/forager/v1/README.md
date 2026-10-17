@@ -1421,20 +1421,26 @@ below).
  "variables": {"NODE_ENV": {"value": "test"}, "APP_REGION": {"value": "eu-west-1"}}}
 ```
 
-`version` is required; `security_policy` and `variables` are optional. `security_policy`
-is a `policy.schema.json` document, and it is the server's policy; the policy the
+`version` is required; `security_policy`, `variables` and `image` are optional.
+`security_policy` is a `policy.schema.json` document, and it is the server's policy; the policy the
 command passes, when there is one, narrows it (§The policy, a node narrows). Without
 `security_policy` the policy the command passes is the run's, else observe everything,
 and `dev.qory.run.policy_applied` reports `url` and `run_configuration` beside `source`
 `config` or `none`; a reload that brings a `security_policy` puts it in force, narrowed
 by the command's, and one that drops it puts the command's back. `variables` are the
 server's variables for the run, a name and an object with its string `value` each
-(§Variables). A member
-Forager does not recognise is ignored. The digest is the server's and opaque;
+(§Variables). `image` is the image the run starts in, a reference pinned by digest,
+`NAME@sha256:` and 64 lower-case hexadecimal digits, which the machine runs only under
+one of its `images.allow` prefixes. Absent, the run's policy selects the image, as
+before (§Images). A member Forager does not recognise is ignored. The digest is the
+server's and opaque;
 Forager keeps it, sends it back on every POST, and never recomputes it. Forager reads
 the document with a decoder that refuses a member name that appears twice and invalid
-UTF-8, then against the schema and the limits, and its error states where in the
-document and which rule refused it, never a value. A registration answered with
+UTF-8, then its `image`, then against the schema and the limits, and its error states
+where in the document and which rule refused it, never a value but the image: an
+`image` that is not a reference pinned by digest is refused before the schema reads it,
+`run configuration <url>: the image <image> is not a reference pinned by digest`. A
+registration answered with
 anything but a signed `200`, or with a document Forager refuses, is no run,
 `run_configuration_invalid` for the latter. On the gateway's link a run opens with a
 `POST` of the session's run request instead, and its answer is the gateway's (§The
@@ -2794,6 +2800,12 @@ user is root. The relay always starts from the machine's default image, never fr
 run's. The run sees its workspace at `/workspace`, not at its path on the machine
 (below).
 
+A run configuration may name the image too, by reference only, beside its
+`security_policy`. The run configuration, the server's policy and the node's policy must
+name the same image wherever two of them name one; otherwise the run is refused,
+`image_unknown`. The image is fixed when the run starts: a run configuration that names
+another is refused, and the one in force stays.
+
 **`images.allow`** lists the prefixes of the references the machine runs. An entry is
 the start of a reference pinned by digest, in lower case, up to a whole part of it: a
 registry, a name or a path, which may end in `/`, or a name and its `@`. An entry
@@ -2845,7 +2857,8 @@ same path as on the machine.
 is one the machine defines `image_name`, `container_runtime` when the definition sets
 one, and `docker: true` when the enclosure has nested Docker; for an image by reference,
 `image_fetch_ms`, how long the wall's fetch took, in milliseconds.
-`dev.qory.run.policy_applied` contains `image` when the policy selects or names one.
+`dev.qory.run.policy_applied` contains `image` when the policy or the run configuration
+selects or names one.
 
 **What an image provides.** The wall builds no image and changes none. An image runs:
 
@@ -3168,13 +3181,13 @@ the option experimental.
 | `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, and with neither, which leaves the node's policy in force | `run-configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool started with an argument, with a credential an adapter mints, and one behind a wall in an image its policy names by reference, with its workspace at `/workspace` and the fetch's time | `event.schema.json` per line, plus the sequence, source and concatenation rules, and that every `dev.qory.run.exited` contains `state` and `exit_code` |
 | `fixtures/run/about-*.json` | the `about` of `dev.qory.run.started` (§What a run is about): accepted ones, with a title alone, with every member and `details` 4 levels deep, with a `type` of two words and one of a dotted name; and refused ones, `about-refused-<reason>.json`, one per bound. A refused one named `about-refused-beyond-schema-<reason>.json` breaks a rule only Forager checks, and passes the schema: a `kind` of 64 characters and 128 bytes, two subjects with the same `type` and `ref`, a `url` with no host, a `url` with a user name and password, `details` over 8192 bytes as the event contains it, and `details` with a member name twice | the `about` of `events/run.started.schema.json`, expecting a failure for each refused one the name does not mark beyond the schema; the session's check, `session.CheckAbout`, expecting a failure for every refused one |
 | `fixtures/link/` | documents of the gateway's link, each named after its schema: the discovery of the local link and of a separate gateway, each with its `proxy`, a run request without a wall with its `passes`, one with a wall, its `passes` and `images`, and one with a narrowing as well, one with `images.allow` and a policy that names its image by reference, a run answer with a wall, its labels, `placeholders`, `reserved`, `image`, `applied` and `certificate_authority`, one with a wall and an `image` whose default is a reference but no `certificate_authority`, one with an image by reference, its `reference` and `relay_image`, one without a wall and one without a policy, each with its `applied`, one behind a separate gateway, without labels and `proxy_secret`, a reload answer with and without a policy, each with its `applied`, and one whose `applied` has `ceiling_paths`, a batch of a session's events without `sequence`, its `dev.qory.run.started` first, a batch of the `dev.qory.run.refused` of a session's code, a batch of a session's `dev.qory.run.exited` with `timeout`, `cancelled`, two with `interrupted`, `cancelled`, one with the runtime's exit status and one with its signal, and refusals: `run_closed`, `session_lost` with its `state` and `reason`, `stopped` with `cancelled` and `stopped` and with the starter's `failed` and `checks_failed`, `batch_refused` with its `state` and `reason`, `placeholder_conflict`, `image_unknown`, `image_not_allowed`, `tool_unknown`, `wall_required` and `internal`, once with a `message` of one line and once with one that spans lines, `run_key_invalid` and `run_attached`, from `gateway`, each with today's text as its `message` but `run_closed`, which shows it optional, and the signed `409` `instance_limit` to the registration and `run_key_expired` to the attach from `apiary` with Qory Apiary's `run.url` in its `message`, each the body alone | the `link-*.schema.json` its name starts with |
-| `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
+| `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>`, a session's `dev.qory.run.exited` with `timeout` and `succeeded`, and one with `interrupted` and `failed`, and a run configuration whose `image` has a tag and one whose `image` is the machine's name for one, among them; and, named `<schema>-beyond-schema-<reason>`, documents that break a rule only the gateway checks and pass the schema: a session's `dev.qory.run.exited`, `cancelled` with no reason, and `succeeded` with exit status 1 | the schema the name starts with, expecting a failure, and a pass for each one the name marks beyond the schema |
 | `fixtures/enrolment/` | enrolment requests with a node's code, `qecn_`, one carrying one fingerprint and one carrying two, and a gateway's request with a gateway's code, `qecg_`, under the fixture gateway key, the answer, the answer to the gateway's request, the answer for an adapter's key, `answer-adapter.json`, unsigned, the signed refusals `key_limit` and `key_invalid`, each with one key and during a rotation with two, and the signed `429` `rate_limited` with one key | `enrolment.schema.json`; each proof under the fixture access key, the gateway's under the fixture gateway key, each answer's and refusal's signature under the fixture signing key, `answer-adapter.json` being checked against the schema alone |
 | `fixtures/known-answers/` | `keys.json`, the fixture access key with its secret, instance id and X25519 keys, and the fixture signing keys, current and next; `signatures.json`, the request, enrolment and answer strings line by line with their signatures, a registration among the requests, and its answer and the signed enrolment refusals among the answers; `discovery.json`, the body an answer signature covers; `registration.json` and `registration-answer.json`, the registration's body and its answer's; `small-order.json`, the public keys enrolment refuses; `keys.json`'s fixture gateway key, the seed being bytes 97 to 128, with its id `ak_f1xt0re00000000g`; `through-gateway.json`, the run key of `run-key-payload.json` and the requests and answers of a run through a gateway, line by line with their signatures, over `registration-gateway.json`, `registration-gateway-answer.json`, `attach.json`, `attach-answer.json`, `attach-run-configuration.json`, `discovery-gateway.json`, `outcome.json` and `outcome-answer.json`, and, for a fixed exporter value, a binding and an answer of the gateway on its link, signed under the fixture gateway key (Known answers of a run through a gateway, §The server) | `configuration.schema.json` for `discovery.json`, `run-registration.schema.json` for `registration.json` and `run-configuration.schema.json` for `registration-answer.json`, and each file of a run through a gateway against its schema, `run-key.schema.json` for the payload; each key recomputed from its seed, the files of a run through a gateway written again by `go generate ./runkey` and compared, each signature verified and signed again, each point checked with integer arithmetic |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |

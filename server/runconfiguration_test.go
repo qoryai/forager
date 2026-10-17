@@ -120,3 +120,40 @@ func TestARunConfigurationIsReadOnlyOnceItsAnswerVerifies(t *testing.T) {
 		t.Errorf("a signed answer: %+v, %v", rc, err)
 	}
 }
+
+// TestARunConfigurationNamesItsImageByDigest pins a run configuration's image: a
+// reference pinned by digest is read; a tag, upper case, no digest, a NAME of more than
+// 255 characters and the machine's name for an image are run_configuration_invalid
+// before the schema reads them, the image named in the refusal, quoted when it holds
+// what is not printable; a value that is no string is the schema's.
+func TestARunConfigurationNamesItsImageByDigest(t *testing.T) {
+	const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	v := newVerified(t)
+	runs := v.srv.URL + "/v1/runs"
+	v.runDoc = `{"version":1,"image":"` + pinned + `"}`
+	if rc, _, err := v.client().RunConfiguration(context.Background(), runs, runID); err != nil || rc.Image != pinned || rc.SecurityPolicy != nil {
+		t.Errorf("read %+v, %v", rc, err)
+	}
+	long := strings.Repeat("a", 256) + "@sha256:" + strings.Repeat("b", 64)
+	for _, tc := range []struct{ image, shown string }{
+		{"registry.example/agents/app:1", "registry.example/agents/app:1"},
+		{"registry.example/agents/app:1@sha256:" + strings.Repeat("b", 64), "registry.example/agents/app:1@sha256:" + strings.Repeat("b", 64)},
+		{"Registry.example/agents/app@sha256:" + strings.Repeat("b", 64), "Registry.example/agents/app@sha256:" + strings.Repeat("b", 64)},
+		{"registry.example/agents/app", "registry.example/agents/app"},
+		{"base", "base"},
+		{long, long},
+		{"", `""`},
+		{`base\nline`, `"base\nline"`},
+	} {
+		v.runDoc = `{"version":1,"image":"` + tc.image + `"}`
+		_, _, err := v.client().RunConfiguration(context.Background(), runs, runID)
+		want := "run configuration " + runs + "/" + runID + ": the image " + tc.shown + " is not a reference pinned by digest"
+		if code(err) != refusal.RunConfigurationInvalid || err == nil || !strings.HasPrefix(err.Error(), want+":") {
+			t.Errorf("%s: %v, want run_configuration_invalid and %q", tc.image, err, want)
+		}
+	}
+	v.runDoc = `{"version":1,"image":1}`
+	if _, _, err := v.client().RunConfiguration(context.Background(), runs, runID); code(err) != refusal.RunConfigurationInvalid || err == nil || !strings.Contains(err.Error(), "/image (type)") {
+		t.Errorf("a number: %v", err)
+	}
+}
