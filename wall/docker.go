@@ -255,6 +255,12 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
 		return nil, errors.New("wall docker: the agent does not run as root; name a user")
 	}
+	// The engine reads a user's name, and a uid's group and groups, out of the image's
+	// /etc/passwd and /etc/group, which an image a run names by its reference writes:
+	// such an image runs only under a uid and a gid, neither 0, that it cannot remap.
+	if req.Pull && !numericUser(user) {
+		return nil, fmt.Errorf("wall docker: an image a run names by its reference needs the wall's user as uid:gid in numbers, neither of them 0, not %q, which the image's /etc/passwd or /etc/group would resolve", user)
+	}
 	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID,
 		env: d.selected()}
 	if req.Docker {
@@ -434,7 +440,9 @@ func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched,
 // of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
 // to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
 // is refused as well, since it cannot be checked. The agent runs as the wall's user
-// whatever the image's, so this keeps an image that expects root out of the run.
+// whatever the image's, and that user is uid:gid in numbers, which Prepare requires
+// for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
+// the agent is; this keeps an image that expects root out of the run.
 func (e *dockerEnclosure) pull(ctx context.Context) error {
 	fetch, cancel := context.WithTimeout(ctx, pullWait)
 	defer cancel()
@@ -486,6 +494,13 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return root()
 	}
 	return nil
+}
+
+// numericUser reports whether user is uid:gid in decimal digits, neither of them 0.
+func numericUser(user string) bool {
+	uid, gid, ok := strings.Cut(user, ":")
+	return ok && uidShape.MatchString(uid) && uidShape.MatchString(gid) &&
+		strings.Trim(uid, "0") != "" && strings.Trim(gid, "0") != ""
 }
 
 // uidShape is a uid written in decimal digits, leading zeros and all.

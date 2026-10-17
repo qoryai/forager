@@ -93,7 +93,7 @@ func TestDockerRefusesAnImageWhoseUserIsRoot(t *testing.T) {
 			rec.files = map[string]string{"/etc/passwd": passwd}
 		}
 		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, Pull: true})
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
 		var r *accesskey.Refusal
 		switch {
 		case !c.root && err != nil:
@@ -115,7 +115,7 @@ func TestDockerRefusesAnImageWhoseUserIsRoot(t *testing.T) {
 func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, fail: "docker pull"}
 	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
-	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, Pull: true}); err == nil {
+	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}); err == nil {
 		t.Fatal("an image that cannot be fetched was prepared")
 	}
 	if len(rec.lines) != 1 {
@@ -183,5 +183,49 @@ func TestDockerShowsAMountAtItsTarget(t *testing.T) {
 		if _, err := e.Wrap(context.Background(), l); err == nil {
 			t.Errorf("a mount shown at %q was bound", target)
 		}
+	}
+}
+
+// TestDockerNeedsANumericUserForAnImageByReference pins that the wall's user of a run
+// in an image by reference is uid:gid in numbers, neither 0, since the engine would
+// look a name, or a uid's groups, up in the image's /etc/passwd and /etc/group: a name,
+// a uid alone and a gid of 0 are refused before any command, uid:gid passes, and a run
+// in the machine's image takes them all as before.
+func TestDockerNeedsANumericUserForAnImageByReference(t *testing.T) {
+	for _, c := range []struct {
+		user string
+		ok   bool
+	}{
+		{"agent", false},
+		{"1000", false},
+		{"1000:0", false},
+		{"1000:000", false},
+		{"agent:1000", false},
+		{"1000:1000", true},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, User: c.user, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+		switch {
+		case c.ok && err != nil:
+			t.Errorf("%s: %v", c.user, err)
+		case c.ok:
+			e.Close(context.Background())
+		case err == nil || !strings.Contains(err.Error(), "uid:gid"):
+			t.Errorf("%s: %v, want the wall's user as uid:gid", c.user, err)
+		case len(rec.lines) != 0:
+			t.Errorf("%s: commands before the refusal:\n%s", c.user, strings.Join(rec.lines, "\n"))
+		}
+		if c.ok {
+			continue
+		}
+		rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+		d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, User: c.user, sys: rec}
+		e, err = d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1"})
+		if err != nil {
+			t.Errorf("%s in the machine's image: %v", c.user, err)
+			continue
+		}
+		e.Close(context.Background())
 	}
 }

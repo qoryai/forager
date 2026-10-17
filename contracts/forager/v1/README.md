@@ -2783,10 +2783,13 @@ under the engine's default runtime with no daemon. A name the machine defines is
 as that image first.
 
 **An image by reference** starts as the machine's default does: under the default's
-runtime, with no daemon, as the wall's user. The wall fetches it before the run starts
-and refuses one whose user is root. The relay always starts from the machine's default
-image, never from the run's. The run sees its workspace at `/workspace`, not at its path
-on the machine (below).
+runtime, with no daemon, as the wall's user, which for such an image is a uid and a gid
+in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
+`/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is refused
+before anything is made. The wall fetches it before the run starts and refuses one whose
+user is root. The relay always starts from the machine's default image, never from the
+run's. The run sees its workspace at `/workspace`, not at its path on the machine
+(below).
 
 **`images.allow`** lists the prefixes of the references the machine runs. An entry is
 the start of a reference pinned by digest, in lower case, up to a whole part of it: a
@@ -2816,8 +2819,9 @@ name the image's `/etc/passwd` maps to uid 0. A user given by a name the image's
 `/etc/passwd` does not map, or in an image with no `/etc/passwd`, cannot be checked and
 is refused the same way: such an image gives its user as a uid. Root is
 `image_user_root`, with the reference as its name: "the image <ref> runs as root; a
-run's image runs as the wall's user". A fetch that fails is no run, and leaves nothing
-the wall made for it.
+run's image runs as the wall's user". The image's user decides nothing else: the agent
+runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves nothing the
+wall made for it.
 
 **The workspace at `/workspace`.** A run whose policy names its image by reference sees
 the bind that holds its workspace, the outermost, at `/workspace`, and the working
