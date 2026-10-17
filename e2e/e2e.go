@@ -406,7 +406,7 @@ func Run(t *testing.T, o Options) {
 		p.PreparedErr == "" && pr.Allowed == 200 && pr.Net != "" && pr.Net == p.Namespaces["net"] && pr.Mnt == p.Namespaces["mnt"] && pr.UID == p.UID &&
 			fmt.Sprint(pr.Args) == fmt.Sprint(preparationWords) && len(egress) > 1 && egress[0] == originHost+" allowed "+originHost &&
 			fmt.Sprint(preparation) == fmt.Sprint(append([]string{o.Probe, modePrepare}, preparationWords...)),
-		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside its own namespaces %v and uid %d; the first egress %v; run.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
+		fmt.Sprintf("the probe found %+v (%s) in the workspace as it started, beside the probe's namespaces %v and uid %d; the first egress %v; run.started's preparation %v", *pr, p.PreparedErr, p.Namespaces, p.UID, egress, preparation))
 	for _, e := range r.events {
 		if e["type"] == "dev.qory.run.started" {
 			d := e["data"].(map[string]any)
