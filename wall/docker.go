@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"debug/elf"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/program"
+	"github.com/qoryai/forager/refusal"
 )
 
 // Where things are inside a Docker enclosure.
@@ -30,6 +32,9 @@ const (
 	// HelperPath is where the helper binary is mounted, read-only. A caller names it in
 	// the hook forwarder's command, since the host's own path does not exist inside.
 	HelperPath = "/qory/qory"
+	// qoryDir holds what the adapter shows the enclosure, the helper, the hooks and the
+	// bundle: no mount of the caller's is shown at it, or inside it.
+	qoryDir = "/qory"
 	// hooksDir is where the directory holding the hook socket is mounted.
 	hooksDir = "/qory/hooks"
 	// BundlePath is where the enclosure finds the authorities it trusts when the run has
@@ -217,6 +222,12 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if !imageShape.MatchString(req.Image) {
 		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.Image)
 	}
+	if req.RelayImage != "" && !imageShape.MatchString(req.RelayImage) {
+		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.RelayImage)
+	}
+	if req.Pull && req.Docker {
+		return nil, errors.New("wall docker: an image a run names by its reference never gets nested Docker")
+	}
 	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
 		return nil, fmt.Errorf("wall docker: %q is not a container runtime's name", req.Runtime)
 	}
@@ -249,6 +260,13 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if req.Docker {
 		if err := e.nestEngine(ctx); err != nil {
 			return nil, err
+		}
+	}
+	// An image a run names by its reference is fetched, and its user read, before any
+	// network is made: one that cannot be fetched, or whose user is root, leaves nothing.
+	if req.Pull {
+		if err := e.pull(ctx); err != nil {
+			return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
 		}
 	}
 	// What removes a thing is noted before the thing is asked for: a command cut off by
@@ -358,12 +376,20 @@ type dockerEnclosure struct {
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
 	env []string
+	// fetched is how long the fetch of an image by reference took, and pulled whether
+	// there was one.
+	fetched time.Duration
+	pulled  bool
+	// created says the never-started container of the run's image exists, which the
+	// image's files are read out of.
+	created bool
 }
 
 func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
 func (e *dockerEnclosure) outside() string { return e.base + "-out" }
 func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
+func (e *dockerEnclosure) image() string   { return e.base + "-image" }
 func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure carries what the command printed.
@@ -392,21 +418,144 @@ func (e *dockerEnclosure) hardening() []string {
 	return []string{"--user", e.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--init"}
 }
 
-// relayWait is how long the relay has to listen, the image's pull included.
+// relayWait is how long the relay has to listen, the image's pull included, and how
+// long the run's image has to be pulled when it is not the relay's.
 const relayWait = 5 * time.Minute
 
-// Wrap starts the relay towards the proxy, waits until it listens, and returns the
-// docker run that starts the launch in the agent's container: on the internal network
-// only, the launch's mounts at their own paths, the workspace as the working directory
-// inside one of them, the helper read-only,
-// the socket's directory, and the launch's environment through a file, so no value is on a
-// command line.
+// pullWait is how long the fetch of an image a run names by its reference may take.
+const pullWait = 10 * time.Minute
+
+// ImageFetch is how long the fetch of the image a run names by its reference took, and
+// whether there was one.
+func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched, e.pulled }
+
+// pull fetches the image a run names by its reference with docker pull, timed, under
+// [pullWait], and refuses one whose user is root, image_user_root: no user, root, a uid
+// of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
+// to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
+// is refused as well, since it cannot be checked. The agent runs as the wall's user
+// whatever the image's, so this keeps an image that expects root out of the run.
+func (e *dockerEnclosure) pull(ctx context.Context) error {
+	fetch, cancel := context.WithTimeout(ctx, pullWait)
+	defer cancel()
+	start := time.Now()
+	if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+		return err
+	}
+	e.fetched, e.pulled = time.Since(start), true
+	// The whole Config, since an image that sets no user has no User in it, which a
+	// template of .Config.User fails on; no Config at all is no user either.
+	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
+	out, err := e.sys.output(ctx, argv, e.env)
+	if err != nil {
+		return fmt.Errorf("wall docker: image inspect: %w", err)
+	}
+	var config *struct{ User string }
+	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
+		return fmt.Errorf("wall docker: the image's user: %w", err)
+	}
+	var user string
+	if config != nil {
+		user = config.User
+	}
+	name, _, _ := strings.Cut(strings.TrimSpace(user), ":")
+	root := func() error {
+		return refusal.New(refusal.ImageUserRoot, []string{e.req.Image}, "the image %s runs as root; a run's image runs as the wall's user", e.req.Image)
+	}
+	switch {
+	case name == "" || name == "root":
+		return root()
+	case uidShape.MatchString(name):
+		if strings.Trim(name, "0") == "" {
+			return root()
+		}
+		return nil
+	}
+	unchecked := func() error {
+		return refusal.New(refusal.ImageUserRoot, []string{e.req.Image}, "the image %s runs as the user %s, which no /etc/passwd of the image maps to a uid, so it cannot be checked for root; a run's image runs as the wall's user", e.req.Image, name)
+	}
+	passwd, err := e.imageFile(ctx, "/etc/passwd")
+	if err != nil {
+		return unchecked()
+	}
+	uid, ok := passwdUID(passwd, name)
+	switch {
+	case !ok:
+		return unchecked()
+	case strings.Trim(uid, "0") == "":
+		return root()
+	}
+	return nil
+}
+
+// uidShape is a uid written in decimal digits, leading zeros and all.
+var uidShape = regexp.MustCompile(`^[0-9]+$`)
+
+// passwdUID is the uid /etc/passwd gives the user name, as written, and whether it
+// names the user with a uid of digits.
+func passwdUID(passwd []byte, name string) (string, bool) {
+	for _, line := range strings.Split(string(passwd), "\n") {
+		f := strings.Split(strings.TrimSuffix(line, "\r"), ":")
+		if len(f) >= 3 && f[0] == name && uidShape.MatchString(f[2]) {
+			return f[2], true
+		}
+	}
+	return "", false
+}
+
+// imageFile is a file of the run's image, read out of a container created from it and
+// never started, on no network, at most as much as [firstFile] reads. The container is
+// created once, and removed with the enclosure.
+func (e *dockerEnclosure) imageFile(ctx context.Context, p string) ([]byte, error) {
+	if err := e.createImage(ctx); err != nil {
+		return nil, err
+	}
+	out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.image() + ":" + p, "-"}, e.env)
+	if err != nil {
+		return nil, err
+	}
+	return firstFile(out)
+}
+
+// createImage creates the container of the run's image that is never started, once,
+// under [relayWait], since it pulls an image the engine does not have: the image's
+// files are read out of it, and the image is there before the agent's container
+// starts.
+func (e *dockerEnclosure) createImage(ctx context.Context) error {
+	if e.created {
+		return nil
+	}
+	pull, cancel := context.WithTimeout(ctx, relayWait)
+	defer cancel()
+	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.image()})
+	if _, err := e.docker(pull, "create", "--name", e.image(), "--label", e.label(), "--network", "none", "--entrypoint", HelperPath, e.req.Image); err != nil {
+		return err
+	}
+	e.created = true
+	return nil
+}
+
+// relayImage is the image the relay starts from: the machine's default, or the run's
+// when the request names none.
+func (e *dockerEnclosure) relayImage() string {
+	if e.req.RelayImage != "" {
+		return e.req.RelayImage
+	}
+	return e.req.Image
+}
+
+// Wrap starts the relay towards the proxy, from the request's RelayImage, the machine's
+// default, waits until it listens, and returns the docker run that starts the launch in
+// the agent's container: on the internal network only, the launch's mounts at their
+// own paths or their Targets, the workspace as the working directory inside one of
+// them, the helper read-only, the socket's directory, and the launch's environment
+// through a file, so no value is on a command line.
 func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	_, port, err := net.SplitHostPort(l.Proxy)
 	if err != nil {
 		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", err)
 	}
-	mounts, err := e.mounts(l)
+	mounts, dir, err := e.mounts(l)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -461,7 +610,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	// The image's health check would run inside the relay, as its user and beside its
 	// environment, with the relay's way out; the relay runs none.
-	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--no-healthcheck", "--mount", helper, "--entrypoint", HelperPath, e.relayImage())
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
@@ -469,6 +618,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
 	if _, err := e.docker(pull, create...); err != nil {
 		return Launch{}, err
+	}
+	// The run's image, when the relay's is another, is there before the agent's
+	// container starts, and its files are read from a container made from it.
+	if e.relayImage() != e.req.Image {
+		if err := e.createImage(ctx); err != nil {
+			return Launch{}, err
+		}
 	}
 	var bundle string
 	if len(l.CA) > 0 {
@@ -541,7 +697,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if e.env != nil {
 		cli = withSelection(cli, e.env)
 	}
-	return Launch{Command: e.command(), Args: run, Env: cli, Dir: l.Dir}, nil
+	return Launch{Command: e.command(), Args: run, Env: cli, Dir: dir}, nil
 }
 
 // Binds lists the adapter's own binds before an enclosure is prepared: the helper,
@@ -587,14 +743,19 @@ func (e *dockerEnclosure) makeTemp() error {
 }
 
 // bundle writes the file the enclosure trusts: the image's own authorities, read out of
-// the relay's container, which is the same image and exists by now, and the run's
+// the relay's container when it is the same image, and otherwise out of the container
+// of the run's image that is never started, each of which exists by now, and the run's
 // certificate after them. An image that keeps a bundle nowhere known gets the run's
 // alone, which serves the hosts the proxy answers as and no other; that is the image's
 // to mend. It returns the file's mount.
 func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
+	from := e.relay()
+	if e.relayImage() != e.req.Image {
+		from = e.image()
+	}
 	var image []byte
 	for _, p := range imageBundles {
-		argv := []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"}
+		argv := []string{e.command(), "cp", "--follow-link", from + ":" + p, "-"}
 		out, err := e.sys.output(ctx, argv, e.env)
 		if err != nil {
 			continue
@@ -631,28 +792,42 @@ func firstFile(stream []byte) ([]byte, error) {
 	}
 }
 
-// mounts are the launch's own: what it lists and the socket's directory. The workspace
-// is the working directory inside; a mount whose path holds it, by whole components,
-// shows it, and a launch none of whose mounts does is refused: the adapter binds
-// nothing of the caller's the launch does not list.
-func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
+// mounts are the launch's: what it lists and the socket's directory, and the
+// workspace's directory on this machine. The workspace is the working directory
+// inside; a mount whose path inside, its Path or its Target, holds it, by whole
+// components, shows it, and a launch none of whose mounts does is refused: the adapter
+// binds nothing of the caller's the launch does not list. A Target that is not
+// absolute, or that is, holds or lies under the adapter's /qory, is refused.
+func (e *dockerEnclosure) mounts(l Launch) ([]string, string, error) {
 	if !filepath.IsAbs(l.Dir) {
-		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
+		return nil, "", fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
 	}
 	var binds []bind
-	held := false
+	host := ""
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
-			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
 		}
 		if e.sys.socket(m.Path) {
-			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
+			return nil, "", fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
 		}
-		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
-		held = held || under(m.Path, l.Dir)
+		dst := m.Path
+		if m.Target != "" {
+			if !filepath.IsAbs(m.Target) {
+				return nil, "", fmt.Errorf("wall docker: the mount %q is shown at %q, which is not an absolute path", m.Path, m.Target)
+			}
+			if under(qoryDir, m.Target) || under(m.Target, qoryDir) {
+				return nil, "", fmt.Errorf("wall docker: the mount %q is shown at %q, which overlaps %s, the wall's", m.Path, m.Target, qoryDir)
+			}
+			dst = filepath.Clean(m.Target)
+		}
+		binds = append(binds, bind{m.Path, dst, m.ReadOnly})
+		if rel, err := filepath.Rel(dst, l.Dir); host == "" && err == nil && under(dst, l.Dir) {
+			host = filepath.Join(m.Path, rel)
+		}
 	}
-	if !held {
-		return nil, fmt.Errorf("wall docker: the workspace %q lies in none of the "+
+	if host == "" {
+		return nil, "", fmt.Errorf("wall docker: the workspace %q lies in none of the "+
 			"launch's mounts", l.Dir)
 	}
 	if l.Socket != "" {
@@ -667,11 +842,11 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		seen[b.dst] = true
 		m, err := mount(b.src, b.dst, b.readonly)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out = append(out, m)
 	}
-	return out, nil
+	return out, host, nil
 }
 
 // under reports whether path is dir or lies below it, by whole components of the

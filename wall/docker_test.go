@@ -1,6 +1,8 @@
 package wall
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -39,6 +41,11 @@ type recorder struct {
 	version string
 	noIPv6  bool
 	ipv6    bool
+	// user is the image's user as a JSON value, the User of the Config image inspect
+	// prints, or none for a Config without one and null for no Config; files are the files
+	// docker cp reads out of a container, by the path inside.
+	user  string
+	files map[string]string
 }
 
 func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
@@ -80,8 +87,32 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 	return nil, nil
 }
 func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error) {
-	r.lines, r.envs = append(r.lines, words(argv)), append(r.envs, env)
+	line := words(argv)
+	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	switch {
+	case strings.Contains(line, " image inspect ") && r.user == "none":
+		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user == "null":
+		return []byte("null\n"), nil
+	case strings.Contains(line, " image inspect ") && r.user != "":
+		return []byte(`{"Env":["PATH=/bin"],"User":` + r.user + "}\n"), nil
+	case strings.Contains(line, " cp --follow-link "):
+		_, inside, _ := strings.Cut(argv[len(argv)-2], ":")
+		if f, ok := r.files[inside]; ok {
+			return tarred(f), nil
+		}
+	}
 	return nil, errors.New("no such file")
+}
+
+// tarred is a tar stream of one file, as docker cp writes one.
+func tarred(content string) []byte {
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	w.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(content))})
+	w.Write([]byte(content))
+	w.Close()
+	return b.Bytes()
 }
 
 // fails reports whether the recorder fails the command: fail holds substrings of the

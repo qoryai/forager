@@ -13,7 +13,10 @@
 // first.
 package wall
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Wall is one way of building an enclosure: one implementation per container
 // interface.
@@ -93,6 +96,20 @@ type Request struct {
 	// daemon in a container without privileges, whose root is a user of the machine's
 	// that is not root. Experimental: see contracts/forager/v1/README.md §The wall.
 	Docker bool
+	// RelayImage is the image the relay starts from, the machine's default; empty is
+	// Image.
+	RelayImage string
+	// Pull says the run's policy named Image by its reference pinned by digest: the wall
+	// fetches it before it makes anything else, and refuses one whose user is root,
+	// image_user_root. Such an image never gets nested Docker.
+	Pull bool
+}
+
+// Fetcher is an enclosure that fetched the run's image itself, for a [Request] with
+// Pull: dev.qory.run.started reports how long it took as image_fetch_ms.
+type Fetcher interface {
+	// ImageFetch is how long the fetch took, and whether there was one.
+	ImageFetch() (time.Duration, bool)
 }
 
 // Enclosure is one run's wall, built.
@@ -119,9 +136,10 @@ type Launch struct {
 	// itself because it knows the addresses inside. Returned from Wrap, nil means the
 	// starting process's own.
 	Env []string
-	// Dir is the working directory, the run's workspace, at the same path inside. A
-	// mount whose path holds it, by whole components, shows it; a launch whose Dir no
-	// mount holds is not wrapped.
+	// Dir is the working directory, the run's workspace, as the enclosure sees it: at the
+	// same path inside, or under the Target of the mount that holds it. A mount whose
+	// path inside holds it, by whole components, shows it; a launch whose Dir no mount
+	// holds is not wrapped. Returned from Wrap, it is a directory of this machine's.
 	Dir string
 	// Interactive says the command runs on a pseudo-terminal.
 	Interactive bool
@@ -143,8 +161,8 @@ type Launch struct {
 	Socket string
 	// Mounts are the files and directories of the host the run lists: the checkout
 	// around Dir, a composed home, the run directory read-only. The enclosure shows each
-	// at the same path, and nothing of the host besides them and Dir. From the session,
-	// none lies inside another, and one of them holds Dir.
+	// at the same path, or at its Target, and nothing of the host besides them and Dir.
+	// From the session, none lies inside another, and one of them holds Dir.
 	Mounts []Mount
 	// Limits are the resources the agent gets; the zero value leaves each to the
 	// adapter's engine.
@@ -166,9 +184,14 @@ type Limits struct {
 	ShmSize string
 }
 
-// Mount is one file or directory of the host an enclosure shows, at the same path.
+// Mount is one file or directory of the host an enclosure shows, at the same path or
+// at Target.
 type Mount struct {
 	Path string
 	// ReadOnly says the enclosure cannot change it.
 	ReadOnly bool
+	// Target is the path inside the enclosure it is shown at, absolute and apart from
+	// the wall's paths, such as /qory; empty is Path. The session sets it for the workspace of a
+	// run whose image is named by its reference, /workspace.
+	Target string
 }
