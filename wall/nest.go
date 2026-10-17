@@ -24,15 +24,16 @@ const (
 	NestLog = "/var/log/qory-dockerd.log"
 	// nestStore is the daemon's store, a volume of the run's.
 	nestStore = "/var/lib/docker"
-	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the run
-	// sets a non-empty one: the proxy for the containers the agent starts. It is the
-	// agent's alone, in a directory of root's that the agent passes through.
+	// nestConfig is the agent's docker configuration, DOCKER_CONFIG, unless the
+	// enclosure's environment has a non-empty DOCKER_CONFIG, the image's included: the
+	// proxy for the containers the agent starts. It is the agent's alone, in a
+	// directory of root's that the agent passes through.
 	nestConfig = "/run/qory/docker"
 )
 
 // NestSets lists the variables [Nest] sets in the agent's environment for a run with
-// nested Docker: DOCKER_CONFIG, the agent's docker configuration, unless the run sets a
-// non-empty one.
+// nested Docker: DOCKER_CONFIG, the agent's docker configuration, unless the
+// enclosure's environment has a non-empty DOCKER_CONFIG, the image's included.
 func NestSets() []string { return []string{"DOCKER_CONFIG"} }
 
 // nestWait is how long the daemon has to answer on its socket.
