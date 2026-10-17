@@ -1,4 +1,5 @@
-# A policy selects an image by the machine's name for it, never by a reference.
+# A policy names an image by the machine's name for it, or by a reference pinned by
+# digest, never by a tag.
 version: 1
 egress:
   mode: enforce

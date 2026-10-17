@@ -108,8 +108,11 @@ type Run struct {
 	beside []map[string][]string
 	// start is the policy pinned at the start: the run's tools are fixed by it, and
 	// img is the image it resolved to, fixed too.
-	start  *policy.Loaded
-	img    Image
+	start *policy.Loaded
+	img   Image
+	// relay is the reference of the machine's default image, which the wall starts the
+	// run's relay from whatever image the run gets.
+	relay  string
 	served map[string]string
 	server bool
 	// patterns are the compiled patterns of [Config.Selects], by index, nil for an entry
@@ -137,8 +140,9 @@ type Run struct {
 // rules, the node's beside a server's and a ceiling's the node's policy was put under
 // included, and one that selects an image, a [*refusal.NeedsWall]. Behind a wall the
 // policy's image is resolved among [Config.Images]: a definition that cannot be
-// one, a name defined twice and a name the machine does not define, image_unknown, are
-// no run.
+// one, a name defined twice, an allow list that cannot be one, a name the machine does
+// not define, image_unknown, a reference not pinned by digest, run_configuration_invalid,
+// and one under none of the allowed prefixes, image_not_allowed, are no run.
 func Decide(cfg Config) (*Run, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
@@ -204,7 +208,7 @@ func Decide(cfg Config) (*Run, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.img = img
+		r.img, r.relay = img, cfg.Images.defaultImage().Ref
 	}
 	r.start, r.pol = pol, pol
 	return r, nil
@@ -347,6 +351,10 @@ func (r *Run) Uses() []proxy.Credential { return ProxyUses(r.Held()) }
 // Image is the image the run starts in, resolved among [Config.Images]: zero without a
 // wall, and a Ref alone when the default is a reference.
 func (r *Run) Image() Image { return r.img }
+
+// RelayImage is the reference of the machine's default image, which the wall starts
+// the run's relay from: empty without a wall, or when the machine has no default.
+func (r *Run) RelayImage() string { return r.relay }
 
 // Chosen are the run's tools, fixed when it starts.
 func (r *Run) Chosen() []tool.Chosen { return r.chosen }

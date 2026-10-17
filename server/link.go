@@ -139,22 +139,26 @@ type LinkNarrowingEgress struct {
 }
 
 // LinkImages are the session's images: its default, the name of one of Definitions or
-// a reference, and the images the machine defines, which a policy selects by name.
-// A reference may carry a registry's credentials in its user information: neither the
-// session's client nor the gateway logs or reports one.
+// a reference, the images the machine defines, which a policy selects by name, and the
+// prefixes of the references pinned by digest a policy may name, Allow. A reference
+// may carry a registry's credentials in its user information: neither the session's
+// client nor the gateway logs or reports one.
 type LinkImages struct {
 	Default     string      `json:"default,omitempty"`
 	Definitions []LinkImage `json:"definitions,omitempty"`
+	Allow       []string    `json:"allow,omitempty"`
 }
 
 // LinkImage is one image: its name, empty for the default given as a reference, its
 // reference, the container runtime the wall starts it under, empty for the engine's
-// default, and whether it gives the agent a Docker daemon of its own.
+// default, and whether it gives the agent a nested Docker daemon. In an answer,
+// Reference says the policy named the image by its reference pinned by digest.
 type LinkImage struct {
-	Name    string `json:"name,omitempty"`
-	Ref     string `json:"ref"`
-	Runtime string `json:"runtime,omitempty"`
-	Docker  bool   `json:"docker,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Ref       string `json:"ref"`
+	Runtime   string `json:"runtime,omitempty"`
+	Docker    bool   `json:"docker,omitempty"`
+	Reference bool   `json:"reference,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
@@ -187,6 +191,10 @@ type LinkRunAnswer struct {
 	Reserved []string `json:"reserved,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
+	// RelayImage is the reference of the machine's default image, which the wall starts
+	// the run's relay from whatever image the run gets, when the run has a wall and the
+	// machine a default.
+	RelayImage string `json:"relay_image,omitempty"`
 	// Labels are the run's labels as the gateway holds them, which run.started reports.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Applied are the members of dev.qory.run.policy_applied the gateway decides for

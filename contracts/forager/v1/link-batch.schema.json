@@ -18,7 +18,7 @@
         {
           "if": {"required": ["type"], "properties": {"type": {"const": "dev.qory.run.refused"}}},
           "then": {"properties": {"data": {"properties": {
-            "code": {"enum": ["run_configuration_invalid", "tool_unknown", "image_unknown", "variable_reserved", "placeholder_conflict", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]},
+            "code": {"enum": ["run_configuration_invalid", "tool_unknown", "image_unknown", "image_not_allowed", "image_user_root", "variable_reserved", "placeholder_conflict", "mount_contains_forager_files", "mount_mode_conflict", "mount_shared_with_run", "mount_through_link", "engine_unreachable"]},
             "names": {"items": {"not": {"pattern": "^(labels|about\\.details)\\.[^=]*="}}}
           }}}}
         },

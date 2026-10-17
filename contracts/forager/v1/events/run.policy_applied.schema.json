@@ -45,7 +45,7 @@
         }
       }
     },
-    "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+    "image": {"description": "The image the policy selects, which the run started in: the machine's name for it, or its reference pinned by digest. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "$ref": "../policy.schema.json#/properties/image"},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {

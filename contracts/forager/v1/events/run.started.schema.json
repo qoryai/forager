@@ -12,7 +12,7 @@
     "runtime_version": {"description": "The runtime version Forager's adapter for it, such as a descriptor, was written against; Forager never checks the installed version. Absent for a bare runtime, whose records the session does not parse, and when the runtime's adapter reports no version.", "type": "string", "minLength": 1},
     "command": {"description": "The program started, as the runtime prepared it.", "type": "string", "minLength": 1},
     "args": {"description": "Its arguments, as the runtime prepared them. Environment is never reported.", "type": "array", "items": {"type": "string"}},
-    "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
+    "dir": {"description": "The working directory the runtime starts in, as the enclosure sees it: under a wall at the same path as on the machine, and /workspace, or a directory under it, when the policy names the image by its reference pinned by digest.", "type": "string", "minLength": 1},
     "preparation": {"description": "The run's preparation, as the caller gave it: the program and then its arguments, which the session runs inside the wall before the runtime, in dir, with the runtime's environment and through the run's proxy. The runtime starts once it exits 0; a preparation that exits otherwise ends the run with its exit status, and the runtime never starts. command and args are then the script the session starts the runtime through, which runs the preparation first. Present with wall when the run has one, absent otherwise.", "type": "array", "minItems": 1, "items": {"type": "string"}},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "terminal": {
@@ -29,9 +29,10 @@
     "host": {"description": "The host name of the agent's machine, the one the runtime runs on.", "type": "string", "minLength": 1},
     "wall": {"description": "The adapter that built the enclosure the runtime runs in: docker. Absent when there is no wall, where command and dir are the machine's; present, they are the enclosure's.", "type": "string", "minLength": 1},
     "image": {"description": "The image the enclosure runs, the reference. Present with wall.", "type": "string", "minLength": 1},
-    "image_name": {"description": "The machine's name for the image, when the image is one the machine defines: the one the policy selected, or the machine's default by name.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+    "image_name": {"description": "The machine's name for the image, when the image is one the machine defines: the one the policy selected, or the machine's default by name. Absent for an image the policy names by its reference.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
     "container_runtime": {"description": "The container runtime the wall started the image under, as the machine's definition sets it: sysbox-runc. Absent means the engine's default.", "type": "string", "minLength": 1},
     "docker": {"description": "True when the enclosure has nested Docker, a Docker daemon inside the wall, separate from the machine's, started by the wall before the runtime. Absent otherwise.", "const": true},
+    "image_fetch_ms": {"description": "How long the wall took to fetch the image, in milliseconds, when the policy names the image by its reference pinned by digest: the wall fetches such an image before the run starts. Absent otherwise.", "type": "integer", "minimum": 0},
     "labels": {
       "description": "The caller's names for the run, its key in a queue, a repository, an issue, as the command that started the run received them. Forager copies them and reads nothing into them, except that a separate gateway's selection of credentials can take a credential's argument from one. Only this event contains them among the events, and the gateway's registration of the run sends them in its body, never in a URL; a receiver keeps them with the run it creates on it.",
       "type": "object",

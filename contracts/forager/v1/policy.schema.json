@@ -80,12 +80,23 @@
       }
     },
     "image": {
-      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and contains no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts.",
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+      "description": "The image the run starts in, behind a wall: the machine's name for one of its images, or a reference pinned by digest, NAME@sha256: and 64 lower-case hexadecimal digits, under one of the machine's images.allow prefixes. The machine defines its images, a reference and the runtime the wall starts each under, and the prefixes it allows; the policy selects one and defines none. Absent means the machine's default. A name the machine does not define is no run, image_unknown; a reference with a tag, in upper case or without a digest is no run, run_configuration_invalid, before the schema reads it; a reference under none of the prefixes is no run, image_not_allowed. The image is fixed when the run starts.",
+      "anyOf": [{"$ref": "#/$defs/image_name"}, {"$ref": "#/$defs/image_reference"}]
     }
   },
   "$defs": {
+    "image_name": {
+      "description": "The machine's name for one of its images: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+    },
+    "image_reference": {
+      "description": "An image pinned by its digest: NAME, then @sha256:, then 64 lower-case hexadecimal digits. NAME is a lower-case OCI reference name: an optional registry host followed by a slash, then one or more path components separated by slashes. The host is lower-case DNS labels separated by dots, each of lower-case ASCII letters, digits and hyphens, starting and ending with a letter or a digit, with an optional port of 1 to 5 digits after a colon. Each path component is lower-case ASCII letters and digits, with a dot, an underscore, two underscores or one or more hyphens between two runs of them. NAME is at most 255 characters, so the whole value is at most 327. A tag, such as :latest, and upper case are refused, so the value names one build and never moves.",
+      "type": "string",
+      "maxLength": 327,
+      "pattern": "^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*@sha256:[0-9a-f]{64}$",
+      "allOf": [{"pattern": "^[^@]{0,255}@"}]
+    },
     "path": {
       "description": "A path from the root, matched whole, or up to a final * matched as a prefix: /repos/acme/shop, /repos/acme/shop/*. No other wildcard, no query.",
       "type": "string",

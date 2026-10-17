@@ -353,8 +353,8 @@ func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
 }
 
 // TestAPolicySelectsAnImageByName pins that a policy names the machine's image by the
-// machine's name for it and never by a reference, and that the selection is part of
-// what the digest pins.
+// machine's name for it, never by a reference with a tag, and that the selection is
+// part of what the digest pins.
 func TestAPolicySelectsAnImageByName(t *testing.T) {
 	l, err := policy.Read("enforce-image.yaml", fixture(t, "fixtures/policy/enforce-image.yaml"))
 	if err != nil {
@@ -577,6 +577,8 @@ func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
 		{"agent", "", "agent"},
 		{"", "agent", "agent"},
 		{"", "", ""},
+		{imageRef, imageRef, imageRef},
+		{"", imageRef, imageRef},
 	} {
 		if l := narrowed(t, doc(tc.server), doc(tc.node)); l.Policy.Image != tc.want {
 			t.Errorf("server %q, node %q: %q", tc.server, tc.node, l.Policy.Image)
@@ -586,6 +588,12 @@ func TestNarrowedImageIsOneBothAgreeOn(t *testing.T) {
 	var r *accesskey.Refusal
 	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{"agent"}) {
 		t.Errorf("two images: %v", err)
+	}
+	// A name and a reference are two strings, never the same image, whatever the name
+	// stands for on the machine.
+	_, err = policy.Narrowed(fetched(t, doc(imageRef)), read(t, doc("agent")))
+	if !errors.As(err, &r) || r.Code != refusal.ImageUnknown || !slices.Equal(r.Names, []string{imageRef}) {
+		t.Errorf("a reference and a name: %v", err)
 	}
 }
 

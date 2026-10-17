@@ -46,7 +46,12 @@
         "definitions": {
           "description": "The images the machine defines, which a policy selects by name.",
           "type": "array",
-          "items": {"allOf": [{"$ref": "#/$defs/image"}, {"required": ["name"]}]}
+          "items": {"allOf": [{"$ref": "#/$defs/image"}, {"required": ["name"], "properties": {"reference": false}}]}
+        },
+        "allow": {
+          "description": "The machine's images.allow: the prefixes of the references pinned by digest a policy may name its image by. An entry covers a reference that starts with it when the entry ends in / or @, or the reference's next character is / or @: registry.example/agents covers registry.example/agents/app@sha256:… and not registry.example/agents-other/app@sha256:…. Nothing is normalised. An entry that is not the start of a reference in lower case up to a whole part of it, and a list without a default, are refused, with no code. Absent means none: a policy names no image by reference.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 327, "pattern": "^[a-z0-9][a-z0-9._:/@-]*$"}
         }
       }
     },
@@ -70,14 +75,14 @@
   },
   "$defs": {
     "image": {
-      "description": "One image: its name, the reference, the container runtime the wall starts it under, and whether it gives the agent nested Docker.",
+      "description": "One image: its name, the reference, the container runtime the wall starts it under, whether it gives the agent nested Docker, and in an answer whether the policy named it by its reference.",
       "type": "object",
       "additionalProperties": false,
       "required": ["ref"],
       "properties": {
         "name": {
-          "description": "What a policy, or the machine's default, selects it by. Absent for the machine's default given as a reference.",
-          "$ref": "policy.schema.json#/properties/image"
+          "description": "What a policy, or the machine's default, selects it by. Absent for the machine's default given as a reference, and for an image the policy names by its reference.",
+          "$ref": "policy.schema.json#/$defs/image_name"
         },
         "ref": {
           "description": "The image's reference, pinned by digest where the machine wants the same image every time. It may carry a registry's credentials in its user information: never logged or reported.",
@@ -92,6 +97,10 @@
         "docker": {
           "description": "True when the agent gets nested Docker, a Docker daemon inside the wall, separate from the machine's, which needs a runtime that runs one without privileges. Absent means false.",
           "type": "boolean"
+        },
+        "reference": {
+          "description": "In an answer alone: true when the policy named the image by its reference pinned by digest, under one of images.allow. Such an image starts under the default's runtime, with no nested Docker, as the wall's user; the wall fetches it and refuses one whose user is root, image_user_root; and the run's workspace is at /workspace inside. Absent means false.",
+          "const": true
         }
       }
     }

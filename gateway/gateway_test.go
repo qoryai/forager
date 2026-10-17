@@ -680,6 +680,29 @@ func TestAWalledRunWithACredential(t *testing.T) {
 	h.close()
 }
 
+// TestAWalledRunInAnImageByReference pins the answer to a run whose policy names its
+// image by its reference under one of images.allow: the image marked as a reference,
+// under the default's runtime, and the default's reference as the relay's image; and
+// a reference no entry covers, image_not_allowed, a 403 from the gateway.
+func TestAWalledRunInAnImageByReference(t *testing.T) {
+	ref := "registry.example/agents/app@sha256:" + strings.Repeat("b", 64)
+	base := "registry.example/agents/base@sha256:" + strings.Repeat("0", 64)
+	h := start(t, gateway.Config{Policy: &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "observe"}, Image: ref}})
+	h.secrets = append(h.secrets, ref, base)
+	images := &server.LinkImages{Default: "base", Definitions: []server.LinkImage{{Name: "base", Ref: base, Runtime: "sysbox-runc"}}, Allow: []string{"registry.example/agents/"}}
+	a := h.open(server.LinkRunRequest{Wall: true, Images: images})
+	if a.Image == nil || *a.Image != (server.LinkImage{Ref: ref, Runtime: "sysbox-runc", Reference: true}) || a.RelayImage != base {
+		t.Errorf("the image %+v, the relay's %q", a.Image, a.RelayImage)
+	}
+	h.post(exited(a.RunID))
+	images.Allow = []string{"registry.example/other/"}
+	var r *accesskey.Refusal
+	if _, err := h.tryOpen(server.LinkRunRequest{Wall: true, Images: images}); !errors.As(err, &r) || r.Code != "image_not_allowed" || r.Status != http.StatusForbidden || r.From != "gateway" || !slices.Equal(r.Names, []string{ref}) {
+		t.Errorf("a reference under no prefix: %v", err)
+	}
+	h.close()
+}
+
 func anyStrings(v any) []string {
 	list, _ := v.([]any)
 	out := make([]string, len(list))

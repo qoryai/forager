@@ -674,6 +674,7 @@ type runAnswerDoc struct {
 	Placeholders         []string                   `json:"placeholders,omitempty"`
 	Reserved             []string                   `json:"reserved,omitempty"`
 	Image                *server.LinkImage          `json:"image,omitempty"`
+	RelayImage           string                     `json:"relay_image,omitempty"`
 	Applied              map[string]any             `json:"applied"`
 }
 
@@ -716,6 +717,9 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 		ProxySecret: lr.secret.reveal(), CertificateAuthority: string(authority), Placeholders: lr.r.Placeholders(), Reserved: lr.r.Reserved(),
 		Image: lr.image(), Applied: lr.given[len(lr.given)-1],
 	}
+	if lr.wall {
+		a.RelayImage = lr.r.RelayImage()
+	}
 	if lr.remote {
 		a.Labels = nil
 	} else if a.Labels == nil {
@@ -731,7 +735,7 @@ func (lr *linkRun) image() *server.LinkImage {
 	if !lr.wall || img.Ref == "" {
 		return nil
 	}
-	return &server.LinkImage{Name: img.Name, Ref: img.Ref, Runtime: img.Runtime, Docker: img.Docker}
+	return &server.LinkImage{Name: img.Name, Ref: img.Ref, Runtime: img.Runtime, Docker: img.Docker, Reference: img.Reference}
 }
 
 // policyDocument is the policy in force as policy.schema.json defines it, and its
@@ -765,7 +769,7 @@ func images(li *server.LinkImages) run.Images {
 	if li == nil {
 		return run.Images{}
 	}
-	out := run.Images{Default: li.Default}
+	out := run.Images{Default: li.Default, Allow: li.Allow}
 	for _, d := range li.Definitions {
 		out.Defined = append(out.Defined, run.Image{Name: d.Name, Ref: d.Ref, Runtime: d.Runtime, Docker: d.Docker})
 	}

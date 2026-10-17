@@ -49,6 +49,11 @@
       "description": "The image the run gets, the one the policy in force selects or the machine's default, resolved against the run request's images: present when the run request's wall is true. Its reference may carry a registry's credentials in its user information: never logged or reported.",
       "$ref": "link-run-request.schema.json#/$defs/image"
     },
+    "relay_image": {
+      "description": "The reference of the machine's default image, which the wall starts the run's relay from whatever image the run gets: present when the run request's wall is true and its images have a default. The session decides none of it again. Its reference may carry a registry's credentials in its user information: never logged or reported.",
+      "type": "string",
+      "minLength": 1
+    },
     "applied": {
       "description": "The members of dev.qory.run.policy_applied the gateway decides for the policy in force: every member but variables and harness_hosts, each present exactly when the gateway's is. The session's dev.qory.run.policy_applied is this object with the session's variables and harness_hosts added.",
       "type": "object",

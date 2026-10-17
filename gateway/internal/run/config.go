@@ -2,6 +2,7 @@ package run
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -30,8 +31,9 @@ type Policy struct {
 	// Tools are the tools of [Config.Tools] the run may reach, by name, nil and empty as
 	// for Credentials.
 	Tools []PolicyTool `json:"tools,omitzero"`
-	// Image is the name of the image of the machine's the run starts in; empty is the
-	// machine's default.
+	// Image is the image the run starts in: the machine's name for one of its images,
+	// or a reference pinned by digest under one of the machine's allowed prefixes;
+	// empty is the machine's default.
 	Image string `json:"image,omitempty"`
 }
 
@@ -321,8 +323,9 @@ type Discovery struct {
 }
 
 // Image is one image as the machine defines it: what an agent's enclosure is started
-// from, and how. A run's policy selects images by name and names no reference, so a
-// repository never chooses what it runs under.
+// from, and how. A run's policy selects one by name, or names one by its reference
+// pinned by digest under one of the machine's allowed prefixes, [Images.Allow], so a
+// repository chooses what it runs under only among what the machine allows.
 type Image struct {
 	// Name is what a policy, or [Images.Default], selects it by.
 	Name string
@@ -337,6 +340,11 @@ type Image struct {
 	// that runs a daemon in a container without privileges. Experimental: see
 	// contracts/forager/v1/README.md §The wall.
 	Docker bool
+	// Reference says the run's policy named the image by its reference, Ref, rather
+	// than by a name of the machine's: the run starts under the default's Runtime, with
+	// no Docker, and the wall fetches the image and refuses one whose user is root. It
+	// is the gateway's answer alone; no definition sets it.
+	Reference bool
 }
 
 // Check refuses a definition that cannot be one, so a command reading the machine's
@@ -357,44 +365,82 @@ func (i Image) Check() error {
 var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // Images are the session's image table: the images the machine defines, which a run's
-// policy selects among by name, and the one a run starts in when its policy selects
-// none.
+// policy selects among by name, the one a run starts in when its policy selects none,
+// and the prefixes of the references a policy may name.
 type Images struct {
 	// Default is the image when the policy selects none: the name of one of Defined, or
 	// a reference.
 	Default string
 	// Defined are the images the machine defines.
 	Defined []Image
+	// Allow are the prefixes of the references pinned by digest a run's policy may name
+	// its image by ([policy.ImageAllowed]): none, nil, allows no reference. A list
+	// needs a Default, whose runtime such an image starts under.
+	Allow []string
+}
+
+// check refuses an image table that cannot be one: a definition that cannot be one, a
+// name defined twice, an allow entry that cannot be one ([policy.CheckImagePrefix]),
+// and an allow list without a default.
+func (im Images) check() error {
+	for _, d := range im.Defined {
+		if err := d.Check(); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for _, d := range im.Defined {
+		if seen[d.Name] {
+			return fmt.Errorf("the image %s is defined twice", d.Name)
+		}
+		seen[d.Name] = true
+	}
+	for _, entry := range im.Allow {
+		if err := policy.CheckImagePrefix(entry); err != nil {
+			return err
+		}
+	}
+	if len(im.Allow) > 0 && im.Default == "" {
+		return errors.New("images.allow needs a default image, whose runtime an image by reference starts under")
+	}
+	return nil
 }
 
 // resolve is the image a run starts in: the one its policy selects, or the default,
-// which is the name of one of the definitions or a reference.
+// which is the name of one of the definitions or a reference. A selection written as a
+// reference must be pinned by digest, run_configuration_invalid, and under one of
+// Allow, image_not_allowed; it starts under the default's runtime with no Docker.
 func (im Images) resolve(selected string) (Image, error) {
-	for _, d := range im.Defined {
-		if err := d.Check(); err != nil {
-			return Image{}, err
+	if err := im.check(); err != nil {
+		return Image{}, err
+	}
+	if err := policy.CheckImage(selected); err != nil {
+		return Image{}, err
+	}
+	if policy.ImageReference(selected) {
+		if _, ok := policy.ImageAllowed(im.Allow, selected); !ok {
+			return Image{}, refusal.New(refusal.ImageNotAllowed, []string{selected},
+				"the image %s is under none of the machine's allowed prefixes (images.allow)", selected)
 		}
+		def := im.defaultImage()
+		return Image{Ref: selected, Runtime: def.Runtime, Reference: true}, nil
 	}
-	if len(im.Defined) > 0 {
-		seen := map[string]bool{}
-		for _, d := range im.Defined {
-			if seen[d.Name] {
-				return Image{}, fmt.Errorf("the image %s is defined twice", d.Name)
-			}
-			seen[d.Name] = true
-		}
+	if selected == "" {
+		return im.defaultImage(), nil
 	}
-	name := selected
-	if name == "" {
-		name = im.Default
-	}
-	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == name }); i >= 0 {
+	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == selected }); i >= 0 {
 		return im.Defined[i], nil
 	}
-	if selected != "" {
-		return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
+	return Image{}, refusal.New(refusal.ImageUnknown, []string{selected}, "the policy selects the image %q, which this machine does not define", selected)
+}
+
+// defaultImage is the image a run starts in when its policy selects none: the
+// definition Default names, or Default as a reference.
+func (im Images) defaultImage() Image {
+	if i := slices.IndexFunc(im.Defined, func(d Image) bool { return d.Name == im.Default }); i >= 0 {
+		return im.Defined[i]
 	}
-	return Image{Ref: im.Default}, nil
+	return Image{Ref: im.Default}
 }
 
 // Passing is a [Config.Passes] of the names of the variables the run passes a value

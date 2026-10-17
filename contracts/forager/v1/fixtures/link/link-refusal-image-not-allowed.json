@@ -1,0 +1,8 @@
+{
+  "error": "image_not_allowed",
+  "names": [
+    "elsewhere.example/app@sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+  ],
+  "message": "the image elsewhere.example/app@sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3 is under none of the machine's allowed prefixes (images.allow): image_not_allowed: elsewhere.example/app@sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "from": "gateway"
+}

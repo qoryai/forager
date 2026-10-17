@@ -30,6 +30,12 @@ const (
 	// ImageUnknown is an image the machine does not define, or a server's image other
 	// than the one the node's policy selects.
 	ImageUnknown = "image_unknown"
+	// ImageNotAllowed is an image a policy names by its reference pinned by digest
+	// that no prefix of the machine's images.allow covers: its name is the reference.
+	ImageNotAllowed = "image_not_allowed"
+	// ImageUserRoot is an image a policy names by its reference whose user is root, as
+	// the wall reads it from the image after it fetches it: its name is the reference.
+	ImageUserRoot = "image_user_root"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.
 	VariableReserved = "variable_reserved"
@@ -65,8 +71,8 @@ const (
 // refusal of the run's own configuration rather than of an answer of the server's.
 func Decides(code string) bool {
 	switch code {
-	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+	case RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+		VariableReserved, PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable:
 		return true
 	}

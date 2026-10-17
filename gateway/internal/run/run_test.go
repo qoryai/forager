@@ -854,3 +854,76 @@ func TestAPolicyEntryOutsideTheHostFormIsRefusedWhereverItIsRead(t *testing.T) {
 		t.Errorf("a ceiling's paths key 127.1: %v, want a *policy.Error", err)
 	}
 }
+
+// pinned is an image a policy names by its reference pinned by digest.
+const pinned = "registry.example/agents/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
+// TestAnImageByReferenceIsOneTheMachineAllows pins an image a policy names by its
+// reference: under a prefix of images.allow it starts under the default's runtime,
+// with no Docker, marked as a reference; under none it is image_not_allowed; with no
+// list none is allowed; one with a tag is run_configuration_invalid; and the relay's
+// image is the default's reference whatever the run's.
+func TestAnImageByReferenceIsOneTheMachineAllows(t *testing.T) {
+	defined := []run.Image{{Name: "base", Ref: "example.com/agent:1", Runtime: "sysbox-runc"}, images[1]}
+	decide := func(image string, im run.Images) (*run.Run, error) {
+		return run.Decide(run.Config{RunID: runID, Wall: true, Images: im,
+			Node: &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: "observe"}, Image: image}})
+	}
+	r, err := decide(pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/agents"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (run.Image{Ref: pinned, Runtime: "sysbox-runc", Reference: true}); r.Image() != want || r.RelayImage() != "example.com/agent:1" {
+		t.Errorf("the image %+v, the relay's %q; want %+v and the default's", r.Image(), r.RelayImage(), want)
+	}
+	r, err = decide(pinned, run.Images{Default: "example.com/other:2", Allow: []string{"registry.example/"}})
+	if err != nil || r.Image() != (run.Image{Ref: pinned, Reference: true}) || r.RelayImage() != "example.com/other:2" {
+		t.Errorf("under a default by reference: %+v, %q, %v", r.Image(), r.RelayImage(), err)
+	}
+	if r, err := decide("with-docker", run.Images{Default: "base", Defined: defined}); err != nil || r.RelayImage() != "example.com/agent:1" || r.Image() != images[1] {
+		t.Errorf("a named image's relay: %+v, %q, %v", r.Image(), r.RelayImage(), err)
+	}
+	for name, c := range map[string]struct {
+		image string
+		im    run.Images
+		code  string
+		want  string
+	}{
+		"under no prefix":        {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/agents-other", "registry.example:5000"}}, "image_not_allowed", "under none of the machine's allowed prefixes (images.allow)"},
+		"with no list":           {pinned, run.Images{Default: "base", Defined: defined}, "image_not_allowed", "images.allow"},
+		"with a tag":             {"registry.example/agents/app:1", run.Images{Default: "base", Defined: defined, Allow: []string{"registry.example/"}}, "run_configuration_invalid", "not pinned by digest"},
+		"an entry of *":          {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{"*"}}, "", "every image"},
+		"an empty entry":         {pinned, run.Images{Default: "base", Defined: defined, Allow: []string{""}}, "", "every image"},
+		"a list with no default": {pinned, run.Images{Allow: []string{"registry.example/"}}, "", "needs a default image"},
+	} {
+		_, err := decide(c.image, c.im)
+		code, names := refusalOf(err)
+		if err == nil || code != c.code || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v (%q), want %q with %q", name, err, code, c.code, c.want)
+		}
+		if code == "image_not_allowed" && !slices.Equal(names, []string{pinned}) {
+			t.Errorf("%s: the names %q", name, names)
+		}
+	}
+}
+
+// TestAReloadKeepsAnImageByReference pins that a run started in an image by reference
+// keeps it: a reload that names the same reference takes effect, one that names the
+// default, another reference or a reference outside the list does not.
+func TestAReloadKeepsAnImageByReference(t *testing.T) {
+	doc := `{"version":1,"egress":{"mode":"observe"},"image":"%s"}`
+	other := strings.Replace(pinned, "agents/app", "agents/other", 1)
+	im := run.Images{Default: "base", Defined: images, Allow: []string{"registry.example/agents/"}}
+	r := open(t, run.Config{RunID: runID, Wall: true, Server: true, Images: im, Fetched: served(fmt.Sprintf(doc, pinned), digest('1'))})
+	if !r.Image().Reference {
+		t.Fatalf("the run started in %+v", r.Image())
+	}
+	if d, err := reload(t, r, served(fmt.Sprintf(doc, pinned), digest('2'))); err != nil || d.Image != r.Image() {
+		t.Errorf("the same reference: %+v, %v", d, err)
+	}
+	for _, image := range []string{"base", other, "elsewhere.example/app@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"} {
+		if _, err := reload(t, r, served(fmt.Sprintf(doc, image), digest('3'))); err == nil {
+			t.Errorf("a reload to %s took effect", image)
+		}
+	}
+}

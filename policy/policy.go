@@ -49,8 +49,9 @@ type Policy struct {
 	// when it has an empty list: a node's empty list allows none of a server's.
 	Credentials []Selected `json:"credentials,omitzero"`
 	Tools       []Selected `json:"tools,omitzero"`
-	// Image is the name of the machine's image the run starts in; empty is the
-	// machine's default.
+	// Image is the image the run starts in: the machine's name for one of its images,
+	// or a reference pinned by digest under one of the machine's allowed prefixes;
+	// empty is the machine's default.
 	Image string `json:"image,omitempty"`
 }
 
@@ -123,7 +124,8 @@ func None() *Loaded {
 
 // Read reads a policy document from bytes, YAML or JSON by name's extension, JSON
 // when it has none, validates it and pins it with its digest. A refused document is a
-// [*Error] naming name.
+// [*Error] naming name; one whose image is a reference not pinned by digest wraps a
+// refusal with run_configuration_invalid ([CheckImage]).
 func Read(name string, b []byte) (*Loaded, error) {
 	p, j, err := parse(name, b)
 	if err != nil {
@@ -143,7 +145,9 @@ func Read(name string, b []byte) (*Loaded, error) {
 }
 
 // Parse validates the bytes of a policy document against the schema and decodes it.
-// name chooses YAML or JSON by its extension, JSON when it has none.
+// name chooses YAML or JSON by its extension, JSON when it has none. An image written
+// as a reference that is not pinned by digest is refused before the schema reads it,
+// with run_configuration_invalid ([CheckImage]).
 func Parse(name string, b []byte) (*Policy, error) {
 	p, _, err := parse(name, b)
 	return p, err
@@ -156,6 +160,9 @@ func parse(name string, b []byte) (*Policy, []byte, error) {
 	}
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkImage(doc); err != nil {
 		return nil, nil, err
 	}
 	schema, err := contracts.Compile("policy.schema.json")
@@ -216,8 +223,9 @@ func formed(e Egress) error {
 //     by argument when the node's entry has one, so an empty list allows none. A tool
 //     outside it is refused with [refusal.ToolUnknown]. The credentials are bounded the
 //     same way.
-//   - The image is the one both select, or the one a side selects; two different ones
-//     are refused with [refusal.ImageUnknown]. Neither leaves the machine's default.
+//   - The image is the one both select, or the one a side selects; two different ones,
+//     two strings that are not the same, a name and a reference among them, are
+//     refused with [refusal.ImageUnknown]. Neither leaves the machine's default.
 //
 // The result keeps the fetched policy's source, digest and URL, with the node's side in
 // [Loaded.Node].

@@ -12,8 +12,8 @@ import (
 // gateway's, and a gateway decides its own and none of Forager's.
 func TestDeciders(t *testing.T) {
 	forager := []string{
-		RunConfigurationInvalid, ToolUnknown, ImageUnknown, VariableReserved,
-		PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
+		RunConfigurationInvalid, ToolUnknown, ImageUnknown, ImageNotAllowed, ImageUserRoot,
+		VariableReserved, PlaceholderConflict, MountContainsForagerFiles, MountModeConflict, MountSharedWithRun,
 		MountThroughLink, EngineUnreachable,
 	}
 	gateway := []string{RunIDUsed}
