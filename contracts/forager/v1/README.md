@@ -694,7 +694,10 @@ whose value stays outside the enclosure, is left out and recorded as `denied`. A
 the node passes for a variable the runtime declares or reserves reaches the runtime as
 passed. Behind a wall, every variable the runtime declares or reserves that neither a
 placeholder, a source nor the runtime's preparation sets goes into the enclosure as an
-empty value, so an image's `ENV` cannot set one.
+empty value, so an image's `ENV` cannot set one. So does every name the runtime
+`denies` or the node's deny list removes, by its exact name, that nothing sets: a
+pattern empties none, and a name Forager, the wall or the preparation sets keeps its
+value.
 
 **Unwalled runs.** The launch spec decides whether an unwalled run receives the server's
 variables, `Spec.Variables.Unwalled` in Go: `ignore`, the default, or `accept`. With

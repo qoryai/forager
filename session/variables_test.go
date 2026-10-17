@@ -116,7 +116,8 @@ func answerVariables(g *linktest.Fake, doc string) {
 // highest source of each name is in the agent's environment and every value that lost
 // is not, the record lists each name with its source and its losses and no value, and
 // OnVariables receives the same once, before the agent starts. Behind a wall the
-// runtime's declared variables nothing applies are there empty. Without a wall, and
+// runtime's declared variables nothing applies are there empty, and so is a name it
+// denies whose value lost. Without a wall, and
 // without accept, none of the server's is there and the run's own apply.
 func TestVariablesReachTheAgentByRung(t *testing.T) {
 	for _, tc := range []struct {
@@ -194,9 +195,13 @@ func TestVariablesReachTheAgentByRung(t *testing.T) {
 				}
 			}
 			for _, name := range []string{"APP_REGION", "ANTHROPIC_BASE_URL", "DOCKER_HOST"} {
-				if value, ok := env[name]; ok {
+				// Behind a wall a name the runtime denies goes in empty.
+				if value, ok := env[name]; ok && (!tc.walled || name != "ANTHROPIC_BASE_URL" || value != "") {
 					t.Errorf("%s=%q reached the agent, a value that lost", name, value)
 				}
+			}
+			if value, ok := env["ANTHROPIC_BASE_URL"]; tc.walled && (!ok || value != "") {
+				t.Errorf("ANTHROPIC_BASE_URL: %q, set %v; want set and empty behind a wall", value, ok)
 			}
 			if _, ok := env["NODE_ENV"]; !server && ok {
 				t.Errorf("NODE_ENV=%q reached an unwalled run that ignores the server", env["NODE_ENV"])

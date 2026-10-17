@@ -104,6 +104,12 @@ release may change what an existing document does, and says so under Upgrading.
   exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
   refused.
 
+#### Changed
+
+- Behind a wall, every name the runtime denies or the node's `Variables.Deny` removes,
+  by its exact name, goes into the enclosure empty when nothing sets it, as the
+  runtime's declared and reserved names do, so an image's `ENV` cannot set one.
+
 ### e2e and CI
 
 #### Added
