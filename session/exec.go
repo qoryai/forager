@@ -17,7 +17,7 @@ import (
 func checkExec(spec Spec) error {
 	switch {
 	case spec.Wall != nil && len(spec.Exec) == 0:
-		return errors.New("a walled run starts its launch through Exec, the helper's exec, and the spec has none")
+		return errors.New("a walled run starts its launch through Exec, the helper's exec, when it has names to unset, and the spec has none")
 	case len(spec.Exec) > 0 && spec.Exec[0] == "":
 		return errors.New("Exec's program is empty")
 	case slices.ContainsFunc(spec.Exec, func(w string) bool { return strings.ContainsRune(w, 0) }):

@@ -35,6 +35,14 @@ type Setter interface {
 	Sets() []string
 }
 
+// AuthoritySetter is a [Setter] some of whose names it sets only for a run with an
+// authority, [Launch.CA]: a run without one gets none of them from the wall.
+type AuthoritySetter interface {
+	// SetsWithAuthority lists the names of [Setter.Sets] that the wall sets only for a
+	// run with an authority.
+	SetsWithAuthority() []string
+}
+
 // Filer is a wall with files of its own on this machine: the programs it starts outside
 // the enclosure and what configures them. A walled run refuses a mount that is, contains
 // or lies inside one of them, since an agent that changes one of them changes what runs

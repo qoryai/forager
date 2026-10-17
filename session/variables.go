@@ -90,8 +90,9 @@ func passes(spec Spec) []string {
 // of the launch's environment: the runtime's declared and reserved variables and the
 // names the runtime denies or the node's deny list removes, that nothing sets. Forager,
 // the wall and the preparation set names too, [wall.Nest] among them for a run with
-// nested Docker, docker, so none of theirs is ever unset.
-func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string, docker bool) (variables.Resolved, []string, error) {
+// nested Docker, docker, so none of theirs is ever unset; the wall's names for a run
+// with an authority count as set only when the run has one, authority.
+func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
 		decl = s.Secrets()
@@ -111,8 +112,24 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	}
 	own = append(own, names(link.ProxyEnv(""))...)
 	own = append(own, names(prepared.Env)...)
+	// What Forager, the preparation and the wall set in this run, which the helper's
+	// exec never unsets: a name the wall sets only for a run with an authority counts
+	// when the run has one, and nested Docker's when the run has it.
+	walls := slices.Clone(own)
 	if s, ok := spec.Wall.(wall.Setter); ok {
 		own = append(own, s.Sets()...)
+		var only []string
+		if a, ok := spec.Wall.(wall.AuthoritySetter); ok && !authority {
+			only = a.SetsWithAuthority()
+		}
+		for _, name := range s.Sets() {
+			if !slices.Contains(only, name) {
+				walls = append(walls, name)
+			}
+		}
+	}
+	if docker {
+		walls = append(walls, wall.NestSets()...)
 	}
 	vars, err := variables.Resolve(variables.Inputs{
 		Fixed: spec.LaunchFixed, Server: served, Run: spec.Variables.Run, Machine: spec.Variables.Machine,
@@ -132,10 +149,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 	// value they give it, since the helper's exec runs after them.
 	var unset []string
 	if spec.Wall != nil {
-		set := slices.Concat(names(spec.Env), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, own)
-		if docker {
-			set = append(set, wall.NestSets()...)
-		}
+		set := slices.Concat(names(spec.Env), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, walls)
 		for _, name := range runtimeNames {
 			if !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)

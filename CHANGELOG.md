@@ -88,6 +88,8 @@ release may change what an existing document does, and says so under Upgrading.
   a timeout, and refuses with `image_user_root` an image whose user is root, a uid of 0
   or a name its `/etc/passwd` maps to uid 0, or a name it cannot map. A pull that fails
   leaves no container or network. `wall.Fetcher` reports how long the pull took.
+- `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
+  `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
   that is not absolute or that overlaps `/qory`.
 

@@ -2907,11 +2907,12 @@ programs: `exec --unset NAME … -- program args…`, which removes the names fr
 environment and executes the program, found in `PATH`. A program found only through `.`
 or an empty entry of `PATH` is not run, and ends the run with 127. The names are those
 a source does not set and win with (§Variables); a name Forager, the wall or the
-preparation sets is never one of them, the nested daemon's `DOCKER_CONFIG` included. A
-name outside a variable's grammar is refused, and a program it does not find or cannot
-execute ends the run with 127 or 126, as a shell's would. A run with no names to unset
-starts its launch as it is. `dev.qory.run.started` reports the launch without the
-helper.
+preparation sets for the run is never one of them, the nested daemon's `DOCKER_CONFIG`
+included; a name the wall sets only for a run with an authority, such as a CA bundle's,
+counts as set only when the run has one. A name outside a variable's grammar is
+refused, and a program it does not find or cannot execute ends the run with 127 or
+126, as a shell's would. A run with no names to unset starts its launch as it is.
+`dev.qory.run.started` reports the launch without the helper.
 
 **Forager's files.** A walled run, one without a server included, refuses a mount,
 or the workspace, that is, contains or lies inside one of Forager's files: no run,

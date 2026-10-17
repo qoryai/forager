@@ -143,16 +143,22 @@ type system interface {
 // itself: the proxy's, the hook socket's and the ones that point a program at the
 // run's bundle.
 func (d *Docker) Sets() []string {
-	names := d.CAEnv
-	if names == nil {
-		names = DefaultCAEnv
-	}
 	var out []string
 	for _, kv := range link.ProxyEnv("") {
 		name, _, _ := strings.Cut(kv, "=")
 		out = append(out, name)
 	}
-	return append(append(out, link.EnvRunSocket), names...)
+	return append(append(out, link.EnvRunSocket), d.SetsWithAuthority()...)
+}
+
+// SetsWithAuthority lists the variables of [Docker.Sets] the adapter sets only for a
+// run with an authority: the ones that point a program at the run's bundle, CAEnv, or
+// DefaultCAEnv when it is nil.
+func (d *Docker) SetsWithAuthority() []string {
+	if d.CAEnv != nil {
+		return slices.Clone(d.CAEnv)
+	}
+	return slices.Clone(DefaultCAEnv)
 }
 
 // Files lists the adapter's own files on this machine: the directory of the docker
@@ -642,11 +648,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		env = append(env, link.EnvRunSocket+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
 	if len(l.CA) > 0 {
-		names := e.d.CAEnv
-		if names == nil {
-			names = DefaultCAEnv
-		}
-		for _, n := range names {
+		for _, n := range e.d.SetsWithAuthority() {
 			env = append(env, n+"="+BundlePath)
 		}
 	}

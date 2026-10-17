@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/internal/linktest"
+	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/wall"
 )
@@ -246,5 +248,41 @@ func TestANameTheWallSetsIsNeverUnset(t *testing.T) {
 	names, _ := unsetIn(t, w.got)
 	if slices.Contains(names, "CLAUDE_CODE_OAUTH_TOKEN") || !slices.Contains(names, "ANTHROPIC_API_KEY") {
 		t.Errorf("unset %q; want the runtime's names but the one the wall sets", names)
+	}
+}
+
+// authorityWall is an open wall that sets NODE_EXTRA_CA_CERTS for a run with an
+// authority alone, as the Docker adapter sets its CA names.
+type authorityWall struct{ openWall }
+
+func (w *authorityWall) Sets() []string              { return []string{"NODE_EXTRA_CA_CERTS"} }
+func (w *authorityWall) SetsWithAuthority() []string { return []string{"NODE_EXTRA_CA_CERTS"} }
+
+// TestANameTheWallSetsWithAnAuthorityIsUnsetWithoutOne pins a name the wall sets only
+// for a run with an authority, which the node's deny list names: a run without one
+// unsets it, so an image's value does not show through, and a run with one leaves it
+// to the wall.
+func TestANameTheWallSetsWithAnAuthorityIsUnsetWithoutOne(t *testing.T) {
+	for _, withAuthority := range []bool{false, true} {
+		w := &authorityWall{}
+		sp, g := specGateway(t, "FAKE_EXIT=0")
+		if withAuthority {
+			g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+				a := linktest.RunAnswer(req)
+				a["certificate_authority"] = authority
+				return linktest.Reply{Status: 200, Body: a}
+			})
+		}
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		sp.Variables.Deny = []string{"NODE_EXTRA_CA_CERTS"}
+		if _, err := session.Run(context.Background(), sp); err != nil {
+			t.Fatalf("an authority %v: %v", withAuthority, err)
+		}
+		if names, _ := unsetIn(t, w.got); slices.Contains(names, "NODE_EXTRA_CA_CERTS") == withAuthority {
+			t.Errorf("an authority %v: unset %q", withAuthority, names)
+		}
+		if withAuthority && len(w.got.CA) == 0 {
+			t.Error("the wall got no authority")
+		}
 	}
 }
