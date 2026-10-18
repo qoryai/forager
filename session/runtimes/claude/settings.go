@@ -2,15 +2,12 @@ package claude
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
+	"github.com/qoryai/forager/session/internal/hostfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -96,41 +93,16 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 	return append(append([]string(nil), args...), "--settings", path), nil
 }
 
-// readSettings reads the settings file path names, when readable passes it: never
-// through a link as its last part, never a file that is not a regular one, and never
-// more than maxSettings bytes. A file is opened without blocking, so a FIFO is refused
-// rather than waited on.
+// readSettings reads the settings file path names, when readable passes it, as
+// [hostfile.Read] reads one: never through a link as its last part, only a regular
+// file, and at most maxSettings bytes.
 func readSettings(path string, readable func(string) error) ([]byte, error) {
 	if readable != nil {
 		if err := readable(path); err != nil {
 			return nil, err
 		}
 	}
-	if info, err := os.Lstat(path); err != nil {
-		return nil, err
-	} else if info.Mode()&fs.ModeSymlink != 0 {
-		return nil, errors.New("it is a link")
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("it is not a regular file")
-	}
-	b, err := io.ReadAll(io.LimitReader(f, maxSettings+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxSettings {
-		return nil, fmt.Errorf("it is larger than %d bytes", maxSettings)
-	}
-	return b, nil
+	return hostfile.Read(path, maxSettings)
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.
