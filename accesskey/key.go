@@ -8,14 +8,20 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"filippo.io/edwards25519"
+	"gopkg.in/yaml.v3"
 )
 
 // SecretPrefix starts every access key secret, so secret scanners recognise one.
@@ -329,6 +335,359 @@ func documentHas(doc any, has func(string) bool) bool {
 		}
 	}
 	return false
+}
+
+// SecretInPinDocument is [SecretInDocument] of a document that holds a pin, with the
+// pin's keys left out. member is the top-level member that holds the pin,
+// apiary_public_key in the server document, or empty for a document that is the pin.
+// An entry's public_key is left out when it is one string that [ParsePublicKey] reads
+// and [PublicKey.Check] passes, so a key whose base64url contains qak_ or qrk_ by
+// chance is not refused. The entry's alg, its other members and the rest of the
+// document are checked as SecretInDocument checks them.
+//
+// A string is the raw bytes, read as JSON when they are one JSON value and as YAML
+// otherwise. A key is left out only where the pin writes it, as a JSON string or a
+// plain or quoted YAML scalar, so the same text elsewhere, in another member or a YAML
+// comment say, is checked. No key is left out when member appears twice, and an
+// entry's key is not when its public_key appears twice. In YAML, a key is not left out
+// when it is written with an anchor, an alias or a tag, or when the mapping that holds
+// it, or the document, has a merge key or a key that is not a scalar. A decoded
+// document has the decoded value left out.
+func SecretInPinDocument(doc any, member string) error {
+	if raw, ok := doc.(string); ok {
+		return SecretInDocument(outsidePinKeys(raw, member))
+	}
+	return SecretInDocument(withoutPinKeys(doc, member))
+}
+
+// SecretInPinEntry is [SecretInDocument] of one entry of a pin, its alg and its public
+// key, with the public key left out when [SecretInPinDocument] leaves it out.
+func SecretInPinEntry(alg, publicKey string) error {
+	if pinKey(publicKey) {
+		return SecretInDocument(alg)
+	}
+	return SecretInDocument([]any{alg, publicKey})
+}
+
+// pinKey reports whether v is a key a pin may list: [ParsePublicKey] reads it and
+// [PublicKey.Check] passes it.
+func pinKey(v string) bool {
+	p, err := ParsePublicKey(v)
+	return err == nil && p.Check() == nil
+}
+
+// withoutPinKeys is a decoded document with each public_key of its pin that pinKey
+// accepts set to nil, in copies, so the document passed in is unchanged.
+func withoutPinKeys(doc any, member string) any {
+	if member == "" {
+		return withoutKeys(doc)
+	}
+	m, ok := doc.(map[string]any)
+	if !ok {
+		return doc
+	}
+	pin, ok := m[member]
+	if !ok {
+		return doc
+	}
+	out := maps.Clone(m)
+	out[member] = withoutKeys(pin)
+	return out
+}
+
+// withoutKeys is withoutPinKeys of a decoded pin, a list of entries.
+func withoutKeys(pin any) any {
+	list, ok := pin.([]any)
+	if !ok {
+		return pin
+	}
+	out := slices.Clone(list)
+	for i, e := range list {
+		entry, _ := e.(map[string]any)
+		if k, ok := entry["public_key"].(string); ok && pinKey(k) {
+			c := maps.Clone(entry)
+			c["public_key"] = nil
+			out[i] = c
+		}
+	}
+	return out
+}
+
+// span is the bytes from and up to, not including, to.
+type span struct{ from, to int }
+
+// outsidePinKeys is the raw bytes of a document as parts, split where its pin writes a
+// key withoutPinKeys leaves out, those bytes left out. Such a span starts and ends with
+// a quote, or is a plain YAML scalar, which a separator bounds; neither qak_ nor qrk_
+// contains a quote or a separator, so no match runs across the edge of a span.
+func outsidePinKeys(raw, member string) []any {
+	b := []byte(raw)
+	spans, ok := jsonPinKeys(b, member)
+	if !ok {
+		spans = yamlPinKeys(b, member)
+	}
+	var parts []any
+	at := 0
+	for _, s := range spans {
+		if s.from < at {
+			return []any{raw}
+		}
+		parts = append(parts, raw[at:s.from])
+		at = s.to
+	}
+	return append(parts, raw[at:])
+}
+
+// jsonPinKeys returns where the bytes write each key withoutPinKeys leaves out, and
+// false when the bytes are not one JSON value.
+func jsonPinKeys(b []byte, member string) ([]span, bool) {
+	j := jsonPin{b: b, d: jsontext.NewDecoder(bytes.NewReader(b), jsontext.AllowDuplicateNames(true))}
+	var spans []span
+	var err error
+	if member == "" {
+		spans, err = j.entries()
+	} else {
+		spans, err = j.member(member)
+	}
+	if err != nil {
+		return nil, false
+	}
+	if _, err := j.d.ReadToken(); err != io.EOF {
+		return nil, false
+	}
+	return spans, true
+}
+
+// jsonPin reads the bytes b of a JSON document with d.
+type jsonPin struct {
+	b []byte
+	d *jsontext.Decoder
+}
+
+// member reads one value, and returns the spans of the pin in its member name when it
+// is an object that holds that member once.
+func (j jsonPin) member(name string) ([]span, error) {
+	if j.d.PeekKind() != '{' {
+		return nil, j.d.SkipValue()
+	}
+	if _, err := j.d.ReadToken(); err != nil {
+		return nil, err
+	}
+	var spans []span
+	n := 0
+	for j.d.PeekKind() != '}' {
+		k, err := j.d.ReadToken()
+		if err != nil {
+			return nil, err
+		}
+		if k.String() != name {
+			if err := j.d.SkipValue(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		n++
+		if spans, err = j.entries(); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := j.d.ReadToken(); err != nil {
+		return nil, err
+	}
+	if n != 1 {
+		return nil, nil
+	}
+	return spans, nil
+}
+
+// entries reads one value, and returns the spans of the keys of its entries when it is
+// a list.
+func (j jsonPin) entries() ([]span, error) {
+	if j.d.PeekKind() != '[' {
+		return nil, j.d.SkipValue()
+	}
+	if _, err := j.d.ReadToken(); err != nil {
+		return nil, err
+	}
+	var spans []span
+	for j.d.PeekKind() != ']' {
+		if j.d.PeekKind() != '{' {
+			if err := j.d.SkipValue(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		s, err := j.entry()
+		if err != nil {
+			return nil, err
+		}
+		spans = append(spans, s...)
+	}
+	_, err := j.d.ReadToken()
+	return spans, err
+}
+
+// entry reads one object, and returns the span of its public_key when the object
+// holds that member once and its value is a string pinKey accepts.
+func (j jsonPin) entry() ([]span, error) {
+	if _, err := j.d.ReadToken(); err != nil {
+		return nil, err
+	}
+	var key []span
+	n := 0
+	for j.d.PeekKind() != '}' {
+		k, err := j.d.ReadToken()
+		if err != nil {
+			return nil, err
+		}
+		if k.String() != "public_key" {
+			if err := j.d.SkipValue(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		n++
+		v, err := j.d.ReadValue()
+		if err != nil {
+			return nil, err
+		}
+		key = nil
+		to := int(j.d.InputOffset())
+		from := to - len(v)
+		var s string
+		if v.Kind() == '"' && from >= 0 && bytes.Equal(j.b[from:to], v) && jsonv2.Unmarshal(v, &s) == nil && pinKey(s) {
+			key = []span{{from, to}}
+		}
+	}
+	if _, err := j.d.ReadToken(); err != nil {
+		return nil, err
+	}
+	if n != 1 {
+		return nil, nil
+	}
+	return key, nil
+}
+
+// yamlPinKeys returns where the bytes, as YAML, write each key withoutPinKeys leaves
+// out: none when they are not YAML, or where yamlMember finds no member.
+func yamlPinKeys(b []byte, member string) []span {
+	var doc yaml.Node
+	if yaml.Unmarshal(b, &doc) != nil || len(doc.Content) != 1 {
+		return nil
+	}
+	pin := doc.Content[0]
+	if member != "" {
+		pin = yamlMember(pin, member)
+	}
+	if pin == nil || pin.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var spans []span
+	for _, e := range pin.Content {
+		v := yamlMember(e, "public_key")
+		if v == nil || v.Kind != yaml.ScalarNode || v.ShortTag() != "!!str" || !pinKey(v.Value) {
+			continue
+		}
+		if s, ok := yamlScalar(b, v); ok {
+			spans = append(spans, s)
+		}
+	}
+	return spans
+}
+
+// yamlMember returns the value of a mapping's member name, or nil when the node is no
+// mapping, holds the member other than once, or has a merge key or a key that is not a
+// scalar.
+func yamlMember(m *yaml.Node, name string) *yaml.Node {
+	if m.Kind != yaml.MappingNode {
+		return nil
+	}
+	var v *yaml.Node
+	n := 0
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if k.Kind != yaml.ScalarNode || k.ShortTag() == "!!merge" {
+			return nil
+		}
+		if k.Value == name {
+			n++
+			v = m.Content[i+1]
+		}
+	}
+	if n != 1 {
+		return nil
+	}
+	return v
+}
+
+// yamlScalar returns the span of a scalar where the node's line and column put it,
+// plain, single-quoted or double-quoted, and false unless those bytes, read as YAML
+// alone, are the node's value. An anchor or a tag puts the column on itself, so a
+// scalar written with one has no span.
+func yamlScalar(b []byte, v *yaml.Node) (span, bool) {
+	from, ok := yamlOffset(b, v.Line, v.Column)
+	if !ok {
+		return span{}, false
+	}
+	to := -1
+	switch v.Style {
+	case 0:
+		to = from + len(v.Value)
+	case yaml.SingleQuotedStyle:
+		to = from + len(v.Value) + 2
+	case yaml.DoubleQuotedStyle:
+		for i := from + 1; i < len(b); i++ {
+			if b[i] == '\\' {
+				i++
+				continue
+			}
+			if b[i] == '"' {
+				to = i + 1
+				break
+			}
+		}
+	}
+	if to < from || to > len(b) {
+		return span{}, false
+	}
+	var s string
+	if yaml.Unmarshal(b[from:to], &s) != nil || s != v.Value {
+		return span{}, false
+	}
+	return span{from, to}, true
+}
+
+// bom is the UTF-8 byte order mark, which yaml.v3 skips.
+const bom = "\xef\xbb\xbf"
+
+// yamlOffset returns the byte offset of a line and a column as yaml.v3 counts them:
+// from 1, in characters, after a UTF-8 byte order mark. It is false when the bytes have
+// no such place.
+func yamlOffset(b []byte, line, column int) (int, bool) {
+	at := 0
+	if bytes.HasPrefix(b, []byte(bom)) {
+		at = len(bom)
+	}
+	for ; line > 1; line-- {
+		i := bytes.IndexAny(b[at:], "\r\n\u0085\u2028\u2029")
+		if i < 0 {
+			return 0, false
+		}
+		at += i
+		_, n := utf8.DecodeRune(b[at:])
+		if bytes.HasPrefix(b[at:], []byte("\r\n")) {
+			n = 2
+		}
+		at += n
+	}
+	for ; column > 1; column-- {
+		if at >= len(b) {
+			return 0, false
+		}
+		_, n := utf8.DecodeRune(b[at:])
+		at += n
+	}
+	return at, true
 }
 
 // decode decodes base64url without padding strictly, to exactly n bytes: padding, a

@@ -54,6 +54,14 @@ release may change what an existing document does, and says so under Upgrading.
 - `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
   run's label a gateway's selection took it from.
 
+#### Fixed
+
+- A pin whose key contains `qak_` or `qrk_` in any case, about one key in 27,000, is
+  read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
+  one valid key out of the secret check, which still covers `alg`, the entry's other
+  members and the rest of the document. `accesskey.SecretInPinDocument` and
+  `accesskey.SecretInPinEntry` hold the rule.
+
 ### Gateway
 
 #### Added
