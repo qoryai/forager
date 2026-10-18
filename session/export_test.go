@@ -33,7 +33,7 @@ func TrustRemote(url, caFile string) (untrust func()) {
 func SetRegisterPause(f func(runID string)) { registerPause = f }
 
 // SetRunContainersExist sets what the registry asks whether a run's containers exist;
-// nil for the engine's own answer.
+// nil for the engine's answer.
 func SetRunContainersExist(
 	f func(ctx context.Context, e wall.Engine, runID string) (bool, error),
 ) {
