@@ -297,6 +297,12 @@ func goingEntries(
 type asking struct {
 	docker *wall.Docker
 	so     string
+	// skip, when not nil, reports whether an entry whose lock is free and that can be
+	// read is left out before its engine is asked: it is no run, and stays.
+	skip func(entry walledEntry) bool
+	// unreadable sets [Refusal.EntryUnreadable] on the engine_unreachable refusal of an
+	// entry whose lock is free and that cannot be read.
+	unreadable bool
 }
 
 // What follows from an engine that cannot be asked: for a run that starts, and for
@@ -316,15 +322,15 @@ type WalledRun struct {
 }
 
 // RunsBinding returns the walled runs of this user's still going on this machine
-// that bind a path overlapping p, an absolute path, each once, in the order of their
-// entries' names. A bind overlaps p when it is p, holds p or lies inside p: a run that
-// binds p, a directory p lies inside, or only a path inside p, such as p/.git, is
-// returned. A bind overlaps p too when a name on the way to p is looked up in it, so
-// that its run can change where p leads, or when a name on the way to it is looked up
-// in p, so that p's contents change where it leads, as the registry checks the binds of
-// two runs against each other. p is resolved as the filesystem resolves it: through
-// symbolic links, and a .. name after a link through the link's target, not by
-// cleaning the path's names.
+// with a writable bind overlapping p, an absolute path, each once, in the order of
+// their entries' names; a read-only bind does not count. A bind overlaps p when it is
+// p, holds p or lies inside p: a run that binds p, a directory p lies inside, or only a
+// path inside p, such as p/.git, is returned. A bind overlaps p too when a name on the
+// way to p is looked up in it, so that its run can change where p leads, or when a name
+// on the way to it is looked up in p, so that p's contents change where it leads, as
+// the registry checks the binds of two runs against each other. p is resolved as the
+// filesystem resolves it: through symbolic links, and a .. name after a link through
+// the link's target, not by cleaning the path's names.
 //
 // The paths are compared as written and as resolved through symbolic links, so that a
 // link on neither side hides an overlap: p resolved now and, when it has no .. name, as
@@ -340,11 +346,15 @@ type WalledRun struct {
 // A run is still going while its session holds its entry's lock, or else while the
 // container engine its entry records holds a container labelled with its run id, in
 // any state, a stopped one included; an entry with neither is removed, as a run that
-// starts removes it. When the engine cannot be asked, or an entry whose lock is free
-// cannot be read or records no engine, the error is a *[Refusal] with the code
+// starts removes it. The engine of an entry whose lock is free is asked only when a
+// writable bind of it overlaps p, or one cannot be resolved now: an entry none of whose
+// writable binds overlaps p is not returned, whatever its engine, and stays. When the
+// engine of such an entry cannot be asked, or the entry records no engine, or an entry
+// whose lock is free cannot be read, the error is a *[Refusal] with the code
 // engine_unreachable, whose Names are the run's id and the path of its entry, and
-// whose Detail says the run is taken as still going. An entry whose lock is held and
-// that cannot be read, and a bind of a run still going that cannot be resolved now,
+// whose Detail says the run is taken as still going; its EntryUnreadable is set for an
+// entry that cannot be read, and for no other. An entry whose lock is held and that
+// cannot be read, and a writable bind of a run still going that cannot be resolved now,
 // are plain errors, in the sentences a run that starts gets, which say nothing of
 // starting. A relative p, or one that cannot be resolved, is an error.
 //
@@ -381,17 +391,21 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 	}
 	defer unlock()
 	var out []WalledRun
-	ask := asking{docker: d, so: takenGoing}
+	// An entry whose lock is free is asked after only when a writable bind of it
+	// overlaps p, or one cannot be resolved, which is an error once its run is found
+	// still going.
+	ask := asking{docker: d, so: takenGoing, unreadable: true,
+		skip: func(entry walledEntry) bool {
+			ok, err := writesOver(pl, entry)
+			return err == nil && !ok
+		}}
 	err = goingEntries(ctx, ask, dir, "", func(file string, entry walledEntry) error {
-		for _, b := range entry.Binds {
-			ob, forms, err := bindForms(entry.RunID, b)
-			if err != nil {
-				return err
-			}
-			if overlaps(pl, ob, forms) {
-				out = append(out, WalledRun{RunID: entry.RunID, Entry: file})
-				return nil
-			}
+		ok, err := writesOver(pl, entry)
+		if err != nil {
+			return err
+		}
+		if ok {
+			out = append(out, WalledRun{RunID: entry.RunID, Entry: file})
 		}
 		return nil
 	})
@@ -399,6 +413,25 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 		return nil, err
 	}
 	return out, nil
+}
+
+// writesOver reports whether a writable bind of the entry overlaps the place pl, by
+// [overlaps], its binds taken in order: a writable bind that cannot be resolved before
+// one that overlaps is the error of [bindForms]. A read-only bind is not compared.
+func writesOver(pl place, entry walledEntry) (bool, error) {
+	for _, b := range entry.Binds {
+		if !b.Writable {
+			continue
+		}
+		ob, forms, err := bindForms(entry.RunID, b)
+		if err != nil {
+			return false, err
+		}
+		if overlaps(pl, ob, forms) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // place is p as [RunsBinding] compares it: its forms, resolved now and, when it has no
@@ -524,7 +557,8 @@ func resolveOtherPath(runID, p string) (splitPath, error) {
 // entry records holds a container labelled with its run id, and is removed when the
 // engine holds none. A run that cannot ask, for an entry that cannot be read, records
 // no engine or an engine that fails, does not start. One whose file is gone already is
-// not live. ask is how the engine is asked, and what its refusal says follows.
+// not live, and so is one that can be read that ask skips, before its engine is asked.
+// ask is how the engine is asked, and what its refusal says follows.
 func readEntry(
 	ctx context.Context, ask asking, file string,
 ) (walledEntry, bool, error) {
@@ -561,8 +595,13 @@ func readEntry(
 		return entry, true, nil
 	}
 	if err != nil {
-		return walledEntry{}, false, engineUnreachable(runID, file, ask.so,
+		r := engineUnreachable(runID, file, ask.so,
 			fmt.Errorf("its entry %s cannot be read: %w", file, err))
+		r.EntryUnreadable = ask.unreadable
+		return walledEntry{}, false, r
+	}
+	if ask.skip != nil && ask.skip(entry) {
+		return walledEntry{}, false, nil
 	}
 	if entry.Engine == nil {
 		return walledEntry{}, false, engineUnreachable(runID, file, ask.so,

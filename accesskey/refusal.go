@@ -61,6 +61,11 @@ type Refusal struct {
 	// returned, which the session sets here, so the user reads what they read when the
 	// session decided it.
 	Text string
+	// EntryUnreadable marks an engine_unreachable refusal of Forager's read of the
+	// registry of walled runs for a caller, session.RunsBinding, whose entry, its lock
+	// free, cannot be read, so that its run's binds and engine are unknown: a caller
+	// tells it apart from an engine that cannot be asked. Error does not show it.
+	EntryUnreadable bool
 }
 
 // The values of [Refusal.From].

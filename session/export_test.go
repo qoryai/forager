@@ -49,7 +49,7 @@ func SetRunContainersExist(
 }
 
 // SetRunContainersAsked sets what the registry asks whether a run's containers exist,
-// with the Docker of the run that asks, nil for another wall; nil for the engine's own
+// with the Docker of the run that asks, nil for another wall; nil for the engine's
 // answer.
 func SetRunContainersAsked(
 	f func(ctx context.Context, d *wall.Docker, e wall.Engine, runID string) (bool, error),

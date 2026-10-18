@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -110,15 +111,15 @@ func TestRunsBindingRemovesAnEntryWithoutAContainer(t *testing.T) {
 	}
 }
 
-// TestRunsBindingRefusesWithoutAnEngine pins an entry whose lock is free and whose
-// engine cannot be asked: the read is refused with engine_unreachable, naming the run
-// and its entry, in a sentence that takes the run as still going and says nothing of a
-// run that starts, and the entry stays.
+// TestRunsBindingRefusesWithoutAnEngine pins an entry whose lock is free, whose binds
+// overlap p and whose engine cannot be asked: the read is refused with
+// engine_unreachable, naming the run and its entry, in a sentence that takes the run as
+// still going and says nothing of a run that starts, and the entry stays.
 func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	root := t.TempDir()
 	file := bound(t, bind{root, resolved(t, root), ""})
 	answer(t, false, errors.New("Cannot connect to the Docker daemon"))
-	runs, err := session.RunsBinding(context.Background(), nil, t.TempDir())
+	runs, err := session.RunsBinding(context.Background(), nil, root)
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != "engine_unreachable" ||
 		!slices.Equal(r.Names, []string{boundID, file}) {
@@ -131,6 +132,139 @@ func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	}
 	if _, err := os.Stat(file); err != nil {
 		t.Errorf("the entry is gone: %v", err)
+	}
+}
+
+// TestRunsBindingLeavesAnUnaskedEngineApart pins an entry whose lock is free and whose
+// engine cannot be asked, none of whose binds overlaps p: the engine is not asked, the
+// read returns no run and no error, and the entry stays.
+func TestRunsBindingLeavesAnUnaskedEngineApart(t *testing.T) {
+	root := t.TempDir()
+	file := bound(t, bind{root, resolved(t, root), ""})
+	a := answer(t, false, errors.New("Cannot connect to the Docker daemon"))
+	runs, err := session.RunsBinding(context.Background(), nil, t.TempDir())
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("runs %+v, %v", runs, err)
+	}
+	if len(a.ids) != 0 {
+		t.Errorf("the engine was asked for %q", a.ids)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("the entry is gone: %v", err)
+	}
+}
+
+// TestRunsBindingRefusesAnEntryThatRecordsNoEngine pins an entry whose lock is free,
+// that can be read and records no engine: when one of its binds overlaps p, the read is
+// refused with engine_unreachable, naming the run and its entry, an entry that can be
+// read; when none does, the read returns no run and no error.
+func TestRunsBindingRefusesAnEntryThatRecordsNoEngine(t *testing.T) {
+	root := t.TempDir()
+	file := leave(t, root, nil)
+	a := answer(t, true, nil)
+	runs, err := session.RunsBinding(context.Background(), nil, t.TempDir())
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("apart: runs %+v, %v", runs, err)
+	}
+	_, err = session.RunsBinding(context.Background(), nil, root)
+	r := refusalOf(t, "engine_unreachable", err)
+	want := "Docker could not be asked whether the walled run " + leftID +
+		" is still going, so it is taken as still going: its entry " + file +
+		" records no engine"
+	if !slices.Equal(r.Names, []string{leftID, file}) || r.Detail != want ||
+		r.EntryUnreadable {
+		t.Errorf("refusal %+v, want the detail %q", r, want)
+	}
+	if len(a.ids) != 0 {
+		t.Errorf("the engine was asked for %q", a.ids)
+	}
+}
+
+// TestRunsBindingRefusesAnUnreadableEntry pins an entry whose lock is free and that
+// cannot be read, whose binds cannot be compared with p: the read is refused with
+// engine_unreachable, naming the run and its entry, in the sentence of an engine that
+// cannot be asked, and marked as an entry that cannot be read, which a caller tells
+// apart from an engine that cannot be asked; the engine is not asked, and the entry
+// stays.
+func TestRunsBindingRefusesAnUnreadableEntry(t *testing.T) {
+	reg := registry(t)
+	if err := os.MkdirAll(reg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(reg, boundID)
+	if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(file) })
+	a := answer(t, true, nil)
+	_, err := session.RunsBinding(context.Background(), nil, t.TempDir())
+	r := refusalOf(t, "engine_unreachable", err)
+	prefix := "Docker could not be asked whether the walled run " + boundID +
+		" is still going, so it is taken as still going: its entry " + file +
+		" cannot be read: "
+	if !slices.Equal(r.Names, []string{boundID, file}) ||
+		!strings.HasPrefix(r.Detail, prefix) || !r.EntryUnreadable {
+		t.Errorf("refusal %+v, want the detail to begin %q", r, prefix)
+	}
+	if len(a.ids) != 0 {
+		t.Errorf("the engine was asked for %q", a.ids)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("the entry is gone: %v", err)
+	}
+}
+
+// readOnly makes the i-th bind of the entry in file read-only, as a run records a bind
+// its enclosure cannot write.
+func readOnly(t *testing.T, file string, i int) {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatal(err)
+	}
+	entry["binds"].([]any)[i].(map[string]any)["writable"] = false
+	if data, err = json.Marshal(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunsBindingLeavesAReadOnlyBindApart pins an entry whose only bind that overlaps
+// p is read-only: its run's agent cannot change p through it, so the run is not
+// returned, its engine is not asked, and the read is no error.
+func TestRunsBindingLeavesAReadOnlyBindApart(t *testing.T) {
+	root := t.TempDir()
+	file := bound(t, bind{root, resolved(t, root), ""})
+	readOnly(t, file, 0)
+	a := answer(t, true, nil)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("runs %+v, %v", runs, err)
+	}
+	if len(a.ids) != 0 {
+		t.Errorf("the engine was asked for %q", a.ids)
+	}
+}
+
+// TestRunsBindingCountsAWritableBindBesideAReadOnlyOne pins an entry with a read-only
+// bind and a writable one that both overlap p: the writable one counts, and the run is
+// returned.
+func TestRunsBindingCountsAWritableBindBesideAReadOnlyOne(t *testing.T) {
+	root := t.TempDir()
+	sub := mkdirs(t, filepath.Join(root, "sub"))
+	file := bound(t, bind{root, resolved(t, root), ""}, bind{sub, resolved(t, sub), ""})
+	readOnly(t, file, 0)
+	answer(t, true, nil)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
+	want := []session.WalledRun{{RunID: boundID, Entry: file}}
+	if err != nil || !slices.Equal(runs, want) {
+		t.Fatalf("runs %+v, %v; want %+v", runs, err, want)
 	}
 }
 
