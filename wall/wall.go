@@ -108,15 +108,17 @@ type Request struct {
 	// Image.
 	RelayImage string
 	// Pull says the run's policy named Image by its reference pinned by digest: the wall
-	// fetches it before it makes anything else, and refuses one whose user is root,
-	// image_user_root. Such an image never gets nested Docker.
+	// fetches it before it makes anything else, unless the engine holds it by that
+	// digest, and refuses one whose user is root, image_user_root. Such an image never gets nested Docker.
 	Pull bool
 }
 
-// Fetcher is an enclosure that fetched the run's image itself, for a [Request] with
-// Pull: dev.qory.run.started reports how long it took as image_fetch_ms.
+// Fetcher is an enclosure that fetched the run's image itself, unless the engine held it
+// by that digest, for a [Request] with Pull: dev.qory.run.started reports how long
+// finding it took as image_fetch_ms.
 type Fetcher interface {
-	// ImageFetch is how long the fetch took, and whether there was one.
+	// ImageFetch is how long finding the image took, the fetch included when there was
+	// one, and whether the request had Pull.
 	ImageFetch() (time.Duration, bool)
 }
 

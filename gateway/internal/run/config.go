@@ -342,7 +342,8 @@ type Image struct {
 	Docker bool
 	// Reference says the run's policy named the image by its reference, Ref, rather
 	// than by a name of the machine's: the run starts under the default's Runtime, with
-	// no Docker, and the wall fetches the image and refuses one whose user is root. It
+	// no Docker, and the wall fetches the image, unless the engine holds it by that
+	// digest, and refuses one whose user is root. It
 	// is the gateway's answer alone; no definition sets it.
 	Reference bool
 }

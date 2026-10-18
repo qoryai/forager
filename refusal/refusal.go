@@ -34,7 +34,8 @@ const (
 	// that no prefix of the machine's images.allow covers: its name is the reference.
 	ImageNotAllowed = "image_not_allowed"
 	// ImageUserRoot is an image a policy names by its reference whose user is root, as
-	// the wall reads it from the image after it fetches it: its name is the reference.
+	// the wall reads it from the image after it fetches it, or finds the engine holds it
+	// by that digest: its name is the reference.
 	ImageUserRoot = "image_user_root"
 	// VariableReserved is a walled run whose environment passes a QORY_ variable, or a
 	// variable a machine value is read from, into the enclosure.

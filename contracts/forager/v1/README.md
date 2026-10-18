@@ -2801,8 +2801,8 @@ as that image first.
 runtime, with no daemon, as the wall's user, which for such an image is a uid and a gid
 in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
 `/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is
-refused before anything is made. The wall fetches it before the run starts and refuses
-one whose user is root. The relay always starts from the machine's default image, never
+refused before anything is made. Before the run starts, the wall fetches it unless the
+engine holds it by that digest, and refuses one whose user is root. The relay always starts from the machine's default image, never
 from the run's. The run sees its workspace at `/workspace`, not at its path on the
 machine (below).
 
@@ -2840,7 +2840,8 @@ reference as its name: "the image <ref> is under none of the machine's allowed p
 that selects another is refused, and the policy in force stays.
 
 **The user of an image by reference.** The wall fetches the image with the engine's
-pull, before it makes anything else for the run, and reads the image's user. No user,
+pull, before it makes anything else for the run, unless the engine holds it by that
+digest, and reads the image's user. No user,
 `root`, and a uid of 0 in any spelling, with or without a group, are root, and so is a
 name the image's `/etc/passwd` maps to uid 0. A user given by a name the image's
 `/etc/passwd` does not map, or in an image with no `/etc/passwd`, cannot be checked and
@@ -2869,7 +2870,8 @@ sees its workspace at the same path as on the machine.
 **The record.** `dev.qory.run.started` contains `image`, the reference, and when the image
 is one the machine defines `image_name`, `container_runtime` when the definition sets
 one, and `docker: true` when the enclosure has nested Docker; for an image by reference,
-`image_fetch_ms`, how long the wall's fetch took, in milliseconds.
+`image_fetch_ms`, how long the wall took to find the image, in milliseconds, its fetch
+included when the engine does not hold it by that digest.
 `dev.qory.run.policy_applied` contains `image` when the policy or the run configuration
 selects or names one.
 

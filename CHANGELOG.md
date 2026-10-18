@@ -30,8 +30,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The refusals `image_not_allowed`, a reference under none of the machine's
   `images.allow` prefixes, and `image_user_root`, an image whose user is root, both in
   `refusal.Decides`.
-- `dev.qory.run.started` has `image_fetch_ms`, how long the wall's fetch of an image by
-  reference took.
+- `dev.qory.run.started` has `image_fetch_ms`, how long the wall took to find an image by
+  reference: its fetch, unless the engine holds it by that digest.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
 
@@ -84,10 +84,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, under
-  a timeout, and refuses with `image_user_root` an image whose user is root, a uid of 0
+- `wall.Request.Pull`: `wall.Docker` pulls the image before it makes any network, unless
+  the engine holds it by that digest, under a timeout, and refuses with `image_user_root` an image whose user is root, a uid of 0
   or a name its `/etc/passwd` maps to uid 0, or a name it cannot map. A pull that fails
-  leaves no container or network. `wall.Fetcher` reports how long the pull took.
+  leaves no container or network. `wall.Fetcher` reports how long finding the image took,
+  the pull included when there was one.
 - `wall.AuthoritySetter`, a wall's names it sets only for a run with an authority:
   `wall.Docker`'s CA names, which a run without one has unset when it denies them.
 - `wall.Mount.Target`, the path a mount is shown at inside; `wall.Docker` refuses one
