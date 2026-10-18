@@ -182,6 +182,9 @@ release may change what an existing document does, and says so under Upgrading.
   nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value, the image's
   included, takes the place of the wall's docker configuration, as the contract's
   §The wall says. A name Forager, the wall or the preparation sets is never unset.
+- A bind in the registry of walled runs whose `writable` field is missing or null is
+  taken as writable, by a run's check against other runs, by the places a walled run
+  could have written and by `session.RunsBinding`.
 
 ### e2e and CI
 

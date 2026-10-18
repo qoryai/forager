@@ -74,9 +74,8 @@ type walledEntry struct {
 	Engine *wall.Engine `json:"engine,omitempty"`
 }
 
-// UnmarshalJSON reads a bind of an entry in the registry as it is recorded, and notes
-// in noMode a bind whose writable field is missing; Writable is false for it, as
-// before.
+// UnmarshalJSON reads a bind of an entry in the registry as it is recorded, and takes a
+// bind whose writable field is missing or null as writable.
 func (b *bindSource) UnmarshalJSON(data []byte) error {
 	type plain bindSource
 	var read struct {
@@ -87,8 +86,7 @@ func (b *bindSource) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*b = bindSource(read.plain)
-	b.Writable = read.Writable != nil && *read.Writable
-	b.noMode = read.Writable == nil
+	b.Writable = read.Writable == nil || *read.Writable
 	return nil
 }
 
@@ -435,11 +433,10 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 
 // writesOver reports whether a writable bind of the entry overlaps the place pl, by
 // [overlaps], its binds taken in order: a writable bind that cannot be resolved before
-// one that overlaps is the error of [bindForms]. A read-only bind is not compared; a
-// bind whose entry records no writable field for it is taken as writable.
+// one that overlaps is the error of [bindForms]. A read-only bind is not compared.
 func writesOver(pl place, entry walledEntry) (bool, error) {
 	for _, b := range entry.Binds {
-		if !b.Writable && !b.noMode {
+		if !b.Writable {
 			continue
 		}
 		ob, forms, err := bindForms(entry.RunID, b)

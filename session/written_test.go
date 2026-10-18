@@ -176,6 +176,33 @@ func TestASettingsFileInAnotherWalledRunsBindIsNoRun(t *testing.T) {
 	}
 }
 
+// TestASettingsFileInABindThatRecordsNoModeIsNoRun pins that a bind of another walled
+// run whose entry records no writable field for it counts as writable: the settings a
+// launch passes are refused while they lie in it, and read once the bind is recorded
+// read-only.
+func TestASettingsFileInABindThatRecordsNoModeIsNoRun(t *testing.T) {
+	m := t.TempDir()
+	f := filepath.Join(m, "launch-settings.json")
+	if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := bound(t, bind{m, resolved(t, m), ""})
+	rebind(t, file, 0, func(b map[string]any) { delete(b, "writable") })
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Args = []string{"--settings", f}
+	want := "runtime claude: settings " + f + ": it lies in " + resolved(t, m) +
+		", which a walled run can write"
+	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("a bind that records no mode: %v", err)
+	}
+	readOnly(t, file, 0)
+	sp = spec(t, "FAKE_EXIT=0")
+	sp.Args = []string{"--settings", f}
+	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("a read-only bind: %+v, %v", res, err)
+	}
+}
+
 // TestAPathWithADotDotIsNotReadable pins that a path with a ".." name is refused, by
 // Readable and by the installer it is given to: the system applies ".." after the link
 // before it, so the clean path the check would judge names another file than the one
