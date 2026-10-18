@@ -2,10 +2,14 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/qoryai/forager/session/runtimes"
 )
@@ -16,16 +20,21 @@ const hookTimeout = 5
 // SettingsInstaller is the name a descriptor gives [Settings].
 const SettingsInstaller = "claude-settings"
 
+// maxSettings is the largest settings file, in bytes, [Settings] reads: 1 MiB.
+const maxSettings = 1 << 20
+
 // Settings installs the forwarder as a command hook for each event in the JSON settings
 // Claude Code reads. It reads the file the arguments name after --settings, or the
 // document they hold there, or starts from an empty one when they name none, adds a
 // hook group per event under "hooks", writes the result as settings.json in the run
 // directory, and names that file instead. The file the launch passed is not modified.
+// A file is read only when [runtimes.Attach.Readable] passes it, its last part is no
+// link, it is a regular file and it holds at most 1 MiB.
 // An interactive launch whose API key is the run's stand-in is then started through
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -33,7 +42,8 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	return approve(a, launch)
 }
 
-func settingsArgs(events []string, args []string, dir string, forwarder []string) ([]string, error) {
+func settingsArgs(events []string, args []string, dir string, forwarder []string,
+	readable func(string) error) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -53,7 +63,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		var err error
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
-		} else if b, err = os.ReadFile(args[at]); err != nil {
+		} else if b, err = readSettings(args[at], readable); err != nil {
 			return nil, fmt.Errorf("settings %s: %w", args[at], err)
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
@@ -84,6 +94,43 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		return args, nil
 	}
 	return append(append([]string(nil), args...), "--settings", path), nil
+}
+
+// readSettings reads the settings file path names, when readable passes it: never
+// through a link as its last part, never a file that is not a regular one, and never
+// more than maxSettings bytes. A file is opened without blocking, so a FIFO is refused
+// rather than waited on.
+func readSettings(path string, readable func(string) error) ([]byte, error) {
+	if readable != nil {
+		if err := readable(path); err != nil {
+			return nil, err
+		}
+	}
+	if info, err := os.Lstat(path); err != nil {
+		return nil, err
+	} else if info.Mode()&fs.ModeSymlink != 0 {
+		return nil, errors.New("it is a link")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("it is not a regular file")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxSettings+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxSettings {
+		return nil, fmt.Errorf("it is larger than %d bytes", maxSettings)
+	}
+	return b, nil
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.
