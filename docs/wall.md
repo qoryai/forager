@@ -469,10 +469,11 @@ nested Docker, as the node's user, which must then be given as `uid:gid` in numb
 neither 0: the engine would look a name, or a uid's groups, up in the image's
 `/etc/passwd` and `/etc/group`, which the image writes, so a user given by name or as a
 uid alone is refused. The wall pulls it before it makes anything else for the run,
-unless the engine holds it by that digest, and refuses with `image_user_root` an image whose user is root: no user, `root`, uid 0, or a
-name the image's `/etc/passwd` maps to uid 0. An image whose user is a name its
-`/etc/passwd` does not map, or that has no `/etc/passwd`, is refused the same way, since
-its user cannot be checked: give the user as a uid. The relay always starts from the
+unless the engine holds it by that digest, and refuses with `image_user_root` an image
+whose user is root: no user, `root`, uid 0, or a name the image's `/etc/passwd` maps to
+uid 0. An image whose user is a name its `/etc/passwd` does not map, or that has no
+`/etc/passwd`, is refused the same way, since its user cannot be checked: give the user
+as a uid. The relay always starts from the
 default image, never from the run's, and the authorities the run trusts are read out of
 the run's image. `dev.qory.run.started` reports `image_fetch_ms`, how long finding
 the image took, the pull included when there was one.

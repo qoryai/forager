@@ -109,7 +109,8 @@ type Request struct {
 	RelayImage string
 	// Pull says the run's policy named Image by its reference pinned by digest: the wall
 	// fetches it before it makes anything else, unless the engine holds it by that
-	// digest, and refuses one whose user is root, image_user_root. Such an image never gets nested Docker.
+	// digest, and refuses one whose user is root, image_user_root. Such an image never
+	// gets nested Docker.
 	Pull bool
 }
 

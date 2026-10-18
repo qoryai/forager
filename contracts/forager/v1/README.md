@@ -2802,9 +2802,9 @@ runtime, with no daemon, as the wall's user, which for such an image is a uid an
 in numbers, neither 0, so that no name or group of the image's `/etc/passwd` or
 `/etc/group` chooses who the agent is: a wall user given by name, or as a uid alone, is
 refused before anything is made. Before the run starts, the wall fetches it unless the
-engine holds it by that digest, and refuses one whose user is root. The relay always starts from the machine's default image, never
-from the run's. The run sees its workspace at `/workspace`, not at its path on the
-machine (below).
+engine holds it by that digest, and refuses one whose user is root. The relay always
+starts from the machine's default image, never from the run's. The run sees its
+workspace at `/workspace`, not at its path on the machine (below).
 
 Against an image by reference, which a repository may have built, what holds is what
 Forager enforces outside the enclosure: the wall, the egress policy, the credentials the
@@ -2841,11 +2841,11 @@ that selects another is refused, and the policy in force stays.
 
 **The user of an image by reference.** The wall fetches the image with the engine's
 pull, before it makes anything else for the run, unless the engine holds it by that
-digest, and reads the image's user. No user,
-`root`, and a uid of 0 in any spelling, with or without a group, are root, and so is a
-name the image's `/etc/passwd` maps to uid 0. A user given by a name the image's
-`/etc/passwd` does not map, or in an image with no `/etc/passwd`, cannot be checked and
-is refused the same way: such an image gives its user as a uid. Root is
+digest, and reads the image's user. No user, `root`, and a uid of 0 in any spelling,
+with or without a group, are root, and so is a name the image's `/etc/passwd` maps to
+uid 0. A user given by a name the image's `/etc/passwd` does not map, or in an image
+with no `/etc/passwd`, cannot be checked and is refused the same way: such an image
+gives its user as a uid. Root is
 `image_user_root`, with the reference as its name: "the image <ref> runs as root; a
 run's image runs as the wall's user". The image's user decides nothing else: the agent
 runs as the wall's numeric uid:gid. A fetch that fails is no run, and leaves no

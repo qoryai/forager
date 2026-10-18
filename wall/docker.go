@@ -457,9 +457,9 @@ func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched,
 
 // pull fetches the image a run names by its reference with docker pull, unless the
 // engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
-// under [pullWait]; and refuses one whose user is root, image_user_root: no user, root, a uid
-// of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
-// to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
+// under [pullWait]; and refuses one whose user is root, image_user_root: no user, root,
+// a uid of 0 in any spelling, with or without a group, or a name the image's /etc/passwd
+// maps to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
 // is refused as well, since it cannot be checked. The agent runs as the wall's user
 // whatever the image's, and that user is uid:gid in numbers, which Prepare requires
 // for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
