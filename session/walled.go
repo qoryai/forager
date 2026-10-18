@@ -74,6 +74,24 @@ type walledEntry struct {
 	Engine *wall.Engine `json:"engine,omitempty"`
 }
 
+// UnmarshalJSON reads a bind of an entry in the registry as it is recorded, and notes
+// in noMode a bind whose writable field is missing; Writable is false for it, as
+// before.
+func (b *bindSource) UnmarshalJSON(data []byte) error {
+	type plain bindSource
+	var read struct {
+		plain
+		Writable *bool `json:"writable"`
+	}
+	if err := json.Unmarshal(data, &read); err != nil {
+		return err
+	}
+	*b = bindSource(read.plain)
+	b.Writable = read.Writable != nil && *read.Writable
+	b.noMode = read.Writable == nil
+	return nil
+}
+
 // openRegistry makes the registry's directory when it does not exist, 0700, and refuses
 // one that is not a directory of this user's that only this user writes.
 func openRegistry() (string, error) {
@@ -338,10 +356,10 @@ type WalledRun struct {
 // its container starts again, as written and resolved now, and against the path the
 // bind resolved to when the run listed it, resolved again now. A path as written holds
 // another path, written or resolved, by its names; a resolved path is compared with a
-// path as written through the lookups above alone. The run directory is compared by the
-// path it resolved to alone, since its entry records the runs directory that holds it
-// as its path. Names are compared whole, regardless of case, as [Overlap] compares
-// them: /a/bc does not overlap /a/b.
+// path as written through the lookups above alone. The run directory is bound
+// read-only, so a run whose run directory alone overlaps p is not returned. Names are
+// compared whole, regardless of case, as [Overlap] compares them: /a/bc does not
+// overlap /a/b.
 //
 // A run is still going while its session holds its entry's lock, or else while the
 // container engine its entry records holds a container labelled with its run id, in
@@ -417,10 +435,11 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 
 // writesOver reports whether a writable bind of the entry overlaps the place pl, by
 // [overlaps], its binds taken in order: a writable bind that cannot be resolved before
-// one that overlaps is the error of [bindForms]. A read-only bind is not compared.
+// one that overlaps is the error of [bindForms]. A read-only bind is not compared; a
+// bind whose entry records no writable field for it is taken as writable.
 func writesOver(pl place, entry walledEntry) (bool, error) {
 	for _, b := range entry.Binds {
-		if !b.Writable {
+		if !b.Writable && !b.noMode {
 			continue
 		}
 		ob, forms, err := bindForms(entry.RunID, b)

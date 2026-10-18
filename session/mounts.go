@@ -414,6 +414,9 @@ type bindSource struct {
 	what  string
 	at    splitPath
 	looks []lookup
+	// noMode says the entry in the registry the bind was read from records no
+	// writable field for it, which [RunsBinding] takes as writable.
+	noMode bool
 }
 
 // source is the bind source of a path, resolved now.

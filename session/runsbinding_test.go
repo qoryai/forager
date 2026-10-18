@@ -218,6 +218,12 @@ func TestRunsBindingRefusesAnUnreadableEntry(t *testing.T) {
 // its enclosure cannot write.
 func readOnly(t *testing.T, file string, i int) {
 	t.Helper()
+	rebind(t, file, i, func(b map[string]any) { b["writable"] = false })
+}
+
+// rebind changes the i-th bind of the entry in file by change.
+func rebind(t *testing.T, file string, i int, change func(b map[string]any)) {
+	t.Helper()
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +232,7 @@ func readOnly(t *testing.T, file string, i int) {
 	if err := json.Unmarshal(data, &entry); err != nil {
 		t.Fatal(err)
 	}
-	entry["binds"].([]any)[i].(map[string]any)["writable"] = false
+	change(entry["binds"].([]any)[i].(map[string]any))
 	if data, err = json.Marshal(entry); err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +271,46 @@ func TestRunsBindingCountsAWritableBindBesideAReadOnlyOne(t *testing.T) {
 	want := []session.WalledRun{{RunID: boundID, Entry: file}}
 	if err != nil || !slices.Equal(runs, want) {
 		t.Fatalf("runs %+v, %v; want %+v", runs, err, want)
+	}
+}
+
+// TestRunsBindingLeavesTheRunDirectoryApart pins a run whose only overlap with p is its
+// run directory, recorded as a run records it, read-only: the run is not returned, and
+// its engine is not asked.
+func TestRunsBindingLeavesTheRunDirectoryApart(t *testing.T) {
+	runs := t.TempDir()
+	one := mkdirs(t, filepath.Join(runs, "one"))
+	file := bound(t, bind{runs, resolved(t, one), "run"})
+	readOnly(t, file, 0)
+	a := answer(t, true, nil)
+	got, err := session.RunsBinding(context.Background(), nil, filepath.Join(one, "x"))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("runs %+v, %v", got, err)
+	}
+	if len(a.ids) != 0 {
+		t.Errorf("the engine was asked for %q", a.ids)
+	}
+}
+
+// TestRunsBindingCountsABindThatRecordsNoMode pins a bind whose entry records no
+// writable field for it: it counts as writable, so the run is returned while its
+// engine holds a container, and the read is refused with engine_unreachable, naming the
+// run and its entry, when its engine cannot be asked.
+func TestRunsBindingCountsABindThatRecordsNoMode(t *testing.T) {
+	root := t.TempDir()
+	file := bound(t, bind{root, resolved(t, root), ""})
+	rebind(t, file, 0, func(b map[string]any) { delete(b, "writable") })
+	answer(t, true, nil)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
+	want := []session.WalledRun{{RunID: boundID, Entry: file}}
+	if err != nil || !slices.Equal(runs, want) {
+		t.Fatalf("runs %+v, %v; want %+v", runs, err, want)
+	}
+	answer(t, false, errors.New("Cannot connect to the Docker daemon"))
+	_, err = session.RunsBinding(context.Background(), nil, root)
+	r := refusalOf(t, "engine_unreachable", err)
+	if !slices.Equal(r.Names, []string{boundID, file}) {
+		t.Errorf("names %q", r.Names)
 	}
 }
 
@@ -388,9 +434,6 @@ func TestRunsBindingOverlaps(t *testing.T) {
 		{"a link as written", bind{moved, resolved(t, filepath.Join(base, "before")),
 			""}, moved, true},
 		{"a bind through a link inside p", bind{out, resolved(t, out), ""}, p, true},
-		{"its run directory", bind{filepath.Join(base, "runs"),
-			resolved(t, filepath.Join(base, "runs", "one")), "run"},
-			filepath.Join(base, "runs", "one", "x"), true},
 		{"a sibling", bind{filepath.Join(base, "a", "b2"),
 			resolved(t, filepath.Join(base, "a", "b2")), ""}, p, false},
 		{"a name beginning with p's", bind{filepath.Join(base, "a", "bc"),

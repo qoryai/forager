@@ -132,11 +132,12 @@ release may change what an existing document does, and says so under Upgrading.
   p when it is p, holds p or lies inside p, or when a name on the way to either is
   looked up in the other, compared as written and as resolved through links, a `..` in
   p after a link resolved from the link's target. An entry is asked after only when one
-  of its writable binds overlaps p: the entry of such a run that is over is removed, and
-  an engine that cannot be asked is `engine_unreachable`, naming the run and its entry,
-  as is an entry that cannot be read, with `EntryUnreadable` set on the refusal, in a
-  sentence that takes the run as still going, and a relative p is an error. The engine
-  of an entry is asked through d, the caller's `*wall.Docker`, by
+  of its writable binds overlaps p, or one cannot be resolved now: the entry of such a
+  run that is over is removed, and an engine that cannot be asked is
+  `engine_unreachable`, naming the run and its entry, as is an entry whose lock is free
+  that cannot be read, with `EntryUnreadable` set on the refusal, in a sentence that
+  takes the run as still going, and a relative p is an error. The engine of an entry
+  is asked through d, the caller's `*wall.Docker`, by
   `(*wall.Docker).RunContainersExist`, with the recorded command and selection;
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
   asks through. A run's check against the registry asks through its wall when it is a

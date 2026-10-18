@@ -437,18 +437,19 @@ up in its parent, so two binds of one root are allowed.
   way to p is looked up in it, or a name on the way to it is looked up in p. The paths
   are compared as written and as resolved through links, either side resolved now, so a
   link on neither side hides an overlap; p is resolved as the filesystem resolves it, a
-  `..` after a link from the link's target, and the run directory is compared by the
-  path it resolved to. The answer holds when the read returns: a caller that removes or
-  reuses p on it holds a lock that the runs it starts on p wait for, from the check to
-  the action. A read-only bind does not count, and the read asks after an entry only
-  when one of its writable binds overlaps p. It removes the entries of those runs that
-  are over, as a run that starts does, is `engine_unreachable`, with the same `Names`,
-  when it cannot ask, or cannot read an entry whose lock is free, with `EntryUnreadable`
-  set on the refusal for that, in the sentence "Docker could not be asked whether the
-  walled run <id> is still going, so it is taken as still going: <the error>", and is a
-  plain error for a relative p. It asks an engine through d, the caller's
-  `*wall.Docker`, by `(*wall.Docker).RunContainersExist`, as a run asks through its wall
-  when that is a `*wall.Docker`; a nil d, like a run behind another wall, asks as
+  `..` after a link from the link's target. The run directory is bound read-only, so a
+  run whose run directory alone overlaps p is not returned. The answer holds when the
+  read returns: a caller that removes or reuses p on it holds a lock that the runs it
+  starts on p wait for, from the check to the action. A read-only bind does not count,
+  and the read asks after an entry only when one of its writable binds overlaps p, or
+  one cannot be resolved now. It removes the entries of those runs that are over, as a
+  run that starts does, is `engine_unreachable`, with the same `Names`, when it cannot
+  ask, or cannot read an entry whose lock is free, with `EntryUnreadable` set on the
+  refusal for that, in the sentence "Docker could not be asked whether the walled run
+  <id> is still going, so it is taken as still going: <the error>", and is a plain error
+  for a relative p. It asks an engine through d, the caller's `*wall.Docker`, by
+  `(*wall.Docker).RunContainersExist`, as a run asks through its wall when that is a
+  `*wall.Docker`; a nil d, like a run behind another wall, asks as
   `wall.RunContainersExist` does, the method of a Docker with no field set.
 
 A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
