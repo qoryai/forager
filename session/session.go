@@ -140,9 +140,11 @@ type Spec struct {
 	// writable by a walled run: the workspaces and the writable mounts of the walled runs
 	// it starts. A file the Runtime reads from this machine as the run starts, the
 	// settings Claude Code is passed say, is refused when its path is or lies inside one
-	// of them, as given or through links, or is reached through one; behind a Wall so is
-	// one in a writable bind of this run's, Dir among them. A relative path is taken
-	// from the working directory.
+	// of them, as given or through links, or is reached through one; so is one in a
+	// writable bind of another walled run in the registry and, behind a Wall, one in a
+	// writable bind of this run's, Dir among them. Behind a Wall, a mount or Dir whose
+	// path goes through a link inside one of them and does not resolve into it is no
+	// run, mount_through_link. A relative path is taken from the working directory.
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
@@ -678,11 +680,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// the settings are read from it, and the record in it is not the agent's to rewrite
 	// or move. Behind a wall the runtime learns the placeholders the run sets. A file
 	// the runtime reads from this machine is refused when a walled run could have
-	// written it: one in a place of Spec.Written or, behind a wall, in a writable bind
-	// of this run's.
+	// written it: one in a place of Spec.Written, in a writable bind of another walled
+	// run in the registry or, behind a wall, in a writable bind of this run's.
+	written, err := writtenPlaces(spec, runID, plan, wallOwn)
+	if err != nil {
+		return fail(err)
+	}
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
-		Readable: readable(writtenPlaces(spec, plan, wallOwn))}
+		Readable: readable(written)}
 	if spec.Wall != nil {
 		attach.Placeholders = slices.Clone(answer.Placeholders)
 	}
