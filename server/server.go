@@ -155,9 +155,10 @@ func Read(name string, b []byte) (*Config, error) {
 // access key secret anywhere, in its bytes or, escaped, in a decoded string or member
 // name, is [accesskey.ErrSecretInDocument] before a schema reads it, and one that
 // contains a run key [accesskey.ErrRunKeyInDocument], so no schema error quotes the
-// secret.
+// secret. A key the pin lists is left out of that check as
+// [accesskey.SecretInPinDocument] leaves it out.
 func Parse(name string, b []byte) (*Config, error) {
-	if err := accesskey.SecretInDocument(string(b)); err != nil {
+	if err := accesskey.SecretInPinDocument(string(b), "apiary_public_key"); err != nil {
 		return nil, err
 	}
 	file := name
@@ -168,7 +169,7 @@ func Parse(name string, b []byte) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := accesskey.SecretInDocument(doc); err != nil {
+	if err := accesskey.SecretInPinDocument(doc, "apiary_public_key"); err != nil {
 		return nil, err
 	}
 	if m, ok := doc.(map[string]any); ok {
