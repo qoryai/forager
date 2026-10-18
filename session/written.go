@@ -1,0 +1,86 @@
+package session
+
+import (
+	"fmt"
+	"path/filepath"
+	"slices"
+)
+
+// writtenPlaces are the places a walled run could have written, as Spec.Written lists
+// them and, behind a wall, the run's writable binds: the places of the plan the
+// enclosure binds writable, the workspace among them, and the wall's writable binds.
+func writtenPlaces(spec Spec, plan mountPlan, own []bindSource) []string {
+	places := slices.Clone(spec.Written)
+	if spec.Wall == nil {
+		return places
+	}
+	for _, b := range append(slices.Clone(plan.sources), own...) {
+		if b.Writable {
+			places = append(places, b.Path)
+		}
+	}
+	return places
+}
+
+// readable is what [runtimes.Attach.Readable] asks of a file before the runtime reads
+// it from this machine: nil when no place holds it, and why not otherwise. A place
+// holds a path when the path, absolute and clean or resolved through every link, is
+// the place or lies inside it, the place taken as given and resolved, by whole names
+// and regardless of case, as [Overlap] compares them, and when a name on the way to
+// the path is looked up inside it: a link there leads where a walled run points it. A
+// path or a place that cannot be resolved is refused, so a file is never taken for one
+// it may not be.
+func readable(places []string) func(string) error {
+	return func(path string) error {
+		at, err := split(path, 0)
+		if err != nil {
+			return fmt.Errorf("cannot resolve it: %w", err)
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("cannot resolve it: %w", err)
+		}
+		looks, err := lookups(path)
+		if err != nil {
+			return fmt.Errorf("cannot resolve it: %w", err)
+		}
+		forms := [][]string{parts(abs), parts(at.String())}
+		for _, p := range places {
+			in, err := split(p, 0)
+			if err != nil {
+				return fmt.Errorf("cannot resolve the place %s: %w", p, err)
+			}
+			given, err := filepath.Abs(p)
+			if err != nil {
+				return fmt.Errorf("cannot resolve the place %s: %w", p, err)
+			}
+			ok, _ := holds(in, at)
+			for _, place := range [][]string{parts(given), parts(in.String())} {
+				for _, names := range forms {
+					ok = ok || namesWithin(place, names)
+				}
+			}
+			if ok {
+				return fmt.Errorf("it lies in %s, which a walled run can write", p)
+			}
+			if _, through := lookedUpIn(in, looks); through {
+				return fmt.Errorf("it is reached through %s, which a walled run can write", p)
+			}
+		}
+		return nil
+	}
+}
+
+// namesWithin reports whether the names of a path begin with the names of a place, each
+// as [sameName] compares them.
+func namesWithin(place, names []string) bool {
+	if len(place) > len(names) {
+		return false
+	}
+	for i, n := range place {
+		if !sameName(n, names[i]) {
+			return false
+		}
+	}
+	return true
+}
