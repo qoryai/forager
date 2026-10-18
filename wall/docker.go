@@ -285,9 +285,10 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 			return nil, err
 		}
 	}
-	// An image a run names by its reference is fetched, and its user read, before any
-	// network is made: one that cannot be fetched, or whose user is root, leaves no
-	// container or network; what the engine pulled stays in its store.
+	// An image a run names by its reference is fetched, unless the engine holds it by
+	// that digest, and its user read, before any network is made: one that cannot be
+	// fetched, or whose user is root, leaves no container or network; what the engine
+	// pulled stays in its store.
 	if req.Pull {
 		if err := e.pull(ctx); err != nil {
 			return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
@@ -400,8 +401,8 @@ type dockerEnclosure struct {
 	// env is the engine's selection every command of the run's runs with, nil for
 	// Forager's own environment.
 	env []string
-	// fetched is how long the fetch of an image by reference took, and pulled whether
-	// there was one.
+	// fetched is how long finding an image by reference took, the check of the engine's
+	// store and any pull, and pulled whether the run's image is one by reference.
 	fetched time.Duration
 	pulled  bool
 	// created says the never-started container of the run's image exists, which the
@@ -446,15 +447,17 @@ func (e *dockerEnclosure) hardening() []string {
 // long the run's image has to be pulled when it is not the relay's.
 const relayWait = 5 * time.Minute
 
-// pullWait is how long the fetch of an image a run names by its reference may take.
+// pullWait is how long finding an image a run names by its reference may take, the
+// check of the engine's store and any pull.
 const pullWait = 10 * time.Minute
 
-// ImageFetch is how long the fetch of the image a run names by its reference took, and
-// whether there was one.
+// ImageFetch is how long finding the image a run names by its reference took, the check
+// of the engine's store and any pull, and whether the run's image is one by reference.
 func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched, e.pulled }
 
-// pull fetches the image a run names by its reference with docker pull, timed, under
-// [pullWait], and refuses one whose user is root, image_user_root: no user, root, a uid
+// pull fetches the image a run names by its reference with docker pull, unless the
+// engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
+// under [pullWait]; and refuses one whose user is root, image_user_root: no user, root, a uid
 // of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
 // to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
 // is refused as well, since it cannot be checked. The agent runs as the wall's user
@@ -465,8 +468,14 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 	fetch, cancel := context.WithTimeout(ctx, pullWait)
 	defer cancel()
 	start := time.Now()
-	if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+	held, err := e.held(fetch)
+	if err != nil {
 		return err
+	}
+	if !held {
+		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+			return err
+		}
 	}
 	e.fetched, e.pulled = time.Since(start), true
 	// The whole Config, since an image that sets no user has no User in it, which a
@@ -512,6 +521,64 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		return root()
 	}
 	return nil
+}
+
+// held reports whether the engine holds the image a run names by its reference by that
+// very reference: the image inspect of NAME@sha256:… answers, and NAME@sha256:… is among
+// the image's repository digests. The same content under another name, or an image whose
+// id is the digest, is not held by the reference, and is pulled. An engine that has no
+// such image says so, and the image is not held; any other failure of the inspect, an
+// engine that does not answer say, is the run's error, as it would be the pull's, and is
+// never taken for an image the engine lacks.
+func (e *dockerEnclosure) held(ctx context.Context) (bool, error) {
+	argv := []string{e.command(), "image", "inspect", "--format", "{{json .RepoDigests}}", e.req.Image}
+	out, err := e.sys.output(ctx, argv, e.env)
+	if err != nil {
+		said := err.Error()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			said = string(bytes.TrimSpace(exit.Stderr))
+		}
+		if noSuchImage(said) {
+			return false, nil
+		}
+		if exit != nil {
+			return false, fmt.Errorf("wall docker: image inspect %s: %w: %s", e.req.Image, err, said)
+		}
+		return false, fmt.Errorf("wall docker: image inspect %s: %w", e.req.Image, err)
+	}
+	var digests []string
+	if err := json.Unmarshal(bytes.TrimSpace(out), &digests); err != nil {
+		return false, fmt.Errorf("wall docker: the repository digests of %s: %w", e.req.Image, err)
+	}
+	want := fullReference(e.req.Image)
+	return slices.ContainsFunc(digests, func(d string) bool { return fullReference(d) == want }), nil
+}
+
+// noSuchImage reports whether an engine's answer to an image inspect says it has no such
+// image: Docker's and nerdctl's "No such image", Podman's "image not known".
+func noSuchImage(said string) bool {
+	said = strings.ToLower(said)
+	return strings.Contains(said, "no such image") || strings.Contains(said, "image not known")
+}
+
+// fullReference is a reference pinned by digest, NAME@sha256:…, with its registry and
+// path in full, as the engine reads it: a NAME whose first part holds no dot or colon
+// and is not localhost is on docker.io, and a docker.io NAME of one part is in library/.
+// An engine lists a repository digest in either form.
+func fullReference(ref string) string {
+	name, digest, _ := strings.Cut(ref, "@")
+	domain, rest, ok := strings.Cut(name, "/")
+	if !ok || (!strings.ContainsAny(domain, ".:") && domain != "localhost") {
+		domain, rest = "docker.io", name
+	}
+	if domain == "index.docker.io" {
+		domain = "docker.io"
+	}
+	if domain == "docker.io" && !strings.Contains(rest, "/") {
+		rest = "library/" + rest
+	}
+	return domain + "/" + rest + "@" + digest
 }
 
 // numericUser reports whether user is uid:gid in decimal digits, neither of them 0.

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
@@ -47,6 +48,11 @@ type recorder struct {
 	// docker cp reads out of a container, by the path inside.
 	user  string
 	files map[string]string
+	// held are the repository digests the engine lists for the image a run names by its
+	// reference; nil is an engine that has no such image. down has the engine answer
+	// no image inspect of the repository digests at all.
+	held []string
+	down bool
 	// endless is the file of a container whose docker cp writes without end, a header
 	// for an enormous file and then zeros; streamed counts what was read of it, and
 	// stopped says the reader closed it before its end.
@@ -97,6 +103,13 @@ func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error)
 	line := words(argv)
 	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
 	switch {
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.down:
+		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon. Is the docker daemon running?")
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.held == nil:
+		return nil, errors.New("exit status 1: Error response from daemon: No such image: " + argv[len(argv)-1])
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' "):
+		b, _ := json.Marshal(r.held)
+		return append(b, '\n'), nil
 	case strings.Contains(line, " image inspect ") && r.user == "none":
 		return []byte(`{"Env":["PATH=/bin"],"Cmd":["sh"]}` + "\n"), nil
 	case strings.Contains(line, " image inspect ") && r.user == "null":

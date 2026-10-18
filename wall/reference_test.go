@@ -20,7 +20,8 @@ func at(lines []string, prefix string) int {
 }
 
 // TestDockerFetchesAnImageByReferenceFirst pins the fetch of an image a run names by its
-// reference: docker pull, then its user, before any network is made; the relay from
+// reference: the check of the engine's store, docker pull of an image the engine does
+// not hold, then its user, before any network is made; the relay from
 // the request's RelayImage, the machine's default; a container of the image, never
 // started and on no network, created before the agent's, and removed with the rest;
 // and the fetch reported.
@@ -41,9 +42,9 @@ func TestDockerFetchesAnImageByReferenceFirst(t *testing.T) {
 	if err := e.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	pull, inspect, network := at(rec.lines, "docker pull "+byReference), at(rec.lines, "docker image inspect --format '{{json .Config}}' "+byReference), at(rec.lines, "docker network create")
-	if pull != 0 || inspect != 1 || network != 2 {
-		t.Errorf("the pull at %d, the user's inspect at %d, the first network at %d:\n%s", pull, inspect, network, strings.Join(rec.lines, "\n"))
+	held, pull, inspect, network := at(rec.lines, "docker image inspect --format '{{json .RepoDigests}}' "+byReference), at(rec.lines, "docker pull "+byReference), at(rec.lines, "docker image inspect --format '{{json .Config}}' "+byReference), at(rec.lines, "docker network create")
+	if held != 0 || pull != 1 || inspect != 2 || network != 3 {
+		t.Errorf("the check at %d, the pull at %d, the user's inspect at %d, the first network at %d:\n%s", held, pull, inspect, network, strings.Join(rec.lines, "\n"))
 	}
 	relay := at(rec.lines, "docker create --name qory-"+runID+"-relay ")
 	if relay < 0 || !strings.Contains(rec.lines[relay], " --entrypoint /qory/qory example.com/agent:1 relay ") {
@@ -119,14 +120,80 @@ func TestDockerLeavesNothingWhenTheFetchFails(t *testing.T) {
 	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true}); err == nil {
 		t.Fatal("an image that cannot be fetched was prepared")
 	}
-	if len(rec.lines) != 1 {
-		t.Errorf("commands beside the pull:\n%s", strings.Join(rec.lines, "\n"))
+	if len(rec.lines) != 2 || at(rec.lines, "docker image inspect --format '{{json .RepoDigests}}' "+byReference) != 0 {
+		t.Errorf("commands beside the check and the pull:\n%s", strings.Join(rec.lines, "\n"))
 	}
 	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, Pull: true, Docker: true, Runtime: "sysbox-runc"}); err == nil {
 		t.Error("an image by reference was given nested Docker")
 	}
 	if _, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "--privileged"}); err == nil {
 		t.Error("a flag was taken as the relay's image")
+	}
+}
+
+// TestDockerPullsNoImageItHoldsByTheDigest pins that the engine is asked first whether it
+// holds the image by the reference: one it lists among the image's repository digests,
+// in either the short form or in full, is not pulled, and its user is still checked; the
+// same content under another name, another digest of the name, and an image with no
+// repository digest are pulled; and an engine whose inspect fails other than with no such
+// image is the run's error, with no pull and nothing made. The fetch is reported either way.
+func TestDockerPullsNoImageItHoldsByTheDigest(t *testing.T) {
+	const digest = "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, c := range []struct {
+		image string
+		held  []string
+		pull  bool
+	}{
+		{byReference, []string{byReference}, false},
+		{byReference, []string{"registry.example/agents/other" + digest, byReference}, false},
+		{"docker.io/library/app" + digest, []string{"app" + digest}, false},
+		{"app" + digest, []string{"docker.io/library/app" + digest}, false},
+		{"example/app" + digest, []string{"index.docker.io/example/app" + digest}, false},
+		{byReference, []string{"registry.example/agents/other" + digest}, true},
+		{byReference, []string{"registry.example:5000/agents/app" + digest}, true},
+		{byReference, []string{"registry.example/agents/app@sha256:" + strings.Repeat("f", 64)}, true},
+		{"library/app" + digest, []string{"example/app" + digest}, true},
+		{byReference, []string{}, true},
+		{byReference, nil, true},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, held: c.held}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: c.image, RelayImage: "example.com/agent:1", Pull: true})
+		if err != nil {
+			t.Errorf("%s held as %v: %v", c.image, c.held, err)
+			continue
+		}
+		if took, ok := e.(Fetcher).ImageFetch(); !ok || took < 0 {
+			t.Errorf("%s held as %v: the fetch reported %v, %v", c.image, c.held, took, ok)
+		}
+		e.Close(context.Background())
+		check, pull, user := at(rec.lines, "docker image inspect --format '{{json .RepoDigests}}' "+c.image), at(rec.lines, "docker pull "+c.image), at(rec.lines, "docker image inspect --format '{{json .Config}}' "+c.image)
+		if check != 0 || (pull >= 0) != c.pull || user < 0 {
+			t.Errorf("%s held as %v: the check at %d, the pull at %d (want one: %v), the user's inspect at %d:\n%s", c.image, c.held, check, pull, c.pull, user, strings.Join(rec.lines, "\n"))
+		}
+	}
+
+	// An image the engine holds whose user is root is refused all the same.
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"root"`, held: []string{byReference}}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	_, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+	var r *accesskey.Refusal
+	if !errors.As(err, &r) || r.Code != refusal.ImageUserRoot {
+		t.Errorf("a held image whose user is root: %v, want image_user_root", err)
+	}
+	if at(rec.lines, "docker pull") >= 0 || at(rec.lines, "docker network") >= 0 {
+		t.Errorf("a held image whose user is root was pulled, or a network made:\n%s", strings.Join(rec.lines, "\n"))
+	}
+
+	// An engine that does not answer the check is the run's error, not an image to pull.
+	rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, down: true}
+	d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	_, err = d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+	if err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Errorf("an engine that does not answer: %v", err)
+	}
+	if len(rec.lines) != 1 {
+		t.Errorf("commands beside the check of an engine that does not answer:\n%s", strings.Join(rec.lines, "\n"))
 	}
 }
 

@@ -188,6 +188,90 @@ func conform(t *testing.T, image, rt string, docker bool) {
 		t.Run("the inside network's IPv6 subnet is isolated", func(t *testing.T) { insideHasIsolatedIPv6(t, command, helper, image, rt) })
 	} else {
 		t.Run("no IPv6 inside but loopback's", func(t *testing.T) { insideHasNoIPv6(t, command, helper, image) })
+		t.Run("an image held by its digest starts with its registry gone", func(t *testing.T) { heldStartsWithoutRegistry(t, command, helper, image) })
+	}
+}
+
+// heldStartsWithoutRegistry pushes one image, whose user is 1000:1000, to a registry of
+// the test's under two names, removes it from the engine and pulls it by the first
+// name's digest, the way a workflow pulls a private image before a run, and then removes
+// the registry. A run in the image by the name it was pulled by starts and runs, with no
+// registry to ask; the same content by the other name, which the engine does not hold by
+// that name, is fetched, and fails with no registry to fetch it from.
+func heldStartsWithoutRegistry(t *testing.T, command, helper, base string) {
+	name := fmt.Sprintf("qory-walltest-held-registry-%d", os.Getpid())
+	if out, err := exec.Command(command, "run", "--detach", "--rm", "--name", name, "--publish", "127.0.0.1::5000",
+		"--mount", "type=tmpfs,dst=/var/lib/registry", registry).CombinedOutput(); err != nil {
+		t.Fatalf("the registry: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "rm", "--force", name).Run() })
+	out, err := exec.Command(command, "port", name, "5000/tcp").Output()
+	if err != nil {
+		t.Fatalf("the registry's port: %v", err)
+	}
+	_, port, ok := strings.Cut(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), "127.0.0.1:")
+	if !ok {
+		t.Fatalf("the registry's port: %q", out)
+	}
+	prefix := "localhost:" + port + "/walltest-held/"
+	pulled, other := prefix+"pulled", prefix+"other"
+	tag := fmt.Sprintf(":%d", os.Getpid())
+	build := exec.Command(command, "build", "--quiet", "--tag", pulled+tag, "--tag", other+tag, "-")
+	build.Stdin = strings.NewReader("FROM " + base + "\nUSER 1000:1000\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the image: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command(command, "image", "rm", pulled+tag, other+tag).Run() })
+	var digest string
+	for _, repository := range []string{pulled, other} {
+		// The registry takes a moment to listen.
+		var out []byte
+		var err error
+		for range 50 {
+			if out, err = exec.Command(command, "push", repository+tag).CombinedOutput(); err == nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		m := pushedDigest.FindSubmatch(out)
+		if err != nil || m == nil {
+			t.Fatalf("the push of %s: %v: %s", repository+tag, err, out)
+		}
+		if digest != "" && digest != string(m[1]) {
+			t.Fatalf("the two names have two digests, %s and %s", digest, m[1])
+		}
+		digest = string(m[1])
+	}
+	held, notHeld := pulled+"@"+digest, other+"@"+digest
+	t.Cleanup(func() { exec.Command(command, "image", "rm", held, notHeld).Run() })
+	// Out of the engine by every name of the test's, and then back by one, pulled.
+	exec.Command(command, "image", "rm", pulled+tag, other+tag, held, notHeld).Run()
+	if out, err := exec.Command(command, "pull", held).CombinedOutput(); err != nil {
+		t.Fatalf("the pull of %s: %v: %s", held, err, out)
+	}
+	if out, err := exec.Command(command, "image", "inspect", "--format", "{{json .RepoDigests}}", notHeld).CombinedOutput(); err == nil &&
+		strings.Contains(string(out), notHeld) {
+		t.Fatalf("the engine holds %s by its digest after the pull of the other name alone: %s", notHeld, out)
+	}
+	if out, err := exec.Command(command, "rm", "--force", name).CombinedOutput(); err != nil {
+		t.Fatalf("removing the registry: %v: %s", err, out)
+	}
+
+	r := startEnclosure(t, command, helper, wall.Request{Image: held, RelayImage: base, Pull: true}, "-c", "echo started")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if got := strings.TrimSpace(r.start(ctx, t)()); got != "started" {
+		t.Errorf("the run in %s, held, with no registry: %q", held, got)
+	}
+
+	w := &wall.Docker{Command: command, Helper: helper, RelayArgs: e2e.RelayArgs, NestArgs: e2e.NestArgs}
+	e, err := w.Prepare(context.Background(), wall.Request{RunID: fmt.Sprintf("walltest-held-%d-%d", os.Getpid(), time.Now().UnixNano()),
+		Image: notHeld, RelayImage: base, Pull: true})
+	if err == nil {
+		e.Close(context.Background())
+		t.Errorf("a run in %s, the same content by a name the engine does not hold, started with no registry to fetch it from", notHeld)
+	} else if !strings.Contains(err.Error(), " pull") {
+		t.Errorf("a run in %s failed other than in its pull: %v", notHeld, err)
 	}
 }
 
