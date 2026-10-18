@@ -19,14 +19,19 @@ const (
 
 // keyWith returns a public key in base64url that has sub from its ninth character on
 // and that ParsePublicKey reads and Check passes when valid is true, or Check refuses
-// when it is false: the first of base64url of SHA-256 of sub and a counter, with sub
-// written over it, that does.
-func keyWith(t *testing.T, sub string, valid bool) string {
+// when it is false.
+func keyWith(t *testing.T, sub string, valid bool) string { return keyAt(t, 8, sub, valid) }
+
+// keyAt returns a public key in base64url that has sub from index at on and that
+// ParsePublicKey reads and Check passes when valid is true, or Check refuses when it
+// is false: the first of base64url of SHA-256 of sub and a counter, with sub written
+// over it, that does.
+func keyAt(t *testing.T, at int, sub string, valid bool) string {
 	t.Helper()
 	for i := range 1000 {
 		h := sha256.Sum256([]byte(sub + strconv.Itoa(i)))
 		b := []byte(base64.RawURLEncoding.EncodeToString(h[:]))
-		copy(b[8:], sub)
+		copy(b[at:], sub)
 		if p, err := accesskey.ParsePublicKey(string(b)); err == nil && (p.Check() == nil) == valid {
 			return string(b)
 		}
@@ -194,5 +199,43 @@ func TestSecretInPinEntry(t *testing.T) {
 		if err := accesskey.SecretInPinEntry(c.alg, c.key); err != c.want {
 			t.Errorf("%s: %v, want %v", c.name, err, c.want)
 		}
+	}
+}
+
+// TestAKeyThatStartsWithASecretPrefixIsChecked pins that a valid key that starts with
+// qak_ or qrk_, in any case, is not left out, since a secret cut to 43 characters can
+// read as a key, and that a valid key with qak_ further in still is.
+func TestAKeyThatStartsWithASecretPrefixIsChecked(t *testing.T) {
+	for prefix, want := range map[string]error{
+		"qak_": accesskey.ErrSecretInDocument,
+		"QAK_": accesskey.ErrSecretInDocument,
+		"qrk_": accesskey.ErrRunKeyInDocument,
+		"QrK_": accesskey.ErrRunKeyInDocument,
+	} {
+		k := keyAt(t, 0, prefix, true)
+		if _, err := accesskey.ParsePin([]byte("[" + entry("ed25519", k) + "]")); err != want {
+			t.Errorf("ParsePin, %s: %v", prefix, err)
+		}
+		if err := accesskey.SecretInPinEntry("ed25519", k); err != want {
+			t.Errorf("SecretInPinEntry, %s: %v", prefix, err)
+		}
+		yaml := "apiary_public_key:\n  - {alg: ed25519, public_key: " + k + "}\n"
+		if err := scanPin("s.yaml", yaml, "apiary_public_key"); err != want {
+			t.Errorf("YAML, %s: %v", prefix, err)
+		}
+		var doc any
+		if err := jsonv2.Unmarshal([]byte("["+entry("ed25519", k)+"]"), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := accesskey.SecretInPinDocument(doc, ""); err != want {
+			t.Errorf("decoded, %s: %v", prefix, err)
+		}
+	}
+	k := keyAt(t, 1, "qak_", true)
+	if _, err := accesskey.ParsePin([]byte("[" + entry("ed25519", k) + "]")); err != nil {
+		t.Errorf("qak_ from the second character: %v", err)
+	}
+	if err := accesskey.SecretInPinEntry("ed25519", k); err != nil {
+		t.Errorf("SecretInPinEntry, qak_ from the second character: %v", err)
 	}
 }
