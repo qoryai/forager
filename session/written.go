@@ -7,19 +7,24 @@ import (
 )
 
 // writtenPlaces are the places a walled run could have written, as Spec.Written lists
-// them and, behind a wall, the run's writable binds: the places of the plan the
-// enclosure binds writable, the workspace among them, and the wall's writable binds.
-func writtenPlaces(spec Spec, plan mountPlan, own []bindSource) []string {
-	places := slices.Clone(spec.Written)
-	if spec.Wall == nil {
-		return places
+// them, the writable binds of the other walled runs in the registry and, behind a wall,
+// the run's writable binds: the places of the plan the enclosure binds writable, the
+// workspace among them, and the wall's writable binds.
+func writtenPlaces(spec Spec, runID string, plan mountPlan, own []bindSource) ([]string, error) {
+	others, err := othersWritable(runID)
+	if err != nil {
+		return nil, err
 	}
-	for _, b := range append(slices.Clone(plan.sources), own...) {
+	places := slices.Concat(spec.Written, others)
+	if spec.Wall == nil {
+		return places, nil
+	}
+	for _, b := range slices.Concat(plan.sources, own) {
 		if b.Writable {
 			places = append(places, b.Path)
 		}
 	}
-	return places
+	return places, nil
 }
 
 // readable is what [runtimes.Attach.Readable] asks of a file before the runtime reads

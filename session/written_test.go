@@ -136,3 +136,36 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		}
 	})
 }
+
+// TestASettingsFileInAnotherWalledRunsBindIsNoRun pins that the settings a launch
+// passes are refused while they lie in a writable bind of another walled run still
+// going, with or without a wall for this run, and read once that run has ended.
+func TestASettingsFileInAnotherWalledRunsBindIsNoRun(t *testing.T) {
+	m := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(m, "launch-settings.json")
+	if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, finish := hold(t, []wall.Mount{{Path: m}}, m)
+	for _, walled := range []bool{false, true} {
+		sp := spec(t, "FAKE_EXIT=0")
+		if walled {
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		}
+		sp.Args = []string{"--settings", f}
+		want := "runtime claude: settings " + f + ": it lies in " + resolved + ", which a walled run can write"
+		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("walled %v: %v", walled, err)
+		}
+	}
+	finish()
+	sp := spec(t, "FAKE_EXIT=0")
+	sp.Args = []string{"--settings", f}
+	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("after the other run ended: %+v, %v", res, err)
+	}
+}

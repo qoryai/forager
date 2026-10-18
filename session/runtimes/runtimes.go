@@ -85,8 +85,8 @@ type Attach struct {
 	// settings Claude Code is passed: nil when Prepare may read it, and why not
 	// otherwise. The session refuses a file a walled run could have written or
 	// replaced: one whose path is or lies inside, as given or through links, or is
-	// reached through, a place the caller lists as written by a walled run or a
-	// writable bind of this run's.
+	// reached through, a place the caller lists as written by a walled run, a writable
+	// bind of another walled run still listed, or a writable bind of this run's.
 	// Nil refuses none.
 	Readable func(path string) error
 }
