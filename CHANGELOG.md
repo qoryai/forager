@@ -60,8 +60,9 @@ release may change what an existing document does, and says so under Upgrading.
   read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
   one valid key out of the secret check, written in a form
   `accesskey.SecretInPinDocument` lists; the check still covers `alg`, the entry's
-  other members and the rest of the document. `accesskey.SecretInPinDocument` and
-  `accesskey.SecretInPinEntry` hold the rule.
+  other members, a key that starts with `qak_` or `qrk_` in any case, and the rest of
+  the document. `accesskey.SecretInPinDocument` and `accesskey.SecretInPinEntry` hold
+  the rule.
 
 ### Gateway
 

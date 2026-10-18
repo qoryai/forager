@@ -342,8 +342,10 @@ func documentHas(doc any, has func(string) bool) bool {
 // apiary_public_key in the server document, or empty for a document that is the pin.
 // An entry's public_key is left out when it is one string that [ParsePublicKey] reads
 // and [PublicKey.Check] passes, so a key whose base64url contains qak_ or qrk_ by
-// chance is not refused. The entry's alg, its other members and the rest of the
-// document are checked as SecretInDocument checks them.
+// chance is not refused. A key that starts with qak_ or qrk_, in any case, is checked,
+// since a secret cut to its first 43 characters can read as a key. The entry's alg, its
+// other members and the rest of the document are checked as SecretInDocument checks
+// them.
 //
 // A string is the raw bytes, read as JSON when they are one JSON value and as YAML
 // otherwise. A key is left out only where the pin writes it, as a JSON string or a
@@ -369,9 +371,13 @@ func SecretInPinEntry(alg, publicKey string) error {
 	return SecretInDocument([]any{alg, publicKey})
 }
 
-// pinKey reports whether v is a key a pin may list: [ParsePublicKey] reads it and
-// [PublicKey.Check] passes it.
+// pinKey reports whether v is a key a pin may list, [ParsePublicKey] reads it and
+// [PublicKey.Check] passes it, and does not start with qak_ or qrk_ in any case: about
+// one access key secret in 65 has a first 43 characters that read as a key.
 func pinKey(v string) bool {
+	if l := strings.ToLower(v); strings.HasPrefix(l, SecretPrefix) || strings.HasPrefix(l, runKeyPrefix) {
+		return false
+	}
 	p, err := ParsePublicKey(v)
 	return err == nil && p.Check() == nil
 }
