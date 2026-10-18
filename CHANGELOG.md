@@ -85,7 +85,17 @@ release may change what an existing document does, and says so under Upgrading.
   them; one whose last part is a link; and one that is not a regular file or is larger
   than 1 MiB. The file is opened without following a link. The run then stops before
   the runtime starts, with "runtime claude: settings <path>: " and the reason. Settings
-  passed as a document are not checked, as before.
+  passed as a document are not checked, as before. The places also hold the writable
+  binds of the other walled runs in the registry, with or without a wall for this run.
+- A walled run bound a mount or a workspace through a link that an agent of an earlier
+  walled run, already ended, had left in a place it could write: the engine followed
+  the link, so the run could bind any directory of this machine, writable. A place whose
+  path goes through a link inside a place of `Spec.Written` and does not resolve into
+  it is now no run, `mount_through_link`, with the place, the link and the written place
+  as its names, as for a link inside a writable place of the run's.
+- `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
+  one only when its last part is no link, it is a regular file and it holds at most
+  1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
 
 ### e2e and CI
 

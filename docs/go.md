@@ -353,7 +353,8 @@ res, err := session.Resend(ctx, session.ResendSpec{
 `catalog.Lookup(name, dir)` resolves a name to the first of these that applies:
 
 1. A descriptor `<name>.yaml` in `dir`. This is how a machine describes a runtime nothing
-   ships for.
+   ships for. It is read only when its last part is no link, it is a regular file and
+   it holds at most 1 MiB.
 2. The contract's descriptor: Claude Code's.
 3. A bare runtime, for a name with neither. It is run and recorded, with no session
    events.
@@ -379,8 +380,10 @@ A program that needs custom code implements the interface.
 - `Written` are the places of this machine a walled run can write, as the caller records
   them: the workspaces and the writable mounts of the walled runs it starts. A settings
   file the runtime reads from this machine, the one Claude Code is passed with
-  `--settings`, is refused when it lies in one of them, and behind a `Wall` when it lies
-  in a writable bind of this run's, the workspace among them. See
+  `--settings`, is refused when it lies in one of them or in a writable bind of another
+  walled run, and behind a `Wall` when it lies in a writable bind of this run's, the
+  workspace among them. Behind a `Wall`, a place whose path goes through a link inside
+  one of them and does not resolve into it is no run, `mount_through_link`. See
   [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
 - `Preparation` is the run's preparation, the program and then its arguments: the
   session runs it inside the wall before the runtime, through the run's proxy, and

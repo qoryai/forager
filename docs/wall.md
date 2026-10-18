@@ -331,6 +331,13 @@ up in its parent, so two binds of one root are allowed.
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
+
+  The same holds of a link inside a place of `Spec.Written`, the places the caller
+  records as written by walled runs, though no walled run that wrote it is still
+  going: `Names` holds the place, the link and the written place as passed. Its
+  sentence reads: "/code/repo/.claude/worktrees/wt is reached through the link
+  /code/repo/.claude/worktrees/wt inside /code/repo, which a walled agent can change:
+  list the link's target itself".
 - **Forager's files.** A writable place that contains a directory a name on the way
   to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
@@ -429,6 +436,9 @@ write, so no walled run chooses what a later run is given:
 
 - the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
   of the walled runs it starts, with or without a wall for this run;
+- the writable binds of the other walled runs of this user's in the registry, by the
+  paths they resolved to, with or without a wall for this run. An entry whose session is
+  gone counts too, until a walled run finds its containers gone and removes it;
 - behind a wall, this run's writable binds: the workspace, or the mount that holds it,
   the writable mounts and the wall's writable binds.
 
