@@ -113,7 +113,7 @@ func TestRunsBindingRemovesAnEntryWithoutAContainer(t *testing.T) {
 
 // TestRunsBindingRefusesWithoutAnEngine pins an entry whose lock is free, whose binds
 // overlap p and whose engine cannot be asked: the read is refused with
-// engine_unreachable, naming the run and its entry, in a sentence that takes the run as
+// engine_unreachable, naming the run and its entry, in a sentence that counts the run as
 // still going and says nothing of a run that starts, and the entry stays.
 func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	root := t.TempDir()
@@ -125,8 +125,8 @@ func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 		!slices.Equal(r.Names, []string{boundID, file}) {
 		t.Fatalf("runs %+v, %v", runs, err)
 	}
-	want := "Docker could not be asked whether the walled run " + boundID +
-		" is still going, so it is taken as still going: Cannot connect to the Docker daemon"
+	want := "The check for a container of the walled run " + boundID +
+		" failed, so the run counts as still going: Cannot connect to the Docker daemon"
 	if r.Detail != want {
 		t.Errorf("detail %q, want %q", r.Detail, want)
 	}
@@ -168,8 +168,8 @@ func TestRunsBindingRefusesAnEntryThatRecordsNoEngine(t *testing.T) {
 	}
 	_, err = session.RunsBinding(context.Background(), nil, root)
 	r := refusalOf(t, "engine_unreachable", err)
-	want := "Docker could not be asked whether the walled run " + leftID +
-		" is still going, so it is taken as still going: its entry " + file +
+	want := "The check for a container of the walled run " + leftID +
+		" failed, so the run counts as still going: its entry " + file +
 		" records no engine"
 	if !slices.Equal(r.Names, []string{leftID, file}) || r.Detail != want ||
 		r.EntryUnreadable {
@@ -199,8 +199,8 @@ func TestRunsBindingRefusesAnUnreadableEntry(t *testing.T) {
 	a := answer(t, true, nil)
 	_, err := session.RunsBinding(context.Background(), nil, t.TempDir())
 	r := refusalOf(t, "engine_unreachable", err)
-	prefix := "Docker could not be asked whether the walled run " + boundID +
-		" is still going, so it is taken as still going: its entry " + file +
+	prefix := "The check for a container of the walled run " + boundID +
+		" failed, so the run counts as still going: its entry " + file +
 		" cannot be read: "
 	if !slices.Equal(r.Names, []string{boundID, file}) ||
 		!strings.HasPrefix(r.Detail, prefix) || !r.EntryUnreadable {

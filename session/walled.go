@@ -324,8 +324,8 @@ type asking struct {
 // What follows from an engine that cannot be asked: for a run that starts, and for
 // [RunsBinding].
 const (
-	startsNot  = "so the run does not start"
-	takenGoing = "so it is taken as still going"
+	startsNot  = "so this run does not start"
+	takenGoing = "so the run counts as still going"
 )
 
 // WalledRun is a walled run of this user's still going on this machine, as the
@@ -368,7 +368,7 @@ type WalledRun struct {
 // engine of such an entry cannot be asked, or the entry records no engine, or an entry
 // whose lock is free cannot be read, the error is a *[Refusal] with the code
 // engine_unreachable, whose Names are the run's id and the path of its entry, and
-// whose Detail says the run is taken as still going; its EntryUnreadable is set for an
+// whose Detail says the run counts as still going; its EntryUnreadable is set for an
 // entry that cannot be read, and for no other. An entry whose lock is held and that
 // cannot be read, and a writable bind of a run still going that cannot be resolved now,
 // are plain errors, in the sentences a run that starts gets, which say nothing of
@@ -729,8 +729,8 @@ func engineUnreachable(runID, file, so string, err error) *Refusal {
 	return &Refusal{
 		Code:  refusal.EngineUnreachable,
 		Names: []string{runID, file},
-		Detail: fmt.Sprintf("Docker could not be asked whether the walled run %s is still "+
-			"going, %s: %v", runID, so, err),
+		Detail: fmt.Sprintf("The check for a container of the walled run %s failed, %s: %v",
+			runID, so, err),
 	}
 }
 

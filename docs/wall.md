@@ -403,10 +403,10 @@ up in its parent, so two binds of one root are allowed.
   command other than podman, or neither a pinned selection nor an id for podman, or that
   reads an entry that records no engine or cannot be read, is no run,
   `engine_unreachable`, with the earlier run's id and then the absolute path of its entry
-  in `Names`: "Docker could not be asked whether the walled run <id> is still going, so
-  the run does not start: <the error>". Under the registry's lock, a run reads the
-  entries, checks its binds against them and adds its entry, so two runs that start
-  together are checked one after the other. A run is no run, `mount_shared_with_run`,
+  in `Names`: "The check for a container of the walled run <id> failed, so this run
+  does not start: <the error>". Under the registry's lock, a run reads the entries,
+  checks its binds against them and adds its entry, so two runs that start together are
+  checked one after the other. A run is no run, `mount_shared_with_run`,
   when one of its binds lies inside a writable bind of another run's or is reached
   through one, or when one of its writable binds holds a bind of another run's or a
   directory a name on the way to one is looked up in. Two runs that bind the same root,
@@ -445,9 +445,9 @@ up in its parent, so two binds of one root are allowed.
   one cannot be resolved now. It removes the entries of those runs that are over, as a
   run that starts does, is `engine_unreachable`, with the same `Names`, when it cannot
   ask, or cannot read an entry whose lock is free, with `EntryUnreadable` set on the
-  refusal for that, in the sentence "Docker could not be asked whether the walled run
-  <id> is still going, so it is taken as still going: <the error>", and is a plain error
-  for a relative p. It asks an engine through d, the caller's `*wall.Docker`, by
+  refusal for that, in the sentence "The check for a container of the walled run <id>
+  failed, so the run counts as still going: <the error>", and is a plain error for a
+  relative p. It asks an engine through d, the caller's `*wall.Docker`, by
   `(*wall.Docker).RunContainersExist`, as a run asks through its wall when that is a
   `*wall.Docker`; a nil d, like a run behind another wall, asks as
   `wall.RunContainersExist` does, the method of a Docker with no field set.

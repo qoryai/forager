@@ -136,7 +136,7 @@ release may change what an existing document does, and says so under Upgrading.
   run that is over is removed, and an engine that cannot be asked is
   `engine_unreachable`, naming the run and its entry, as is an entry whose lock is free
   that cannot be read, with `EntryUnreadable` set on the refusal, in a sentence that
-  takes the run as still going, and a relative p is an error. The engine of an entry
+  counts the run as still going, and a relative p is an error. The engine of an entry
   is asked through d, the caller's `*wall.Docker`, by
   `(*wall.Docker).RunContainersExist`, with the recorded command and selection;
   `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
@@ -185,6 +185,9 @@ release may change what an existing document does, and says so under Upgrading.
 - A bind in the registry of walled runs whose `writable` field is missing or null is
   taken as writable, by a run's check against other runs, by the places a walled run
   could have written and by `session.RunsBinding`.
+- The `engine_unreachable` sentence of a walled run now reads "The check for a
+  container of the walled run <id> failed, so this run does not start: <the error>",
+  and, for `session.RunsBinding`, "… so the run counts as still going: …".
 
 ### e2e and CI
 
