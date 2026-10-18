@@ -194,6 +194,8 @@ One run, on a developer machine, with a server configured:
    interactive session whose API key is a placeholder, a script that pre-approves the
    placeholder value in Claude Code's configuration before it starts (§The descriptor).
    What is prepared goes into the run directory; the composed home is not modified.
+   A settings file that lies in a place a walled run can write, that is a link or that
+   is not a regular file of at most 1 MiB is not read, and the run does not start.
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.

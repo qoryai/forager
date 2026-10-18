@@ -420,6 +420,27 @@ So no name on the way to a bind source is looked up in a place a walled agent of
 user's can write. A process outside every wall, the user's or another user's, can still
 change a path between the last check and the bind.
 
+### No file read from a place an agent can write
+
+Claude Code's runtime reads one file of this machine as the run starts: the settings
+file passed with `--settings`, which it copies into the run directory with Forager's
+hooks added. The session refuses that file when it lies in a place a walled run can
+write, so no walled run chooses what a later run is given:
+
+- the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
+  of the walled runs it starts, with or without a wall for this run;
+- behind a wall, this run's writable binds: the workspace, or the mount that holds it,
+  the writable mounts and the wall's writable binds.
+
+A file is refused when its path, absolute and clean or resolved through every link, is
+or lies inside such a place, the place taken as given and resolved, by whole names and
+regardless of case; when a name on the way to it is looked up inside such a place; and
+when its last part is a link. The file is then opened without following a link, and
+read only when it is a regular file of at most 1 MiB. A refusal stops the run before the
+runtime starts, with the session's error, such as "runtime claude: settings
+/work/launch-settings.json: it lies in /work, which a walled run can write". Settings
+passed as a document, `--settings '{…}'`, are no file and are not checked.
+
 ### The helper
 
 The helper is the caller's binary:

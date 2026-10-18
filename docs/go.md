@@ -376,6 +376,12 @@ A program that needs custom code implements the interface.
 - `Wall` starts the runtime behind a wall. See [the wall](wall.md#from-go).
   `Mounts` are what else of the machine the wall shows, and `ForagerFiles` the caller's
   files, which no mount may hold. See [Forager's files](wall.md#foragers-files).
+- `Written` are the places of this machine a walled run can write, as the caller records
+  them: the workspaces and the writable mounts of the walled runs it starts. A settings
+  file the runtime reads from this machine, the one Claude Code is passed with
+  `--settings`, is refused when it lies in one of them, and behind a `Wall` when it lies
+  in a writable bind of this run's, the workspace among them. See
+  [no file read from a place an agent can write](wall.md#no-file-read-from-a-place-an-agent-can-write).
 - `Preparation` is the run's preparation, the program and then its arguments: the
   session runs it inside the wall before the runtime, through the run's proxy, and
   starts the runtime once it exits 0. A preparation that exits otherwise is the run's

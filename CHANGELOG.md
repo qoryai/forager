@@ -67,6 +67,25 @@ release may change what an existing document does, and says so under Upgrading.
   `preparation.sh` in the run directory. The runtime starts once it exits 0; one that
   exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
   refused.
+- `session.Spec.Written`, the places of this machine the caller records as writable by a
+  walled run: the workspaces and the writable mounts of the walled runs it starts.
+- `runtimes.Attach.Readable`, which a runtime asks of a file of this machine before
+  `Prepare` reads it, and which the session sets: it refuses a file a walled run could
+  have written.
+
+#### Fixed
+
+- The `claude-settings` installer read the settings file the launch passes with
+  `--settings` through links, wherever it lay, and copied it into the run directory,
+  where the enclosure reads it: a walled run could put a link to any JSON file of this
+  machine in its workspace, in place of the settings a later run is passed, and hand
+  that file to the agent. The session now refuses a settings file whose path, as given
+  or through links, is or lies inside, or is reached through, a place of
+  `Spec.Written` or, behind a wall, a writable bind of the run's, the workspace among
+  them; one whose last part is a link; and one that is not a regular file or is larger
+  than 1 MiB. The file is opened without following a link. The run then stops before
+  the runtime starts, with "runtime claude: settings <path>: " and the reason. Settings
+  passed as a document are not checked, as before.
 
 ### e2e and CI
 
@@ -74,6 +93,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 - The conformance suite checks that a run's preparation runs inside, before the runtime,
   through the proxy.
+
+#### Changed
+
+- The conformance suite passes the launch's settings file from outside the workspace,
+  since the session refuses a settings file in it.
 
 ## [0.7.0] - 2026-10-12
 
