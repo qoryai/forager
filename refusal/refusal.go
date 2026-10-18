@@ -51,9 +51,9 @@ const (
 	// id and its path.
 	MountSharedWithRun = "mount_shared_with_run"
 	// MountThroughLink is a walled run with a mount, or the workspace, whose path goes
-	// through a link inside another of its places and does not resolve into that place:
-	// its names are the place, the link and the other place, the place and the other
-	// one as passed.
+	// through a link inside another of its places, or inside a place the caller records
+	// as written by walled runs, and does not resolve into that place: its names are the
+	// place, the link and the other place, the place and the other one as passed.
 	MountThroughLink = "mount_through_link"
 	// EngineUnreachable is a walled run that cannot check with the container engine
 	// whether an earlier walled run, whose session is gone, still has containers: its
