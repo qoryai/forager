@@ -475,7 +475,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			v := e.Engine(ctx)
 			engine = &v
 		}
-		if listed, err = register(runID, append(plan.sources, wallOwn...), engine); err != nil {
+		docker, _ := spec.Wall.(*wall.Docker)
+		if listed, err = register(runID, append(plan.sources, wallOwn...), engine,
+			docker); err != nil {
 			return nil, err
 		}
 		defer listed.release()

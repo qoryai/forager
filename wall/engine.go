@@ -194,9 +194,27 @@ func podman(command string) bool { return filepath.Base(command) == "podman" }
 
 // RunContainersExist reports whether the engine holds a container labelled with the
 // run's id, in any state: a container that is created, paused or stopped can be started
-// again with its binds.
+// again with its binds. It is [Docker.RunContainersExist] of a Docker with no field
+// set.
 func RunContainersExist(ctx context.Context, e Engine, runID string) (bool, error) {
-	return runContainersExist(ctx, hostSystem{}, e, runID)
+	return (&Docker{}).RunContainersExist(ctx, e, runID)
+}
+
+// RunContainersExist reports whether the engine e, an earlier run's as its session
+// recorded it, holds a container labelled with the run's id, in any state: a container
+// that is created, paused or stopped can be started again with its binds. It runs e's
+// command with e's variables in place of those of this process that select an engine,
+// through the adapter's host commands, and asks the engine for its id first when e
+// records one, so that another engine does not answer. A nil Docker is one with no
+// field set.
+func (d *Docker) RunContainersExist(
+	ctx context.Context, e Engine, runID string,
+) (bool, error) {
+	var sys system = hostSystem{}
+	if d != nil && d.sys != nil {
+		sys = d.sys
+	}
+	return runContainersExist(ctx, sys, e, runID)
 }
 
 func runContainersExist(

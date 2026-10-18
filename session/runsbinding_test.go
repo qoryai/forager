@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"syscall"
 	"testing"
 
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/wall"
 )
 
 // boundID is the run id of the entries the tests of RunsBinding write.
@@ -67,7 +69,7 @@ func TestRunsBindingCountsAStoppedContainer(t *testing.T) {
 	sub := mkdirs(t, filepath.Join(root, "sub"))
 	file := bound(t, bind{root, resolved(t, root), ""}, bind{sub, resolved(t, sub), ""})
 	a := answer(t, true, nil)
-	runs, err := session.RunsBinding(context.Background(), root)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestRunsBindingRemovesAnEntryWithoutAContainer(t *testing.T) {
 	root := t.TempDir()
 	file := bound(t, bind{root, resolved(t, root), ""})
 	answer(t, false, nil)
-	runs, err := session.RunsBinding(context.Background(), root)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
 	if err != nil || len(runs) != 0 {
 		t.Fatalf("runs %+v, %v", runs, err)
 	}
@@ -107,7 +109,7 @@ func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	root := t.TempDir()
 	file := bound(t, bind{root, resolved(t, root), ""})
 	answer(t, false, errors.New("Cannot connect to the Docker daemon"))
-	runs, err := session.RunsBinding(context.Background(), t.TempDir())
+	runs, err := session.RunsBinding(context.Background(), nil, t.TempDir())
 	var r *session.Refusal
 	if !errors.As(err, &r) || r.Code != "engine_unreachable" ||
 		!slices.Equal(r.Names, []string{boundID, file}) {
@@ -132,7 +134,7 @@ func TestRunsBindingCountsAHeldEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := answer(t, false, errors.New("Cannot connect to the Docker daemon"))
-	runs, err := session.RunsBinding(context.Background(), root)
+	runs, err := session.RunsBinding(context.Background(), nil, root)
 	want := []session.WalledRun{{RunID: boundID, Entry: file}}
 	if err != nil || !slices.Equal(runs, want) {
 		t.Fatalf("runs %+v, %v; want %+v", runs, err, want)
@@ -204,7 +206,7 @@ func TestRunsBindingOverlaps(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			file := bound(t, c.bind)
-			runs, err := session.RunsBinding(context.Background(), c.query)
+			runs, err := session.RunsBinding(context.Background(), nil, c.query)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,12 +226,86 @@ func TestRunsBindingOverlaps(t *testing.T) {
 func TestRunsBindingRefusesARelativePath(t *testing.T) {
 	a := answer(t, true, nil)
 	bound(t, bind{"/", "/", ""})
-	_, err := session.RunsBinding(context.Background(), "places/x")
+	_, err := session.RunsBinding(context.Background(), nil, "places/x")
 	var r *session.Refusal
 	if err == nil || errors.As(err, &r) || err.Error() != `the path "places/x" is not absolute` {
 		t.Errorf("err %v", err)
 	}
 	if len(a.ids) != 0 {
 		t.Errorf("the engine was asked for %q", a.ids)
+	}
+}
+
+// askedThrough points the registry's question at a fake engine that answers that the
+// run's containers exist, and records the Docker each question is asked through.
+func askedThrough(t *testing.T) *[]*wall.Docker {
+	t.Helper()
+	var mu sync.Mutex
+	var asked []*wall.Docker
+	session.SetRunContainersAsked(
+		func(_ context.Context, d *wall.Docker, _ wall.Engine, _ string) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			asked = append(asked, d)
+			return true, nil
+		})
+	t.Cleanup(func() { session.SetRunContainersAsked(nil) })
+	return &asked
+}
+
+// TestRunsBindingAsksThroughTheDocker pins the Docker RunsBinding is passed: the engine
+// of an entry whose lock is free is asked through it, and with nil as the package's
+// function asks.
+func TestRunsBindingAsksThroughTheDocker(t *testing.T) {
+	root := t.TempDir()
+	bound(t, bind{root, resolved(t, root), ""})
+	asked := askedThrough(t)
+	d := &wall.Docker{Command: "/opt/asker/docker"}
+	for _, by := range []*wall.Docker{d, nil} {
+		*asked = nil
+		runs, err := session.RunsBinding(context.Background(), by, root)
+		if err != nil || len(runs) != 1 {
+			t.Fatalf("runs %+v, %v", runs, err)
+		}
+		if !slices.Equal(*asked, []*wall.Docker{by}) {
+			t.Errorf("asked through %p, want %p", *asked, by)
+		}
+	}
+}
+
+// TestTheRegistryAsksThroughTheRunsDocker pins the Docker a run's check against the
+// registry asks through: the run's wall when it is a Docker, and none for another wall.
+func TestTheRegistryAsksThroughTheRunsDocker(t *testing.T) {
+	bin := t.TempDir()
+	command := filepath.Join(bin, "docker")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(bin, "helper")
+	if err := os.WriteFile(helper, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := &wall.Docker{Command: command, Helper: helper}
+	for _, c := range []struct {
+		name string
+		w    wall.Wall
+		want *wall.Docker
+	}{
+		{"a Docker", d, d},
+		{"another wall", &openWall{}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			sub := mkdirs(t, filepath.Join(root, "sub"))
+			leave(t, root, &leftEngine)
+			asked := askedThrough(t)
+			sp := walledSpec(t, c.w)
+			sp.Mounts, sp.Dir = []wall.Mount{{Path: sub}}, sub
+			refusalOf(t, "mount_shared_with_run", runErr(sp))
+			if len(*asked) == 0 || slices.ContainsFunc(*asked,
+				func(by *wall.Docker) bool { return by != c.want }) {
+				t.Errorf("asked through %p, want %p", *asked, c.want)
+			}
+		})
 	}
 }

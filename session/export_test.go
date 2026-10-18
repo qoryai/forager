@@ -38,7 +38,24 @@ func SetRunContainersExist(
 	f func(ctx context.Context, e wall.Engine, runID string) (bool, error),
 ) {
 	if f == nil {
-		f = wall.RunContainersExist
+		runContainersExist = askContainers
+		return
+	}
+	runContainersExist = func(
+		ctx context.Context, _ *wall.Docker, e wall.Engine, runID string,
+	) (bool, error) {
+		return f(ctx, e, runID)
+	}
+}
+
+// SetRunContainersAsked sets what the registry asks whether a run's containers exist,
+// with the Docker of the run that asks, nil for another wall; nil for the engine's own
+// answer.
+func SetRunContainersAsked(
+	f func(ctx context.Context, d *wall.Docker, e wall.Engine, runID string) (bool, error),
+) {
+	if f == nil {
+		f = askContainers
 	}
 	runContainersExist = f
 }
