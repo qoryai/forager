@@ -121,6 +121,16 @@ type Spec struct {
 	// them, one of the gateway's files, or one of the paths Forager knows itself,
 	// RunsDir among them, mount_contains_forager_files: see [Overlap].
 	ForagerFiles []string
+	// Written are the places of this machine, directories, that the caller records as
+	// writable by a walled run: the workspaces and the writable mounts of the walled runs
+	// it starts. A file the Runtime reads from this machine as the run starts, the
+	// settings Claude Code is passed say, is refused when its path is or lies inside one
+	// of them, as given or through links, or is reached through one; so is one in a
+	// writable bind of another walled run in the registry and, behind a Wall, one in a
+	// writable bind of this run's, Dir among them. Behind a Wall, a mount or Dir whose
+	// path goes through a link inside one of them and does not resolve into it is no
+	// run, mount_through_link. A relative path is taken from the working directory.
+	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
@@ -414,11 +424,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	var listed *registration
+	var wallOwn []bindSource
 	if spec.Wall != nil {
 		// The wall's own binds are listed from the start, as far as it knows them, so a
 		// run that starts and ends before this one binds them is checked against them.
-		own, err := firstWallBinds(spec.Wall)
-		if err != nil {
+		if wallOwn, err = firstWallBinds(spec.Wall); err != nil {
 			return nil, err
 		}
 		var engine *wall.Engine
@@ -426,7 +436,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			v := e.Engine(ctx)
 			engine = &v
 		}
-		if listed, err = register(runID, append(plan.sources, own...), engine); err != nil {
+		if listed, err = register(runID, append(plan.sources, wallOwn...), engine); err != nil {
 			return nil, err
 		}
 		defer listed.release()
@@ -650,9 +660,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// sets is Forager's own and wins over a server's variable of the same name. Behind
 	// a wall the run directory goes in read-only, apart from every place the run binds:
 	// the settings are read from it, and the record in it is not the agent's to rewrite
-	// or move. Behind a wall the runtime learns the placeholders the run sets.
+	// or move. Behind a wall the runtime learns the placeholders the run sets. A file
+	// the runtime reads from this machine is refused when a walled run could have
+	// written it: one in a place of Spec.Written, in a writable bind of another walled
+	// run in the registry or, behind a wall, in a writable bind of this run's.
+	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
-	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}
+	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
+		Readable: readable(written)}
 	if spec.Wall != nil {
 		attach.Placeholders = slices.Clone(answer.Placeholders)
 	}

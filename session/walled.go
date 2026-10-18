@@ -338,6 +338,91 @@ func readEntry(file string) (walledEntry, bool, error) {
 	return walledEntry{}, false, nil
 }
 
+// othersWritable are the writable binds of the other walled runs of this user's in the
+// registry, each by its path as resolved when that run listed it: the places their
+// agents can write. An entry whose lock is free counts too, since its run's containers
+// may still be going; one of those that cannot be read is skipped, and one of a run
+// still going that cannot be read is an error. A registry that does not exist holds
+// none, and is not made.
+func othersWritable(runID string) ([]string, error) {
+	dir, err := walledDir()
+	if err != nil {
+		return nil, fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if dir, err = openRegistry(); err != nil {
+		return nil, err
+	}
+	unlock, err := lockRegistry(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	var out []string
+	for _, e := range names {
+		name := e.Name()
+		if name == runID || CheckRunID(name) != nil {
+			continue
+		}
+		entry, ok, err := writtenEntry(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		for _, b := range entry.Binds {
+			if b.Writable {
+				out = append(out, b.Resolved)
+			}
+		}
+	}
+	return out, nil
+}
+
+// writtenEntry reads one entry of the registry for [othersWritable], and whether it
+// counts: one that is gone, or whose lock is free and that cannot be read, does not.
+func writtenEntry(file string) (walledEntry, bool, error) {
+	f, err := os.Open(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return walledEntry{}, false, nil
+	}
+	if err != nil {
+		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	defer f.Close()
+	held := false
+	switch err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); {
+	case errors.Is(err, syscall.EWOULDBLOCK):
+		held = true
+	case err != nil:
+		return walledEntry{}, false,
+			fmt.Errorf("the registry of walled runs: locking %s: %w", file, err)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	var entry walledEntry
+	if err == nil {
+		err = json.Unmarshal(b, &entry)
+	}
+	if err == nil && entry.RunID != filepath.Base(file) {
+		err = errors.New("it names another run")
+	}
+	switch {
+	case err != nil && held:
+		return walledEntry{}, false, fmt.Errorf("the registry of walled runs: the "+
+			"entry %s of a run still going cannot be read", file)
+	case err != nil:
+		return walledEntry{}, false, nil
+	}
+	return entry, true, nil
+}
+
 // engineUnreachable is the refusal of a run that cannot ask the container engine
 // whether an earlier walled run, whose session is gone, still has containers: nothing is
 // bound while one may. Its names are the earlier run's id and file, the path of its

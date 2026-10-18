@@ -331,6 +331,13 @@ up in its parent, so two binds of one root are allowed.
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
+
+  The same holds of a link inside a place of `Spec.Written`, the places the caller
+  records as written by walled runs, though no walled run that wrote it is still
+  going: `Names` holds the place, the link and the written place as passed. Its
+  sentence reads: "/code/repo/.claude/worktrees/wt is reached through the link
+  /code/repo/.claude/worktrees/wt inside /code/repo, which a walled agent can change:
+  list the link's target itself".
 - **Forager's files.** A writable place that contains a directory a name on the way
   to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
@@ -419,6 +426,37 @@ directories, fails the run, with a sentence that says which.
 So no name on the way to a bind source is looked up in a place a walled agent of this
 user's can write. A process outside every wall, the user's or another user's, can still
 change a path between the last check and the bind.
+
+### No file read from a place an agent can write
+
+Claude Code's runtime reads one file of this machine as the run starts: the settings
+file passed with `--settings`, which it copies into the run directory with Forager's
+hooks added. The session refuses that file when it lies in a place a walled run can
+write, so no walled run chooses what a later run is given:
+
+- the places the caller lists in `Spec.Written`, the workspaces and the writable mounts
+  of the walled runs it starts, with or without a wall for this run;
+- the writable binds of the other walled runs of this user's in the registry, by the
+  paths they resolved to, with or without a wall for this run. An entry whose session is
+  gone counts too, until a walled run finds its containers gone and removes it;
+- behind a wall, this run's writable binds: the workspace, or the mount that holds it,
+  the writable mounts and the wall's writable binds.
+
+A path with a `..` name is refused first, "it has a ".." part": the system applies `..`
+after the link before it, so the path made clean would name another file than the one
+opened. Otherwise the path is made absolute once, and that one path is checked and
+opened. A file is refused when its path, absolute and clean or resolved through every
+link, is or lies inside such a place, the place taken as given and resolved, by whole
+names and regardless of case; when a name on the way to it is looked up inside such a
+place; when its last part is a link; and when it is not a regular file. The file is then
+opened without following a link as its last part, and read only when it is a regular
+file of at most 1 MiB and the same file as the one its path resolved to when it was
+checked, or the run is refused with "it changed while it was checked". A refusal stops
+the run before the runtime starts, with the session's error, such as "runtime claude:
+settings /work/launch-settings.json: it lies in /work, which a walled run can write".
+Settings passed as a document, `--settings '{…}'`, are no file and are not checked. The
+places are worked out only when a file is to be read: a run that passes none does not
+read the registry for them.
 
 ### The helper
 

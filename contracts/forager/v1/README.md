@@ -194,6 +194,12 @@ One run, on a developer machine, with a server configured:
    interactive session whose API key is a placeholder, a script that pre-approves the
    placeholder value in Claude Code's configuration before it starts (§The descriptor).
    What is prepared goes into the run directory; the composed home is not modified.
+   A settings file that lies in a place a walled run can write, whose path has a `..`
+   name, that is a link or that is not a regular file of at most 1 MiB is not read, and
+   the run does not start. The
+   places are the ones the caller records as written by walled runs, the writable binds
+   of the other walled runs in the registry and, behind a wall, the run's writable
+   binds.
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.
@@ -2830,7 +2836,9 @@ up in its parent, so two binds of one root are allowed:
   the run's and that does not resolve into it is no run, `mount_through_link`: the
   agent that writes the link would choose what is bound. Its names are the place as
   passed, the link, absolute and clean, the last one inside the writable place on the
-  way, and the writable place as passed;
+  way, and the writable place as passed. The same holds of a link inside a place the
+  caller records as written by walled runs (`Spec.Written`), whether or not a run that
+  wrote it is still going: the names are the place, the link and the written place;
 - the runs directory is one of Forager's files, so the run directory lies in no
   place the run lists, and a writable place that holds a directory a name on the way
   to one of Forager's files is looked up in is `mount_contains_forager_files`;

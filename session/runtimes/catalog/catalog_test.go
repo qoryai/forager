@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qoryai/forager/session/runtimes/catalog"
@@ -56,5 +57,43 @@ func TestLookupIsTheMachinesDescriptorThenTheContractsThenBare(t *testing.T) {
 	long := "a" + strings.Repeat("b", 63)
 	if rt, err := catalog.Lookup(long, dir); err != nil || rt.Name() != long {
 		t.Errorf("a name of 64 characters: %v", err)
+	}
+}
+
+// TestLookupReadsOnlyAPlainDescriptor pins what Lookup reads of a descriptor in dir:
+// never through a link as its last part, only a regular file and at most 1 MiB; a
+// refusal names the descriptor.
+func TestLookupReadsOnlyAPlainDescriptor(t *testing.T) {
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	doc := "version: 1\nruntime: codex\nruntime_version: \"9\"\nsources:\n  output: {format: jsonl}\nrules:\n  - {source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}\n"
+	target := filepath.Join(elsewhere, "codex.yaml")
+	if err := os.WriteFile(target, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "codex.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "amp.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pi.yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	big := doc + "# " + strings.Repeat("x", 1<<20) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "big.yaml"), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"codex": "the descriptor " + filepath.Join(dir, "codex.yaml") + ": it is a link",
+		"amp":   "the descriptor " + filepath.Join(dir, "amp.yaml") + ": it is not a regular file",
+		"pi":    "the descriptor " + filepath.Join(dir, "pi.yaml") + ": it is not a regular file",
+		"big":   "the descriptor " + filepath.Join(dir, "big.yaml") + ": it is larger than 1048576 bytes",
+	} {
+		if _, err := catalog.Lookup(name, dir); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+	}
+	if rt, err := catalog.Lookup("codex", elsewhere); err != nil || rt.Name() != "codex" {
+		t.Errorf("the descriptor the link leads to: %v", err)
 	}
 }

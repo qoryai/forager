@@ -651,3 +651,37 @@ func TestAnotherRunsBindThatCannotBeResolvedFailsTheRun(t *testing.T) {
 	}
 	os.Chmod(locked, 0o755)
 }
+
+// TestAPlaceThroughALinkInAWrittenPlaceIsNoRun pins a link an earlier walled run's agent
+// left inside a place of Spec.Written, where a later run's workspace was to be: a place
+// whose path goes through it and does not resolve into the written place is refused,
+// as the workspace or as a mount of either mode, though no walled run is still going.
+// A link there that resolves into the written place is bound as checked, and without
+// Spec.Written the same link is not seen.
+func TestAPlaceThroughALinkInAWrittenPlaceIsNoRun(t *testing.T) {
+	repo, secret := t.TempDir(), t.TempDir()
+	trees := mkdirs(t, filepath.Join(repo, ".claude", "worktrees"), filepath.Join(repo, "real"))
+	wt := filepath.Join(trees, "wt")
+	symlink(t, secret, wt)
+	sp := walledSpec(t, &openWall{})
+	sp.Written, sp.Dir = []string{repo}, wt
+	throughLink(t, runErr(sp), wt, wt, repo)
+	for _, readOnly := range []bool{false, true} {
+		sp := walledSpec(t, &openWall{})
+		sp.Written, sp.Mounts = []string{repo}, []wall.Mount{{Path: wt, ReadOnly: readOnly}}
+		throughLink(t, runErr(sp), wt, wt, repo)
+	}
+
+	inside := filepath.Join(repo, "current")
+	symlink(t, filepath.Join(repo, "real"), inside)
+	sp = walledSpec(t, &openWall{})
+	sp.Written, sp.Dir = []string{repo}, inside
+	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("a link that resolves into the written place: %+v, %v", res, err)
+	}
+	sp = walledSpec(t, &openWall{})
+	sp.Dir = wt
+	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
+		t.Errorf("without Spec.Written: %+v, %v", res, err)
+	}
+}
