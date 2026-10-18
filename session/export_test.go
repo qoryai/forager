@@ -49,3 +49,9 @@ var DirInBinds = dirInBinds
 // SetExitObserved sets what a run calls the moment its runtime's exit is observed,
 // once Cancelled is decided; nil for nothing.
 func SetExitObserved(f func()) { exitObserved = f }
+
+// Readable is what a runtime is given to ask of a file before it reads it from this
+// machine, for the places a walled run could have written.
+func Readable(places []string) func(string) (string, error) {
+	return readable(func() ([]string, error) { return places, nil })
+}

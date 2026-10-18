@@ -196,7 +196,7 @@ func specGateway(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
 	return session.Spec{
 		Runtime:        claudeCode(t),
 		Command:        os.Args[0],
-		Args:           []string{"--settings", writeSettings(t, dir)},
+		Args:           []string{"--settings", writeSettings(t, t.TempDir())},
 		Env:            append([]string{"FAKE_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
 		Dir:            dir,
 		RunsDir:        filepath.Join(t.TempDir(), "runs"),
@@ -222,6 +222,8 @@ func claudeCode(t *testing.T) runtimes.Runtime {
 	return rt
 }
 
+// writeSettings writes the settings a launch passes into dir, which spec keeps outside
+// the workspace: a walled run's workspace is a place the session reads no file from.
 func writeSettings(t *testing.T, dir string) string {
 	t.Helper()
 	p := filepath.Join(dir, "launch-settings.json")

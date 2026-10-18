@@ -523,9 +523,9 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 //     part of a read-only one writes what the run shows read-only. Its names are the
 //     inner place and the outer one, in that order.
 //   - mount_through_link: a place, of either mode, whose path goes through a link
-//     inside a writable place and does not resolve into it: the agent that writes the
-//     link chooses what is bound. Its names are the place, the link and the writable
-//     place, in that order.
+//     inside a writable place, or inside a place of Spec.Written, and does not resolve
+//     into it: the agent that writes the link chooses what is bound. Its names are the
+//     place, the link and the writable or written place, in that order.
 //
 // A place inside another one of the same mode is no bind of its own: the enclosure
 // reaches it through the outer one, at the same path. So no bound place is reached
@@ -606,23 +606,23 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 			if j == i || !out.writable {
 				continue
 			}
-			if ok, _ := holds(out.at, in.at); ok {
-				continue
+			if err := throughLink(in, out); err != nil {
+				return mountPlan{}, err
 			}
-			if _, ok := lookedUpIn(out.at, in.looks); !ok {
-				continue
-			}
-			link, err := linkIn(out, in.looks)
-			if err != nil {
-				return mountPlan{}, fmt.Errorf("%s %s is looked up inside %s %s and resolves "+
-					"outside it: %w", in.what, in.path, out.what, out.path, err)
-			}
-			return mountPlan{}, &Refusal{
-				Code:  refusal.MountThroughLink,
-				Names: []string{in.path, link, out.path},
-				Detail: fmt.Sprintf("%s is reached through the link %s inside %s, which a "+
-					"walled agent can change: list the link's target itself",
-					in.path, link, out.path),
+		}
+	}
+	// So is a place whose path goes through a link inside a place of Spec.Written and
+	// does not resolve into it: an agent of an earlier walled run, ended or still going,
+	// may have written the link, and it would choose what is bound.
+	for _, w := range spec.Written {
+		at, err := split(w, 0)
+		if err != nil {
+			return mountPlan{}, fmt.Errorf("cannot resolve the written place %s: %w", w, err)
+		}
+		out := shown{path: w, what: "the written place", writable: true, at: at}
+		for _, in := range places {
+			if err := throughLink(in, out); err != nil {
+				return mountPlan{}, err
 			}
 		}
 	}
@@ -692,6 +692,31 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	run.Path = spec.RunsDir
 	plan.sources = append(plan.sources, run)
 	return plan, nil
+}
+
+// throughLink is the refusal of a place whose path goes through a link inside the
+// writable place out and does not resolve into it, mount_through_link, or nil when its
+// path does not. A place that resolves into out is reached through it, and nothing is
+// bound through the link.
+func throughLink(in, out shown) error {
+	if ok, _ := holds(out.at, in.at); ok {
+		return nil
+	}
+	if _, ok := lookedUpIn(out.at, in.looks); !ok {
+		return nil
+	}
+	link, err := linkIn(out, in.looks)
+	if err != nil {
+		return fmt.Errorf("%s %s is looked up inside %s %s and resolves "+
+			"outside it: %w", in.what, in.path, out.what, out.path, err)
+	}
+	return &Refusal{
+		Code:  refusal.MountThroughLink,
+		Names: []string{in.path, link, out.path},
+		Detail: fmt.Sprintf("%s is reached through the link %s inside %s, which a "+
+			"walled agent can change: list the link's target itself",
+			in.path, link, out.path),
+	}
 }
 
 // dirInBinds fails a plan whose working directory lies, by its names, in none of its

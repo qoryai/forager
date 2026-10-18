@@ -120,6 +120,39 @@ release may change what an existing document does, and says so under Upgrading.
   `preparation.sh` in the run directory. The runtime starts once it exits 0; one that
   exits otherwise is the run's exit status. A spec with a preparation and no `Wall` is
   refused.
+- `session.Spec.Written`, the places of this machine the caller records as writable by a
+  walled run: the workspaces and the writable mounts of the walled runs it starts.
+- `runtimes.Attach.Readable`, which a runtime asks of a file of this machine, by its
+  absolute path, before `Prepare` reads it, and which the session sets: it returns where
+  the path resolves through every link, the file `Prepare` may read, and refuses a file
+  a walled run could have written and a path with a `..` name.
+
+#### Fixed
+
+- The `claude-settings` installer read the settings file the launch passes with
+  `--settings` through links, wherever it lay, and copied it into the run directory,
+  where the enclosure reads it: a walled run could put a link to any JSON file of this
+  machine in its workspace, in place of the settings a later run is passed, and hand
+  that file to the agent. The session now refuses a settings file whose path, as given
+  or through links, is or lies inside, or is reached through, a place of
+  `Spec.Written` or, behind a wall, a writable bind of the run's, the workspace among
+  them; one whose path has a `..` name; one whose last part is a link; and one that is
+  not a regular file or is larger than 1 MiB. The path is made absolute once and that
+  path is checked and opened. The open does not follow a link as the path's last part,
+  and the file opened must be the one the path resolved to when it was checked. The run
+  then stops before the runtime starts, with "runtime claude: settings <path>: " and the
+  reason. Settings passed as a document are not checked, as before. The places also hold
+  the writable binds of the other walled runs in the registry, with or without a wall
+  for this run, and are worked out only when a settings file is to be read.
+- A walled run bound a mount or a workspace through a link that an agent of an earlier
+  walled run, already ended, had left in a place it could write: the engine followed
+  the link, so the run could bind any directory of this machine, writable. A place whose
+  path goes through a link inside a place of `Spec.Written` and does not resolve into
+  it is now no run, `mount_through_link`, with the place, the link and the written place
+  as its names, as for a link inside a writable place of the run's.
+- `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
+  one only when its last part is no link, it is a regular file and it holds at most
+  1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
 
 #### Changed
 
@@ -145,6 +178,11 @@ release may change what an existing document does, and says so under Upgrading.
   the machine's default, its workspace at `/workspace`, and a name its image's `ENV`
   sets that the runtime denies unset. The Docker adapter's test pushes the images to a
   registry it starts on the machine.
+
+#### Changed
+
+- The conformance suite passes the launch's settings file from outside the workspace,
+  since the session refuses a settings file in it.
 
 ## [0.7.0] - 2026-10-12
 

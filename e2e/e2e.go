@@ -829,7 +829,9 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	dir, runs := t.TempDir(), filepath.Join(t.TempDir(), "runs")
 	var out, errs, reports bytes.Buffer
 	var reportsMu sync.Mutex
-	settings := filepath.Join(dir, "launch-settings.json")
+	// The settings the launch passes lie outside the workspace, which a walled run
+	// writes: the session refuses a file in it.
+	settings := filepath.Join(t.TempDir(), "launch-settings.json")
 	if err := os.WriteFile(settings, []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

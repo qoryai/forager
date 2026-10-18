@@ -2,9 +2,11 @@ package claude_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qoryai/forager/contracts"
@@ -91,5 +93,74 @@ func TestSettingsKeepsWhatTheLaunchPassedAndAddsTheForwarder(t *testing.T) {
 		Launch: runtimes.Launch{Args: []string{"--settings", filepath.Join(t.TempDir(), "absent.json")}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 	}); err == nil {
 		t.Error("settings that cannot be read were passed over")
+	}
+}
+
+// TestSettingsReadsOnlyAPlainFileItIsLetRead pins what the installer reads of a file
+// the launch names: only one Readable passes, never through a link as its last part,
+// only a regular file and at most 1 MiB; a refusal names the file. A document the
+// launch holds is no file, and Readable is not asked of it.
+func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
+	dir := t.TempDir()
+	p := func(name string) string { return filepath.Join(dir, name) }
+	if err := os.WriteFile(p("plain.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(p("plain.json"), p("link.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p("dir.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(p("fifo.json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	big := append([]byte(`{"x":"`), make([]byte, 1<<20)...)
+	for i := 6; i < len(big); i++ {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(p("big.json"), append(big, '"', '}'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// edge is 1 MiB exactly, the most the installer reads.
+	edge := append([]byte(`{"x":"`), make([]byte, 1<<20-8)...)
+	for i := 6; i < len(edge); i++ {
+		edge[i] = 'a'
+	}
+	if err := os.WriteFile(p("edge.json"), append(edge, '"', '}'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refuseAll := func(string) (string, error) { return "", errors.New("refused here") }
+	pass := filepath.EvalSymlinks
+	other := func(string) (string, error) { return filepath.EvalSymlinks(p("edge.json")) }
+	for _, c := range []struct {
+		name     string
+		arg      string
+		readable func(string) (string, error)
+		want     string
+	}{
+		{"a plain file", p("plain.json"), nil, ""},
+		{"a plain file Readable passes", p("plain.json"), pass, ""},
+		{"a file other than the one Readable judged", p("plain.json"), other, "settings " + p("plain.json") + ": it changed while it was checked"},
+		{"a file Readable refuses", p("plain.json"), refuseAll, "settings " + p("plain.json") + ": refused here"},
+		{"a link as its last part", p("link.json"), nil, "settings " + p("link.json") + ": it is a link"},
+		{"a directory", p("dir.json"), nil, "settings " + p("dir.json") + ": it is not a regular file"},
+		{"a FIFO", p("fifo.json"), nil, "settings " + p("fifo.json") + ": it is not a regular file"},
+		{"a file of 1 MiB", p("edge.json"), nil, ""},
+		{"a file larger than 1 MiB", p("big.json"), nil, "settings " + p("big.json") + ": it is larger than 1048576 bytes"},
+		{"a document", ` {"permissions":{}}`, refuseAll, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Command: "claude", Args: []string{"--settings", c.arg}},
+				RunDir: t.TempDir(), Forwarder: []string{"q"}, Readable: c.readable,
+			})
+			switch {
+			case c.want == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case c.want != "" && (err == nil || err.Error() != c.want):
+				t.Errorf("got %v, want %q", err, c.want)
+			}
+		})
 	}
 }
