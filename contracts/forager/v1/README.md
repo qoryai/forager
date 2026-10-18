@@ -194,8 +194,9 @@ One run, on a developer machine, with a server configured:
    interactive session whose API key is a placeholder, a script that pre-approves the
    placeholder value in Claude Code's configuration before it starts (§The descriptor).
    What is prepared goes into the run directory; the composed home is not modified.
-   A settings file that lies in a place a walled run can write, that is a link or that
-   is not a regular file of at most 1 MiB is not read, and the run does not start. The
+   A settings file that lies in a place a walled run can write, whose path has a `..`
+   name, that is a link or that is not a regular file of at most 1 MiB is not read, and
+   the run does not start. The
    places are the ones the caller records as written by walled runs, the writable binds
    of the other walled runs in the registry and, behind a wall, the run's writable
    binds.

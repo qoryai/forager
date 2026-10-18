@@ -442,14 +442,21 @@ write, so no walled run chooses what a later run is given:
 - behind a wall, this run's writable binds: the workspace, or the mount that holds it,
   the writable mounts and the wall's writable binds.
 
-A file is refused when its path, absolute and clean or resolved through every link, is
-or lies inside such a place, the place taken as given and resolved, by whole names and
-regardless of case; when a name on the way to it is looked up inside such a place; and
-when its last part is a link. The file is then opened without following a link, and
-read only when it is a regular file of at most 1 MiB. A refusal stops the run before the
-runtime starts, with the session's error, such as "runtime claude: settings
-/work/launch-settings.json: it lies in /work, which a walled run can write". Settings
-passed as a document, `--settings '{…}'`, are no file and are not checked.
+A path with a `..` name is refused first, "it has a ".." part": the system applies `..`
+after the link before it, so the path made clean would name another file than the one
+opened. Otherwise the path is made absolute once, and that one path is checked and
+opened. A file is refused when its path, absolute and clean or resolved through every
+link, is or lies inside such a place, the place taken as given and resolved, by whole
+names and regardless of case; when a name on the way to it is looked up inside such a
+place; when its last part is a link; and when it is not a regular file. The file is then
+opened without following a link as its last part, and read only when it is a regular
+file of at most 1 MiB and the same file as the one its path resolved to when it was
+checked, or the run is refused with "it changed while it was checked". A refusal stops
+the run before the runtime starts, with the session's error, such as "runtime claude:
+settings /work/launch-settings.json: it lies in /work, which a walled run can write".
+Settings passed as a document, `--settings '{…}'`, are no file and are not checked. The
+places are worked out only when a file is to be read: a run that passes none does not
+read the registry for them.
 
 ### The helper
 

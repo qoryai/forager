@@ -69,9 +69,10 @@ release may change what an existing document does, and says so under Upgrading.
   refused.
 - `session.Spec.Written`, the places of this machine the caller records as writable by a
   walled run: the workspaces and the writable mounts of the walled runs it starts.
-- `runtimes.Attach.Readable`, which a runtime asks of a file of this machine before
-  `Prepare` reads it, and which the session sets: it refuses a file a walled run could
-  have written.
+- `runtimes.Attach.Readable`, which a runtime asks of a file of this machine, by its
+  absolute path, before `Prepare` reads it, and which the session sets: it returns where
+  the path resolves through every link, the file `Prepare` may read, and refuses a file
+  a walled run could have written and a path with a `..` name.
 
 #### Fixed
 
@@ -82,11 +83,14 @@ release may change what an existing document does, and says so under Upgrading.
   that file to the agent. The session now refuses a settings file whose path, as given
   or through links, is or lies inside, or is reached through, a place of
   `Spec.Written` or, behind a wall, a writable bind of the run's, the workspace among
-  them; one whose last part is a link; and one that is not a regular file or is larger
-  than 1 MiB. The file is opened without following a link. The run then stops before
-  the runtime starts, with "runtime claude: settings <path>: " and the reason. Settings
-  passed as a document are not checked, as before. The places also hold the writable
-  binds of the other walled runs in the registry, with or without a wall for this run.
+  them; one whose path has a `..` name; one whose last part is a link; and one that is
+  not a regular file or is larger than 1 MiB. The path is made absolute once and that
+  path is checked and opened. The open does not follow a link as the path's last part,
+  and the file opened must be the one the path resolved to when it was checked. The run
+  then stops before the runtime starts, with "runtime claude: settings <path>: " and the
+  reason. Settings passed as a document are not checked, as before. The places also hold
+  the writable binds of the other walled runs in the registry, with or without a wall
+  for this run, and are worked out only when a settings file is to be read.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
   the link, so the run could bind any directory of this machine, writable. A place whose
