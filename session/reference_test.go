@@ -78,7 +78,9 @@ func TestARunInAnImageByReference(t *testing.T) {
 	sp, g := specGateway(t, "FAKE_EXIT=0")
 	byReference(g)
 	dir := sp.Dir
-	settings := filepath.Join(dir, "settings-with-a-hook.json")
+	// The settings lie outside the workspace, a place the session reads no file from;
+	// what they name in it is written as the enclosure sees it.
+	settings := filepath.Join(t.TempDir(), "settings-with-a-hook.json")
 	hook := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ` + dir + `/hook.sh"}]}]},"note":"` + dir + `shop"}`
 	if err := os.WriteFile(settings, []byte(hook), 0o644); err != nil {
 		t.Fatal(err)
@@ -126,6 +128,24 @@ func TestARunInAnImageByReference(t *testing.T) {
 	if started["dir"] != "/workspace" || started["image"] != pinned || started["image_name"] != nil || started["container_runtime"] != nil ||
 		started["docker"] != nil || started["image_fetch_ms"] != float64(1500) {
 		t.Errorf("run.started %v", started)
+	}
+}
+
+// TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine pins that a run whose workspace
+// is at /workspace inside judges the settings file by its path on this machine: one in
+// the workspace is refused, named by that path, before anything is written inside.
+func TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	byReference(g)
+	settings := filepath.Join(sp.Dir, "launch-settings.json")
+	if err := os.WriteFile(settings, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sp.Args = []string{"--settings", settings}
+	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}
+	want := "runtime claude: settings " + settings + ": it lies in " + sp.Dir + ", which a walled run can write"
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("the run: %v, want %q", err, want)
 	}
 }
 
