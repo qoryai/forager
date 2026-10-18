@@ -126,6 +126,12 @@ release may change what an existing document does, and says so under Upgrading.
   absolute path, before `Prepare` reads it, and which the session sets: it returns where
   the path resolves through every link, the file `Prepare` may read, and refuses a file
   a walled run could have written and a path with a `..` name.
+- `session.RunsBinding(ctx, p)`, the walled runs still going on this machine whose binds
+  overlap p, an absolute path, by the registry's rule, each a `session.WalledRun` of its
+  run id and the absolute path of its entry. A bind overlaps p when it is p, holds p or
+  lies inside p, compared as written and as resolved through links. The entry of a run
+  that is over is removed, an engine that cannot be asked is `engine_unreachable`, naming
+  the run and its entry, and a relative p is an error.
 
 #### Fixed
 

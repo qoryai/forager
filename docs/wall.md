@@ -429,6 +429,17 @@ up in its parent, so two binds of one root are allowed.
   The check comes before the gateway is contacted, and the run leaves the registry when
   it ends, however it ends, unless its wall could not be removed.
 
+  `session.RunsBinding(ctx, p)` reads the registry, under its lock, for a caller that
+  removes or reuses a place p, an absolute path: it returns each walled run still going,
+  by the same rule, one of whose binds overlaps p, as a `session.WalledRun` of the run's
+  id and the absolute path of its entry. A bind overlaps p when it is p, holds p or lies
+  inside p, so a run that binds only `p/.git` counts. The paths are compared as written
+  and as resolved through links, either side resolved now, so a link on neither side
+  hides an overlap; the run directory is compared by the path it resolved to. The read
+  removes the entries of runs that are over, as a run that starts does, is
+  `engine_unreachable`, with the same `Names` and sentence, when it cannot ask, and is a
+  plain error for a relative p.
+
 A refusal's first name is always a `Spec.Mounts` path or `Dir`, exactly as passed, and
 the run directory is named by `Spec.RunsDir`. Every check runs again just before the
 enclosure binds the mounts, with the wall's extra binds, and the run's entry is updated.

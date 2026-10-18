@@ -221,6 +221,30 @@ func lockRegistry(dir string) (func(), error) {
 // that share that run's run directory. The caller holds the registry's lock. An entry
 // whose lock is free is a run that is over: it is removed.
 func checkShared(dir, runID string, binds []bindSource) error {
+	return goingEntries(context.Background(), dir, runID,
+		func(_ string, other walledEntry) error {
+			for _, b := range other.Binds {
+				ob, err := resolveOther(other.RunID, b)
+				if err != nil {
+					return err
+				}
+				for _, own := range binds {
+					if err := shared(own, other.RunID, ob); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+}
+
+// goingEntries calls each with the file and the entry of every walled run in the
+// registry dir still going, runID's left out, by [readEntry], in the order of their
+// names, and returns the first error, of an entry or of each. The caller holds the
+// registry's lock. An entry whose lock is free is a run that is over: it is removed.
+func goingEntries(
+	ctx context.Context, dir, runID string, each func(file string, entry walledEntry) error,
+) error {
 	names, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("the registry of walled runs: %w", err)
@@ -230,26 +254,136 @@ func checkShared(dir, runID string, binds []bindSource) error {
 		if name == runID || CheckRunID(name) != nil {
 			continue
 		}
-		other, live, err := readEntry(filepath.Join(dir, name))
+		file := filepath.Join(dir, name)
+		entry, live, err := readEntry(ctx, file)
 		if err != nil {
 			return err
 		}
 		if !live {
 			continue
 		}
-		for _, b := range other.Binds {
-			ob, err := resolveOther(other.RunID, b)
-			if err != nil {
-				return err
-			}
-			for _, own := range binds {
-				if err := shared(own, other.RunID, ob); err != nil {
-					return err
-				}
-			}
+		if err := each(file, entry); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// WalledRun is a walled run of this user's still going on this machine, as the
+// registry of walled runs lists it.
+type WalledRun struct {
+	// RunID is the run's id.
+	RunID string
+	// Entry is the path of the run's entry in the registry, absolute.
+	Entry string
+}
+
+// RunsBinding returns the walled runs of this user's still going on this machine
+// that bind a path overlapping p, an absolute path, each once, in the order of their
+// entries' names. A bind overlaps p when it is p, holds p or lies inside p: a run that
+// binds p, a directory p lies inside, or only a path inside p, such as p/.git, is
+// returned. The paths are compared as written and as resolved through symbolic links,
+// so that a link on neither side hides an overlap: p as passed and resolved now,
+// against a bind's path as the run passed it, which its engine binds again when its
+// container starts again, as written and resolved now, and against the path the bind
+// resolved to when the run listed it, resolved again now. The run directory is
+// compared by the path it resolved to alone, since its entry records the runs
+// directory that holds it as its path. Names are compared whole, regardless of case,
+// as [Overlap] compares them: /a/bc does not overlap /a/b.
+//
+// A run is still going while its session holds its entry's lock, or else while the
+// container engine its entry records holds a container labelled with its run id, in
+// any state, a stopped one included; an entry with neither is removed, as a run that
+// starts removes it. When the engine cannot be asked, or an entry whose lock is free
+// cannot be read or records no engine, the error is a *[Refusal] with the code
+// engine_unreachable, whose Names are the run's id and the path of its entry; an entry
+// whose lock is held and that cannot be read is a plain error. The registry's lock is
+// held for the whole read; a registry that does not exist holds no run, and is not
+// made. A relative p, or one that cannot be resolved, is an error.
+func RunsBinding(ctx context.Context, p string) ([]WalledRun, error) {
+	if !filepath.IsAbs(p) {
+		return nil, fmt.Errorf("the path %q is not absolute", p)
+	}
+	at, err := split(p, 0)
+	if err != nil {
+		return nil, err
+	}
+	place := []splitPath{written(p), at}
+	dir, err := walledDir()
+	if err != nil {
+		return nil, fmt.Errorf("the registry of walled runs: %w", err)
+	}
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if dir, err = openRegistry(); err != nil {
+		return nil, err
+	}
+	unlock, err := lockRegistry(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	var out []WalledRun
+	err = goingEntries(ctx, dir, "", func(file string, entry walledEntry) error {
+		for _, b := range entry.Binds {
+			forms, err := bindForms(entry.RunID, b)
+			if err != nil {
+				return err
+			}
+			if overlaps(place, forms) {
+				out = append(out, WalledRun{RunID: entry.RunID, Entry: file})
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// bindForms are the forms of a bind of another run's [RunsBinding] compares: the path
+// it resolved to, resolved again now, and, but for the run directory, the path the
+// run passed, as written and resolved now. A failure to resolve one is the error of
+// [resolveOther].
+func bindForms(runID string, b bindSource) ([]splitPath, error) {
+	at, err := resolveOtherPath(runID, b.Resolved)
+	if err != nil {
+		return nil, err
+	}
+	forms := []splitPath{at}
+	if b.Kind == kindRun || !filepath.IsAbs(b.Path) {
+		return forms, nil
+	}
+	now, err := resolveOtherPath(runID, b.Path)
+	if err != nil {
+		return nil, err
+	}
+	return append(forms, written(b.Path), now), nil
+}
+
+// overlaps reports whether a form of a place and a form of a bind overlap: one is the
+// other, or lies inside it. It is the one rule of [RunsBinding].
+func overlaps(place, bind []splitPath) bool {
+	for _, p := range place {
+		for _, b := range bind {
+			if ok, _ := holds(b, p); ok {
+				return true
+			}
+			if ok, _ := holds(p, b); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// written is p as written, absolute: its names alone, none of them resolved, so that
+// [holds] compares it name by name with another path, written or resolved.
+func written(p string) splitPath {
+	return splitPath{exists: string(filepath.Separator), tail: parts(filepath.Clean(p))}
 }
 
 // resolveOther is a bind of another run's as the filesystem has it now: its resolved
@@ -259,25 +393,32 @@ func checkShared(dir, runID string, binds []bindSource) error {
 // one is an error, a race with a link that changes included, since a bind this run
 // cannot see may be one it shares.
 func resolveOther(runID string, b bindSource) (bindSource, error) {
-	fail := func(p string, err error) (bindSource, error) {
-		return bindSource{}, fmt.Errorf("the registry of walled runs: cannot "+
-			"resolve %s of the walled run %s, which is still going: %w", p, runID, err)
-	}
-	at, err := split(b.Resolved, 0)
+	at, err := resolveOtherPath(runID, b.Resolved)
 	if err != nil {
-		return fail(b.Resolved, err)
+		return bindSource{}, err
 	}
 	b.at = at
 	for _, entry := range b.Lookups {
 		dir := filepath.Dir(entry)
-		dirAt, err := split(dir, 0)
+		dirAt, err := resolveOtherPath(runID, dir)
 		if err != nil {
-			return fail(dir, err)
+			return bindSource{}, err
 		}
 		b.looks = append(b.looks,
 			lookup{dir: dir, rest: []string{filepath.Base(entry)}, at: dirAt})
 	}
 	return b, nil
+}
+
+// resolveOtherPath is a path of another run's bind as the filesystem has it now, for
+// [resolveOther].
+func resolveOtherPath(runID, p string) (splitPath, error) {
+	at, err := split(p, 0)
+	if err != nil {
+		return splitPath{}, fmt.Errorf("the registry of walled runs: cannot "+
+			"resolve %s of the walled run %s, which is still going: %w", p, runID, err)
+	}
+	return at, nil
 }
 
 // readEntry reads one entry of the registry. An entry whose lock is held is live. One
@@ -286,7 +427,7 @@ func resolveOther(runID string, b bindSource) (bindSource, error) {
 // engine holds none. A run that cannot ask, for an entry that cannot be read, records
 // no engine or an engine that fails, does not start. One whose file is gone already is
 // not live.
-func readEntry(file string) (walledEntry, bool, error) {
+func readEntry(ctx context.Context, file string) (walledEntry, bool, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return walledEntry{}, false, nil
@@ -327,7 +468,7 @@ func readEntry(file string) (walledEntry, bool, error) {
 		return walledEntry{}, false, engineUnreachable(runID, file,
 			fmt.Errorf("its entry %s records no engine", file))
 	}
-	exists, err := runContainersExist(context.Background(), *entry.Engine, runID)
+	exists, err := runContainersExist(ctx, *entry.Engine, runID)
 	switch {
 	case err != nil:
 		return walledEntry{}, false, engineUnreachable(runID, file, err)
