@@ -162,11 +162,11 @@ func TestRunsBindingCountsAHeldEntry(t *testing.T) {
 // p and a path inside p, compared as written and as resolved through links on either
 // side, a link that has changed since the run listed its bind and a bind through a link
 // inside p that leads out of it included; a bind a name on the way to p is looked up
-// in, and one whose names are looked up in p, through a chain of links or a spelling
-// of p through another link; p with a .. name after a link, resolved as the filesystem
-// resolves it; not a sibling of p, nor one whose name only begins with p's, nor another
-// run directory in the same runs directory, nor the directory a .. name after a link
-// would name if p were cleaned.
+// in, and one whose names are looked up in p, through a chain of links or a spelling of
+// p through another link; p with a .. name after a link, resolved as the filesystem
+// resolves it, after a link to ., / or .. too; not a sibling of p, nor one whose name
+// only begins with p's, nor another run directory in the same runs directory, nor the
+// directory a .. name after a link would name if p were cleaned.
 func TestRunsBindingOverlaps(t *testing.T) {
 	base := t.TempDir()
 	p := filepath.Join(base, "a", "b")
@@ -207,6 +207,12 @@ func TestRunsBindingOverlaps(t *testing.T) {
 	mkdirs(t, filepath.Join(base, "deep", "dir"), filepath.Join(base, "deep", "repo"),
 		filepath.Join(base, "repo9"))
 	link("lk", filepath.Join(base, "deep", "dir"))
+	// w/dot leads to ., w/root to / and w/up to ..: a .. after each is the directory
+	// the link leads to's parent, not w.
+	mkdirs(t, filepath.Join(base, "w"))
+	link(filepath.Join("w", "dot"), ".")
+	link(filepath.Join("w", "root"), "/")
+	link(filepath.Join("w", "up"), "..")
 	answer(t, true, nil)
 	for _, c := range []struct {
 		name  string
@@ -227,6 +233,12 @@ func TestRunsBindingOverlaps(t *testing.T) {
 			base + "/lk/../repo", true},
 		{"p with .. after a link, cleaned", bind{filepath.Join(base, "repo9"),
 			resolved(t, filepath.Join(base, "repo9")), ""}, base + "/lk/../repo9", false},
+		{"p with .. after a link to .", bind{filepath.Join(base, "before"),
+			resolved(t, filepath.Join(base, "before")), ""}, base + "/w/dot/..", true},
+		{"p with .. after a link to /", bind{filepath.Join(base, "before"),
+			resolved(t, filepath.Join(base, "before")), ""}, base + "/w/root/..", true},
+		{"p with .. after a link to ..", bind{filepath.Join(base, "before"),
+			resolved(t, filepath.Join(base, "before")), ""}, base + "/w/up/..", true},
 		{"p itself", bind{p, resolved(t, p), ""}, p, true},
 		{"a directory holding p", bind{filepath.Join(base, "a"),
 			resolved(t, filepath.Join(base, "a")), ""}, p, true},

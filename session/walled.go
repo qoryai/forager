@@ -408,19 +408,19 @@ type place struct {
 	looks []lookup
 }
 
-// placeOf is p, absolute, as [RunsBinding] compares it. p is resolved through the
-// lookups on the way to it, of its names as given, which follow a .. name from the
+// placeOf is p, absolute, as [RunsBinding] compares it. p is resolved by the walk of
+// the lookups on the way to it, of its names as given, which follows a .. name from the
 // directory a link led to, as the filesystem does, where cleaning p would drop the
-// link's name and the .. with it.
+// link's name and the .. with it; up to a name that does not exist, and those names
+// below it as written.
 func placeOf(p string) (place, error) {
-	looks, err := lookupsOf(p, parts(p))
+	looks, walked, err := lookupsOf(p, parts(p))
 	if err != nil {
 		return place{}, err
 	}
-	walked := string(filepath.Separator)
-	if len(looks) > 0 {
-		// The last name looked up, from the directory it is looked up in, and only .
-		// and .. names after it, or the names below one that does not exist.
+	if walked == "" {
+		// The walk stopped at a name that does not exist: the directory it is looked
+		// up in, and the names from it on, which nothing resolves.
 		last := looks[len(looks)-1]
 		walked = filepath.Join(append([]string{last.dir}, last.rest...)...)
 	}

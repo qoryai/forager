@@ -261,13 +261,16 @@ func lookups(p string) ([]lookup, error) {
 	if err != nil {
 		return nil, err
 	}
-	return lookupsOf(abs, parts(abs))
+	looks, _, err := lookupsOf(abs, parts(abs))
+	return looks, err
 }
 
 // lookupsOf is [lookups] of the names of the absolute path abs, as they are given: a ..
 // name among them is followed from the directory the walk is in, as the filesystem
-// follows it, where a link may have led.
-func lookupsOf(abs string, names []string) ([]lookup, error) {
+// follows it, where a link may have led. It returns too where the walk ends when it
+// follows every name, through every link, and empty when it stops at a name that
+// does not exist.
+func lookupsOf(abs string, names []string) ([]lookup, string, error) {
 	cur := "/"
 	var out []lookup
 	links := 0
@@ -281,16 +284,16 @@ func lookupsOf(abs string, names []string) ([]lookup, error) {
 		}
 		at, err := split(cur, 0)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out = append(out, lookup{dir: cur, rest: append([]string(nil), names[i:]...), at: at})
 		next := filepath.Join(cur, names[i])
 		info, err := os.Lstat(next)
 		if errors.Is(err, fs.ErrNotExist) {
-			return out, nil
+			return out, "", nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
 			cur = next
@@ -298,11 +301,11 @@ func lookupsOf(abs string, names []string) ([]lookup, error) {
 		}
 		out[len(out)-1].link = true
 		if links++; links > maxLinks {
-			return nil, fmt.Errorf("%s: too many links", abs)
+			return nil, "", fmt.Errorf("%s: too many links", abs)
 		}
 		to, err := os.Readlink(next)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if filepath.IsAbs(to) {
 			cur = "/"
@@ -310,7 +313,7 @@ func lookupsOf(abs string, names []string) ([]lookup, error) {
 		names = append(parts(to), names[i+1:]...)
 		i = -1
 	}
-	return out, nil
+	return out, cur, nil
 }
 
 // parts are the names of a path, as written.
