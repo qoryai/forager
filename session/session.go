@@ -682,10 +682,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// the runtime reads from this machine is refused when a walled run could have
 	// written it: one in a place of Spec.Written, in a writable bind of another walled
 	// run in the registry or, behind a wall, in a writable bind of this run's.
-	written, err := writtenPlaces(spec, runID, plan, wallOwn)
-	if err != nil {
-		return fail(err)
-	}
+	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
 		Readable: readable(written)}

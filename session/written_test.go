@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/session/runtimes/claude"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -43,7 +45,7 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 		{"a file below the place", p("ws"), p("ws/sub/settings.json"), true},
 		{"the place itself", p("ws"), p("ws"), true},
 		{"a file that does not exist yet", p("ws"), p("ws/later/settings.json"), true},
-		{"unclean", p("ws"), p("other") + "/../ws/./settings.json", true},
+		{"unclean", p("ws"), p("ws") + "/./sub//settings.json", true},
 		{"a link in a parent that leads into the place", p("ws"), p("safe/into/settings.json"), true},
 		{"a link in the place that leads out of it", p("ws"), p("ws/out/settings.json"), true},
 		{"a place reached through a link", p("place"), p("ws/settings.json"), true},
@@ -57,7 +59,7 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 		{"a path that goes through a link in the place and leads out of it", p("ws"), p("safe/into/out/settings.json"), true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			err := session.Readable([]string{c.place})(c.path)
+			_, err := session.Readable([]string{c.place})(c.path)
 			if c.refused != (err != nil) {
 				t.Fatalf("Readable(%q) for %q: %v", c.path, c.place, err)
 			}
@@ -66,8 +68,12 @@ func TestAFileInAWrittenPlaceIsNotReadable(t *testing.T) {
 			}
 		})
 	}
-	if err := session.Readable(nil)(p("ws/settings.json")); err != nil {
-		t.Errorf("no places: %v", err)
+	want, err := filepath.EvalSymlinks(p("ws/settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := session.Readable(nil)(p("ws/settings.json")); err != nil || got != want {
+		t.Errorf("no places: %q, %v, want %q", got, err, want)
 	}
 }
 
@@ -167,5 +173,77 @@ func TestASettingsFileInAnotherWalledRunsBindIsNoRun(t *testing.T) {
 	sp.Args = []string{"--settings", f}
 	if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("after the other run ended: %+v, %v", res, err)
+	}
+}
+
+// TestAPathWithADotDotIsNotReadable pins that a path with a ".." name is refused, by
+// Readable and by the installer it is given to: the system applies ".." after the link
+// before it, so the clean path the check would judge names another file than the one
+// opened. Each of these opens a file of the written place, though its clean path lies
+// outside it.
+func TestAPathWithADotDotIsNotReadable(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := func(rel string) string { return filepath.Join(root, rel) }
+	mkdirs(t, p("ws/sub"), p("ws/a/b"), p("outside"))
+	ws, outside := p("ws"), p("outside")
+	for _, f := range []string{"ws/settings.json", "outside/settings.json", "ws/cfg.json", "cfg.json"} {
+		if err := os.WriteFile(p(f), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// current, outside every place, leads into the written place; inner, inside it,
+	// leads deeper into it.
+	symlink(t, p("ws/sub"), p("outside/current"))
+	symlink(t, p("ws/a/b"), p("ws/inner"))
+	t.Chdir(outside)
+	for name, path := range map[string]string{
+		"after a link that leads into the place": p("outside/current") + "/../settings.json",
+		"relative, after a link":                 "current/../settings.json",
+		"after a link inside the place":          p("ws/inner") + "/../../cfg.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := session.Readable([]string{ws})(path); err == nil || err.Error() != `it has a ".." part` {
+				t.Errorf("Readable: %v", err)
+			}
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch:   runtimes.Launch{Command: "claude", Args: []string{"--settings", path}},
+				RunDir:   t.TempDir(),
+				Readable: session.Readable([]string{ws}),
+			})
+			if want := "settings " + path + `: it has a ".." part`; err == nil || err.Error() != want {
+				t.Errorf("the installer: %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// TestARunWithoutASettingsFileLeavesTheRegistryAlone pins that the places are worked
+// out only when a file is to be read: a run that passes no settings file, or passes
+// them as a document, never reads the registry of walled runs, and starts where the
+// registry cannot be opened; one that passes a file does not.
+func TestARunWithoutASettingsFileLeavesTheRegistryAlone(t *testing.T) {
+	notDir := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", notDir)
+	for name, args := range map[string][]string{
+		"no settings":            {"-p", "hi"},
+		"settings in a document": {"--settings", `{"permissions":{}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp := spec(t, "FAKE_EXIT=0")
+			sp.Args = args
+			if res, err := runWithSettingsEnv(t, sp); err != nil || res.ExitCode != 0 {
+				t.Errorf("the run: %+v, %v", res, err)
+			}
+		})
+	}
+	sp := spec(t, "FAKE_EXIT=0")
+	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "the registry of walled runs") {
+		t.Errorf("a run with a settings file: %v", err)
 	}
 }

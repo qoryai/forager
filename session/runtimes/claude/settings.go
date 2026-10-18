@@ -25,8 +25,9 @@ const maxSettings = 1 << 20
 // document they hold there, or starts from an empty one when they name none, adds a
 // hook group per event under "hooks", writes the result as settings.json in the run
 // directory, and names that file instead. The file the launch passed is not modified.
-// A file is read only when [runtimes.Attach.Readable] passes it, its last part is no
-// link, it is a regular file and it holds at most 1 MiB.
+// A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
+// it, its last part is no link, it is a regular file, it is the file Readable judged
+// and it holds at most 1 MiB.
 // An interactive launch whose API key is the run's stand-in is then started through
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
@@ -40,7 +41,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) error) ([]string, error) {
+	readable func(string) (string, error)) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -93,16 +94,34 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 	return append(append([]string(nil), args...), "--settings", path), nil
 }
 
-// readSettings reads the settings file path names, when readable passes it, as
-// [hostfile.Read] reads one: never through a link as its last part, only a regular
-// file, and at most maxSettings bytes.
-func readSettings(path string, readable func(string) error) ([]byte, error) {
-	if readable != nil {
-		if err := readable(path); err != nil {
-			return nil, err
-		}
+// readSettings reads the settings file path names. A path with a ".." name is refused,
+// since the system applies it after a link and a check of the clean path would judge
+// another file. The path is made absolute once, and readable judges the same path
+// that is read: it passes the file and returns where the path resolves, and the file
+// opened must be the one there when it was judged. It is read as [hostfile.Read] reads
+// one: never through a link as its last part, only a regular file, and at most
+// maxSettings bytes. Without readable, the file judged is the one the path resolves to.
+func readSettings(path string, readable func(string) (string, error)) ([]byte, error) {
+	if hostfile.DotDot(path) {
+		return nil, hostfile.ErrDotDot
 	}
-	return hostfile.Read(path, maxSettings)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	resolve := filepath.EvalSymlinks
+	if readable != nil {
+		resolve = readable
+	}
+	resolved, err := resolve(abs)
+	if err != nil {
+		return nil, err
+	}
+	judged, err := os.Stat(resolved)
+	if err != nil {
+		return nil, err
+	}
+	return hostfile.Read(abs, maxSettings, judged)
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.

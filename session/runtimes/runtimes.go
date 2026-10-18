@@ -82,13 +82,15 @@ type Attach struct {
 	// wall.
 	Placeholders []string
 	// Readable is asked of a file of this machine before Prepare reads it, such as the
-	// settings Claude Code is passed: nil when Prepare may read it, and why not
-	// otherwise. The session refuses a file a walled run could have written or
-	// replaced: one whose path is or lies inside, as given or through links, or is
-	// reached through, a place the caller lists as written by a walled run, a writable
-	// bind of another walled run still listed, or a writable bind of this run's.
-	// Nil refuses none.
-	Readable func(path string) error
+	// settings Claude Code is passed, by its absolute path, which Prepare then opens as
+	// it is: where the path resolves through every link, which is the file Prepare may
+	// read, or why it may not read it. The session refuses a file a walled run could
+	// have written or replaced: one whose path is or lies inside, as given or through
+	// links, or is reached through, a place the caller lists as written by a walled run,
+	// a writable bind of another walled run still listed, or a writable bind of this
+	// run's; and a path with a ".." name, whose clean form names another file than the
+	// system opens. Nil refuses none.
+	Readable func(path string) (string, error)
 }
 
 // Placeholder is the value of every variable of [Attach.Placeholders]: a stand-in that
