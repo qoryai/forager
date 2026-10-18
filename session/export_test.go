@@ -60,6 +60,20 @@ func SetRunContainersAsked(
 	runContainersExist = f
 }
 
+// BindLookups are the entries looked up on the way to p, as a walled run records them
+// for a bind in its entry in the registry.
+func BindLookups(p string) ([]string, error) {
+	looks, err := lookups(p)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, l := range looks {
+		out = append(out, l.entry())
+	}
+	return out, nil
+}
+
 // DirInBinds fails a working directory that lies in none of the binds.
 var DirInBinds = dirInBinds
 

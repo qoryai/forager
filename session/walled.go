@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 
@@ -47,7 +48,8 @@ var walledDir = func() (string, error) {
 // [wall.RunContainersExist] asks when d is nil. A test points it elsewhere.
 var runContainersExist = askContainers
 
-// askContainers is what runContainersExist is, but in a test.
+// askContainers asks through d, or as [wall.RunContainersExist] does when d is nil:
+// what runContainersExist is unless a test sets it.
 func askContainers(
 	ctx context.Context, d *wall.Docker, e wall.Engine, runID string,
 ) (bool, error) {
@@ -237,7 +239,8 @@ func lockRegistry(dir string) (func(), error) {
 // it is a Docker, asks the engine of an entry whose lock is free; nil asks as
 // [wall.RunContainersExist] does.
 func checkShared(docker *wall.Docker, dir, runID string, binds []bindSource) error {
-	return goingEntries(context.Background(), docker, dir, runID,
+	return goingEntries(context.Background(), asking{docker: docker, so: startsNot}, dir,
+		runID,
 		func(_ string, other walledEntry) error {
 			for _, b := range other.Binds {
 				ob, err := resolveOther(other.RunID, b)
@@ -258,9 +261,9 @@ func checkShared(docker *wall.Docker, dir, runID string, binds []bindSource) err
 // registry dir still going, runID's left out, by [readEntry], in the order of their
 // names, and returns the first error, of an entry or of each. The caller holds the
 // registry's lock. An entry whose lock is free is a run that is over: it is removed.
-// docker asks the engine of an entry whose lock is free, as [readEntry] says.
+// ask is how the engine of an entry whose lock is free is asked, as [readEntry] says.
 func goingEntries(
-	ctx context.Context, docker *wall.Docker, dir, runID string,
+	ctx context.Context, ask asking, dir, runID string,
 	each func(file string, entry walledEntry) error,
 ) error {
 	names, err := os.ReadDir(dir)
@@ -273,7 +276,7 @@ func goingEntries(
 			continue
 		}
 		file := filepath.Join(dir, name)
-		entry, live, err := readEntry(ctx, docker, file)
+		entry, live, err := readEntry(ctx, ask, file)
 		if err != nil {
 			return err
 		}
@@ -286,6 +289,22 @@ func goingEntries(
 	}
 	return nil
 }
+
+// asking is how a read of the registry asks after an entry whose lock is free: through
+// docker, the asking run's wall when it is a Docker, nil to ask as
+// [wall.RunContainersExist] does, and with so, what the engine_unreachable refusal of
+// an engine that cannot be asked says follows from it.
+type asking struct {
+	docker *wall.Docker
+	so     string
+}
+
+// What follows from an engine that cannot be asked: for a run that starts, and for
+// [RunsBinding].
+const (
+	startsNot  = "so the run does not start"
+	takenGoing = "so it is taken as still going"
+)
 
 // WalledRun is a walled run of this user's still going on this machine, as the
 // registry of walled runs lists it.
@@ -300,24 +319,40 @@ type WalledRun struct {
 // that bind a path overlapping p, an absolute path, each once, in the order of their
 // entries' names. A bind overlaps p when it is p, holds p or lies inside p: a run that
 // binds p, a directory p lies inside, or only a path inside p, such as p/.git, is
-// returned. The paths are compared as written and as resolved through symbolic links,
-// so that a link on neither side hides an overlap: p as passed and resolved now,
-// against a bind's path as the run passed it, which its engine binds again when its
-// container starts again, as written and resolved now, and against the path the bind
-// resolved to when the run listed it, resolved again now. The run directory is
-// compared by the path it resolved to alone, since its entry records the runs
-// directory that holds it as its path. Names are compared whole, regardless of case,
-// as [Overlap] compares them: /a/bc does not overlap /a/b.
+// returned. A bind overlaps p too when a name on the way to p is looked up in it, so
+// that its run can change where p leads, or when a name on the way to it is looked up
+// in p, so that p's contents change where it leads, as the registry checks the binds of
+// two runs against each other. p is resolved as the filesystem resolves it: through
+// symbolic links, and a .. name after a link through the link's target, not by
+// cleaning the path's names.
+//
+// The paths are compared as written and as resolved through symbolic links, so that a
+// link on neither side hides an overlap: p resolved now and, when it has no .. name, as
+// passed, against a bind's path as the run passed it, which its engine binds again when
+// its container starts again, as written and resolved now, and against the path the
+// bind resolved to when the run listed it, resolved again now. A path as written holds
+// another path, written or resolved, by its names; a resolved path is compared with a
+// path as written through the lookups above alone. The run directory is compared by the
+// path it resolved to alone, since its entry records the runs directory that holds it
+// as its path. Names are compared whole, regardless of case, as [Overlap] compares
+// them: /a/bc does not overlap /a/b.
 //
 // A run is still going while its session holds its entry's lock, or else while the
 // container engine its entry records holds a container labelled with its run id, in
 // any state, a stopped one included; an entry with neither is removed, as a run that
 // starts removes it. When the engine cannot be asked, or an entry whose lock is free
 // cannot be read or records no engine, the error is a *[Refusal] with the code
-// engine_unreachable, whose Names are the run's id and the path of its entry; an entry
-// whose lock is held and that cannot be read is a plain error. The registry's lock is
-// held for the whole read; a registry that does not exist holds no run, and is not
-// made. A relative p, or one that cannot be resolved, is an error.
+// engine_unreachable, whose Names are the run's id and the path of its entry, and
+// whose Detail says the run is taken as still going. An entry whose lock is held and
+// that cannot be read, and a bind of a run still going that cannot be resolved now,
+// are plain errors, in the sentences a run that starts gets, which say nothing of
+// starting. A relative p, or one that cannot be resolved, is an error.
+//
+// The registry's lock is held for the whole read, and the answer holds when
+// RunsBinding returns: a run may start and bind p right after. A caller that removes or
+// reuses p on the answer holds a lock of the caller's, which every run it starts on p
+// waits for, from the check to the action. A registry that does not exist holds no
+// run, and is not made.
 //
 // d is the Docker of the caller that asks, through which the engine of an entry whose
 // lock is free is asked, by [wall.Docker.RunContainersExist]; nil asks as
@@ -326,11 +361,10 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 	if !filepath.IsAbs(p) {
 		return nil, fmt.Errorf("the path %q is not absolute", p)
 	}
-	at, err := split(p, 0)
+	pl, err := placeOf(p)
 	if err != nil {
 		return nil, err
 	}
-	place := []splitPath{written(p), at}
 	dir, err := walledDir()
 	if err != nil {
 		return nil, fmt.Errorf("the registry of walled runs: %w", err)
@@ -347,13 +381,14 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 	}
 	defer unlock()
 	var out []WalledRun
-	err = goingEntries(ctx, d, dir, "", func(file string, entry walledEntry) error {
+	ask := asking{docker: d, so: takenGoing}
+	err = goingEntries(ctx, ask, dir, "", func(file string, entry walledEntry) error {
 		for _, b := range entry.Binds {
-			forms, err := bindForms(entry.RunID, b)
+			ob, forms, err := bindForms(entry.RunID, b)
 			if err != nil {
 				return err
 			}
-			if overlaps(place, forms) {
+			if overlaps(pl, ob, forms) {
 				out = append(out, WalledRun{RunID: entry.RunID, Entry: file})
 				return nil
 			}
@@ -366,31 +401,67 @@ func RunsBinding(ctx context.Context, d *wall.Docker, p string) ([]WalledRun, er
 	return out, nil
 }
 
-// bindForms are the forms of a bind of another run's [RunsBinding] compares: the path
-// it resolved to, resolved again now, and, but for the run directory, the path the
-// run passed, as written and resolved now. A failure to resolve one is the error of
-// [resolveOther].
-func bindForms(runID string, b bindSource) ([]splitPath, error) {
-	at, err := resolveOtherPath(runID, b.Resolved)
+// place is p as [RunsBinding] compares it: its forms, resolved now and, when it has no
+// .. name, as written; the first is resolved; and the lookups on the way to it.
+type place struct {
+	forms []splitPath
+	looks []lookup
+}
+
+// placeOf is p, absolute, as [RunsBinding] compares it. p is resolved through the
+// lookups on the way to it, of its names as given, which follow a .. name from the
+// directory a link led to, as the filesystem does, where cleaning p would drop the
+// link's name and the .. with it.
+func placeOf(p string) (place, error) {
+	looks, err := lookupsOf(p, parts(p))
 	if err != nil {
-		return nil, err
+		return place{}, err
 	}
-	forms := []splitPath{at}
+	walked := string(filepath.Separator)
+	if len(looks) > 0 {
+		// The last name looked up, from the directory it is looked up in, and only .
+		// and .. names after it, or the names below one that does not exist.
+		last := looks[len(looks)-1]
+		walked = filepath.Join(append([]string{last.dir}, last.rest...)...)
+	}
+	at, err := split(walked, 0)
+	if err != nil {
+		return place{}, err
+	}
+	pl := place{forms: []splitPath{at}, looks: looks}
+	if !slices.Contains(parts(p), "..") {
+		pl.forms = append(pl.forms, written(p))
+	}
+	return pl, nil
+}
+
+// bindForms are a bind of another run's as [resolveOther] has it now, and the forms of
+// it [RunsBinding] compares: the path it resolved to, resolved again now, and, but for
+// the run directory, the path the run passed, as written and resolved now. A failure to
+// resolve one is the error of [resolveOther].
+func bindForms(runID string, b bindSource) (bindSource, []splitPath, error) {
+	ob, err := resolveOther(runID, b)
+	if err != nil {
+		return bindSource{}, nil, err
+	}
+	forms := []splitPath{ob.at}
 	if b.Kind == kindRun || !filepath.IsAbs(b.Path) {
-		return forms, nil
+		return ob, forms, nil
 	}
 	now, err := resolveOtherPath(runID, b.Path)
 	if err != nil {
-		return nil, err
+		return bindSource{}, nil, err
 	}
-	return append(forms, written(b.Path), now), nil
+	return ob, append(forms, written(b.Path), now), nil
 }
 
-// overlaps reports whether a form of a place and a form of a bind overlap: one is the
-// other, or lies inside it. It is the one rule of [RunsBinding].
-func overlaps(place, bind []splitPath) bool {
-	for _, p := range place {
-		for _, b := range bind {
+// overlaps reports whether a bind of another run's, ob with its forms, overlaps the
+// place pl: a form of one is a form of the other or lies inside it, a name on the way
+// to pl is looked up in a form of the bind, or a name on the way to the bind is looked
+// up in pl as resolved. It is the one rule of [RunsBinding].
+func overlaps(pl place, ob bindSource, forms []splitPath) bool {
+	for _, b := range forms {
+		for _, p := range pl.forms {
 			if ok, _ := holds(b, p); ok {
 				return true
 			}
@@ -398,12 +469,17 @@ func overlaps(place, bind []splitPath) bool {
 				return true
 			}
 		}
+		if _, ok := lookedUpIn(b, pl.looks); ok {
+			return true
+		}
 	}
-	return false
+	_, ok := lookedUpIn(pl.forms[0], ob.looks)
+	return ok
 }
 
-// written is p as written, absolute: its names alone, none of them resolved, so that
-// [holds] compares it name by name with another path, written or resolved.
+// written is p as written, absolute and clean: its names alone, none of them resolved.
+// As the outer path, [holds] compares it name by name with another path, written or
+// resolved; as the inner one, only with another written path.
 func written(p string) splitPath {
 	return splitPath{exists: string(filepath.Separator), tail: parts(filepath.Clean(p))}
 }
@@ -448,10 +524,9 @@ func resolveOtherPath(runID, p string) (splitPath, error) {
 // entry records holds a container labelled with its run id, and is removed when the
 // engine holds none. A run that cannot ask, for an entry that cannot be read, records
 // no engine or an engine that fails, does not start. One whose file is gone already is
-// not live. docker, the asking run's wall when it is a Docker, asks the engine; nil
-// asks as [wall.RunContainersExist] does.
+// not live. ask is how the engine is asked, and what its refusal says follows.
 func readEntry(
-	ctx context.Context, docker *wall.Docker, file string,
+	ctx context.Context, ask asking, file string,
 ) (walledEntry, bool, error) {
 	f, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -486,17 +561,17 @@ func readEntry(
 		return entry, true, nil
 	}
 	if err != nil {
-		return walledEntry{}, false, engineUnreachable(runID, file,
+		return walledEntry{}, false, engineUnreachable(runID, file, ask.so,
 			fmt.Errorf("its entry %s cannot be read: %w", file, err))
 	}
 	if entry.Engine == nil {
-		return walledEntry{}, false, engineUnreachable(runID, file,
+		return walledEntry{}, false, engineUnreachable(runID, file, ask.so,
 			fmt.Errorf("its entry %s records no engine", file))
 	}
-	exists, err := runContainersExist(ctx, docker, *entry.Engine, runID)
+	exists, err := runContainersExist(ctx, ask.docker, *entry.Engine, runID)
 	switch {
 	case err != nil:
-		return walledEntry{}, false, engineUnreachable(runID, file, err)
+		return walledEntry{}, false, engineUnreachable(runID, file, ask.so, err)
 	case exists:
 		return entry, true, nil
 	}
@@ -589,17 +664,18 @@ func writtenEntry(file string) (walledEntry, bool, error) {
 	return entry, true, nil
 }
 
-// engineUnreachable is the refusal of a run that cannot ask the container engine
-// whether an earlier walled run, whose session is gone, still has containers: nothing is
-// bound while one may. Its names are the earlier run's id and file, the path of its
-// entry, which the registry's directory makes absolute, so the entry can be found and
-// looked at.
-func engineUnreachable(runID, file string, err error) *Refusal {
+// engineUnreachable is the refusal of a read of the registry that cannot ask the
+// container engine whether an earlier walled run, whose session is gone, still has
+// containers: nothing is bound while one may, and such a run counts as still going. so
+// is what follows from it, [startsNot] for a run that starts. Its names are the earlier
+// run's id and file, the path of its entry, which the registry's directory makes
+// absolute, so the entry can be found and looked at.
+func engineUnreachable(runID, file, so string, err error) *Refusal {
 	return &Refusal{
 		Code:  refusal.EngineUnreachable,
 		Names: []string{runID, file},
 		Detail: fmt.Sprintf("Docker could not be asked whether the walled run %s is still "+
-			"going, so the run does not start: %v", runID, err),
+			"going, %s: %v", runID, so, err),
 	}
 }
 

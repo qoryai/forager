@@ -35,7 +35,9 @@ func resolved(t *testing.T, dir string) string {
 }
 
 // bound writes the entry of the walled run boundID, its lock free, recording leftEngine
-// and the binds, and returns its file, which goes when the test ends.
+// and the binds, each with the entries looked up on the way to it now, as a run records
+// them, the run directory's on the way to its resolved path, and returns its file, which
+// goes when the test ends.
 func bound(t *testing.T, binds ...bind) string {
 	t.Helper()
 	reg := registry(t)
@@ -45,9 +47,15 @@ func bound(t *testing.T, binds ...bind) string {
 	var bs []map[string]any
 	for _, b := range binds {
 		m := map[string]any{"path": b.path, "resolved": b.resolved, "writable": true}
+		looked := b.path
 		if b.kind != "" {
-			m["kind"] = b.kind
+			m["kind"], looked = b.kind, b.resolved
 		}
+		looks, err := session.BindLookups(looked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m["lookups"] = looks
 		bs = append(bs, m)
 	}
 	data, _ := json.Marshal(map[string]any{"run_id": boundID, "pid": 1, "binds": bs,
@@ -104,7 +112,8 @@ func TestRunsBindingRemovesAnEntryWithoutAContainer(t *testing.T) {
 
 // TestRunsBindingRefusesWithoutAnEngine pins an entry whose lock is free and whose
 // engine cannot be asked: the read is refused with engine_unreachable, naming the run
-// and its entry, and the entry stays.
+// and its entry, in a sentence that takes the run as still going and says nothing of a
+// run that starts, and the entry stays.
 func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	root := t.TempDir()
 	file := bound(t, bind{root, resolved(t, root), ""})
@@ -114,6 +123,11 @@ func TestRunsBindingRefusesWithoutAnEngine(t *testing.T) {
 	if !errors.As(err, &r) || r.Code != "engine_unreachable" ||
 		!slices.Equal(r.Names, []string{boundID, file}) {
 		t.Fatalf("runs %+v, %v", runs, err)
+	}
+	want := "Docker could not be asked whether the walled run " + boundID +
+		" is still going, so it is taken as still going: Cannot connect to the Docker daemon"
+	if r.Detail != want {
+		t.Errorf("detail %q, want %q", r.Detail, want)
 	}
 	if _, err := os.Stat(file); err != nil {
 		t.Errorf("the entry is gone: %v", err)
@@ -147,8 +161,12 @@ func TestRunsBindingCountsAHeldEntry(t *testing.T) {
 // TestRunsBindingOverlaps pins which binds overlap p: p itself, a directory that holds
 // p and a path inside p, compared as written and as resolved through links on either
 // side, a link that has changed since the run listed its bind and a bind through a link
-// inside p that leads out of it included; not a sibling of p, nor one whose name only
-// begins with p's, nor another run directory in the same runs directory.
+// inside p that leads out of it included; a bind a name on the way to p is looked up
+// in, and one whose names are looked up in p, through a chain of links or a spelling
+// of p through another link; p with a .. name after a link, resolved as the filesystem
+// resolves it; not a sibling of p, nor one whose name only begins with p's, nor another
+// run directory in the same runs directory, nor the directory a .. name after a link
+// would name if p were cleaned.
 func TestRunsBindingOverlaps(t *testing.T) {
 	base := t.TempDir()
 	p := filepath.Join(base, "a", "b")
@@ -171,6 +189,24 @@ func TestRunsBindingOverlaps(t *testing.T) {
 	if err := os.Symlink(filepath.Join(base, "before"), out); err != nil {
 		t.Fatal(err)
 	}
+	// home/l leads to the directory new, and l2 to home: a run that binds l2 can
+	// change where home/l/repo leads.
+	home := mkdirs(t, filepath.Join(base, "home"), filepath.Join(base, "new", "repo"))
+	link(filepath.Join("home", "l"), filepath.Join(base, "new"))
+	l2 := link("l2", home)
+	// repo/.git leads to gitdirs/x, and alias to base itself; a1 leads through repo/l3
+	// to elsewhere.
+	repo := mkdirs(t, filepath.Join(base, "repo"), filepath.Join(base, "gitdirs", "x"),
+		filepath.Join(base, "elsewhere"))
+	gitdir := filepath.Join(base, "gitdirs", "x")
+	dotGit := link(filepath.Join("repo", ".git"), gitdir)
+	alias := link("alias", base)
+	link(filepath.Join("repo", "l3"), filepath.Join(base, "elsewhere"))
+	a1 := link("a1", filepath.Join(repo, "l3"))
+	// lk leads to deep/dir, so lk/.. is deep, not base.
+	mkdirs(t, filepath.Join(base, "deep", "dir"), filepath.Join(base, "deep", "repo"),
+		filepath.Join(base, "repo9"))
+	link("lk", filepath.Join(base, "deep", "dir"))
 	answer(t, true, nil)
 	for _, c := range []struct {
 		name  string
@@ -178,6 +214,19 @@ func TestRunsBindingOverlaps(t *testing.T) {
 		query string
 		want  bool
 	}{
+		{"a bind a name on the way to p is looked up in", bind{l2, resolved(t, home), ""},
+			filepath.Join(home, "l", "repo"), true},
+		{"p/.git through a link, p spelled as resolved", bind{dotGit,
+			resolved(t, gitdir), ""}, resolved(t, repo), true},
+		{"p/.git through a link, reached through another", bind{
+			filepath.Join(alias, "repo", ".git"), resolved(t, gitdir), ""}, repo, true},
+		{"a chain of links through p", bind{a1, resolved(t, filepath.Join(base, "elsewhere")),
+			""}, repo, true},
+		{"p with .. after a link", bind{filepath.Join(base, "deep", "repo"),
+			resolved(t, filepath.Join(base, "deep", "repo")), ""},
+			base + "/lk/../repo", true},
+		{"p with .. after a link, cleaned", bind{filepath.Join(base, "repo9"),
+			resolved(t, filepath.Join(base, "repo9")), ""}, base + "/lk/../repo9", false},
 		{"p itself", bind{p, resolved(t, p), ""}, p, true},
 		{"a directory holding p", bind{filepath.Join(base, "a"),
 			resolved(t, filepath.Join(base, "a")), ""}, p, true},

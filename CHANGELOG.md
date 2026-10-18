@@ -128,14 +128,17 @@ release may change what an existing document does, and says so under Upgrading.
   a walled run could have written and a path with a `..` name.
 - `session.RunsBinding(ctx, d, p)`, the walled runs still going on this machine whose
   binds overlap p, an absolute path, by the registry's rule, each a `session.WalledRun`
-  of its run id and the absolute path of its entry. A bind overlaps p when it is p, holds
-  p or lies inside p, compared as written and as resolved through links. The entry of a
-  run that is over is removed, an engine that cannot be asked is `engine_unreachable`,
-  naming the run and its entry, and a relative p is an error. The engine of an entry is
-  asked through d, the caller's `*wall.Docker`, by `(*wall.Docker).RunContainersExist`,
-  with the recorded command and selection; `wall.RunContainersExist` is that method of a
-  Docker with no field set, which a nil d asks through. A run's check against the
-  registry asks through its wall when it is a `*wall.Docker`.
+  of its run id and the absolute path of its entry. A bind overlaps p when it is p,
+  holds p or lies inside p, or when a name on the way to either is looked up in the
+  other, compared as written and as resolved through links, a `..` in p after a link
+  resolved from the link's target. The entry of a run that is over is removed, an engine
+  that cannot be asked is `engine_unreachable`, naming the run and its entry, in a
+  sentence that takes the run as still going, and a relative p is an error. The engine
+  of an entry is asked through d, the caller's `*wall.Docker`, by
+  `(*wall.Docker).RunContainersExist`, with the recorded command and selection;
+  `wall.RunContainersExist` is that method of a Docker with no field set, which a nil d
+  asks through. A run's check against the registry asks through its wall when it is a
+  `*wall.Docker`.
 
 #### Fixed
 

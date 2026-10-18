@@ -261,7 +261,13 @@ func lookups(p string) ([]lookup, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := parts(abs)
+	return lookupsOf(abs, parts(abs))
+}
+
+// lookupsOf is [lookups] of the names of the absolute path abs, as they are given: a ..
+// name among them is followed from the directory the walk is in, as the filesystem
+// follows it, where a link may have led.
+func lookupsOf(abs string, names []string) ([]lookup, error) {
 	cur := "/"
 	var out []lookup
 	links := 0
