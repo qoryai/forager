@@ -122,9 +122,9 @@ type Spec struct {
 	// with it when the entry ends in / or @, or the reference's next character is / or
 	// @. Nil allows no reference. A list needs an Image, the default: an image by
 	// reference starts under the default's runtime, with no nested Docker,
-	// as the wall's user, its workspace at /workspace inside, and the wall fetches it
-	// and refuses one whose user is root, image_user_root. A reference no entry covers
-	// is no run, image_not_allowed.
+	// as the wall's user, its workspace at /workspace inside, and the wall fetches it,
+	// unless the engine holds it by that digest, and refuses one whose user is root,
+	// image_user_root. A reference no entry covers is no run, image_not_allowed.
 	ImagesAllow []string
 	// Mounts are what the enclosure shows of this machine, each at its own path: the
 	// checkout around Dir, a composed home outside it. A mount, or Dir, inside another

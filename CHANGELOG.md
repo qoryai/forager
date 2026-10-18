@@ -31,7 +31,7 @@ release may change what an existing document does, and says so under Upgrading.
   `images.allow` prefixes, and `image_user_root`, an image whose user is root, both in
   `refusal.Decides`.
 - `dev.qory.run.started` has `image_fetch_ms`, how long the wall took to find an image by
-  reference: its fetch, unless the engine holds it by that digest.
+  reference: its fetch included unless the engine holds it by that digest.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
 
