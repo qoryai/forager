@@ -457,9 +457,9 @@ func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched,
 
 // pull fetches the image a run names by its reference with docker pull, unless the
 // engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
-// under [pullWait]. An image held with no Config, as a store holds an index without the
-// content for this machine's platform, is pulled then all the same, and its Config read
-// again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
+// under [pullWait]. An image held with no Config, as a containerd store holds an index
+// with the content of none of its platforms, is pulled then all the same, and its Config
+// read again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
 // of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
 // to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
 // is refused as well, since it cannot be checked. The agent runs as the wall's user

@@ -185,8 +185,8 @@ func TestDockerPullsNoImageItHoldsByTheDigest(t *testing.T) {
 		t.Errorf("a held image whose user is root was pulled, or a network made:\n%s", strings.Join(rec.lines, "\n"))
 	}
 
-	// An image the engine holds with no Config, an index without this platform's content
-	// in a containerd store, is pulled, and its user read again after the pull: a user
+	// An image the engine holds with no Config, as a containerd store holds an index with
+	// the content of none of its platforms, is pulled, and its user read again after the pull: a user
 	// that is not root passes, root is refused.
 	for _, c := range []struct {
 		after string
