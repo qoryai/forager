@@ -58,10 +58,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - A pin whose key contains `qak_` or `qrk_` in any case, about one key in 27,000, is
   read: `server.Parse` and `accesskey.ParsePin` leave each entry's `public_key` that is
-  one valid key, written once as a JSON string or a plain or quoted YAML scalar with no
-  anchor, alias, tag or merge key, out of the secret check, which still covers `alg`,
-  the entry's other members and the rest of the document.
-  `accesskey.SecretInPinDocument` and `accesskey.SecretInPinEntry` hold the rule.
+  one valid key out of the secret check, written in a form
+  `accesskey.SecretInPinDocument` lists; the check still covers `alg`, the entry's
+  other members and the rest of the document. `accesskey.SecretInPinDocument` and
+  `accesskey.SecretInPinEntry` hold the rule.
 
 ### Gateway
 
