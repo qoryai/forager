@@ -36,7 +36,7 @@ func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 	}
 	if dir != "" {
 		p := filepath.Join(dir, runtime+".yaml")
-		b, err := hostfile.Read(p, maxDescriptor)
+		b, err := hostfile.Read(p, maxDescriptor, nil)
 		if err == nil {
 			return described(p, runtime, b)
 		}

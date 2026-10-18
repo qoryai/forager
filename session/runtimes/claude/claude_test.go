@@ -130,15 +130,18 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 	if err := os.WriteFile(p("edge.json"), append(edge, '"', '}'), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	refuseAll := func(string) error { return errors.New("refused here") }
+	refuseAll := func(string) (string, error) { return "", errors.New("refused here") }
+	pass := filepath.EvalSymlinks
+	other := func(string) (string, error) { return filepath.EvalSymlinks(p("edge.json")) }
 	for _, c := range []struct {
 		name     string
 		arg      string
-		readable func(string) error
+		readable func(string) (string, error)
 		want     string
 	}{
 		{"a plain file", p("plain.json"), nil, ""},
-		{"a plain file Readable passes", p("plain.json"), func(string) error { return nil }, ""},
+		{"a plain file Readable passes", p("plain.json"), pass, ""},
+		{"a file other than the one Readable judged", p("plain.json"), other, "settings " + p("plain.json") + ": it changed while it was checked"},
 		{"a file Readable refuses", p("plain.json"), refuseAll, "settings " + p("plain.json") + ": refused here"},
 		{"a link as its last part", p("link.json"), nil, "settings " + p("link.json") + ": it is a link"},
 		{"a directory", p("dir.json"), nil, "settings " + p("dir.json") + ": it is not a regular file"},

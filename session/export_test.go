@@ -52,4 +52,6 @@ func SetExitObserved(f func()) { exitObserved = f }
 
 // Readable is what a runtime is given to ask of a file before it reads it from this
 // machine, for the places a walled run could have written.
-var Readable = readable
+func Readable(places []string) func(string) (string, error) {
+	return readable(func() ([]string, error) { return places, nil })
+}
