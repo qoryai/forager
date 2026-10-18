@@ -457,9 +457,11 @@ func (e *dockerEnclosure) ImageFetch() (time.Duration, bool) { return e.fetched,
 
 // pull fetches the image a run names by its reference with docker pull, unless the
 // engine holds it by that digest, [dockerEnclosure.held], timed, the check included,
-// under [pullWait]; and refuses one whose user is root, image_user_root: no user, root,
-// a uid of 0 in any spelling, with or without a group, or a name the image's /etc/passwd
-// maps to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
+// under [pullWait]. An image held with no Config, as a store holds an index without the
+// content for this machine's platform, is pulled then all the same, and its Config read
+// again. pull refuses an image whose user is root, image_user_root: no user, root, a uid
+// of 0 in any spelling, with or without a group, or a name the image's /etc/passwd maps
+// to uid 0. A name the image cannot map, for want of /etc/passwd or of the name in it,
 // is refused as well, since it cannot be checked. The agent runs as the wall's user
 // whatever the image's, and that user is uid:gid in numbers, which Prepare requires
 // for such an image, so neither the image's /etc/passwd nor its /etc/group chooses who
@@ -478,16 +480,19 @@ func (e *dockerEnclosure) pull(ctx context.Context) error {
 		}
 	}
 	e.fetched, e.pulled = time.Since(start), true
-	// The whole Config, since an image that sets no user has no User in it, which a
-	// template of .Config.User fails on; no Config at all is no user either.
-	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
-	out, err := e.sys.output(ctx, argv, e.env)
+	config, err := e.imageConfig(ctx)
 	if err != nil {
-		return fmt.Errorf("wall docker: image inspect: %w", err)
+		return err
 	}
-	var config *struct{ User string }
-	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
-		return fmt.Errorf("wall docker: the image's user: %w", err)
+	if config == nil && held {
+		again := time.Now()
+		if _, err := e.docker(fetch, "pull", e.req.Image); err != nil {
+			return err
+		}
+		e.fetched += time.Since(again)
+		if config, err = e.imageConfig(ctx); err != nil {
+			return err
+		}
 	}
 	var user string
 	if config != nil {
@@ -579,6 +584,22 @@ func fullReference(ref string) string {
 		rest = "library/" + rest
 	}
 	return domain + "/" + rest + "@" + digest
+}
+
+// imageConfig is the Config of the run's image, nil when it has none. It is the whole
+// Config, since an image that sets no user has no User in it, which a template of
+// .Config.User fails on; no Config at all is no user either.
+func (e *dockerEnclosure) imageConfig(ctx context.Context) (*struct{ User string }, error) {
+	argv := []string{e.command(), "image", "inspect", "--format", "{{json .Config}}", e.req.Image}
+	out, err := e.sys.output(ctx, argv, e.env)
+	if err != nil {
+		return nil, fmt.Errorf("wall docker: image inspect: %w", err)
+	}
+	var config *struct{ User string }
+	if err := json.Unmarshal(bytes.TrimSpace(out), &config); err != nil {
+		return nil, fmt.Errorf("wall docker: the image's user: %w", err)
+	}
+	return config, nil
 }
 
 // numericUser reports whether user is uid:gid in decimal digits, neither of them 0.

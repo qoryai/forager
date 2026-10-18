@@ -185,6 +185,65 @@ func TestDockerPullsNoImageItHoldsByTheDigest(t *testing.T) {
 		t.Errorf("a held image whose user is root was pulled, or a network made:\n%s", strings.Join(rec.lines, "\n"))
 	}
 
+	// An image the engine holds with no Config, an index without this platform's content
+	// in a containerd store, is pulled, and its user read again after the pull: a user
+	// that is not root passes, root is refused.
+	for _, c := range []struct {
+		after string
+		root  bool
+	}{{`"1000:1000"`, false}, {`"root"`, true}, {"null", true}} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: "null", pulledUser: c.after, held: []string{byReference}}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+		var r *accesskey.Refusal
+		switch {
+		case !c.root && err != nil:
+			t.Errorf("held with no Config, %s after the pull: %v", c.after, err)
+		case !c.root:
+			if took, ok := e.(Fetcher).ImageFetch(); !ok || took < 0 {
+				t.Errorf("held with no Config: the fetch reported %v, %v", took, ok)
+			}
+			e.Close(context.Background())
+		case !errors.As(err, &r) || r.Code != refusal.ImageUserRoot:
+			t.Errorf("held with no Config, %s after the pull: %v, want image_user_root", c.after, err)
+		}
+		inspect := "docker image inspect --format '{{json .Config}}' " + byReference
+		first, pull := at(rec.lines, inspect), at(rec.lines, "docker pull "+byReference)
+		if first < 0 || pull < first || at(rec.lines[pull:], inspect) < 0 {
+			t.Errorf("held with no Config, %s after the pull: the user's inspect at %d, the pull at %d, no inspect after it:\n%s", c.after, first, pull, strings.Join(rec.lines, "\n"))
+		}
+	}
+
+	// The engine's answer on standard error decides: no such image is an image to pull,
+	// any other answer is the run's error, with what the engine said, and no pull.
+	for _, c := range []struct {
+		stderr string
+		pull   bool
+	}{
+		{"Error response from daemon: No such image: " + byReference, true},
+		{"Error: " + byReference + ": image not known", true},
+		{"permission denied while trying to connect to the Docker daemon socket", false},
+	} {
+		rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, stderr: c.stderr}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+		e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: byReference, RelayImage: "example.com/agent:1", Pull: true})
+		pulled := at(rec.lines, "docker pull "+byReference) >= 0
+		switch {
+		case c.pull && err != nil:
+			t.Errorf("%q: %v", c.stderr, err)
+		case c.pull:
+			e.Close(context.Background())
+		case err == nil:
+			e.Close(context.Background())
+			t.Errorf("%q: prepared", c.stderr)
+		case !strings.Contains(err.Error(), c.stderr) || !strings.Contains(err.Error(), "image inspect "+byReference):
+			t.Errorf("%q: %v, want what the engine said", c.stderr, err)
+		}
+		if pulled != c.pull {
+			t.Errorf("%q: pulled %v, want %v:\n%s", c.stderr, pulled, c.pull, strings.Join(rec.lines, "\n"))
+		}
+	}
+
 	// An engine that does not answer the check is the run's error, not an image to pull.
 	rec = &recorder{t: t, gateway: "172.30.0.1", uid: 1000, user: `"1000:1000"`, down: true}
 	d = &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,6 +54,12 @@ type recorder struct {
 	// no image inspect of the repository digests at all.
 	held []string
 	down bool
+	// stderr, when set, has the inspect of the repository digests exit 1 with it on
+	// standard error, as an *exec.ExitError carries it.
+	stderr string
+	// pulledUser, when set, is the image's user once a docker pull has run, in place of
+	// user: an image the engine held without its Config until the pull.
+	pulledUser string
 	// endless is the file of a container whose docker cp writes without end, a header
 	// for an enormous file and then zeros; streamed counts what was read of it, and
 	// stopped says the reader closed it before its end.
@@ -102,7 +109,12 @@ func (r *recorder) run(_ context.Context, argv, env []string) ([]byte, error) {
 func (r *recorder) output(_ context.Context, argv, env []string) ([]byte, error) {
 	line := words(argv)
 	r.lines, r.envs = append(r.lines, line), append(r.envs, env)
+	if r.pulledUser != "" && slices.ContainsFunc(r.lines, func(l string) bool { return strings.HasPrefix(l, "docker pull ") }) {
+		r.user = r.pulledUser
+	}
 	switch {
+	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.stderr != "":
+		return nil, &exec.ExitError{Stderr: []byte(r.stderr + "\n")}
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.down:
 		return nil, errors.New("exit status 1: Cannot connect to the Docker daemon. Is the docker daemon running?")
 	case strings.Contains(line, " image inspect --format '{{json .RepoDigests}}' ") && r.held == nil:
