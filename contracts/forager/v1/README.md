@@ -559,7 +559,7 @@ environment variables from which a runtime reads the credential's key, 1 to 16, 
 `^[A-Z_][A-Z0-9_]{0,127}$` and none twice: the session gives the placeholder to the one
 of them that the run's runtime declares (The variable of a model key, below).
 `placeholders` are variables for the enclosure to get with the placeholder value. An entry
-has no value and no member beside these seven: the server seals each value to the access
+has no value and no member beside these six: the server seals each value to the access
 key in the answer to the secrets request (§The server, Secrets). Forager checks a run
 configuration's `credentials` against the schema, then refuses a name twice and an
 `auth.header` that frames the request or that the proxy sets: `Host`, `Content-Length`,
@@ -615,10 +615,13 @@ tool's `GITHUB_TOKEN`, which are set as well.
 A placeholder goes only into a variable for a credential. A placeholder of a
 credential from the server is `run_configuration_invalid`, with the credential's name,
 when the runtime's descriptor lists it in `denies` or in its model `overrides`, when it
-is the model `endpoint`'s variable, or when the runtime declares or reserves it and the
-session did not choose it from the credential's `key_variables`: a key goes into one
-variable, and only through `key_variables`. The session checks the run answer's `placeholders` too, the
-machine's credentials and tools included: one that the descriptor denies, lists in its
+is the model `endpoint`'s variable, when the descriptor lists it in `reserves`, or when
+the runtime declares it and the session did not choose it from the credential's
+`key_variables`: a credential's key goes into one variable, and a key's variable gets a
+placeholder only through `key_variables`. Two credentials with `key_variables`, on
+different hosts, may each set one key's variable; each gets a placeholder. The session
+checks the run answer's `placeholders` too, the machine's credentials and tools
+included: one that the descriptor denies, lists in its
 overrides or reads its endpoint from, or one the runtime declares or reserves that no
 credential has among its `placeholders`, is `run_configuration_invalid` with the
 placeholder's name. A credential of the machine's may have a declared variable among

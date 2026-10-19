@@ -72,7 +72,8 @@ and its placeholders, with no value. Qory Apiary stores the values.
   choose from its `key_variables` stops the run (`run_configuration_invalid`). The same
   holds for the run's placeholders from this machine's credentials and tools, apart
   from a machine credential's key variable. A tool's variable, such as `GITHUB_TOKEN`,
-  is fine.
+  is fine. Two credentials with `key_variables` on different hosts may each set one
+  key's variable; both get a placeholder.
 - The credentials are fixed for the run. A reload that changes them fails, and the run
   keeps its policy.
 - Without `credentials`, the run gets the machine's credentials as before.

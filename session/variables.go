@@ -239,18 +239,17 @@ func secretsOf(rt runtimes.Runtime) runtimes.Declarations {
 	return runtimes.Declarations{}
 }
 
-// authWords is how a refusal names how a value is set: the header with its name, a
-// bearer, basic, or no auth.
+// authWords is how a refusal writes how a value is set: the header with its name, the
+// bearer or basic scheme, or no auth. The header's name goes through
+// [accesskey.ShownName], since a server's entry may contain a secret pasted there.
 func authWords(scheme, header string) string {
 	switch scheme {
 	case "header":
-		return "the header " + header
+		return "the header " + accesskey.ShownName(header, false)
 	case "":
 		return "no auth"
-	case "basic":
-		return "basic"
 	}
-	return "a " + scheme
+	return "the " + scheme + " scheme"
 }
 
 // shownNames are names as a refusal lists them, each through [accesskey.ShownName].
@@ -321,7 +320,7 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 		d := matches[0]
 		if d.Auth.Scheme != auth.Scheme || (d.Auth.Scheme == "header" && !strings.EqualFold(d.Auth.Header, auth.Header)) {
 			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-				"set the auth of the credential %s in Qory Apiary's run configuration to %s, or list another variable in its key_variables: the runtime %s sends the key in %s as %s, and the credential's auth is set to %s",
+				"set the auth of the credential %s in Qory Apiary's run configuration to %s, or list another variable in its key_variables: the runtime %s sends the key in %s with %s, and the credential's auth is set to %s",
 				shown, authWords(d.Auth.Scheme, d.Auth.Header), rt.Name(), d.Name, authWords(d.Auth.Scheme, d.Auth.Header), authWords(auth.Scheme, auth.Header))
 		}
 		variable := d.Name
@@ -364,11 +363,11 @@ func checkPlaceholders(rt runtimes.Runtime, declared []string, credentials []ser
 	takesNone := func(p string) string {
 		switch {
 		case slices.Contains(decl.Denies, p):
-			return "denies it"
+			return "lists it in denies"
 		case slices.Contains(overrides, p):
-			return "lists it among its model overrides"
+			return "lists it in its model overrides"
 		case endpoint != "" && p == endpoint:
-			return "reads its model endpoint from it"
+			return "has it as its model endpoint's variable"
 		}
 		return ""
 	}
@@ -381,13 +380,17 @@ func checkPlaceholders(rt runtimes.Runtime, declared []string, credentials []ser
 			switch why := takesNone(p); {
 			case why != "":
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the runtime %s %s, and a placeholder goes only into a variable for a credential",
+					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the descriptor of the runtime %s %s, and a placeholder goes only into a variable for a credential",
 					accesskey.ShownName(p, false), shown, rt.Name(), why)
 			case p == picked[i] || !slices.Contains(declared, p):
 			case picked[i] != "":
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: %s is the variable of its key_variables that the runtime %s declares, and a key goes into one variable",
 					accesskey.ShownName(p, false), shown, picked[i], rt.Name())
+			case !slices.ContainsFunc(decl.Declares, func(d runtimes.Declaration) bool { return d.Name == p }):
+				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: the descriptor of the runtime %s lists it in reserves, and a placeholder goes only into a variable for a credential",
+					accesskey.ShownName(p, false), shown, rt.Name())
 			default:
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
 					"list %s in the key_variables of the credential %s in Qory Apiary's run configuration instead of its placeholders: the runtime %s reads a key from it, and a key's variable gets a credential's placeholder only through key_variables",
@@ -398,12 +401,12 @@ func checkPlaceholders(rt runtimes.Runtime, declared []string, credentials []ser
 	for _, p := range names {
 		if why := takesNone(p); why != "" {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(p),
-				"remove %s from the placeholders of the machine's credentials and tools in forager.yaml: the runtime %s %s, and a placeholder goes only into a variable for a credential",
+				"remove %s from the placeholders of the machine's credentials and tools in forager.yaml: the descriptor of the runtime %s %s, and a placeholder goes only into a variable for a credential",
 				accesskey.ShownName(p, false), rt.Name(), why)
 		}
 		if slices.Contains(declared, p) && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool { return slices.Contains(c.Placeholders, p) }) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(p),
-				"remove %s from the placeholders of the machine's tools in forager.yaml, or give it to a credential: the runtime %s reads a key from it, and no credential of the run has it among its placeholders",
+				"remove %s from the placeholders of the machine's tools in forager.yaml, or give it to a credential in forager.yaml: the runtime %s reads a key from it, and no credential of the run has it among its placeholders",
 				accesskey.ShownName(p, false), rt.Name())
 		}
 	}
@@ -509,9 +512,10 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 			if v := values(); v != "" {
 				give = ", or give the run a value of " + v + " from the run or the machine"
 			}
+			listed := orList(keys, ", ", " or ")
 			return refusal.New(refusal.ModelKeyMissing, keys,
-				"set %s to an https URL, with no user name or password, whose host a credential with a placeholder of %s covers%s: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential counts as its model key",
-				endpoint, orList(keys, ", ", " or "), give, endpoint, rt.Name())
+				"set %s to an https URL, with no user name or password, whose host is a host of a credential whose key_variables list one of %s in Qory Apiary's run configuration or of a credential with a placeholder of %s in forager.yaml%s: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential counts as its model key",
+				endpoint, listed, listed, give, endpoint, rt.Name())
 		}
 		hosts = []string{host}
 	}
@@ -524,11 +528,15 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 			return nil
 		}
 	}
-	give := ""
+	listed := orList(keys, ", ", " or ")
+	ways := []string{
+		"a credential for " + shownHosts + " whose key_variables list one of " + listed + " in Qory Apiary's run configuration",
+		"a credential for " + shownHosts + " with a placeholder of " + listed + " in forager.yaml",
+	}
 	if v := values(); v != "" {
-		give = ", or a value of " + v + " from the run or the machine"
+		ways = append(ways, "a value of "+v+" from the run or the machine")
 	}
 	return refusal.New(refusal.ModelKeyMissing, keys,
-		"give the run a model key for the runtime %s: a credential for %s with a placeholder of %s, on this machine or in Qory Apiary's run configuration%s; the gateway holds credentials for the run, and none of them is a model key for %s",
-		rt.Name(), shownHosts, orList(keys, ", ", " or "), give, shownHosts)
+		"give the run a model key for the runtime %s: %s; the gateway holds credentials for the run, and none of them is a model key for %s",
+		rt.Name(), orList(ways, ", ", ", or "), shownHosts)
 }

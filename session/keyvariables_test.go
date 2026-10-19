@@ -152,9 +152,9 @@ func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 		{"two names Claude Code declares", false, apiKeyVariable + "," + authTokenVariable, "bearer",
 			`keep only one of ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN in the key_variables of the credential "model" in Qory Apiary's run configuration: the runtime claude reads a key from each of them, and a key goes into one variable`},
 		{"another scheme", false, authTokenVariable, "header",
-			`set the auth of the credential "model" in Qory Apiary's run configuration to a bearer, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_AUTH_TOKEN as a bearer, and the credential's auth is set to the header x-api-key`},
+			`set the auth of the credential "model" in Qory Apiary's run configuration to the bearer scheme, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_AUTH_TOKEN with the bearer scheme, and the credential's auth is set to the header x-api-key`},
 		{"another header", false, apiKeyVariable, "header:authorization",
-			`set the auth of the credential "model" in Qory Apiary's run configuration to the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_API_KEY as the header x-api-key, and the credential's auth is set to the header authorization`},
+			`set the auth of the credential "model" in Qory Apiary's run configuration to the header x-api-key, or list another variable in its key_variables: the runtime claude sends the key in ANTHROPIC_API_KEY with the header x-api-key, and the credential's auth is set to the header authorization`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -182,6 +182,8 @@ func TestKeyVariablesTheRuntimeDoesNotTakeAreRefused(t *testing.T) {
 // another credential's included, is run_configuration_invalid with the credential's
 // name; one of the run's placeholders that Claude Code denies, or that is a key's
 // variable no credential has, is run_configuration_invalid with the placeholder's name.
+// A variable the runtime reserves is refused with removal as its fix, since the session
+// chooses from key_variables only a declared variable.
 // A tool's placeholder, GITHUB_TOKEN, passes.
 func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 	model := sealed("model", "api.anthropic.com", apiKeyVariable, "header")
@@ -202,20 +204,23 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 		detail       string
 	}{
 		{"a variable the runtime denies", []map[string]any{plain("forge", "api.github.com", "CLAUDE_CONFIG_DIR")}, []string{"CLAUDE_CONFIG_DIR"}, nil, []string{"forge"},
-			`remove CLAUDE_CONFIG_DIR from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude denies it, and a placeholder goes only into a variable for a credential`},
+			`remove CLAUDE_CONFIG_DIR from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in denies, and a placeholder goes only into a variable for a credential`},
 		{"a model override", []map[string]any{plain("forge", "api.github.com", "ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"forge"},
-			`remove ANTHROPIC_MODEL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude lists it among its model overrides, and a placeholder goes only into a variable for a credential`},
+			`remove ANTHROPIC_MODEL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in its model overrides, and a placeholder goes only into a variable for a credential`},
 		{"the model endpoint's variable", []map[string]any{plain("forge", "api.github.com", endpointVariable)}, []string{endpointVariable},
 			func(rt runtimes.Runtime) runtimes.Runtime { return &allowsEndpoint{Runtime: rt} }, []string{"forge"},
-			`remove ANTHROPIC_BASE_URL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the runtime claude reads its model endpoint from it, and a placeholder goes only into a variable for a credential`},
+			`remove ANTHROPIC_BASE_URL from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude has it as its model endpoint's variable, and a placeholder goes only into a variable for a credential`},
+		{"a variable the runtime reserves", []map[string]any{plain("forge", "api.github.com", "MODEL_SESSION")}, []string{"MODEL_SESSION"},
+			func(rt runtimes.Runtime) runtimes.Runtime { return &reservesSession{Runtime: rt} }, []string{"forge"},
+			`remove MODEL_SESSION from the placeholders of the credential "forge" in Qory Apiary's run configuration: the descriptor of the runtime claude lists it in reserves, and a placeholder goes only into a variable for a credential`},
 		{"a key's variable without key_variables", []map[string]any{plain("model", "api.anthropic.com", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"model"},
 			`list ANTHROPIC_API_KEY in the key_variables of the credential "model" in Qory Apiary's run configuration instead of its placeholders: the runtime claude reads a key from it, and a key's variable gets a credential's placeholder only through key_variables`},
 		{"a second key in another credential", []map[string]any{model, plain("forge", "api.github.com", oauthVariable)}, []string{oauthVariable}, nil, []string{"forge"},
 			`list CLAUDE_CODE_OAUTH_TOKEN in the key_variables of the credential "forge" in Qory Apiary's run configuration instead of its placeholders: the runtime claude reads a key from it, and a key's variable gets a credential's placeholder only through key_variables`},
 		{"a second key among the run's placeholders", []map[string]any{model}, []string{oauthVariable}, nil, []string{oauthVariable},
-			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the machine's tools in forager.yaml, or give it to a credential: the runtime claude reads a key from it, and no credential of the run has it among its placeholders`},
+			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the machine's tools in forager.yaml, or give it to a credential in forager.yaml: the runtime claude reads a key from it, and no credential of the run has it among its placeholders`},
 		{"a machine credential's override", []map[string]any{model, machine("ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"ANTHROPIC_MODEL"},
-			`remove ANTHROPIC_MODEL from the placeholders of the machine's credentials and tools in forager.yaml: the runtime claude lists it among its model overrides, and a placeholder goes only into a variable for a credential`},
+			`remove ANTHROPIC_MODEL from the placeholders of the machine's credentials and tools in forager.yaml: the descriptor of the runtime claude lists it in its model overrides, and a placeholder goes only into a variable for a credential`},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -253,6 +258,19 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 			t.Errorf("credential_variables %q, want %q", got, want)
 		}
 	})
+}
+
+// reservesSession is Claude Code with a descriptor that reserves MODEL_SESSION.
+type reservesSession struct{ runtimes.Runtime }
+
+func (p *reservesSession) Secrets() runtimes.Declarations {
+	d := p.Runtime.(runtimes.Secrets).Secrets()
+	d.Reserves = append(slices.Clone(d.Reserves), "MODEL_SESSION")
+	return d
+}
+
+func (p *reservesSession) Model() (runtimes.ModelPlaces, bool) {
+	return p.Runtime.(runtimes.Model).Model()
 }
 
 // allowsEndpoint is Claude Code with a descriptor whose denies leave out its model
@@ -437,7 +455,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 			if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {
 				t.Fatalf("%v, want model_key_missing for %q", err, modelKeys)
 			}
-			want := "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of one of these variables from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com"
+			want := "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of one of these variables from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com"
 			if r.Detail != want {
 				t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, want)
 			}
@@ -464,7 +482,7 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 // reaches the runtime.
 func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
-	const keyFix = "a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN"
+	const keyFix = "is a host of a credential whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration or of a credential with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml"
 	for _, tc := range []struct {
 		what         string
 		inherited    string
@@ -482,14 +500,14 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			what:      "an endpoint with no host Forager reads",
 			inherited: "http://litellm.internal:4000",
 			hosts:     []map[string]any{forge},
-			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of one of these variables from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+			want:      "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + ", or give the run a value of one of these variables from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
 			what:         "an endpoint with no host Forager reads and a model credential's placeholder",
 			inherited:    "http://litellm.internal:4000",
 			hosts:        []map[string]any{sealed("model", "litellm.internal", "", "", apiKeyVariable)},
 			placeholders: []string{apiKeyVariable},
-			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + ", or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
 			// The run's https value is not covered, so the endpoint rule leaves it
@@ -499,69 +517,69 @@ func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
 			run:          []string{endpointVariable + "=https://evil.example"},
 			hosts:        modelAndForge,
 			placeholders: []string{apiKeyVariable, "GITHUB_TOKEN"},
-			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers, or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + ", or give the run a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
 			what:         "an endpoint with no host Forager reads and every model key a placeholder",
 			inherited:    "http://litellm.internal:4000",
 			hosts:        []map[string]any{sealed("model", "litellm.internal", "", "", modelKeys...)},
 			placeholders: modelKeys,
-			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + " covers: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
+			want:         "set ANTHROPIC_BASE_URL to an https URL, with no user name or password, whose host " + keyFix + ": the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential counts as its model key",
 		},
 		{
 			what:     "a model key the gateway reserves",
 			hosts:    []map[string]any{forge},
 			reserved: []string{authTokenVariable},
-			want:     "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:     "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:  "a model key the node denies",
 			hosts: []map[string]any{forge},
 			deny:  []string{"claude_code_*"},
-			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:    "a model key the runtime denies",
 			hosts:   []map[string]any{forge},
 			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &deniesKey{Runtime: rt} },
-			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:    "a model key among the runtime's model overrides",
 			hosts:   []map[string]any{forge},
 			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &deniesKey{Runtime: rt, inOverrides: true} },
-			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:  "a model key the harness sets to empty",
 			hosts: []map[string]any{forge},
 			fixed: []string{authTokenVariable + "="},
-			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:  "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:    "a model key the runtime's preparation sets to empty",
 			hosts:   []map[string]any{forge},
 			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &preparesEmpty{Runtime: rt} },
-			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:    "a model key in a variable Forager sets",
 			hosts:   []map[string]any{forge},
 			runtime: func(rt runtimes.Runtime) runtimes.Runtime { return &runIDKey{Runtime: rt} },
 			names:   []string{apiKeyVariable, authTokenVariable, oauthVariable, "QORY_RUN_ID"},
-			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_AUTH_TOKEN or QORY_RUN_ID, on this machine or in Qory Apiary's run configuration, or a value of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:    "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_AUTH_TOKEN or QORY_RUN_ID in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_AUTH_TOKEN or QORY_RUN_ID in forager.yaml, or a value of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:         "a model credential for another host",
 			hosts:        []map[string]any{sealed("model", "llm.example", "", "", apiKeyVariable)},
 			placeholders: []string{apiKeyVariable},
-			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration, or a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml, or a value of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 		{
 			what:         "every model key a placeholder of a credential for another host",
 			hosts:        []map[string]any{sealed("model", "llm.example", "", "", modelKeys...)},
 			placeholders: modelKeys,
-			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN, on this machine or in Qory Apiary's run configuration; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
+			want:         "give the run a model key for the runtime claude: a credential for api.anthropic.com whose key_variables list one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in Qory Apiary's run configuration, or a credential for api.anthropic.com with a placeholder of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN in forager.yaml; the gateway holds credentials for the run, and none of them is a model key for api.anthropic.com",
 		},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
