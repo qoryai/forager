@@ -325,7 +325,7 @@ func fileRefused(v flagValue, err error) error {
 		} else if text, ok := promptText[v.flag]; ok {
 			what = "the text with " + text
 		}
-		return fmt.Errorf("Move %s to a directory no walled run writes, or pass %s. This launch passes %s %s, "+
+		return fmt.Errorf("Move %s to a directory no walled run can write, or pass %s. This launch passes %s %s, "+
 			"which %s %s, a place a walled run can write, so the run does not start.",
 			shown, what, v.flag, shown, written.How, written.Place)
 	}
@@ -347,7 +347,7 @@ func readFix(v flagValue, rest string) string {
 	case rest == "is not a regular file":
 		return "Pass a " + v.flag + " path to a regular file."
 	case strings.HasPrefix(rest, "is larger than "):
-		return fmt.Sprintf("Pass a %s file of at most %d bytes.", v.flag, maxSettings)
+		return fmt.Sprintf("Pass a %s file of at most %d bytes (1 MiB).", v.flag, maxSettings)
 	case rest == "changed while it was checked":
 		return "Start the run again when no process is writing " + shown + "."
 	}

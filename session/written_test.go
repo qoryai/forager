@@ -99,7 +99,7 @@ func TestASettingsFileAWalledRunCouldWriteIsNoRun(t *testing.T) {
 		sp.Wall, sp.Image = w, "example.com/agent:1"
 		f := settingsIn(t, &sp, sp.Dir)
 		err := runErr(sp)
-		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+		want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the settings as a JSON object. " +
 			"This launch passes --settings " + f + ", which lies in " + sp.Dir + ", a place a walled run can write, " +
 			"so the run does not start."
 		if err == nil || err.Error() != want {
@@ -192,7 +192,7 @@ func TestASettingsFileInAnotherWalledRunsBindIsNoRun(t *testing.T) {
 			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 		}
 		sp.Args = []string{"--settings", f}
-		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+		want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the settings as a JSON object. " +
 			"This launch passes --settings " + f + ", which lies in " + resolved + ", a place a walled run can write, " +
 			"so the run does not start."
 		if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
@@ -221,7 +221,7 @@ func TestASettingsFileInABindThatRecordsNoModeIsNoRun(t *testing.T) {
 	rebind(t, file, 0, func(b map[string]any) { delete(b, "writable") })
 	sp := spec(t, "FAKE_EXIT=0")
 	sp.Args = []string{"--settings", f}
-	want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the settings as a JSON object. " +
+	want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the settings as a JSON object. " +
 		"This launch passes --settings " + f + ", which lies in " + resolved(t, m) + ", a place a walled run can write, " +
 		"so the run does not start."
 	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), want) {
@@ -376,7 +376,7 @@ func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		sp.Args = append(sp.Args, "--mcp-config", f)
-		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+		want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 			"This launch passes --mcp-config " + f + ", which lies in " + sp.Dir +
 			", a place a walled run can write, so the run does not start."
 		if err := runErr(sp); err == nil || err.Error() != want {
@@ -399,7 +399,7 @@ func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
 		symlink(t, outside, filepath.Join(sp.Dir, "out"))
 		f := filepath.Join(safe, "into", "out", "mcp.json")
 		sp.Args = append(sp.Args, "--mcp-config="+f)
-		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+		want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 			"This launch passes --mcp-config " + f + ", which is reached through " + sp.Dir +
 			", a place a walled run can write, so the run does not start."
 		if err := runErr(sp); err == nil || err.Error() != want {
@@ -497,7 +497,7 @@ func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		sp.Args = append(sp.Args, "--append-system-prompt-file", f)
-		want := "runtime claude: Move " + f + " to a directory no walled run writes, or pass the text with " +
+		want := "runtime claude: Move " + f + " to a directory no walled run can write, or pass the text with " +
 			"--append-system-prompt. This launch passes --append-system-prompt-file " + f + ", which lies in " + sp.Dir +
 			", a place a walled run can write, so the run does not start."
 		if err := runErr(sp); err == nil || err.Error() != want {

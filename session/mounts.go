@@ -629,7 +629,7 @@ func checkMounts(spec Spec, runDir string) (mountPlan, error) {
 	for _, w := range spec.Written {
 		at, err := split(w, 0)
 		if err != nil {
-			return mountPlan{}, fmt.Errorf("cannot resolve the written place %s: %w", pathShown(w), accesskey.ShownError(err))
+			return mountPlan{}, fmt.Errorf("Fix the error at the end of this message, then run the command again. Cannot resolve the written place %s: %w", pathShown(w), accesskey.ShownError(err))
 		}
 		out := shown{path: w, what: "the written place", writable: true, at: at}
 		for _, in := range places {
@@ -719,16 +719,17 @@ func throughLink(in, out shown) error {
 	}
 	link, err := linkIn(out, in.looks)
 	if err != nil {
-		return fmt.Errorf("%s %s is looked up inside %s %s and resolves "+
-			"outside it: %w", in.what, pathShown(in.path), out.what, pathShown(out.path),
+		return fmt.Errorf("List the path that %s %s resolves to, in place of the path given. "+
+			"The path is looked up inside %s %s and resolves outside it: %w", in.what, pathShown(in.path), out.what, pathShown(out.path),
 			accesskey.ShownError(err))
 	}
 	return &Refusal{
 		Code:  refusal.MountThroughLink,
 		Names: pathsShown(in.path, link, out.path),
-		Detail: fmt.Sprintf("%s is reached through the link %s inside %s, which a "+
-			"walled agent can change: list the link's target itself",
-			pathShown(in.path), pathShown(link), pathShown(out.path)),
+		Detail: fmt.Sprintf("List the path that %s resolves to, in place of %s. %s is reached "+
+			"through the link %s inside %s, which a walled agent can change",
+			pathShown(in.path), pathShown(in.path), pathShown(in.path), pathShown(link),
+			pathShown(out.path)),
 	}
 }
 

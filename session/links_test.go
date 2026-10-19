@@ -91,8 +91,8 @@ func TestABindOverAnotherRunsWayIsNoRun(t *testing.T) {
 func throughLink(t *testing.T, err error, place, link, outer string) {
 	t.Helper()
 	r := refusalOf(t, "mount_through_link", err)
-	want := place + " is reached through the link " + link + " inside " + outer +
-		", which a walled agent can change: list the link's target itself"
+	want := "List the path that " + place + " resolves to, in place of " + place + ". " + place +
+		" is reached through the link " + link + " inside " + outer + ", which a walled agent can change"
 	if !slices.Equal(r.Names, []string{place, link, outer}) || r.Detail != want {
 		t.Errorf("names %q, detail %q\nwant names %q, detail %q",
 			r.Names, r.Detail, []string{place, link, outer}, want)
@@ -683,5 +683,41 @@ func TestAPlaceThroughALinkInAWrittenPlaceIsNoRun(t *testing.T) {
 	sp.Dir = wt
 	if res, err := session.Run(context.Background(), sp); err != nil || res.ExitCode != 0 {
 		t.Errorf("without Spec.Written: %+v, %v", res, err)
+	}
+}
+
+// TestTheLinkRefusalPutsEachNameInItsPlace pins the sentence of a mount_through_link
+// refusal for a place, a link and a writable place that are three different paths:
+// the fix names the place twice, the cause the place, the link and the writable
+// place.
+func TestTheLinkRefusalPutsEachNameInItsPlace(t *testing.T) {
+	top := t.TempDir()
+	w, x := mkdirs(t, filepath.Join(top, "w")), mkdirs(t, filepath.Join(top, "x"))
+	mkdirs(t, filepath.Join(x, "c"))
+	link := filepath.Join(w, "l")
+	symlink(t, x, link)
+	place := filepath.Join(link, "c")
+	sp := walledSpec(t, &openWall{})
+	sp.Mounts, sp.Dir = []wall.Mount{{Path: w}, {Path: place}}, w
+	r := refusalOf(t, "mount_through_link", runErr(sp))
+	want := "List the path that " + place + " resolves to, in place of " + place + ". " + place +
+		" is reached through the link " + link + " inside " + w + ", which a walled agent can change"
+	if r.Detail != want {
+		t.Errorf("detail %q\nwant   %q", r.Detail, want)
+	}
+}
+
+// TestAWrittenPlaceThatCannotBeResolvedIsNoRun pins the text of the refusal of a
+// Spec.Written place that cannot be resolved, here a link that leads to itself: the
+// fix comes first, and the reason, with the place, follows.
+func TestAWrittenPlaceThatCannotBeResolvedIsNoRun(t *testing.T) {
+	loop := filepath.Join(t.TempDir(), "loop")
+	symlink(t, loop, loop)
+	sp := walledSpec(t, &openWall{})
+	sp.Written = []string{loop}
+	want := "Fix the error at the end of this message, then run the command again. " +
+		"Cannot resolve the written place " + loop + ": EvalSymlinks: too many links"
+	if err := runErr(sp); err == nil || err.Error() != want {
+		t.Errorf("got %v\nwant %q", err, want)
 	}
 }

@@ -25,9 +25,9 @@ func TestLookupPrintsAPhraseForASecret(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "amp.yaml"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		want := "the descriptor " + filepath.Join(dir, "amp.yaml") + ": it is not a regular file"
+		want := "Make the runtime descriptor " + filepath.Join(dir, "amp.yaml") + " a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file"
 		if filepath.Base(dir) == "QRK_y" {
-			want = "the descriptor (a value that contains a run key): it is not a regular file"
+			want = "Make the runtime descriptor (a value that contains a run key) a readable regular file of at most 1 MiB, or remove it. It could not be read: it is not a regular file"
 		}
 		if _, err := catalog.Lookup("amp", dir); err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", dir, err, want)

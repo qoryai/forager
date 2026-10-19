@@ -65,14 +65,14 @@ func writeFile(t *testing.T, path, content string) string {
 
 // mcpInWork is the refusal of an --mcp-config file in a place a walled run can write.
 func mcpInWork(file, place string) string {
-	return "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+	return "Move " + file + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 		"This launch passes --mcp-config " + file + ", which lies in " + place +
 		", a place a walled run can write, so the run does not start."
 }
 
 // agentsInWork is the refusal of an --agents file in a place a walled run can write.
 func agentsInWork(file, place string) string {
-	return "Move " + file + " to a directory no walled run writes, or pass the agents as a JSON object. " +
+	return "Move " + file + " to a directory no walled run can write, or pass the agents as a JSON object. " +
 		"This launch passes --agents " + file + ", which lies in " + place +
 		", a place a walled run can write, so the run does not start."
 }
@@ -123,7 +123,7 @@ func TestAWalledLaunchsFileReachedThroughAWrittenPlaceIsRefused(t *testing.T) {
 		Launch: runtimes.Launch{Args: []string{"--mcp-config", file}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
 		Walled: true, Readable: through,
 	})
-	want := "Move " + file + " to a directory no walled run writes, or pass the servers as a JSON string. " +
+	want := "Move " + file + " to a directory no walled run can write, or pass the servers as a JSON string. " +
 		"This launch passes --mcp-config " + file + ", which is reached through /work, a place a walled run can write, " +
 		"so the run does not start."
 	if err == nil || err.Error() != want {
@@ -311,7 +311,7 @@ func TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused(t *testing.T) {
 	ok := writeFile(t, filepath.Join(t.TempDir(), "ok.md"), "# ok")
 	bad := writeFile(t, filepath.Join(work, "p.md"), "# prompt")
 	refusal := func(flag, how, place string) string {
-		return "Move " + bad + " to a directory no walled run writes, or pass the text with " + promptFlags[flag] + ". " +
+		return "Move " + bad + " to a directory no walled run can write, or pass the text with " + promptFlags[flag] + ". " +
 			"This launch passes " + flag + " " + bad + ", which " + how + " " + place +
 			", a place a walled run can write, so the run does not start."
 	}
@@ -497,7 +497,7 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 		}{
 			{"a link", link, nil, "is a link", "Pass the path of the file that " + link + " links to."},
 			{"a directory", sub, nil, "is not a regular file", "Pass a " + flag + " path to a regular file."},
-			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes", "Pass a " + flag + " file of at most 1048576 bytes."},
+			{"larger than 1 MiB", big, nil, "is larger than 1048576 bytes", "Pass a " + flag + " file of at most 1048576 bytes (1 MiB)."},
 			{"not the file judged", plain, other, "changed while it was checked",
 				"Start the run again when no process is writing " + plain + "."},
 		} {
