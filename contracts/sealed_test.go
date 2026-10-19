@@ -420,9 +420,9 @@ func refusedAt(t *testing.T, f sealedFixture, e sealedEnvelope, now uint64) stri
 // is sealed again from the plaintext, the info and the aad its case lists, with the
 // fixed ephemeral key, and its enc and ct are the file's; a sig is the fixture signing
 // key's over the envelope's members, the bad signature's case apart; and the checks of
-// whoever opens it, in order, refuse it at the step its case names and at no step before. The
-// accepted answer passes every check, and the cases cover every step but the access
-// key's, which the run id's and the digest's stand for.
+// whoever opens it, in order, refuse it at the step its case names and at no step
+// before. The accepted answer passes every check, and the cases cover every step but
+// the access key's, which the run id's and the digest's stand for.
 func TestSealedInvalidVectors(t *testing.T) {
 	f := loadSealed(t)
 	if got := refusedAt(t, f, f.answer.Sealed, f.vec.Now); got != "" {

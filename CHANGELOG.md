@@ -51,8 +51,9 @@ release may change what an existing document does, and says so under Upgrading.
   opens it with an access key, returning the values by credential name as bytes that
   `Values.Clear` overwrites. A `Values`, a `Value` or a `Sealing` prints no value with
   any format verb, also as a field of a struct printed by reflection; `sealed.Seal`
-  seals and signs an answer, for a receiver and the tests. Each refusal is one of the package's errors,
-  and no error contains a value. No Forager component calls `sealed.Open`.
+  seals and signs an answer, for a receiver and the tests. Each refusal is one of the
+  package's errors, and no error contains a value. No Forager component calls
+  `sealed.Open`.
 
 #### Changed
 

@@ -101,11 +101,11 @@ func clearAll(values [][]byte) {
 // or values, not sorted by name [ErrPlaintext]; a value for a credential the request
 // did not ask for [ErrNotRequested]; and a requested credential without a value
 // [ErrMissing]. A digest outside its form or a request outside its forms is
-// [ErrRequest], before pt is read. It does not check the rule for a value set in a header, no control
-// character other than tab and no leading or trailing space or tab: Plaintext is not
-// given which values are set in a header, so that check is the caller's. It returns
-// the values by credential; on an error it has cleared every value it read. The caller
-// clears pt.
+// [ErrRequest], before pt is read. It does not check the rule for a value set in a
+// header, no control character other than tab and no leading or trailing space or tab:
+// Plaintext is not given which values are set in a header, so that check is the
+// caller's. It returns the values by credential; on an error it has cleared every value
+// it read. The caller clears pt.
 func Plaintext(pt []byte, digest string, requested []string) (Values, error) {
 	if !digestShape.MatchString(digest) || len(requested) < 1 || len(requested) > MaxCredentials {
 		return Values{}, refuse(ErrRequest, "the digest is outside its form, or the request lists %d credentials and not 1 to %d", len(requested), MaxCredentials)
