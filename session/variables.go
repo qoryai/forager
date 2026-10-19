@@ -297,13 +297,17 @@ func orList(items []string, sep, last string) string {
 }
 
 // credentialVariables is the record's credential_variables: one entry per credential
-// and placeholder, in order, the credential shown by [accesskey.ShownName]; nil
-// when none has a placeholder.
+// and placeholder, in order; nil when none is left. An entry whose credential's name or
+// placeholder contains an access key secret or a run key, [accesskey.ContainsSecret],
+// is left out, so the record never carries one.
 func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]string {
 	var out []map[string]string
 	for _, c := range credentials {
 		for _, p := range c.Placeholders {
-			out = append(out, map[string]string{"credential": accesskey.ShownName(c.Name, false), "name": p})
+			if accesskey.ContainsSecret(c.Name) || accesskey.ContainsSecret(p) {
+				continue
+			}
+			out = append(out, map[string]string{"credential": c.Name, "name": p})
 		}
 	}
 	return out
@@ -316,7 +320,8 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // runtime's preparation, and no credential of credentials, after [chosen], has a
 // model key's variable among its placeholders and a host of the runtime's model among
 // its hosts. The runtime's model host is the host of the value of its endpoint variable
-// that reaches it, or, when none does, a host of a model key's declaration. A run
+// that reaches it, or, when none does, a host of a model key's declaration; a value
+// from which [policy.EndpointHost] reads no host is covered by no credential. A run
 // without a wall, or whose answer has no credential_hosts, is not checked: its key may
 // come from what the session does not see, such as a login of the developer's, a
 // mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
@@ -358,14 +363,17 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	if slices.ContainsFunc(keys, func(k string) bool { return reaches[k] != "" }) {
 		return nil
 	}
-	shownHosts := strings.Join(hosts, " or ")
-	if v := reaches[places.Endpoint.Variable]; places.Endpoint.Variable != "" && v != "" {
+	endpoint := places.Endpoint.Variable
+	if v := reaches[endpoint]; endpoint != "" && v != "" {
 		host, ok := policy.EndpointHost(v)
-		hosts, shownHosts = []string{host}, host
 		if !ok {
-			hosts, shownHosts = nil, "the host of "+places.Endpoint.Variable
+			return refusal.New(refusal.ModelKeyMissing, keys,
+				"set %s to an https URL with a host, or give the run a value of %s from the run or the machine: the value of %s that reaches the runtime %s has no host that Forager reads, so no credential's placeholder counts as its model key",
+				endpoint, orList(keys, ", ", " or "), endpoint, rt.Name())
 		}
+		hosts = []string{host}
 	}
+	shownHosts := strings.Join(hosts, " or ")
 	for _, c := range credentials {
 		if !slices.ContainsFunc(c.Placeholders, func(p string) bool { return slices.Contains(keys, p) }) {
 			continue

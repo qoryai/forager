@@ -61,7 +61,7 @@
             "items": {"$ref": "events/run.policy_applied.schema.json#/properties/credentials/items/properties/hosts/items"}
           },
           "placeholders": {
-            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none. The variable key_form chooses is not among them: the session adds it.",
+            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none. The variable key_form chooses may be among them, when the server's entry lists it; when it is not, the session adds it.",
             "type": "array",
             "uniqueItems": true,
             "items": {"$ref": "#/properties/placeholders/items"}

@@ -100,7 +100,7 @@
       }
     },
     "credential_variables": {
-      "description": "Behind a wall, the variables the agent's process receives as a placeholder for a credential the gateway holds, never a value: one entry per credential and variable, in the order of the run answer's credential_hosts and of each credential's placeholders, the variable a credential's key_form and auth choose after them when the credential does not list it. credential is the credential's name, with a name that contains an access key secret or a run key shown as a phrase. Absent when no credential sets one. The session decides it; fixed when the run starts: every further policy_applied repeats it.",
+      "description": "Behind a wall, the variables the agent's process receives as a placeholder for a credential the gateway holds, never a value: one entry per credential and variable, in the order of the run answer's credential_hosts and of each credential's placeholders, the variable a credential's key_form and auth choose after them when the credential does not list it. credential is the credential's name. An entry whose credential's name or variable contains an access key secret or a run key is left out, so the record carries neither. Absent when no entry is left. The session decides it; fixed when the run starts: every further policy_applied repeats it.",
       "type": "array",
       "minItems": 1,
       "items": {

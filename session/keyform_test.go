@@ -338,3 +338,73 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 		})
 	}
 }
+
+// TestTheModelKeyRefusalNamesTheFix pins the text of model_key_missing by what the
+// runtime sends its model requests to. A value of the endpoint's variable with no host
+// Forager reads, here an http URL the run inherits, is covered by no credential, and
+// the text names the endpoint as the fix, not a credential the run has. A value the
+// endpoint rule leaves out does not reach the runtime: the descriptor's host counts,
+// and a model credential for it is the run's model key.
+func TestTheModelKeyRefusalNamesTheFix(t *testing.T) {
+	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
+	t.Run("an endpoint with no host Forager reads", func(t *testing.T) {
+		sp, g := specGateway(t, "FAKE_EXIT=0", endpointVariable+"=http://litellm.internal:4000")
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		answeringWith(g, []map[string]any{sealed("model", "litellm.internal", "", "", apiKeyVariable)}, nil)
+		_, err := session.Run(context.Background(), sp)
+		var r *session.Refusal
+		if !errors.As(err, &r) || r.Code != "model_key_missing" || !slices.Equal(r.Names, modelKeys) {
+			t.Fatalf("%v, want model_key_missing for %q", err, modelKeys)
+		}
+		want := "set ANTHROPIC_BASE_URL to an https URL with a host, or give the run a value of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN from the run or the machine: the value of ANTHROPIC_BASE_URL that reaches the runtime claude has no host that Forager reads, so no credential's placeholder counts as its model key"
+		if r.Detail != want {
+			t.Errorf("the refusal reads\n %q\nwant\n %q", r.Detail, want)
+		}
+	})
+	for _, tc := range []struct {
+		what    string
+		hosts   []map[string]any
+		refused bool
+	}{
+		{"a dropped endpoint and a model credential for the descriptor's host", modelAndForge, false},
+		{"a dropped endpoint and no model credential", []map[string]any{forge}, true},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			sp, g := specGateway(t, "FAKE_EXIT=0")
+			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			sp.Variables.Run = []string{endpointVariable + "=https://evil.example"}
+			answeringWith(g, tc.hosts, nil)
+			_, err := session.Run(context.Background(), sp)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("%v, want the run", err)
+				}
+				return
+			}
+			var r *session.Refusal
+			if !errors.As(err, &r) || r.Code != "model_key_missing" || !strings.Contains(r.Detail, "a credential for api.anthropic.com") {
+				t.Fatalf("%v, want model_key_missing for api.anthropic.com", err)
+			}
+		})
+	}
+}
+
+// TestTheRecordOfCredentialVariablesHoldsNoSecret pins that credential_variables leaves
+// out an entry whose credential's name or placeholder contains an access key secret or
+// a run key, and keeps the others.
+func TestTheRecordOfCredentialVariablesHoldsNoSecret(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	secret := "qak_0123456789abcdef"
+	answeringWith(g, []map[string]any{
+		sealed("model", "api.anthropic.com", "", "", apiKeyVariable, secret),
+		sealed("qrk_forge", "api.github.com", "", "", "GITHUB_TOKEN"),
+	}, []string{apiKeyVariable, secret, "GITHUB_TOKEN"})
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := credentialVariables(t, res), []string{"model=" + apiKeyVariable}; !slices.Equal(got, want) {
+		t.Errorf("credential_variables %q, want %q", got, want)
+	}
+}

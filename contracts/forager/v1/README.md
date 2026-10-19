@@ -844,7 +844,10 @@ one of these holds:
 
 The runtime's model host is the host of the value of its endpoint variable that reaches
 it, or, when none does, a host of a model key's declaration: `api.anthropic.com` for
-Claude Code. A run without a wall, or whose answer has no `credential_hosts`, is not
+Claude Code. A value of the endpoint variable that the endpoint rule leaves out does not
+reach the runtime, so the declaration's host counts. When the value that reaches it has no
+host `policy.EndpointHost` reads, such as an `http` URL, no credential covers it, and the
+refusal says to set the endpoint variable to an `https` URL with a host. A run without a wall, or whose answer has no `credential_hosts`, is not
 checked: its runtime may use a login the session does not see, such as the developer's,
 one in a mount or one in the image. The refusal is posted on the link, as the session's
 other refusals are.
@@ -910,25 +913,26 @@ the model endpoint's variable whose host is a host of the run's model credential
 - A name no source's value applies to has no `from`: a value left out by the deny list
   with nothing below it, or a variable the runtime declares, which behind a wall goes in
   empty.
-
-Behind a wall, `credential_variables` lists the variables the agent gets a placeholder in
-for a credential, never a value: one `{credential, name}` per credential and variable,
-in the order of the run answer's `credential_hosts` and of each credential's
-`placeholders`, the variable its `key_form` chooses after them when the credential does
-not list it. `credential` is the credential's name, shown as a phrase when it contains an
-access key secret or a run key. It is absent when no credential sets a placeholder, and
-every further `dev.qory.run.policy_applied` repeats it.
-
-```json
-[{"credential": "forge", "name": "GITHUB_TOKEN"},
- {"credential": "model", "name": "ANTHROPIC_API_KEY"}]
-```
 - The sources and the reasons are open lists: a receiver shows a word it does not know
   as it is.
 
 The record is fixed when the run starts: every further `policy_applied` repeats it. The
 launch spec's `OnVariables`, in Go, receives the same list once, before the agent
 starts, so `qory` prints a line for an `--env` value that lost.
+
+Behind a wall, `credential_variables` lists the variables the agent gets a placeholder in
+for a credential, never a value: one `{credential, name}` per credential and variable,
+in the order of the run answer's `credential_hosts` and of each credential's
+`placeholders`, the variable its `key_form` chooses after them when the credential does
+not list it. An entry whose credential's name or variable contains an access key secret
+or a run key is left out, so the record carries neither; the run still sets the
+variable. `credential_variables` is absent when no entry is left, and every further
+`dev.qory.run.policy_applied` repeats it.
+
+```json
+[{"credential": "forge", "name": "GITHUB_TOKEN"},
+ {"credential": "model", "name": "ANTHROPIC_API_KEY"}]
+```
 
 **The document.** `variables` maps each name to an object with its `value`:
 `{"LOG_LEVEL": {"value": "info"}}`. The object is open: Forager ignores a member beside
@@ -2584,9 +2588,9 @@ document:
   `placeholders`, the variables the session sets to a placeholder for this credential,
   each also in `placeholders` and each once, empty when it sets none. A credential from
   the server also has `auth`, its run configuration entry's, and `key_form` when the
-  entry has one; the session adds the variable they choose (§Credentials, The variable
-  of a model key), which neither `placeholders` lists. Names and hosts alone, never a
-  secret. Absent means none.
+  entry has one. The variable they choose (§Credentials, The variable of a model key) may
+  be in both `placeholders`, when the server's entry lists it; when it is not, the
+  session adds it. Names and hosts alone, never a secret. Absent means none.
 - `image`: the image the run gets, as a definition of `images` has it, `ref` required:
   the one the policy in force selects, or the machine's default, `name` absent when the
   default is a reference. For a reference the policy names, `ref` is that reference,
@@ -2987,7 +2991,8 @@ paths of those hosts, in the policy's path grammar; how it is set,
 form of model key the runtime reads from the variable, set by that scheme. A declaration
 with a `key_form` is a model key: the session gives its variable the placeholder of a
 credential from the server with the same `key_form` and scheme (§Credentials, The
-variable of a model key), and a walled run needs one (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
+variable of a model key). When the descriptor also has a `model` section, a walled run
+whose run answer has `credential_hosts` needs a model key (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
 declared ids, each in one group at most: groups of declarations of which the runtime
 needs at most one, and exactly one of a `required` group. `reserves` lists variables
 the runtime reads a credential from beside the declared ones; `denies`, variables the

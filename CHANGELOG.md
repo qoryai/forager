@@ -13,9 +13,10 @@ release may change what an existing document does, and says so under Upgrading.
 - A walled run whose gateway holds credentials for it, and whose runtime declares model
   keys, needs a model key: without a credential whose placeholder is a model key's
   variable on the runtime's model host, and without a value of one from the run, the
-  machine, the harness or what the run inherits, it is `model_key_missing`. A setup
-  whose walled Claude Code run has only a forge credential and finds its model key in a
-  mount, the image or its settings now stops: pass the key in the machine's variables,
+  machine, the harness, the runtime's preparation or what the run inherits, it is
+  `model_key_missing`. A setup whose walled Claude Code run has only a forge credential
+  and finds its model key in a mount, the image, its settings or a login inside the run
+  now stops: pass the key in the machine's variables,
   or define a model credential with a placeholder. A run without a wall, or whose run
   answer has no `credential_hosts`, starts as before.
 - A run configuration credential with `key_form` now sets a variable: one with
@@ -54,8 +55,9 @@ release may change what an existing document does, and says so under Upgrading.
   and `KeyForm`.
 - `dev.qory.run.policy_applied`: each entry of `credentials` of a credential from the
   server with `key_form` has it, and behind a wall `credential_variables` lists the
-  variable each credential's placeholder is in, `{credential, name}`, the credential's
-  name shown through `accesskey.ShownName`. The gateway leaves `credential_variables`
+  variable each credential's placeholder is in, `{credential, name}`, leaving out an
+  entry whose credential's name or variable contains an access key secret or a run
+  key. The gateway leaves `credential_variables`
   out of the members it matches.
 - The refusal `model_key_missing`, in `refusal.Decides`: a walled run whose run answer
   has `credential_hosts`, whose runtime has a `model` section and model keys, and that
