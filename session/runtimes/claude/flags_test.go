@@ -171,6 +171,8 @@ func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 		return "Replace " + v + " with an absolute path outside the workspace. This launch passes " + flag + " " + v +
 			", a relative path that Claude Code reads from the workspace, which a walled run can write, so the run does not start."
 	}
+	// The values that start with "{" or "[" after white space, which the text shows as a phrase.
+	phrase := map[string]bool{"{": true, "  {": true, "\u00a0{}": true}
 	for _, c := range []struct {
 		flag, value string
 		inline      bool
@@ -203,7 +205,11 @@ func TestAWalledLaunchsInlineJSONPassesAsItIs(t *testing.T) {
 			args := []string{"-p", "hi", c.flag, c.value}
 			got, _, err := walled(t, f, args)
 			if !c.inline {
-				if want := relative(c.flag, c.value); err == nil || err.Error() != want {
+				shown := c.value
+				if phrase[c.value] {
+					shown = "(an " + c.flag + " value)"
+				}
+				if want := relative(c.flag, shown); err == nil || err.Error() != want {
 					t.Errorf("got %v, want %q", err, want)
 				}
 				return
@@ -387,6 +393,26 @@ func TestAWalledLaunchsPromptFilesAreCopiedUnchanged(t *testing.T) {
 			t.Errorf("launch %q, %v, Readable asked of %q", got.Args, err, f.asked)
 		}
 	})
+}
+
+// TestAWalledLaunchsJSONPathIsAPhrase pins that a value that starts with "{" or "["
+// after white space and is taken as a path is shown as a phrase, so a token in JSON
+// that does not parse is not printed.
+func TestAWalledLaunchsJSONPathIsAPhrase(t *testing.T) {
+	for _, value := range []string{`{"headers":{"Authorization":"Bearer fake-token-123"},}`,
+		` [{"headers":{"Authorization":"Bearer fake-token-123"}},]`} {
+		for _, args := range [][]string{{"--mcp-config", value}, {"--mcp-config=" + value}} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				want := "Replace (an --mcp-config value) with an absolute path outside the workspace. This launch passes " +
+					"--mcp-config (an --mcp-config value), a relative path that Claude Code reads from the workspace, " +
+					"which a walled run can write, so the run does not start."
+				_, _, err := walled(t, &fakeWritten{written: t.TempDir()}, args)
+				if err == nil || err.Error() != want || strings.Contains(err.Error(), "fake-token-123") {
+					t.Errorf("got %v, want %q", err, want)
+				}
+			})
+		}
+	}
 }
 
 // TestAWalledLaunchsPathsFollowThePathRules pins that a path value of any of the flags

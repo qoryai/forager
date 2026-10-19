@@ -123,6 +123,18 @@ const (
 	recordersCAVar = "PROBE_RECORDERS_CA"
 )
 
+// What the run's model key is: a fake key in the suite's environment, with keyMark,
+// for Claude Code's model host, with a variable Claude Code reads a model key from as
+// its stand-in. A walled run whose gateway holds credentials needs one, and the
+// recorders stand in for no model host. The allow list has the host, as it must for a
+// credential's host; the probe sends nothing to it.
+const (
+	modelKeyVar  = "QORY_WALLTEST_MODEL_KEY"
+	modelStandIn = "ANTHROPIC_AUTH_TOKEN"
+	modelHost    = "api.anthropic.com"
+	modelCred    = "runtime-model"
+)
+
 // What the suite's tool is: the test binary on this machine, serving a name that
 // exists nowhere, held to one prefix of its paths.
 const (
@@ -281,6 +293,7 @@ func Run(t *testing.T, o Options) {
 	keys := runtimeKeys{api: "sk-ant-test" + keyMark + "0001-" + strconv.Itoa(os.Getpid()), oauth: "sk-ant-oat01-test" + keyMark + "0002-" + strconv.Itoa(os.Getpid())}
 	t.Setenv(apiKeyVar, keys.api)
 	t.Setenv(oauthVar, keys.oauth)
+	t.Setenv(modelKeyVar, "sk-ant-test"+keyMark+"0003-"+strconv.Itoa(os.Getpid()))
 	var trusted error
 	if n := len(o.Recorders); n != 0 && n != 3 {
 		t.Fatalf("Recorders lists %d recorders; the suite takes three: the API key's host, the OAuth credential's host, and an allowed host with none", n)
@@ -840,7 +853,7 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 		t.Fatal(err)
 	}
 	// The metadata address is in the list to show that no entry opens it.
-	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost}
+	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost, modelHost}
 	if h.named {
 		allow = append(allow, "127.0.0.1")
 	}
@@ -875,8 +888,9 @@ func runIn(t *testing.T, o Options, v variant, interactive bool, h hosts, outsid
 	if o.Docker {
 		env = append(env, "PROBE_DOCKER=1")
 	}
-	policyCreds := []gateway.PolicyCredential{{Name: "suite"}}
-	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}}
+	policyCreds := []gateway.PolicyCredential{{Name: "suite"}, {Name: modelCred}}
+	creds := []gateway.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}},
+		{Name: modelCred, Env: modelKeyVar, Hosts: []string{modelHost}, Scheme: "bearer", Paths: []string{"/v1/*"}, Placeholders: []string{modelStandIn}}}
 	if len(h.recorders) == 3 {
 		cert, _ := authority()
 		env = append(env, "PROBE_API_KEY_HOST="+h.recorders[0], "PROBE_OAUTH_HOST="+h.recorders[1], "PROBE_OTHER_HOST="+h.recorders[2],

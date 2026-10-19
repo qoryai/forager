@@ -49,8 +49,8 @@ var refPoolSecret = mustGenerate()
 
 // reference is the reference receiver as a server of the contract for a gateway: the
 // gateway's access key, the pool's when the gateway is separate, every key allowed stored
-// secrets; a run configuration with the credential model on origin, the TLS origin of
-// the test; and refValue as model's value.
+// secrets but the pool's; a run configuration with the credential model on origin, the
+// TLS origin of the test; and refValue as model's value.
 type reference struct {
 	srv    *httptest.Server
 	h      *receiver.Handler

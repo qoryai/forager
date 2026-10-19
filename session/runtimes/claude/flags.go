@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
@@ -225,7 +226,7 @@ func truthy(v any) bool {
 
 // pathRules refuses a path value that starts with "~", is relative or has a ".." name.
 func pathRules(v flagValue) error {
-	shown := accesskey.ShownValue(v.value, false)
+	shown := shownPath(v)
 	switch {
 	case strings.HasPrefix(v.value, "~"):
 		return fmt.Errorf("Replace %s with an absolute path. This launch passes %s %s, and inside the wall ~ is "+
@@ -238,6 +239,16 @@ func pathRules(v flagValue) error {
 		return dotDot(v)
 	}
 	return nil
+}
+
+// shownPath is the value of v as a refusal shows it: "(an <flag> value)" for one that
+// starts with "{" or "[" after white space, which may be JSON with a token in it that
+// [accesskey.ShownValue] does not hide, and ShownValue's text for any other.
+func shownPath(v flagValue) string {
+	if t := strings.TrimLeftFunc(v.value, unicode.IsSpace); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+		return "(an " + v.flag + " value)"
+	}
+	return accesskey.ShownValue(v.value, false)
 }
 
 // dotDot is the refusal of a path value of v that has a ".." part.
