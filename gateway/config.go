@@ -79,6 +79,11 @@ type Config struct {
 	// False makes the socket, for a session in another process too. A gateway with
 	// Listen serves no local link either way.
 	NoLinkSocket bool
+	// LockMemory, on Linux, makes Start lock every page of this process in memory, the
+	// pages mapped now and those mapped later, so that no key the gateway holds is
+	// written to swap: gateway.lock_memory of qory's configuration. Start fails when the
+	// lock fails, and on any other system when LockMemory is true. False locks nothing.
+	LockMemory bool
 
 	// quiet, when not zero, replaces three intervals as the time after which a run
 	// whose session sends nothing ends; closeWait, when not zero, bounds each run's

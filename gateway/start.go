@@ -123,6 +123,13 @@ type Gateway struct {
 // them for one that takes an argument, or whose pattern does not compile; and once
 // discovery is read, a Listen whose access key is not a gateway's, whose node id is not
 // ng_, and a gateway's access key, ng_, without a Listen.
+//
+// Before it starts anything, Start limits core dumps of this process and debugger
+// access to it: on Linux it makes the process non-dumpable,
+// PR_SET_DUMPABLE 0, and on macOS it calls ptrace(PT_DENY_ATTACH); on both it sets
+// RLIMIT_CORE to 0, soft and hard. A test binary gets none of these. With
+// [Config.LockMemory], on Linux, it locks the process's memory out of swap. What it sets
+// stays for the life of the process, after Close too, and a failure is Start's error.
 func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	if cfg.Server != nil {
 		s := *cfg.Server
@@ -169,6 +176,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 		if err := t.Check(); err != nil {
 			return nil, err
 		}
+	}
+	if err := hardenProcess(cfg.LockMemory); err != nil {
+		return nil, err
 	}
 	report := cfg.Report
 	if report == nil {

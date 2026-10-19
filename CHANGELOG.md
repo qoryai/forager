@@ -314,9 +314,24 @@ release may change what an existing document does, and says so under Upgrading.
 - A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
   any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
   `run.registered` sent the instance id as it was.
+- `gateway.Start` limits core dumps of the process that calls it and debugger access to
+  it, for the life of the process. On Linux it calls
+  `prctl(PR_SET_DUMPABLE, 0)`, so that a process of the same user without
+  `CAP_SYS_PTRACE` can no longer attach to the gateway's process or read it under
+  `/proc/<pid>/`. On macOS it calls `ptrace(PT_DENY_ATTACH)`, so a gateway's process
+  that a debugger traces exits at `Start` with status 45. On both it sets
+  `RLIMIT_CORE` to 0, soft and hard, which the programs it starts keep. A test binary
+  gets none of these settings. If a call fails, the gateway does not start, and the
+  error starts with the fix. Before, `Start` set nothing on the process.
 
 #### Added
 
+- `gateway.Config.LockMemory`, `gateway.lock_memory` in `forager.yaml`, default
+  `false`: on Linux, `true` makes `Start` call `mlockall(MCL_CURRENT|MCL_FUTURE)`, so
+  that no page of the gateway's process goes to swap. It needs `RLIMIT_MEMLOCK`
+  unlimited, such as `LimitMEMLOCK=infinity` in a systemd unit; else the gateway does
+  not start, and the error starts with that fix. On other systems `true` stops the
+  gateway.
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
   no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
   argument taking it from a label of the run whose value matches the pattern named, for

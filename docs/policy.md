@@ -110,6 +110,8 @@ gateway:
   [where the policy comes from](#where-the-policy-comes-from).
 - Without `gateway.egress`, and with no other policy, everything is allowed and recorded.
 - `gateway.server` defines the server Forager reports to. See [the server](server.md).
+- `gateway.lock_memory`, on Linux, keeps the gateway's memory out of swap. See
+  [keep the memory out of swap](credentials.md#keep-the-memory-out-of-swap).
 
 ## A denied connection
 
