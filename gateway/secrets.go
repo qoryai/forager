@@ -56,7 +56,7 @@ func (g *Gateway) secrets(runID string) func(context.Context, string, []string) 
 		// The local clock, never the answer's Date: exp is judged by this machine.
 		values, err := sealed.Open(answer, sealed.AccessKey{ID: s.AccessKeyID, Key: s.AccessKey}, pin, runID, digest, names, time.Now())
 		if err != nil {
-			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %v", u, err)}
+			return sealed.Values{}, &accesskey.Refusal{Code: sealedCode(err), Detail: fmt.Sprintf("secrets %s: %s; the answer does not open: %v", u, sealedFix(err), err)}
 		}
 		return values, nil
 	}
@@ -71,4 +71,17 @@ func sealedCode(err error) string {
 		return accesskey.CodeAnswerUnsigned
 	}
 	return refusal.RunConfigurationInvalid
+}
+
+// sealedFix is the step that fixes a refusal of [sealed.Open], first in its message:
+// for a signature, the pin; for an exp outside the window, this machine's clock; for
+// every other refusal, Qory Apiary, which sealed an answer that is not the request's.
+func sealedFix(err error) string {
+	switch {
+	case errors.Is(err, sealed.ErrSignature):
+		return "pin Qory Apiary's current signing key in apiary_public_key"
+	case errors.Is(err, sealed.ErrExpired), errors.Is(err, sealed.ErrAhead):
+		return "set this machine's clock to the right time"
+	}
+	return "report this answer to whoever runs Qory Apiary"
 }

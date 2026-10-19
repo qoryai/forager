@@ -42,8 +42,9 @@ type Credential struct {
 	// told when the host answered 401, which is a reason to ask for another.
 	Token    func() string
 	Rejected func()
-	// Value, for a credential from the server, returns its opened value's bytes, not a
-	// copy, in place of Token; Stored says the credential is the server's. The proxy
+	// Value, for a credential from the server, returns a copy of its opened value's
+	// bytes, which the proxy clears once the header is set, in place of Token; Stored
+	// says the credential is the server's. The proxy
 	// refuses TRACE and TRACK on a host a stored credential is for.
 	Value  func() []byte
 	Stored bool
@@ -410,12 +411,14 @@ func (c *Credential) header() (string, string, bool) {
 }
 
 // storedHeader is the header that carries a credential from the server. The value
-// stays bytes until here, and every buffer this builds is cleared before it returns.
+// stays bytes until here: Value returns a copy, which this clears, and every buffer
+// this builds is cleared before it returns.
 // The header's value is a Go string, since http.Header holds strings: one copy per
 // request that cannot be cleared, and the copies the transport makes as it writes the
 // request, its buffers and, over HTTP/2, the header compression's table.
 func (c *Credential) storedHeader() (string, string, bool) {
 	v := c.Value()
+	defer clear(v)
 	if len(v) == 0 {
 		return "", "", false
 	}

@@ -344,7 +344,7 @@ func (r *Run) open(ctx context.Context) error {
 	for _, name := range names {
 		if v, _ := values.Value(name); !HeaderValue(v) {
 			values.Clear()
-			return refusal.New(refusal.RunConfigurationInvalid, []string{name},
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
 				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", r.cfg.Fetched.URL, accesskey.ShownName(name, true))
 		}
 	}
@@ -354,13 +354,13 @@ func (r *Run) open(ctx context.Context) error {
 	return nil
 }
 
-// clearValues overwrites the opened values of the run configuration's credentials.
+// clearValues overwrites the opened values of the run configuration's credentials,
+// under r.mu, so it never overlaps the copy a request takes ([Run.storedUses]).
 func (r *Run) clearValues() {
 	r.mu.Lock()
-	v := r.values
+	defer r.mu.Unlock()
+	r.values.Clear()
 	r.values = sealed.Values{}
-	r.mu.Unlock()
-	v.Clear()
 }
 
 // HeaderValue reports whether v, UTF-8, holds the contract's rule for a value set in a
@@ -550,7 +550,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		fetched.Source = "fetched"
 	}
 	if f.Document != nil {
-		if err := checkCredentials(f.Document.Credentials); err != nil {
+		if err := server.CheckCredentials(f.Document.Credentials); err != nil {
 			return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
 		}
 	}
@@ -691,22 +691,6 @@ func (r *Run) takeCreds(p *policy.Loaded) []server.RunCredential {
 	c := r.creds[p]
 	delete(r.creds, p)
 	return c
-}
-
-// checkCredentials refuses run configuration credentials outside the contract, for a
-// document not read from bytes, as the server package refuses them in one it reads: a
-// name twice, and a header [server.ReservedHeader] reports.
-func checkCredentials(creds []server.RunCredential) error {
-	for i, c := range creds {
-		if slices.ContainsFunc(creds[:i], func(o server.RunCredential) bool { return o.Name == c.Name }) {
-			return refusal.New(refusal.RunConfigurationInvalid, []string{c.Name}, "the document is refused: the credential %s is listed twice", accesskey.ShownName(c.Name, true))
-		}
-		if c.Auth.Scheme == "header" && server.ReservedHeader(c.Auth.Header) {
-			return refusal.New(refusal.RunConfigurationInvalid, []string{c.Name},
-				"the document is refused: the credential %s is set in the header %s, which frames the request or which the proxy sets", accesskey.ShownName(c.Name, true), accesskey.ShownName(c.Auth.Header, true))
-		}
-	}
-	return nil
 }
 
 // takeNamed is the image the run configuration of a policy [Run.Read] made named,
@@ -853,7 +837,7 @@ func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error
 		return &Decision{Unchanged: true, Policy: next}, nil
 	}
 	if !sameCredentials(creds, r.stored) {
-		return nil, fmt.Errorf("run configuration %s: the run configuration has other credentials than the run started with; a run's credentials from Qory Apiary are fixed when it starts; the policy in force stays", next.URL)
+		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", next.URL)
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
@@ -1050,8 +1034,11 @@ func claimedBy(held *credential.Held) func(string) string {
 	}
 }
 
-// storedUses are the run configuration's credentials the run started with, each with
-// its opened value, as the credential package holds them.
+// storedUses are the run configuration's credentials the run started with, as the
+// credential package holds them. Each one's Value copies the opened value under r.mu,
+// as [Run.clearValues] clears it, so a request that is still being served when the run
+// ends copies the value whole or gets none, and never reads bytes while they are
+// overwritten.
 func (r *Run) storedUses() []credential.Stored {
 	out := make([]credential.Stored, len(r.stored))
 	for i, c := range r.stored {
@@ -1059,10 +1046,9 @@ func (r *Run) storedUses() []credential.Stored {
 		out[i] = credential.Stored{Name: name, Hosts: c.Hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
 			Paths: c.Paths, Placeholders: c.Placeholders, Value: func() []byte {
 				r.mu.Lock()
-				v := r.values
-				r.mu.Unlock()
-				b, _ := v.Value(name)
-				return b
+				defer r.mu.Unlock()
+				b, _ := r.values.Value(name)
+				return slices.Clone(b)
 			}}
 	}
 	return out

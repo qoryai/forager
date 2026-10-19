@@ -49,10 +49,10 @@ func TestARunConfigurationsCredentialsAreRefused(t *testing.T) {
 		return `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"` + header + `"}}`
 	}
 	cases := map[string]struct{ doc, want string }{
-		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `the credential "model" is listed twice`},
+		"a name twice": {`{"version":1,"credentials":[` + entry("model", "x-api-key") + `,` + entry("model", "x-other-key") + `]}`, `list the credential "model" once; the document lists it twice`},
 	}
 	for _, h := range []string{"Host", "content-length", "Transfer-Encoding", "Connection", "TE", "Trailer", "Upgrade", "Keep-Alive", "Cookie", "Proxy-Authorization", "proxy_authorization", "X-Qory-Credential-Set", "x_qory_credential_set", "Qory-Anything"} {
-		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, `the credential "model" is set in the header "` + h + `", which frames the request or which the proxy sets`}
+		cases["the header "+h] = struct{ doc, want string }{`{"version":1,"credentials":[` + entry("model", h) + `]}`, `set the credential "model" in another header than "` + h + `"; that header frames the request, or the proxy sets it`}
 	}
 	v := newVerified(t)
 	for name, c := range cases {
@@ -120,5 +120,56 @@ func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	}
 	if _, err := ok.Body(); err != nil {
 		t.Error(err)
+	}
+}
+
+// TestARefusedCredentialShowsNoSecretInItsName pins a refusal of a credential whose
+// name contains qak_: the phrase in the text, and no name among the refusal's names,
+// since they reach its text and the answer that carries it.
+func TestARefusedCredentialShowsNoSecretInItsName(t *testing.T) {
+	const name = "x-qak_not-a-real-secret"
+	entry := `{"name":"` + name + `","hosts":["api.model.example"],"auth":{"scheme":"header","header":"Host"}}`
+	v := newVerified(t)
+	for what, doc := range map[string]string{
+		"a name twice":      `{"version":1,"credentials":[` + strings.Replace(entry, "Host", "x-api-key", 1) + `,` + strings.Replace(entry, "Host", "x-other", 1) + `]}`,
+		"a reserved header": `{"version":1,"credentials":[` + entry + `]}`,
+		"a placeholder":     `{"version":1,"credentials":[` + strings.Replace(entry, `"header":"Host"}`, `"header":"x-api-key"},"placeholders":["SSL_CERT_FILE"]`, 1) + `]}`,
+	} {
+		v.runDoc = doc
+		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 0 ||
+			strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "(a name that contains an access key secret)") {
+			t.Errorf("%s: %v, names %v", what, err, r)
+		}
+	}
+}
+
+// TestAPlaceholderTheDenyListCoversIsRefused pins the placeholders of a credential from
+// the server: one that an entry of denied-variables.json covers, a name or a pattern,
+// case ignored, Forager's QORY_ names among them, is run_configuration_invalid with the
+// credential's name; another is read. The header Expect is reserved as well.
+func TestAPlaceholderTheDenyListCoversIsRefused(t *testing.T) {
+	doc := func(placeholder string) string {
+		return `{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"bearer"},"placeholders":["MODEL_API_KEY","` + placeholder + `"]}]}`
+	}
+	v := newVerified(t)
+	for _, p := range []string{"GIT_SSL_CAINFO", "git_ssl_cainfo", "HTTPS_PROXY", "no_proxy", "QORY_RUN_ID", "PATH"} {
+		v.runDoc = doc(p)
+		_, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID)
+		want := `the document is refused: give the credential "model" another placeholder than "` + p + `"; the built-in deny list, denied-variables.json, covers that variable`
+		var r *accesskey.Refusal
+		if !errors.As(err, &r) || r.Code != "run_configuration_invalid" || len(r.Names) != 1 || r.Names[0] != "model" || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	for _, p := range []string{"ANTHROPIC_API_KEY", "PROXY_KEY", "MY_PATH"} {
+		v.runDoc = doc(p)
+		if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/runs", runID); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if !server.ReservedHeader("Expect") || !server.ReservedHeader("expect") {
+		t.Error("Expect is not reserved")
 	}
 }

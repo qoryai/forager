@@ -44,7 +44,9 @@ A credential's secret comes from one of three sources:
   credential's secret.
 
 In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
-[qory's docs](https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has).
+[qory's docs][qory-credentials].
+
+[qory-credentials]: https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has
 
 ## From Qory Apiary
 
@@ -55,7 +57,7 @@ and its placeholders, with no value. Qory Apiary stores the values.
 - When the run starts, the gateway fetches the values once, sealed to its access key,
   and opens them. The values stay outside the container.
 - On a host that one of these credentials is for, its value replaces the machine's
-  credential, such as the model key in `forager.yaml`.
+  credential, such as the model key in `forager.yaml`, whatever its name.
 - The credentials are fixed for the run. A reload that changes them fails, and the run
   keeps its policy.
 - Without `credentials`, the run gets the machine's credentials as before.

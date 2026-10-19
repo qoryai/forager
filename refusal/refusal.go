@@ -105,6 +105,19 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
 
+// Shown are names as a refusal lists them: each that contains an access key secret or
+// a run key, [accesskey.ContainsSecret], is left out, since a refusal's names reach its
+// text and the answer that carries it. Nil when none is left.
+func Shown(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		if !accesskey.ContainsSecret(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // ByGateway is the refusal [New] makes, decided by a gateway: its From is
 // [accesskey.FromGateway].
 func ByGateway(code string, names []string, format string, a ...any) *accesskey.Refusal {

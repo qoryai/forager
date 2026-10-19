@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestARunOpensItsCredentialsOnceUnderTheComputedDigest(t *testing.T) {
 	}
 	other := strings.Replace(same, `"scheme":"bearer"`, `"scheme":"basic","username":"x"`, 1)
 	_, err = reload(t, r, computed(t, other, digest('3')))
-	if err == nil || err.Error() != "run configuration "+runURL+": the run configuration has other credentials than the run started with; a run's credentials from Qory Apiary are fixed when it starts; the policy in force stays" {
+	if err == nil || err.Error() != "run configuration "+runURL+": start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays" {
 		t.Errorf("a reload with other credentials: %v", err)
 	}
 	none := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}}`
@@ -122,8 +123,8 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 	}{
 		"no wall":           {storedDoc, false, &secrets{value: "v"}, "", "run it with a wall: the run configuration from Qory Apiary has credentials", false},
 		"no secrets":        {storedDoc, true, nil, "run_configuration_invalid", "enrol an access key allowed stored secrets", false},
-		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", `the credential "model" is listed twice`, false},
-		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", `is set in the header "Proxy-Authorization"`, false},
+		"a name twice":      {twice, true, &secrets{value: "v"}, "run_configuration_invalid", `list the credential "model" once`, false},
+		"a reserved header": {reserved, true, &secrets{value: "v"}, "run_configuration_invalid", `in another header than "Proxy-Authorization"`, false},
 		"Secrets fails":     {storedDoc, true, &secrets{err: errors.New("secrets https://apiary.example/v1/secrets: the envelope is for another run configuration")}, "", "for another run configuration", true},
 		"a carriage return": {storedDoc, true, &secrets{value: "opened\rvalue"}, "run_configuration_invalid", `store another value of the credential "model" in Qory Apiary`, true},
 		"a trailing tab":    {storedDoc, true, &secrets{value: "opened-value\t"}, "run_configuration_invalid", "which a header value cannot have", true},
@@ -175,5 +176,43 @@ func TestAHeaderValueIsTheContracts(t *testing.T) {
 		if got := run.HeaderValue([]byte(v)); got != want {
 			t.Errorf("HeaderValue(%q) = %v, want %v", v, got, want)
 		}
+	}
+}
+
+// TestAValueIsNeverReadWhileTheRunClearsIt pins the end of a run while a request is
+// still being served: a use's Value, read as the proxy reads it, and Close, which
+// overwrites the values, never touch the bytes at once. Under -race a read of the
+// bytes outside the run's lock fails this test.
+func TestAValueIsNeverReadWhileTheRunClearsIt(t *testing.T) {
+	for range 20 {
+		s := &secrets{value: "opened-value"}
+		r, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, storedDoc, digest('1')), Secrets: s.fetch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		uses := r.Uses()
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			for range 200 {
+				v := uses[0].Value()
+				if got := string(v); got != "" && got != "opened-value" {
+					t.Errorf("a value read while it is cleared: %q", got)
+				}
+			}
+		})
+		r.Close()
+		wg.Wait()
+	}
+}
+
+// TestAValueRefusalShowsNoSecretInTheName pins the refusal of a value a header cannot
+// hold for a credential whose name contains qak_: the phrase in the text and no name.
+func TestAValueRefusalShowsNoSecretInTheName(t *testing.T) {
+	doc := strings.Replace(storedDoc, `"name":"model"`, `"name":"x-qak_not-a-real-secret"`, 1)
+	s := &secrets{value: "opened\nvalue"}
+	_, err := run.Open(context.Background(), run.Config{RunID: runID, Wall: true, Server: true, Fetched: computed(t, doc, digest('1')), Secrets: s.fetch})
+	code, names := refusalOf(err)
+	if code != "run_configuration_invalid" || len(names) != 0 || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "(a name that contains an access key secret)") {
+		t.Errorf("%v, names %v", err, names)
 	}
 }

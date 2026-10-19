@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -56,7 +57,7 @@ func TestACredentialFromTheServerSetsItsValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := []byte("stored-value-0001")
-	stored := func() []byte { return value }
+	stored := func() []byte { return slices.Clone(value) }
 	p.Terminate(ca, []Credential{
 		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: stored, Stored: true},
 		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Value: stored, Stored: true},

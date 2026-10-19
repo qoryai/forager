@@ -74,6 +74,40 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 	})
 }
 
+// TestACredentialFromTheServerOfTheSameNameReplacesTheMachines pins the plan's case:
+// forager.yaml's model on api.anthropic.com and the run configuration's model on the
+// same host. The server's replaces the machine's, the name check runs against the
+// machine's credentials that stay, and the one use is the server's model.
+func TestACredentialFromTheServerOfTheSameNameReplacesTheMachines(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "a-token")
+	defs := []Definition{{Name: "model", Env: "MODEL_TOKEN", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}}
+	stored := []Stored{{Name: "model", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"},
+		Value: func() []byte { return []byte("server-value") }}}
+	held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}}, stored, policy.Enforce, []string{"api.anthropic.com"}, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if len(held.Uses) != 1 || !held.Uses[0].Stored || held.Uses[0].Name != "model" || string(held.Uses[0].Value()) != "server-value" || held.Uses[0].Token() != "" {
+		t.Errorf("uses %+v, want the server's model alone", held.Uses)
+	}
+	if !slices.Equal(held.Placeholders, []string{"ANTHROPIC_API_KEY"}) {
+		t.Errorf("placeholders %v", held.Placeholders)
+	}
+}
+
+// TestTwoCredentialsFromTheServerOnOneHostShowNoSecretInAName pins the overlap message
+// of two credentials from the server whose names contain qak_: the phrase in place of
+// each name.
+func TestTwoCredentialsFromTheServerOnOneHostShowNoSecretInAName(t *testing.T) {
+	a, b := storedModel("server-value"), storedModel("server-value")
+	a.Name, b.Name = "x-qak_not-a-real-secret", "y-qak_not-a-real-secret"
+	_, err := ResolveWith(context.Background(), nil, nil, []Stored{a, b}, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err == nil || strings.Contains(strings.ToLower(err.Error()), "qak_") || !strings.Contains(err.Error(), "both claim api.model.example") {
+		t.Errorf("%v", err)
+	}
+}
+
 // TestNoCredentialFromTheServerIsResolveUnchanged pins ResolveWith with no credential
 // from the server: what Resolve gives, the machine's key.
 func TestNoCredentialFromTheServerIsResolveUnchanged(t *testing.T) {
@@ -106,7 +140,7 @@ func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
 	}{
 		"a name the machine's has": {[]Definition{{Name: "server-model", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "server-model"}},
 			[]Stored{storedModel("server-value")}, []string{"plain.example", "api.model.example"},
-			`the run configuration's credential "server-model" has the name of a credential of this machine's that the policy selects; rename one of them`},
+			`rename the run configuration's credential "server-model" or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record names each credential once`},
 		"two on one host": {nil, nil, []Stored{storedModel("server-value"), other}, []string{"api.model.example"}, "both claim api.model.example"},
 		"a host the run does not reach": {nil, nil, []Stored{storedModel("server-value")}, []string{"plain.example"},
 			"the credential server-model is for api.model.example, which the run's allow list does not cover"},

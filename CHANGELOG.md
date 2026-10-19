@@ -61,12 +61,14 @@ release may change what an existing document does, and says so under Upgrading.
   exact hosts and no value. `key_form`, optional, is the form of the key for a model
   credential, `api_key` or `access_token`. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
-  frames the request or that the proxy sets, each `run_configuration_invalid`. Forager
-  reads no `key_form`.
+  frames the request or that the proxy sets, and a placeholder that
+  `denied-variables.json` covers, each `run_configuration_invalid`. Forager reads no
+  `key_form`.
 - The gateway sets a run configuration's `credentials` for a walled run. When the run
   starts it sends one secrets request under the access key, for the digest it computes of
   the document's bytes, opens the answer with `sealed.Open`, and the proxy sets each value
-  in place of a credential of the machine's that claims one of its hosts. Without a wall
+  in place of a credential of the machine's that claims one of its hosts, of the same
+  name or another. Without a wall
   the run is `wall_required` with the name `server_credentials`; without `secrets` in
   discovery, with a fixture pin or access key, or with a value a header cannot hold, it
   is `run_configuration_invalid`. A reload with other `credentials` fails, and the policy
@@ -104,8 +106,8 @@ release may change what an existing document does, and says so under Upgrading.
 - The Claude Code descriptor no longer requires a model key: its `secrets` have no
   `one_of` group, and its `one_of` in `runtimes.json` is `[]`, no longer `model_key`,
   required, of `api_key` and `oauth_token`. The descriptor requires neither, because the
-  runtime connection supplies no model key: the run's model key is a credential the
-  machine defines, or a sealed credential that the run configuration names.
+  run's model key is a credential the machine defines, or a sealed credential that the
+  run configuration names.
   A descriptor may still define `one_of` groups.
 - Enrolment: an access key can belong to an adapter, `node_kind` `adapter` with an
   `na_` id.

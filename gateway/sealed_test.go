@@ -174,11 +174,11 @@ func TestCredentialsNeedTheSecretsEndpoint(t *testing.T) {
 func TestARefusedDocumentOpensNoRun(t *testing.T) {
 	for name, c := range map[string]struct{ doc, message string }{
 		"a name twice": {`{"version":1,"credentials":[` + modelEntry + `,` + modelEntry + `]}`,
-			`the document is refused: the credential "model" is listed twice`},
+			`the document is refused: list the credential "model" once; the document lists it twice`},
 		"Host": {`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"Host"}}]}`,
-			`the document is refused: the credential "model" is set in the header "Host", which frames the request or which the proxy sets`},
+			`the document is refused: set the credential "model" in another header than "Host"; that header frames the request, or the proxy sets it`},
 		"X-Qory-": {`{"version":1,"credentials":[{"name":"model","hosts":["api.model.example"],"auth":{"scheme":"header","header":"x_qory_credential_set"}}]}`,
-			`the document is refused: the credential "model" is set in the header "x_qory_credential_set", which frames the request or which the proxy sets`},
+			`the document is refused: set the credential "model" in another header than "x_qory_credential_set"; that header frames the request, or the proxy sets it`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctl, h := sealedGateway(t, c.doc, map[string]string{"model": sealedValue})
@@ -210,11 +210,11 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 	}{
 		"expired": {answer: func(c *control, req server.SecretsRequest) (int, []byte) {
 			return http.StatusOK, c.seal(req, map[string]string{"model": sealedValue}, uint64(time.Now().Unix())-1000)
-		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "the envelope's exp is more than 300 seconds past"},
+		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "set this machine's clock to the right time; the answer does not open: the envelope's exp is more than 300 seconds past"},
 		"another digest": {answer: func(c *control, req server.SecretsRequest) (int, []byte) {
 			req.RunConfiguration = "sha256=" + strings.Repeat("b", 64)
 			return http.StatusOK, c.seal(req, map[string]string{"model": sealedValue}, sealed.Expiry(time.Now()))
-		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "the envelope is for another run configuration"},
+		}, status: http.StatusForbidden, code: "run_configuration_invalid", message: "report this answer to whoever runs Qory Apiary; the answer does not open: the envelope is for another run configuration"},
 		"other credentials": {answer: func(c *control, req server.SecretsRequest) (int, []byte) {
 			req.Credentials = []string{"other"}
 			return http.StatusOK, c.seal(req, map[string]string{"other": sealedValue}, sealed.Expiry(time.Now()))
@@ -226,7 +226,7 @@ func TestASealedAnswerThatDoesNotOpenIsNoRun(t *testing.T) {
 				panic(err)
 			}
 			return http.StatusOK, b
-		}, status: http.StatusBadGateway, code: "answer_unsigned", message: "the envelope's sig does not verify under the pinned apiary_public_key"},
+		}, status: http.StatusBadGateway, code: "answer_unsigned", message: "pin Qory Apiary's current signing key in apiary_public_key; the answer does not open: the envelope's sig does not verify under the pinned apiary_public_key"},
 		"secrets_not_allowed": {answer: func(*control, server.SecretsRequest) (int, []byte) {
 			return http.StatusConflict, []byte(`{"error":"secrets_not_allowed"}`)
 		}, status: http.StatusConflict, code: "secrets_not_allowed", message: "secrets "},
@@ -363,7 +363,7 @@ func TestAReloadKeepsTheCredentialsFixed(t *testing.T) {
 	// Other credentials: the hosts differ.
 	c.serveDocument(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","c.example"]}},"credentials":[{"name":"model","hosts":["c.example"],"auth":{"scheme":"bearer"}}]}`, 'c')
 	h.post(logged(runID))
-	line := "the run configuration has other credentials than the run started with; a run's credentials from Qory Apiary are fixed when it starts; the policy in force stays"
+	line := "start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays"
 	eventually(t, "the failed reload's report", func() bool {
 		h.post(heartbeat(runID))
 		return h.reported(line)
@@ -498,4 +498,41 @@ func TestASealedKeyReachesATLSOrigin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestARefusalAnswerShowsNoSecretInAName pins the gateway's answer to a run whose run
+// configuration lists a credential whose name contains qak_ twice: no qak_ anywhere in
+// the answer's body, its names included.
+func TestARefusalAnswerShowsNoSecretInAName(t *testing.T) {
+	entry := strings.Replace(modelEntry, `"name":"model"`, `"name":"x-qak_not-a-real-secret"`, 1)
+	_, h := sealedGateway(t, `{"version":1,"credentials":[`+entry+`,`+entry+`]}`, map[string]string{"model": sealedValue})
+	status, got := h.refusalOf("/v1/run-configuration", walledBody())
+	b, _ := json.Marshal(got)
+	if status != http.StatusForbidden || got["error"] != "run_configuration_invalid" || strings.Contains(strings.ToLower(string(b)), "qak_") {
+		t.Errorf("%d %s", status, b)
+	}
+}
+
+// TestASealedModelReplacesForagerYamlsModel pins the plan's case through the gateway:
+// forager.yaml defines model on api.anthropic.com, the server's policy selects it, and
+// the run configuration has its own model on the same host. The run opens, and the
+// proxy sets the sealed value under the name model.
+func TestASealedModelReplacesForagerYamlsModel(t *testing.T) {
+	t.Setenv("GATEWAY_TEST_MODEL_KEY", machineValue)
+	doc := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com"]},"credentials":[{"name":"model"}]},` +
+		`"credentials":[{"name":"model","hosts":["api.anthropic.com"],"auth":{"scheme":"header","header":"x-api-key"},"placeholders":["ANTHROPIC_API_KEY"]}]}`
+	c := newControl(t)
+	c.serveDocument(doc, 'a')
+	c.mu.Lock()
+	c.secrets = map[string]string{"model": sealedValue}
+	c.mu.Unlock()
+	machine := gateway.Credential{Name: "model", Env: "GATEWAY_TEST_MODEL_KEY", Hosts: []string{"api.anthropic.com"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"ANTHROPIC_API_KEY"}}
+	h := start(t, gateway.Config{Server: c.server(), Credentials: []gateway.Credential{machine}})
+	h.secrets = append(h.secrets, sealedValue, machineValue)
+	a := h.open(server.LinkRunRequest{Wall: true})
+	if got, want := gateway.Tokens(h.g, a.RunID), map[string]string{"model": sealedValue}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the proxy sets %v, want %v", got, want)
+	}
+	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))
+	h.close()
 }

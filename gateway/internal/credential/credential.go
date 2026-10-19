@@ -86,8 +86,8 @@ type Stored struct {
 	// Paths are nil for every path.
 	Paths        []string
 	Placeholders []string
-	// Value returns the opened value's bytes, not a copy; the caller clears them once
-	// the run ends.
+	// Value returns a copy of the opened value's bytes, which the caller clears once it
+	// has set them; empty once the run has ended.
 	Value func() []byte
 }
 
@@ -100,9 +100,9 @@ func (u *Use) Token() string {
 	return u.held.token(u.index)
 }
 
-// Value is the opened value of a credential from the server, the stored bytes and not
-// a copy: the run that opened it clears them when it ends. Nil for a credential of the
-// machine's.
+// Value is a copy of the opened value of a credential from the server, which the
+// caller clears once it has set it; empty once the run has ended. Nil for a credential
+// of the machine's.
 func (u *Use) Value() []byte {
 	if !u.Stored || u.held.value == nil {
 		return nil
@@ -179,9 +179,10 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 // after the machine's. A credential from the server replaces each credential of the
 // machine's that claims a host it claims, or a host above or below one: a definition
 // whose env or file use claims one is not read, and an adapter's answer that claims one
-// is dropped, with no renewal. A credential from the server with the name of a
-// credential of the machine's the policy selects is refused, so the record names each
-// once. The checks of Resolve then cover all of them.
+// is dropped, with no renewal; the adapter has run all the same. A credential of the
+// machine's that it replaces may have its name. A credential from the server with the
+// name of a credential of the machine's that stays is refused, so the record names
+// each once. The checks of Resolve then cover all of them.
 func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
 	replaced := func(hosts []string) bool {
@@ -195,11 +196,6 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 			}
 		}
 		return false
-	}
-	for _, s := range stored {
-		if slices.ContainsFunc(selected, func(sel policy.Selected) bool { return sel.Name == s.Name }) {
-			return nil, fmt.Errorf("the run configuration's credential %s has the name of a credential of this machine's that the policy selects; rename one of them", accesskey.ShownName(s.Name, true))
-		}
 	}
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
@@ -245,6 +241,14 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		}
 		out.all = append(out.all, h)
 	}
+	// The name check runs against the machine's credentials that stay, so one the
+	// server's replaces may have its name, such as model in both.
+	for _, s := range stored {
+		if slices.ContainsFunc(out.all, func(h *held) bool { return h.def.Name == s.Name }) {
+			out.Close()
+			return nil, fmt.Errorf("rename the run configuration's credential %s or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record names each credential once", accesskey.ShownName(s.Name, true))
+		}
+	}
 	for _, s := range stored {
 		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
 		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true, held: h})
@@ -277,7 +281,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", other.Name, u.Name, host)
+						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), host)
 					}
 				}
 			}
