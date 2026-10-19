@@ -175,7 +175,8 @@ const settingsMoreThanOnce = "This launch passes --settings more than once, and 
 // launch whose arguments pass --settings more than once, in either form, after -- or
 // as the value of another option, is refused before any file is read or written, and
 // that a walled launch with one --settings and an unwalled launch with two are
-// prepared as before.
+// prepared as before. A walled launch whose last argument is a bare --settings passes
+// that one flag, with the run's settings.
 func TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce(t *testing.T) {
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first.json"), filepath.Join(dir, "second.json")
@@ -223,21 +224,39 @@ func TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce(t *testing.T
 		})
 	}
 	for name, args := range map[string][]string{
-		"a file":        {"-p", "hi", "--settings", first},
-		"a file with =": {"--settings=" + first},
-		"a document":    {"--settings", `{"permissions":{}}`},
-		"none":          {"-p", "hi"},
+		"a file":            {"-p", "hi", "--settings", first},
+		"a file with =":     {"--settings=" + first},
+		"a document":        {"--settings", `{"permissions":{}}`},
+		"none":              {"-p", "hi"},
+		"a bare last flag":  {"-p", "hi", "--settings"},
+		"a bare flag alone": {"--settings"},
 	} {
 		t.Run("walled, "+name, func(t *testing.T) {
 			got, run, _, err := prepare(t, true, args)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n := strings.Count(strings.Join(got.Args, "\x00")+"\x00", "--settings\x00"+filepath.Join(run, "settings.json")+"\x00"); n != 1 {
-				t.Errorf("launch %q does not pass the run's settings once", got.Args)
+			flags, at := 0, -1
+			for i, a := range got.Args {
+				if a == "--settings" || strings.HasPrefix(a, "--settings=") {
+					flags, at = flags+1, i
+				}
+			}
+			if flags != 1 || got.Args[at] != "--settings" || at+1 >= len(got.Args) || got.Args[at+1] != filepath.Join(run, "settings.json") {
+				t.Errorf("launch %q does not pass --settings once, with the run's settings", got.Args)
 			}
 		})
 	}
+	t.Run("unwalled, a bare last flag", func(t *testing.T) {
+		got, run, _, err := prepare(t, false, []string{"-p", "hi", "--settings"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"-p", "hi", "--settings", "--settings", filepath.Join(run, "settings.json")}
+		if !slices.Equal(got.Args, want) {
+			t.Errorf("launch %q, want %q", got.Args, want)
+		}
+	})
 	t.Run("unwalled, two flags", func(t *testing.T) {
 		got, run, _, err := prepare(t, false, []string{"--settings", first, "--settings=" + second})
 		if err != nil {

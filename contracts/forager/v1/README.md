@@ -200,8 +200,8 @@ One run, on a developer machine, with a server configured:
    passes `--settings` more than once, counted anywhere in its arguments, does not
    start: "This launch passes --settings more than once, and Claude Code reads only the
    last one, so the run does not start. Pass one --settings file." An unwalled launch
-   that passes it more than once starts, and Claude Code reads the last file it passes,
-   without Forager's hooks.
+   that passes it more than once starts, and Claude Code reads the last `--settings` it
+   passes, without Forager's hooks.
    A settings file that lies in a place a walled run can write, whose path has a `..`
    name, that is a link or that is not a regular file of at most 1 MiB is not read, and
    the run does not start. The
@@ -2662,10 +2662,10 @@ descriptor selects an installer and never contains one, so a program that takes 
 another way needs an installer in Forager before a descriptor can select it.
 `claude-settings` adds a group per event under `hooks` in the JSON settings the launch
 passes with its first `--settings`, leaving the groups already there; a launch that
-passes `--settings` more than once is handled as §Sequence step 6 says. The forwarder writes the
-JSON it reads on its standard input to the local socket, as one record. A forwarder
-exits 0 and prints nothing, which every hook interface reads as no decision, so an
-installed hook observes and never changes what the runtime does.
+passes `--settings` more than once is handled as §Sequence step 6 says. The forwarder
+writes the JSON it reads on its standard input to the local socket, as one record. A
+forwarder exits 0 and prints nothing, which every hook interface reads as no decision,
+so an installed hook observes and never changes what the runtime does.
 
 **Rules**: for each source, a match and a target. `match` is a map of dotted paths into
 the record to values: equality with a string, number or boolean, or `{present: true}`.

@@ -28,7 +28,8 @@ const maxSettings = 1 << 20
 // directory, and names that file instead. The file the launch passed is not modified.
 // A file is read only when its path has no ".." name, [runtimes.Attach.Readable] passes
 // it, its last part is no link, it is a regular file, it is the file Readable judged
-// and it holds at most 1 MiB.
+// and it holds at most 1 MiB. In a walled launch whose last argument is a bare
+// --settings, that flag is given the path of the run's settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
 // without Forager's hooks and with a file that was not checked.
@@ -39,7 +40,7 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	if a.Walled && settingsFlags(launch.Args) > 1 {
 		return runtimes.Launch{}, errSettingsMoreThanOnce
 	}
-	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside)
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.Walled)
 	if err != nil {
 		return runtimes.Launch{}, err
 	}
@@ -66,7 +67,7 @@ func settingsFlags(args []string) int {
 }
 
 func settingsArgs(events []string, args []string, dir string, forwarder []string,
-	readable func(string) (string, error), inside func(string) string) ([]string, error) {
+	readable func(string) (string, error), inside func(string) string, walled bool) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -118,6 +119,12 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		args = append([]string(nil), args...)
 		args[at] = path
 		return args, nil
+	}
+	// Claude Code takes the argument after --settings as its value, even one that is
+	// --settings, so a second flag after a bare last one would name a file called
+	// --settings in its working directory. Behind a wall that flag is given the path.
+	if walled && len(args) > 0 && args[len(args)-1] == "--settings" {
+		return append(append([]string(nil), args...), path), nil
 	}
 	return append(append([]string(nil), args...), "--settings", path), nil
 }
