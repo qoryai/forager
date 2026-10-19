@@ -37,13 +37,14 @@ var errTooManyLinks = fmt.Errorf("more than %d links, the most Forager follows",
 // as it is read: a link must pass Readable, and a link to a directory ReadableDir, and
 // the directory it leads to is read the same way; a regular file, and a file a link
 // leads to, must have one name. A link that leads into /workspace, for a run that sees
-// its workspace there, is refused. The scan stops after maxEntries entries. Any other
-// value, a .zip say, is checked as a file: it must pass Readable, be no link as its last
-// part, be a regular file and have one name. For a run that sees its workspace at
-// /workspace, a value whose path reaches /workspace is refused first, since the
-// enclosure reads it from the workspace, not from where this machine has it. Each
-// directory is read once, by the file it is. An --add-dir directory is not counted as
-// read, since only part of it is: a link that leads back to it reads all of it.
+// its workspace there, is refused. The scan stops after maxEntries entries. An
+// --add-dir value that is no directory is refused, since Claude Code adds only a
+// directory. Any other value, a .zip say, is checked as a file: it must pass Readable,
+// be no link as its last part, be a regular file and have one name. For a run that sees
+// its workspace at /workspace, a value whose path reaches /workspace is refused first,
+// since the enclosure reads it from the workspace, not from where this machine has it.
+// Each directory is read once, by the file it is. An --add-dir directory is not counted
+// as read, since only part of it is: a link that leads back to it reads all of it.
 func checkDir(v flagValue, a runtimes.Attach) error {
 	if a.Inside != nil {
 		through, err := throughWorkspace(v.value)
@@ -64,6 +65,11 @@ func checkDir(v flagValue, a runtimes.Attach) error {
 	info, err := os.Stat(v.value)
 	if err != nil {
 		return checkFailed(v, err)
+	}
+	if !info.IsDir() && v.flag == addDirFlag {
+		shown := accesskey.ShownValue(v.value, false)
+		return fmt.Errorf("Pass an %s path to a directory. This launch passes %s %s, and that file is not a "+
+			"directory, so the run does not start.", v.flag, v.flag, shown)
 	}
 	if !info.IsDir() {
 		return checkPluginFile(v, a)
@@ -110,12 +116,8 @@ func checkPluginFile(v flagValue, a runtimes.Attach) error {
 		return fmt.Errorf("Pass the path of the file that %s links to. This launch passes %s %s, and that file "+
 			"is a link, so the run does not start.", shown, v.flag, shown)
 	case !info.Mode().IsRegular():
-		fix := "Pass a " + v.flag + " path to a directory or a regular file."
-		if v.flag == addDirFlag {
-			fix = "Pass an " + v.flag + " path to a directory."
-		}
-		return fmt.Errorf("%s This launch passes %s %s, and that file is not a regular file, so the run does not start.",
-			fix, v.flag, shown)
+		return fmt.Errorf("Pass a %s path to a directory or a regular file. This launch passes %s %s, and that "+
+			"file is not a regular file, so the run does not start.", v.flag, v.flag, shown)
 	case links(info) > 1:
 		return hardLinked(v, v.value)
 	}

@@ -142,6 +142,10 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		if err := json.Unmarshal(b, &settings); err != nil {
 			return nil, notAnObject(args[at], err)
 		}
+		// JSON null decodes into a map as nil, with no error.
+		if settings == nil {
+			return nil, notAnObject(args[at], errors.New("it is null"))
+		}
 		if inside != nil {
 			settings = insideValues(settings, inside).(map[string]any)
 		}

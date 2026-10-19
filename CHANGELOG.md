@@ -421,6 +421,15 @@ release may change what an existing document does, and says so under Upgrading.
 - `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
   one only when its last part is no link, it is a regular file and it holds at most
   1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
+- A `--settings` file whose content is `null` stopped the session with a panic. It now
+  does not start, with "runtime claude: Make the file /a/settings.json a JSON object.
+  The check of --settings /a/settings.json failed: it is null", as other settings that
+  are no JSON object.
+- A walled launch's `--add-dir` passed with a regular file, or a link to one, though
+  Claude Code adds only a directory. It now does not start, with "runtime claude: Pass
+  an --add-dir path to a directory. This launch passes --add-dir /home/notes.md, and
+  that file is not a directory, so the run does not start." Any other value that is no
+  directory gets the same text, where it said "not a regular file" before.
 
 #### Changed
 
