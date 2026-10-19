@@ -104,13 +104,16 @@ func TestAPatternSetsNoKeyOnALocalName(t *testing.T) {
 // private-host rule: a credential's "*." pattern under which every name is private, such
 // as "*.local", is for no host and is not listed; an exact private name and a pattern
 // that is for some host are; and a path rule's or a tool's entry is listed as before.
+// A listed pattern is still for no private name under it: "*.arpa" is listed and the
+// proxy terminates a.arpa and home.arpa under it, while x.home.arpa stays a tunnel.
 func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		creds []string
-		paths map[string][]string
-		tools []string
-		want  []string
+		name            string
+		creds           []string
+		paths           map[string][]string
+		tools           []string
+		want            []string
+		covered, tunnel []string
 	}{
 		{
 			name:  "credentials",
@@ -123,6 +126,13 @@ func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
 			paths: map[string][]string{"*.local": {"/*"}},
 			tools: []string{"*.internal"},
 			want:  []string{"*.internal", "*.local"},
+		},
+		{
+			name:    "a listed pattern with a private name under it",
+			creds:   []string{"*.arpa"},
+			want:    []string{"*.arpa"},
+			covered: []string{"a.arpa", "home.arpa"},
+			tunnel:  []string{"x.home.arpa"},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -142,6 +152,17 @@ func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
 			p.Terminate(ca, []Credential{{Name: "model", Hosts: c.creds, Scheme: "bearer", Token: func() string { return "x" }}}, c.paths, tools)
 			if got := p.Terminated(); !slices.Equal(got, c.want) {
 				t.Errorf("Terminated() = %q, want %q", got, c.want)
+			}
+			term := p.term.Load()
+			for _, h := range c.covered {
+				if !term.covers(h) {
+					t.Errorf("covers(%q) = false, want true", h)
+				}
+			}
+			for _, h := range c.tunnel {
+				if term.covers(h) {
+					t.Errorf("covers(%q) = true, want false", h)
+				}
 			}
 		})
 	}
