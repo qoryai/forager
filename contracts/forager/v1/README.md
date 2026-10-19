@@ -219,6 +219,13 @@ One run, on a developer machine, with a server configured:
    one name, and it may have at most 10,000 entries; a `.zip` is checked as a file. An
    `--add-dir` directory is checked the same way, with only `<dir>/.claude` and
    `<dir>/CLAUDE.md` read. An unwalled launch passes these flags unchecked.
+   In a walled launch the files of the three system-prompt file flags are checked and
+   copied the same way, and a launch that passes `--project-config-root` does not
+   start: "This launch passes --project-config-root, and Claude Code reads project
+   settings, .mcp.json and the .claude trees from that directory, which Forager does not
+   check, so the run does not start. Remove --project-config-root from the walled
+   launch." The programs those files start, and the checkout's `.claude/`, `.mcp.json`
+   and `CLAUDE.md`, are not checked (§The wall).
 7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor lists as headless is among the runtime's, on pipes otherwise.
@@ -2836,6 +2843,8 @@ Forager enforces outside the enclosure: the wall, the egress policy, the credent
 proxy sets, the tools the gateway starts and the `dev.qory.run.*` records. The runtime's
 settings, its hooks and its prompts, and the `dev.qory.session.*` records, which the
 runtime reports from inside, are not that boundary: the image can change or forge them.
+So Forager checks no program that the runtime's settings start, and no configuration
+file in the checkout.
 
 A run configuration may name the image too, by reference only, beside its
 `security_policy`. The run configuration, the server's policy and the node's policy must

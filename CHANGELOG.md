@@ -422,6 +422,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Changed
 
+- A walled Claude Code launch checks and copies the files of `--system-prompt-file`,
+  `--append-system-prompt-file` and `--append-subagent-system-prompt-file`, as it does
+  `--settings`, and does not start with `--project-config-root`.
 - A walled run needs `session.Spec.Exec`, the command that makes the caller's binary
   run `session.Exec` inside the enclosure, `{wall.HelperPath, "exec"}` for a binary that
   runs it in its `exec` mode; a `Wall` without one is refused before the run starts.

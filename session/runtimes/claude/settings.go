@@ -33,15 +33,21 @@ const maxSettings = 1 << 20
 // --settings, that flag is given the path of the run's settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
-// without Forager's hooks and with a file that was not checked. A walled launch's
-// --mcp-config, --agents, --plugin-dir, --plugin-dir-no-mcp and --add-dir values are
-// then checked as [walledPaths] checks them, before the settings are read.
+// without Forager's hooks and with a file that was not checked. So is a walled launch
+// that passes --project-config-root, counted the same way: Claude Code reads project
+// settings, .mcp.json and the .claude trees from that directory. A walled launch's
+// --mcp-config, --agents, --plugin-dir, --plugin-dir-no-mcp, --add-dir and
+// system-prompt file values are then checked as [walledPaths] checks them, before the
+// settings are read.
 // An interactive launch whose API key is the run's stand-in is then started through
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
-	if a.Walled && settingsFlags(launch.Args) > 1 {
+	if a.Walled && flagCount(launch.Args, "--settings") > 1 {
 		return runtimes.Launch{}, errSettingsMoreThanOnce
+	}
+	if a.Walled && flagCount(launch.Args, projectConfigRootFlag) > 0 {
+		return runtimes.Launch{}, errProjectConfigRoot
 	}
 	if a.Walled {
 		var err error
@@ -61,14 +67,23 @@ func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 var errSettingsMoreThanOnce = errors.New("This launch passes --settings more than once, and Claude Code " +
 	"reads only the last one, so the run does not start. Pass one --settings file.")
 
-// settingsFlags counts the arguments that are --settings or start with --settings=,
-// wherever they are: after --, and as the value of another option, though Claude Code
-// reads neither as a --settings flag. A count above the flags Claude Code reads only
-// refuses more launches; one below would let a later file through unchecked.
-func settingsFlags(args []string) int {
+// projectConfigRootFlag is the flag whose directory Claude Code reads project settings,
+// .mcp.json and the .claude trees from, in place of the working directory.
+const projectConfigRootFlag = "--project-config-root"
+
+// errProjectConfigRoot refuses a walled launch that passes --project-config-root.
+var errProjectConfigRoot = errors.New("This launch passes --project-config-root, and Claude Code reads project settings, " +
+	".mcp.json and the .claude trees from that directory, which Forager does not check, so the run does not start. " +
+	"Remove --project-config-root from the walled launch.")
+
+// flagCount counts the arguments that are flag or start with flag and "=", wherever
+// they are: after --, and as the value of another option, though Claude Code reads
+// neither as the flag. A count above the flags Claude Code reads only refuses more
+// launches; one below would let a later file through unchecked.
+func flagCount(args []string, flag string) int {
 	n := 0
 	for _, a := range args {
-		if a == "--settings" || strings.HasPrefix(a, "--settings=") {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
 			n++
 		}
 	}

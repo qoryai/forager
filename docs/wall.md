@@ -585,13 +585,34 @@ unwalled launch passes them unchecked.
   /a/mcp.json: no such file or directory".
 
 A refusal stops the run before the wall is prepared, with the prefix `runtime claude: `.
-The programs a checked file or plugin starts, such as a server's command, are not
-checked. Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,
+Claude Code also loads plugin directories named in `CLAUDE_CODE_PLUGIN_DIRS`,
 adds the directories named in `CLAUDE_RELAUNCH_SESSION_ADD_DIRS`, and reads plugins or
 settings from `CLAUDE_CODE_PLUGIN_SEED_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR` and
 `CLAUDE_CODE_MANAGED_SETTINGS_PATH`. The Claude descriptor denies all five, so no value
 of the server's, the run's or the machine's reaches the enclosure, and a walled run has
 them unset.
+
+A walled launch's files of `--system-prompt-file`, `--append-system-prompt-file` and
+`--append-subagent-system-prompt-file` are checked and copied as the settings file is,
+and Claude Code is passed the copies. A walled launch that passes
+`--project-config-root` does not start, because Claude Code reads project settings,
+`.mcp.json` and the `.claude` trees from that directory.
+
+Forager does not check:
+
+- the programs that a checked file starts: a hook's command, an MCP server's command,
+  `apiKeyHelper` and the like. A command that runs a file in a place a walled run can
+  write runs what that run wrote. Keep the scripts of a harness's hooks and servers
+  outside the checkout.
+- the checkout's `.claude/`, `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md`. Claude Code
+  reads them unless the launch passes `--setting-sources user`, as `qory` does.
+- a change after the check by a process outside every wall. A change to a file after
+  its copy has no effect, since Claude Code reads the copy. A directory and a program
+  are read in place, so a process with write access to them can change them after the
+  check.
+
+These programs, and what these files start, run inside the enclosure. Against an image
+by reference, what runs inside is not the boundary ([Images](#images)).
 
 ### The helper
 

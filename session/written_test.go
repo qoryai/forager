@@ -454,8 +454,8 @@ func qoryHome(t *testing.T, module string) (string, []string) {
 
 // TestAQoryShapedWalledLaunchStarts pins that a walled launch as qory composes one
 // starts when the harness home lies outside the checkout, bound read-only, and its
-// module lies outside the checkout too: the servers are passed as a copy in the run
-// directory, and the plugin as it is.
+// module lies outside the checkout too: the servers and the launch's instructions are
+// passed as copies in the run directory, and the plugin as it is.
 func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
 	t.Setenv("QORY_TEST_HOST_ONLY", "1")
 	sp := spec(t, "FAKE_EXIT=0")
@@ -470,6 +470,50 @@ func TestAQoryShapedWalledLaunchStarts(t *testing.T) {
 	if want, _ := os.ReadFile(filepath.Join(home, "mcp.json")); err != nil || string(b) != string(want) {
 		t.Errorf("the copy of the servers: %s, %v", b, err)
 	}
+	b, err = os.ReadFile(filepath.Join(res.Dir, "append-system-prompt-file-1.md"))
+	if want, _ := os.ReadFile(filepath.Join(home, "launch", "CLAUDE.md")); err != nil || string(b) != string(want) {
+		t.Errorf("the copy of the launch's instructions: %s, %v", b, err)
+	}
+}
+
+// TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun pins that a walled run whose
+// launch passes --append-system-prompt-file with a file in its workspace, or passes
+// --project-config-root, stops before the wall is prepared, with the runtime's text.
+func TestAWalledLaunchsPromptFileOrProjectConfigRootIsNoRun(t *testing.T) {
+	t.Run("a prompt file in the workspace", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		f := filepath.Join(sp.Dir, "p.md")
+		if err := os.WriteFile(f, []byte("# prompt"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--append-system-prompt-file", f)
+		want := "runtime claude: This launch passes --append-system-prompt-file " + f + ", and that file lies in " + sp.Dir +
+			", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
+			"or pass the text with --append-system-prompt."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
+	t.Run("--project-config-root", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		sp.Args = append(sp.Args, "--project-config-root", sp.Dir)
+		want := "runtime claude: This launch passes --project-config-root, and Claude Code reads project settings, " +
+			".mcp.json and the .claude trees from that directory, which Forager does not check, so the run does not start. " +
+			"Remove --project-config-root from the walled launch."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
 }
 
 // TestAQoryShapedWalledLaunchWithAModuleInTheCheckoutIsNoRun pins that a walled launch

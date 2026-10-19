@@ -285,10 +285,114 @@ func TestAWalledLaunchsCopiesNameTheWorkspaceInside(t *testing.T) {
 	}
 }
 
+// promptFlags are the three system-prompt file flags and, for each, the flag that passes
+// the text itself.
+var promptFlags = map[string]string{
+	"--system-prompt-file":                 "--system-prompt",
+	"--append-system-prompt-file":          "--append-system-prompt",
+	"--append-subagent-system-prompt-file": "--append-subagent-system-prompt",
+}
+
+// TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused pins that a walled launch whose
+// system-prompt file flag passes a file in, or reached through, a place a walled run
+// can write is refused with the flag's text, in both forms, and when the file is the
+// second value of a repeated flag. Nothing is copied.
+func TestAWalledLaunchsPromptFileInAWrittenPlaceIsRefused(t *testing.T) {
+	work := t.TempDir()
+	ok := writeFile(t, filepath.Join(t.TempDir(), "ok.md"), "# ok")
+	bad := writeFile(t, filepath.Join(work, "p.md"), "# prompt")
+	refusal := func(flag, how, place string) string {
+		return "This launch passes " + flag + " " + bad + ", and that file " + how + " " + place +
+			", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
+			"or pass the text with " + promptFlags[flag] + "."
+	}
+	for flag := range promptFlags {
+		for name, args := range map[string][]string{
+			"path":                {flag, bad, "-p", "hi"},
+			"=path":               {flag + "=" + bad},
+			"twice":               {flag, ok, flag, bad},
+			"twice, = then space": {flag + "=" + ok, flag, bad},
+		} {
+			t.Run(flag+" "+name, func(t *testing.T) {
+				_, run, err := walled(t, &fakeWritten{written: work}, args)
+				if want := refusal(flag, "lies in", work); err == nil || err.Error() != want {
+					t.Fatalf("got %v, want %q", err, want)
+				}
+				if copies, _ := filepath.Glob(filepath.Join(run, "*-*.md")); len(copies) > 0 {
+					t.Errorf("copies were written: %q", copies)
+				}
+			})
+		}
+		t.Run(flag+" reached through", func(t *testing.T) {
+			through := func(string) (string, error) {
+				return "", &runtimes.WrittenError{How: "is reached through", Place: "/work"}
+			}
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Args: []string{flag, bad}}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+				Walled: true, Readable: through,
+			})
+			if want := refusal(flag, "is reached through", "/work"); err == nil || err.Error() != want {
+				t.Errorf("got %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// TestAWalledLaunchsPromptFilesAreCopiedUnchanged pins that each system-prompt file is
+// passed as a copy in the run directory, <flag>-<n>.md, numbered by its place among the
+// flag's files, in either form, byte for byte, even when the file is JSON and the
+// workspace is at /workspace inside; and that an unwalled launch keeps its arguments.
+func TestAWalledLaunchsPromptFilesAreCopiedUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	one := writeFile(t, filepath.Join(dir, "one.md"), "# one\n/home/ws\n")
+	two := writeFile(t, filepath.Join(dir, "two.md"), `{"a": "/home/ws"}`)
+	inside := func(s string) string { return strings.ReplaceAll(s, "/home/ws", "/workspace") }
+	for flag := range promptFlags {
+		t.Run(flag, func(t *testing.T) {
+			run := t.TempDir()
+			f := &fakeWritten{written: t.TempDir()}
+			got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Args: []string{flag, one, "-p", "hi", flag + "=" + two}}, RunDir: run,
+				Forwarder: []string{"q"}, Walled: true, Readable: f.readable, Inside: inside,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := filepath.Join(run, strings.TrimPrefix(flag, "--")+"-1.md")
+			second := filepath.Join(run, strings.TrimPrefix(flag, "--")+"-2.md")
+			if want := []string{flag, first, "-p", "hi", flag + "=" + second}; !slices.Equal(got.Args[:len(want)], want) {
+				t.Fatalf("launch %q, want %q", got.Args, want)
+			}
+			for copied, from := range map[string]string{first: one, second: two} {
+				a, _ := os.ReadFile(copied)
+				b, _ := os.ReadFile(from)
+				if string(a) != string(b) {
+					t.Errorf("%s: %q, want %q", copied, a, b)
+				}
+			}
+			if !slices.Equal(f.asked, []string{one, two}) {
+				t.Errorf("Readable asked of %q", f.asked)
+			}
+		})
+	}
+	t.Run("unwalled", func(t *testing.T) {
+		f := &fakeWritten{written: dir}
+		args := []string{"--system-prompt-file", one, "--append-system-prompt-file=rel.md",
+			"--append-subagent-system-prompt-file", "~/p.md", "--project-config-root", dir}
+		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+			Launch: runtimes.Launch{Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"}, Readable: f.readable,
+		})
+		if err != nil || !slices.Equal(got.Args[:len(args)], args) || len(f.asked) > 0 {
+			t.Errorf("launch %q, %v, Readable asked of %q", got.Args, err, f.asked)
+		}
+	})
+}
+
 // TestAWalledLaunchsPathsFollowThePathRules pins that a path value of any of the flags
 // that starts with "~", is relative or has a ".." part is refused before it is read.
 func TestAWalledLaunchsPathsFollowThePathRules(t *testing.T) {
-	for _, flag := range []string{"--mcp-config", "--agents", "--plugin-dir", "--plugin-dir-no-mcp", "--add-dir"} {
+	for _, flag := range []string{"--mcp-config", "--agents", "--plugin-dir", "--plugin-dir-no-mcp", "--add-dir",
+		"--system-prompt-file", "--append-system-prompt-file", "--append-subagent-system-prompt-file"} {
 		for value, want := range map[string]string{
 			"~/ref": "This launch passes " + flag + " ~/ref, and inside the wall ~ is the home of the wall's user, " +
 				"which Forager cannot check, so the run does not start. Pass an absolute path.",
@@ -332,7 +436,8 @@ func TestAWalledLaunchsFileIsReadAsTheSettingsAre(t *testing.T) {
 	}
 	big := writeFile(t, filepath.Join(dir, "big.json"), `{"x":"`+strings.Repeat("a", 1<<20)+`"}`)
 	other := func(string) (string, error) { return filepath.EvalSymlinks(big) }
-	for _, flag := range []string{"--mcp-config", "--agents"} {
+	for _, flag := range []string{"--mcp-config", "--agents", "--system-prompt-file", "--append-system-prompt-file",
+		"--append-subagent-system-prompt-file"} {
 		for _, c := range []struct {
 			name, file string
 			readable   func(string) (string, error)

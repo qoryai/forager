@@ -23,14 +23,28 @@ const (
 	pluginDirFlag  = "--plugin-dir"
 	pluginDirNoMCP = "--plugin-dir-no-mcp"
 	addDirFlag     = "--add-dir"
+
+	systemPromptFileFlag   = "--system-prompt-file"
+	appendPromptFileFlag   = "--append-system-prompt-file"
+	subagentPromptFileFlag = "--append-subagent-system-prompt-file"
 )
 
-// The names of the copies of --mcp-config and --agents files in the run directory, by
+// copyNames are the names of the copies of the flags' files in the run directory, by
 // their place among the flag's files, from 1.
-const (
-	mcpConfigCopy = "mcp-config-%d.json"
-	agentsCopy    = "agents-%d.json"
-)
+var copyNames = map[string]string{
+	mcpConfigFlag:          "mcp-config-%d.json",
+	agentsFlag:             "agents-%d.json",
+	systemPromptFileFlag:   "system-prompt-file-%d.md",
+	appendPromptFileFlag:   "append-system-prompt-file-%d.md",
+	subagentPromptFileFlag: "append-subagent-system-prompt-file-%d.md",
+}
+
+// promptText is, for each system-prompt file flag, the flag that passes the text itself.
+var promptText = map[string]string{
+	systemPromptFileFlag:   "--system-prompt",
+	appendPromptFileFlag:   "--append-system-prompt",
+	subagentPromptFileFlag: "--append-subagent-system-prompt",
+}
 
 // jsonWhitespace is the white space JSON allows around a value.
 const jsonWhitespace = " \t\n\r"
@@ -44,6 +58,10 @@ var variadic = map[string]bool{
 	pluginDirFlag:  false,
 	pluginDirNoMCP: false,
 	addDirFlag:     true,
+
+	systemPromptFileFlag:   false,
+	appendPromptFileFlag:   false,
+	subagentPromptFileFlag: false,
 }
 
 // flagValue is one value of a flag of [variadic] in a launch's arguments: the flag, the
@@ -108,9 +126,12 @@ func takesValue(w string) bool {
 // A file of --mcp-config or --agents is then checked and read as the settings are, and
 // copied into the run directory, as mcp-config-<n>.json or agents-<n>.json, with its
 // strings written as the enclosure sees them when [runtimes.Attach.Inside] is set; the
-// argument is given the copy's path. A value of --plugin-dir, --plugin-dir-no-mcp or
-// --add-dir is checked as [checkDir] checks it, and passes as it is. Every value is
-// checked before a copy is written, so a refused launch leaves none.
+// argument is given the copy's path. A file of --system-prompt-file,
+// --append-system-prompt-file or --append-subagent-system-prompt-file is checked and
+// read the same way and copied as it was read, as <flag>-<n>.md without the leading
+// "--". A value of --plugin-dir, --plugin-dir-no-mcp or --add-dir is checked as
+// [checkDir] checks it, and passes as it is. Every value is checked before a copy is
+// written, so a refused launch leaves none.
 func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 	type copied struct {
 		v       flagValue
@@ -126,20 +147,20 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 		if err := pathRules(v); err != nil {
 			return nil, err
 		}
-		name := ""
-		switch v.flag {
-		case mcpConfigFlag:
-			name = mcpConfigCopy
-		case agentsFlag:
-			name = agentsCopy
-		default:
+		name, ok := copyNames[v.flag]
+		if !ok {
 			if err := checkDir(v, a); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		b, err := readCopy(v, a)
-		if err != nil {
+		var b []byte
+		var err error
+		if _, prompt := promptText[v.flag]; prompt {
+			if b, err = readSettings(v.value, a.Readable); err != nil {
+				return nil, fileRefused(v, err)
+			}
+		} else if b, err = readCopy(v, a); err != nil {
 			return nil, err
 		}
 		n[v.flag]++
@@ -254,6 +275,8 @@ func fileRefused(v flagValue, err error) error {
 		what := "the servers as a JSON string"
 		if v.flag == agentsFlag {
 			what = "the agents as a JSON object"
+		} else if text, ok := promptText[v.flag]; ok {
+			what = "the text with " + text
 		}
 		return fmt.Errorf("This launch passes %s %s, and that file %s %s, which a walled run can write, "+
 			"so the run does not start. Move the file to a directory no walled run writes, or pass %s.",
