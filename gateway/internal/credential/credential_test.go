@@ -3,6 +3,7 @@ package credential
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -861,10 +862,10 @@ func TestAModelKeysTokenThatMatchesNoPrefixIsRefused(t *testing.T) {
 		body string
 		want string
 	}{
-		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), " gives the model key model placeholders: the session gives the runtime the key's variable"},
-		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), " sets the model key model with another scheme than the definition's"},
-		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), " sets the model key model with another scheme than the definition's"},
-		"a host above its": {answer(`{"hosts":["other.model.example"],"scheme":"header","header":"x-api-key"}`, ""), " claims other.model.example, above the hosts the machine gives it"},
+		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), "remove placeholders from the answer of the adapter %s: the model key model takes none, since the session gives the runtime the key's variable"},
+		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), "set the model key model in the answer of the adapter %s with the scheme of its definition: the answer has another"},
+		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), "set the model key model in the answer of the adapter %s with the scheme of its definition: the answer has another"},
+		"a host above its": {answer(`{"hosts":["other.model.example"],"scheme":"header","header":"x-api-key"}`, ""), "the adapter %s claims other.model.example, above the hosts the machine gives it"},
 	} {
 		path := adapter(t, c.body)
 		d := modelKey("model")
@@ -875,7 +876,7 @@ func TestAModelKeysTokenThatMatchesNoPrefixIsRefused(t *testing.T) {
 			t.Errorf("an adapter's answer with %s: the credentials resolved", name)
 			continue
 		}
-		if want := "credential model: the adapter " + path + c.want; err.Error() != want {
+		if want := "credential model: " + fmt.Sprintf(c.want, path); err.Error() != want {
 			t.Errorf("an adapter's answer with %s:\n got %v\nwant %s", name, err, want)
 		}
 	}

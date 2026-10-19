@@ -759,7 +759,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		return nil, accesskey.ShownError(err)
 	}
 	if d.Format != "" && len(a.Placeholders) > 0 {
-		return nil, fmt.Errorf("the adapter %s gives the model key %s placeholders: the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))
+		return nil, fmt.Errorf("remove placeholders from the answer of the adapter %s: the model key %s takes none, since the session gives the runtime the key's variable", path, accesskey.ShownName(d.Name, false))
 	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
@@ -772,7 +772,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 			// A model key is set as its definition says, which the session chooses the
 			// runtime's variable by.
 			if u.Scheme != d.Scheme || u.Username != d.Username || !strings.EqualFold(u.Header, d.Header) {
-				return nil, fmt.Errorf("the adapter %s sets the model key %s with another scheme than the definition's", path, accesskey.ShownName(d.Name, false))
+				return nil, fmt.Errorf("set the model key %s in the answer of the adapter %s with the scheme of its definition: the answer has another", accesskey.ShownName(d.Name, false), path)
 			}
 			token := u.Token
 			if token == "" {
