@@ -83,7 +83,8 @@ from a host that gets the credential, before the answer reaches the agent.
 - A `TRACE` or `TRACK` to such a host gets a `405` from the gateway and never reaches the
   host, in either mode, with the rule `wall:echo-method`. Use another method.
 - The proxy replaces the value in the answer's headers, those of a `1xx` and the
-  trailer included, and in the body as it streams.
+  trailer included, in their names and values in any case, and in the body as it
+  streams.
 - For a `basic` credential, the proxy also replaces the base64 of the username and the
   value, as the header has it, with or without its padding.
 - The proxy also looks for each form percent-encoded and JSON-escaped. For a key of
@@ -96,9 +97,16 @@ from a host that gets the credential, before the answer reaches the agent.
 - The answer has no `Content-Length` and comes chunked, since the placeholder and the
   value differ in length.
 
-The proxy does not replace a part of the value, a copy in another case or encoding, such
-as hex, a copy inside a compressed file such as a zip archive, or a value the credential
-had before a renewal. A tool's answers are the tool's.
+The proxy does not replace:
+
+- a part of the value;
+- a copy in the body in another case, or in another encoding, such as hex;
+- a copy inside a compressed file, such as a zip archive;
+- a value the credential had before a renewal;
+- anything from another name or address of the same server that no credential is for,
+  such as its IP address: the connection to it is a tunnel the proxy does not read.
+
+A tool's answers are the tool's.
 
 ## From Qory Apiary
 

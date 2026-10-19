@@ -74,6 +74,15 @@ func echoOrigin(t *testing.T, up *CA) (*httptest.Server, func() []echoed) {
 			w.(http.Flusher).Flush()
 			time.Sleep(20 * time.Millisecond)
 			io.WriteString(w, auth[half:]+" after")
+		case "/trailer":
+			// The value in a trailer's name, which the proxy announces in the
+			// Trailer header in canonical case, and in a header in upper case.
+			w.Header().Set("Trailer", "X-T-"+value)
+			w.Header().Set("X-Upper", strings.ToUpper(value))
+			w.WriteHeader(http.StatusOK)
+			io.WriteString(w, "body")
+			w.Header().Set("X-T-"+value, value)
+			w.Header().Set(http.TrailerPrefix+"X-U-"+value, value)
 		case "/length":
 			body := "value " + auth
 			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -285,6 +294,76 @@ func TestAKeyedHostsAnswerHasThePlaceholder(t *testing.T) {
 		}
 		take()
 	}
+}
+
+// TestAKeyedHostsHeaderNamesAreMaskedInAnyCase pins the value in a trailer's name,
+// which reaches the client in another case through the Trailer header, and in a
+// header's value in upper case: neither reaches the client in any case.
+func TestAKeyedHostsHeaderNamesAreMaskedInAnyCase(t *testing.T) {
+	client, _, _ := maskedProxy(t)
+	resp, err := client.Get("https://bearer.example/trailer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	whole := strings.ToLower(headerText(resp.Header) + string(b) + headerText(resp.Trailer))
+	for name := range resp.Trailer {
+		whole += strings.ToLower(name) + "\n"
+	}
+	if strings.Contains(whole, strings.ToLower(fakeKey)) {
+		t.Errorf("the answer contains the value in some case:\n%s", whole)
+	}
+	if resp.Trailer.Get("X-T-"+link.Placeholder) != link.Placeholder || resp.Trailer.Get("X-U-"+link.Placeholder) != link.Placeholder {
+		t.Errorf("the trailer %v", resp.Trailer)
+	}
+	if resp.Header.Get("X-Upper") != link.Placeholder {
+		t.Errorf("an upper-case value: %q", resp.Header.Get("X-Upper"))
+	}
+}
+
+// TestMaskingARepeatedValueIsLinear masks 4 MiB of the basic value repeated. When
+// each replacement searched the rest of the body for every form again, a body of the
+// value repeated went through at about 1 MB/s.
+func TestMaskingARepeatedValueIsLinear(t *testing.T) {
+	m := (&Credential{Scheme: "basic", Username: "x-access-token"}).masker([]byte(fakeToken))
+	body := bytes.Repeat([]byte(fakeToken), (4<<20)/len(fakeToken))
+	start := time.Now()
+	maskAll(m, body)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("masking 4 MiB took %v", took)
+	}
+}
+
+// BenchmarkMasking masks 1 MiB with no copy of the value and 1 MiB of the value
+// repeated, in writes of 32 KiB.
+func BenchmarkMasking(b *testing.B) {
+	for _, c := range []struct {
+		name string
+		body []byte
+	}{
+		{"none", bytes.Repeat([]byte("x"), 1<<20)},
+		{"repeated", bytes.Repeat([]byte(fakeToken), (1<<20)/len(fakeToken))},
+	} {
+		for _, scheme := range []string{"bearer", "basic"} {
+			m := (&Credential{Scheme: scheme, Username: "x-access-token"}).masker([]byte(fakeToken))
+			b.Run(c.name+"-"+scheme, func(b *testing.B) {
+				b.SetBytes(int64(len(c.body)))
+				for range b.N {
+					maskAll(m, c.body)
+				}
+			})
+		}
+	}
+}
+
+// maskAll writes body through a masking writer in writes of 32 KiB.
+func maskAll(m *masker, body []byte) {
+	mw := &masking{w: httptest.NewRecorder(), m: m}
+	for off := 0; off < len(body); off += 32 << 10 {
+		mw.Write(body[off:min(off+32<<10, len(body))])
+	}
+	mw.finish()
 }
 
 // TestAKeyedHostsCompressedAnswerIsA502 pins a compressed answer from a host that gets

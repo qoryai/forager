@@ -24,8 +24,9 @@ type masker struct {
 	pairs []maskPair
 	// longest is the length of the longest find.
 	longest int
-	// fold is the masker of header names, which a server may write in another case:
-	// its finds and puts are in lower case. It is made on first use.
+	// fold is the masker of headers in any case, since a server or the proxy may write
+	// a header's name or value in another case: its finds and puts are in lower case.
+	// It is made on first use.
 	fold *masker
 }
 
@@ -138,23 +139,12 @@ func jsonEscaped(b []byte, html, slash bool) []byte {
 	return out
 }
 
-// next is the index in b of the first find, the longest of those that start there, or
-// -1 when b contains none.
-func (m *masker) next(b []byte) (int, *maskPair) {
-	at, which := -1, -1
-	for i := range m.pairs {
-		j := bytes.Index(b, m.pairs[i].find)
-		if j < 0 {
-			continue
-		}
-		if at < 0 || j < at || j == at && len(m.pairs[i].find) > len(m.pairs[which].find) {
-			at, which = j, i
-		}
+// index is the index in b of f at or after from, or -1 when there is none.
+func index(b []byte, from int, f []byte) int {
+	if j := bytes.Index(b[from:], f); j >= 0 {
+		return from + j
 	}
-	if at < 0 {
-		return -1, nil
-	}
-	return at, &m.pairs[which]
+	return -1
 }
 
 // scan appends b to dst with every find replaced. Unless final, it keeps back the end
@@ -162,19 +152,44 @@ func (m *masker) next(b []byte) (int, *maskPair) {
 // bytes, and none when no find starts with that end. rest is where the bytes kept back
 // start in b.
 func (m *masker) scan(dst, b []byte, final bool) (out []byte, rest int) {
+	return m.scanIn(dst, b, b, final)
+}
+
+// scanIn is scan that looks for the finds in in, which has the length of b and its
+// bytes at the same places, such as b in lower case, and copies the rest from b. Of
+// the finds at one place the longest wins. Each find's next place is kept and looked
+// for again only once the replacing has passed it, so the time is linear in b for a
+// fixed set of finds, however often b contains them.
+func (m *masker) scanIn(dst, b, in []byte, final bool) (out []byte, rest int) {
+	at := make([]int, len(m.pairs))
+	for k := range m.pairs {
+		at[k] = index(in, 0, m.pairs[k].find)
+	}
 	i := 0
 	for {
-		at, p := m.next(b[i:])
-		if at < 0 {
+		which := -1
+		for k := range m.pairs {
+			if at[k] >= 0 && at[k] < i {
+				at[k] = index(in, i, m.pairs[k].find)
+			}
+			if at[k] < 0 {
+				continue
+			}
+			if which < 0 || at[k] < at[which] || at[k] == at[which] && len(m.pairs[k].find) > len(m.pairs[which].find) {
+				which = k
+			}
+		}
+		if which < 0 {
 			break
 		}
-		dst = append(append(dst, b[i:i+at]...), p.put...)
-		i += at + len(p.find)
+		p := &m.pairs[which]
+		dst = append(append(dst, b[i:at[which]]...), p.put...)
+		i = at[which] + len(p.find)
 	}
 	hold := len(b)
 	if !final {
 		for s := max(i, len(b)-(m.longest-1)); s < len(b); s++ {
-			if m.starts(b[s:]) {
+			if m.starts(in[s:]) {
 				hold = s
 				break
 			}
@@ -193,31 +208,69 @@ func (m *masker) starts(b []byte) bool {
 	return false
 }
 
+// contains reports whether b contains a find.
+func (m *masker) contains(b []byte) bool {
+	for _, p := range m.pairs {
+		if bytes.Contains(b, p.find) {
+			return true
+		}
+	}
+	return false
+}
+
 // replace is s with every find replaced.
 func (m *masker) replace(s string) string {
 	b := []byte(s)
-	if at, _ := m.next(b); at < 0 {
+	defer clear(b)
+	if !m.contains(b) {
 		return s
 	}
 	out, _ := m.scan(nil, b, true)
-	clear(b)
 	return string(out)
 }
 
-// header replaces every find in the values of h, and in its names in any case.
+// lowerASCII is b with the ASCII letters in lower case, every other byte as it is, so
+// each byte stays at its place.
+func lowerASCII(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// replaceFold is s with every find of the folded masker replaced in any case of its
+// ASCII letters; what is not replaced keeps its case.
+func (m *masker) replaceFold(s string) string {
+	b := []byte(s)
+	defer clear(b)
+	in := lowerASCII(b)
+	defer clear(in)
+	if !m.contains(in) {
+		return s
+	}
+	out, _ := m.scanIn(nil, b, in, true)
+	return string(out)
+}
+
+// header replaces every find in the names and the values of h: in the case it has,
+// then in any case, since a server or the proxy may write a name, such as one the
+// Trailer header lists, in another case.
 func (m *masker) header(h http.Header) {
 	if m.fold == nil {
 		m.fold = &masker{longest: m.longest}
 		for _, p := range m.pairs {
-			m.fold.pairs = append(m.fold.pairs, maskPair{find: bytes.ToLower(p.find), put: bytes.ToLower(p.put)})
+			m.fold.pairs = append(m.fold.pairs, maskPair{find: lowerASCII(p.find), put: lowerASCII(p.put)})
 		}
 	}
 	for name, values := range h {
 		for i, v := range values {
-			values[i] = m.replace(v)
+			values[i] = m.fold.replaceFold(m.replace(v))
 		}
-		lower := strings.ToLower(name)
-		if masked := m.fold.replace(lower); masked != lower {
+		if masked := m.fold.replaceFold(name); masked != name {
 			delete(h, name)
 			key := http.CanonicalHeaderKey(masked)
 			h[key] = append(h[key], values...)
@@ -267,10 +320,10 @@ func (mw *masking) Write(b []byte) (int, error) {
 		mw.WriteHeader(http.StatusOK)
 	}
 	buf := append(mw.tail, b...)
+	defer clear(buf)
 	out, rest := mw.m.scan(nil, buf, false)
-	mw.tail = append([]byte(nil), buf[rest:]...)
-	clear(buf)
 	defer clear(out)
+	mw.tail = append([]byte(nil), buf[rest:]...)
 	if len(out) == 0 {
 		return len(b), nil
 	}
@@ -283,6 +336,13 @@ func (mw *masking) Write(b []byte) (int, error) {
 // Flush flushes what is written, apart from the bytes kept back.
 func (mw *masking) Flush() {
 	http.NewResponseController(mw.w).Flush()
+}
+
+// discard overwrites the bytes kept back, which the handler defers so that a copy that
+// ends early, with the server's panic, keeps no part of the value.
+func (mw *masking) discard() {
+	clear(mw.tail)
+	mw.tail = nil
 }
 
 // finish writes the bytes kept back, which hold no find, and replaces every find in

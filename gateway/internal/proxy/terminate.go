@@ -377,6 +377,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		}
 		defer mask.clear()
 		mw := &masking{w: w, m: mask}
+		defer mw.discard()
 		rp.ServeHTTP(mw, r.WithContext(ctx))
 		mw.finish()
 	})

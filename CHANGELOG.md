@@ -344,7 +344,8 @@ release may change what an existing document does, and says so under Upgrading.
   place, is refused. `server.CheckConfigurationImage` holds its rule.
 - The proxy replaces a credential's value with its placeholder in every answer from a
   host that gets the credential: in the headers, those of a `1xx` and the trailer
-  included, and in the body as it streams, a copy split across two reads included. For
+  included, in their names and values in any case, and in the body as it streams, a
+  copy split across two reads included. For
   `basic` it also replaces the base64 of the username and the value, with or without
   its padding, and it looks for each form percent-encoded and JSON-escaped too. See
   [credentials](docs/credentials.md#what-the-agent-gets-back) for what it does not

@@ -568,17 +568,19 @@ debug endpoint, an error page. On a host that gets a credential, the proxy denie
 `TRACE` or `TRACK` with a `405` and the rule `wall:echo-method`, in either mode, before
 anything is sent, and replaces the credential's value with the placeholder in every
 answer it passes on, also on a path that gets no credential: in the headers, those of a
-`1xx` and the trailer included, in header names in any case, and in the body as it
-streams. For `basic` it also replaces the base64 of the username and the value, with or
+`1xx` and the trailer included, in their names and values in any case, and in the body
+as it streams. For `basic` it also replaces the base64 of the username and the value, with or
 without its padding, in the standard and the URL alphabet, with the base64 of the
 username and the placeholder. Each form is also looked for percent-encoded and
 JSON-escaped where that changes it. The request goes upstream with `Accept-Encoding:
 identity` and without `Range`, `If-Range`, `Upgrade` and `Connection`; an answer with
 another `Content-Encoding` and a body, or a `101`, is a `502` from the proxy, and the
 record contains the host's status. The answer has no `Content-Length`, since the
-placeholder and the value differ in length. A part of the value, another case or
-encoding of it, a copy inside a compressed payload such as a zip file, and a value from
-before a renewal are not replaced. A tool's answers are the tool's.
+placeholder and the value differ in length. A part of the value, another case of it in
+the body, another encoding of it, a copy inside a compressed payload such as a zip
+file, and a value from before a renewal are not replaced. Another name or address of
+the same server, one no credential is for, is a tunnel the proxy does not read, so its
+answers are not replaced either. A tool's answers are the tool's.
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
