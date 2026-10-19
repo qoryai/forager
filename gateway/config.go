@@ -17,7 +17,9 @@ type Config struct {
 	Server *Server
 	// Policy is the node's policy, the one the command passes; nil means none. Without
 	// a server's policy it is each run's, and none is mode observe. Beside a server's
-	// policy it narrows that one: the node only takes away.
+	// policy it narrows that one: the node only takes away. Its allow list's entries
+	// that name a host itself, and that the run's policy allows, are the only ones that
+	// open this machine's addresses to a guarded proxy.
 	Policy *Policy
 	// Credentials and Tools are the ones this machine defines; a run's policy selects
 	// among them by name. Each needs a wall.

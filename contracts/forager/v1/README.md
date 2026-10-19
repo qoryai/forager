@@ -3095,12 +3095,13 @@ reached by default. Two rules, in either mode, observe included:
 - The link-local range, where a cloud keeps its metadata service, is refused whatever
   the allow list contains.
 - Forager's machine, loopback and every address it has, is refused unless an
-  `egress.allow` entry of the policy lists the host itself. A `*.` suffix over it does
-  not count, and neither does a name a harness declares under such a suffix: the
-  machine's owner decides what is opened on the machine, a repository cannot. A
-  local MCP server or model endpoint is reached through the proxy like everything else,
-  decided and recorded, when the policy lists it, and the rule that lists it applies
-  under observe as well. The session addresses such a server by the machine's host name or
+  `egress.allow` entry of the node's policy lists the host itself and the run's policy
+  allows the host. A `*.` suffix over it does not count, and neither does a name a
+  harness declares under such a suffix, an entry of a server's `security_policy` or a
+  session's narrowing: the machine's owner decides what is opened on the machine, a
+  repository or a server cannot. A local MCP server or model endpoint is reached
+  through the proxy like everything else, decided and recorded, when the node's policy
+  lists it, and the rule that lists it applies under observe as well. The session addresses such a server by the machine's host name or
   an alias of it, as the hosts file or a name server gives it, with no search domain
   added, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
 

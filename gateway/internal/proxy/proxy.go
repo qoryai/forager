@@ -23,10 +23,11 @@
 // machine on behalf of something that is not on it, so what is on this machine is not
 // reached by default. The link-local range, which holds a cloud's metadata service, is
 // refused whatever the policy says. This machine's own addresses, loopback and every
-// address an interface holds, are refused unless an allow entry names the host itself,
-// not a *. suffix over it: a local MCP server or model endpoint is reached through the
-// proxy like everything else, decided and recorded, when the policy names it, in either
-// mode. Without the guard the way around a wall is through the proxy.
+// address an interface holds, are refused unless one of the guard's names is the host
+// itself, not a *. suffix over it, and the allow list allows the host. The gateway takes
+// the names from the node's policy alone: a local MCP server or model endpoint is
+// reached through the proxy like everything else, decided and recorded, when the node's
+// policy names it, in either mode. Without the guard the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
@@ -361,9 +362,10 @@ func (p *Proxy) Close() error {
 	return err
 }
 
-// Guard makes the proxy refuse the link-local range, and this machine's own addresses
-// unless the host is one of names: the entries of the policy's allow list, as its
-// owner wrote them. Entries that are *. suffixes are ignored. The session calls
+// Guard makes the proxy refuse the link-local range, and this machine's addresses
+// unless the host is one of names and the allow list allows it. The gateway passes
+// entries of the node's policy's allow list, as its owner wrote them, never a server's
+// policy's. Entries that are *. suffixes are ignored. The session calls
 // Guard once, before it starts anything behind a wall; a policy set later brings its
 // own names.
 func (p *Proxy) Guard(names []string) {
@@ -418,9 +420,9 @@ func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[stri
 }
 
 // SetPolicyOpening is [Proxy.SetPolicy] with the guard's names apart from the allow
-// list: names, the entries of the policy's own allow list before a session narrowed
-// it, which alone open this machine's addresses when the proxy is guarded, and only
-// for a host the allow list allows as well.
+// list: names, which the gateway takes from the node's policy's allow list, alone open
+// this machine's addresses when the proxy is guarded, and only for a host the allow
+// list allows as well.
 func (p *Proxy) SetPolicyOpening(mode policy.Mode, allow, deny, names []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	r := &rules{mode: mode, allow: allow, deny: deny}
 	if p.guarded.Load() {
@@ -486,10 +488,10 @@ func (p *Proxy) untrack(t *tunnel) {
 	p.tmu.Unlock()
 }
 
-// namedKey marks the context of a connection whose host an allow entry names itself.
+// namedKey marks the context of a connection whose host is one of the guard's names.
 type namedKey struct{}
 
-// named reports whether the policy's owner named the host, which alone opens this
+// named reports whether the host is one of the guard's names, which alone open this
 // machine to an enclosure, and the connection is one the allow list lets through.
 func (p *Proxy) named(host string, allowed bool) bool {
 	_, ok := policy.Match(p.rules.Load().opened, host)
@@ -888,8 +890,8 @@ func unrooted(err error, host string) error {
 	return err
 }
 
-// dialContext carries into the dial whether the policy names the host, which is what
-// lets a guarded proxy reach this machine for it.
+// dialContext carries into the dial whether the host is one of the guard's names,
+// which is what lets a guarded proxy reach this machine for it.
 func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 	if p.named(d.Host, d.Rule != "") {
 		return context.WithValue(ctx, namedKey{}, true)

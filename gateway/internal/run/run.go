@@ -186,7 +186,7 @@ func Decide(cfg Config) (*Run, error) {
 		r.node, pol = node, node
 	}
 	if cfg.Fetched == nil {
-		r.guard = GuardNames(pol, cfg.Narrowing)
+		r.guard = GuardNames(r.node, pol, cfg.Narrowing)
 		pol = Narrow(pol, cfg.Narrowing)
 	} else {
 		fetched, err := r.Read(*cfg.Fetched)
@@ -472,7 +472,7 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 	if r.read == nil {
 		r.read = map[*policy.Loaded][]string{}
 	}
-	r.read[out] = GuardNames(pol, r.cfg.Narrowing)
+	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
 	if named != "" {
 		if r.images == nil {
 			r.images = map[*policy.Loaded]string{}
@@ -565,14 +565,14 @@ func (r *Run) selects(pol *policy.Loaded) error {
 	return nil
 }
 
-// takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken; the
-// policy's own allow list for one it did not make.
+// takeGuard is the guard's names of a policy [Run.Read] made, forgotten once taken;
+// [GuardNames] of the node's policy and p for one it did not make.
 func (r *Run) takeGuard(p *policy.Loaded) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	names, ok := r.read[p]
 	if !ok {
-		return p.Policy.Egress.Allow
+		return GuardNames(r.node, p, r.cfg.Narrowing)
 	}
 	delete(r.read, p)
 	return names
@@ -589,24 +589,31 @@ func (r *Run) takeNamed(p *policy.Loaded) string {
 }
 
 // GuardNames are the names a guarded proxy opens, this machine's own addresses
-// reached for them, under pol narrowed by n: the entries of pol's own allow list, as
-// its owner wrote them, never a narrowing's. A session's narrowing only narrows, so it
-// opens nothing pol does not: under a pol that enforces, pol's names, which the
-// narrowed allow list must allow as well; under one that observes, or none, no name
-// at all, since every name its allow list holds is the narrowing's to choose. A nil n
-// is pol's allow list, as without a narrowing.
-func GuardNames(pol *policy.Loaded, n *Narrowing) []string {
-	if n == nil {
-		return pol.Policy.Egress.Allow
-	}
-	if pol.Policy.Egress.Mode != policy.Enforce {
+// reached for them, under pol, the policy in force before n narrows it: the entries of
+// the node's policy's allow list that name a host itself, not a "*." pattern, and that
+// pol's allow list matches by [policy.Match]. A server's policy, which pol may be or
+// contain, opens nothing: with no node's policy, nil, there is no name. A session's
+// narrowing only narrows, so it opens nothing either: under a pol that observes, no
+// name at all, since every name its allow list holds is the narrowing's to choose. A
+// nil n is no narrowing.
+func GuardNames(node, pol *policy.Loaded, n *Narrowing) []string {
+	if node == nil || (n != nil && pol.Policy.Egress.Mode != policy.Enforce) {
 		return nil
 	}
-	return slices.Clone(pol.Policy.Egress.Allow)
+	var out []string
+	for _, entry := range node.Policy.Egress.Allow {
+		if strings.HasPrefix(entry, "*.") {
+			continue
+		}
+		if _, ok := policy.Match(pol.Policy.Egress.Allow, entry); ok {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // GuardNames are the names a guarded proxy opens under the policy in force:
-// [GuardNames] of the policy before the session's narrowing.
+// [GuardNames] of the node's policy and the policy before the session's narrowing.
 func (r *Run) GuardNames() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -677,8 +684,8 @@ type Decision struct {
 	Policy *policy.Loaded
 	// Uses are its credentials as the proxy sets them.
 	Uses []proxy.Credential
-	// Guard are the names a guarded proxy opens under it ([GuardNames]): those of the
-	// policy before the session's narrowing.
+	// Guard are the names a guarded proxy opens under it ([GuardNames]): entries of the
+	// node's policy that the policy before the session's narrowing allows.
 	Guard []string
 	// Image is the image the policy resolves to, the one the run started in: a reload
 	// that resolves to another is refused. Zero without a wall.

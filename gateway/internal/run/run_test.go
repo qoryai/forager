@@ -7,7 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -786,11 +790,11 @@ func TestASessionsNarrowingOnlyNarrows(t *testing.T) {
 }
 
 // TestANarrowingOpensNoneOfTheMachinesAddresses pins the guard's names under a
-// session's narrowing: those of the policy before it, and only when that policy
-// enforces. Under observe, or no policy, a narrowing's allow opens nothing; under
-// enforce, a narrowed entry the policy does not name itself opens nothing either, the
-// policy's own names being the only ones; and without a narrowing the names are the
-// allow list's, as today.
+// session's narrowing: those of the node's policy, and only when the policy before the
+// narrowing enforces. Under observe, or no policy, a narrowing's allow opens nothing;
+// under enforce, a narrowed entry the node's policy does not name itself opens nothing
+// either, nor does a "*." pattern; and without a narrowing the names are the node's
+// allow list's.
 func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 	loaded := func(mode policy.Mode, allow ...string) *policy.Loaded {
 		return &policy.Loaded{Policy: policy.Policy{Version: 1, Egress: policy.Egress{Mode: mode, Allow: allow}}, Source: "config"}
@@ -803,13 +807,89 @@ func TestANarrowingOpensNoneOfTheMachinesAddresses(t *testing.T) {
 	}{
 		"no policy":                      {policy.None(), narrowing, nil},
 		"observe":                        {loaded(policy.Observe, "127.0.0.1"), narrowing, nil},
-		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1", "*.example"}},
-		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, []string{"*.example"}},
+		"enforce, a host it names":       {loaded(policy.Enforce, "127.0.0.1", "*.example"), narrowing, []string{"127.0.0.1"}},
+		"enforce, a host it only covers": {loaded(policy.Enforce, "*.example"), &run.Narrowing{Allow: []string{"api.example"}}, nil},
 		"no narrowing, observe":          {loaded(policy.Observe, "127.0.0.1"), nil, []string{"127.0.0.1"}},
 	} {
-		if got := run.GuardNames(c.pol, c.n); !slices.Equal(got, c.want) {
+		if got := run.GuardNames(c.pol, c.pol, c.n); !slices.Equal(got, c.want) {
 			t.Errorf("%s: %v", name, got)
 		}
+	}
+}
+
+// TestOnlyTheNodesPolicyOpensTheMachine pins that an entry of a server's policy never
+// opens this machine's addresses: the guard's names are entries of the node's policy
+// that the policy in force allows, at the start and at a reload. A guarded proxy given
+// those names refuses localhost by the guard's rule where the node's policy does not
+// name it, and reaches it where it does; a local policy alone opens what it names, as
+// before.
+func TestOnlyTheNodesPolicyOpensTheMachine(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "the local server") }))
+	defer origin.Close()
+	port := origin.URL[strings.LastIndex(origin.URL, ":"):]
+	node := func(mode string, allow ...string) *run.Policy {
+		return &run.Policy{Version: 1, Egress: run.PolicyEgress{Mode: mode, Allow: allow}}
+	}
+	localhost := `{"version":1,"egress":{"mode":"enforce","allow":["localhost"]}}`
+	for _, c := range []struct {
+		name    string
+		node    *run.Policy
+		fetched *run.Fetched
+		want    []string
+	}{
+		{"a server's localhost under a node that observes", node("observe"), served(localhost, digest('a')), nil},
+		{"a server's localhost under a node that enforces it", node("enforce", "localhost"), served(localhost, digest('a')), []string{"localhost"}},
+		{"a server's localhost with no node's policy", nil, served(localhost, digest('a')), nil},
+		{"a server's name that resolves to this machine", nil, served(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1.nip.io"]}}`, digest('a')), nil},
+		{"a local policy alone", node("enforce", "localhost", "*.example"), nil, []string{"localhost"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := open(t, run.Config{RunID: runID, Node: c.node, Server: c.fetched != nil, Fetched: c.fetched})
+			if got := r.GuardNames(); !slices.Equal(got, c.want) {
+				t.Errorf("the guard's names: %q, want %q", got, c.want)
+			}
+			e := r.Policy().Policy.Egress
+			p, err := proxy.Listen("", e.Mode, e.Allow, e.Deny, func(proxy.Decision) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			p.Guard(r.GuardNames())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+			resp, err := client.Get("http://localhost" + port + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			opened := slices.Contains(c.want, "localhost")
+			if reached := resp.StatusCode == 200 && string(body) == "the local server"; reached != opened {
+				t.Errorf("localhost through the guarded proxy: %d %q, want reached %v", resp.StatusCode, body, opened)
+			}
+			if !opened && (resp.StatusCode != 403 || !strings.Contains(string(body), "the gateway's machine only for a host the policy's allow list names")) {
+				t.Errorf("localhost: %d %q, want the guard's refusal", resp.StatusCode, body)
+			}
+		})
+	}
+	// A reload takes the names from the node's policy in the same way.
+	for _, c := range []struct {
+		name string
+		node *run.Policy
+		want []string
+	}{
+		{"a node that observes", node("observe"), nil},
+		{"a node that enforces localhost", node("enforce", "localhost", "api.example"), []string{"localhost"}},
+	} {
+		r := open(t, run.Config{RunID: runID, Node: c.node, Server: true, Fetched: served(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, digest('a'))})
+		d, err := reload(t, r, served(localhost, digest('b')))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !slices.Equal(d.Guard, c.want) {
+			t.Errorf("%s: a reload's names %q, want %q", c.name, d.Guard, c.want)
+		}
+		d.Discard()
 	}
 }
 

@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -165,5 +167,50 @@ func TestTerminatedLeavesOutACredentialPatternForNoHost(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestANameThatResolvesToThisMachineOpensOnlyByTheGuardsNames pins the dial-time half of
+// the guard: a server's allow entry 127.0.0.1.nip.io, a name that resolves to
+// 127.0.0.1, passes the decision and is refused when dialled, unless the guard's names,
+// which the gateway takes from the node's policy alone, contain it.
+func TestANameThatResolvesToThisMachineOpensOnlyByTheGuardsNames(t *testing.T) {
+	for _, c := range []struct {
+		names   []string
+		refused bool
+	}{
+		{nil, true},
+		{[]string{"127.0.0.1.nip.io"}, false},
+	} {
+		seen := &decisions{}
+		p, err := Listen("", policy.Enforce, []string{"127.0.0.1.nip.io"}, nil, seen.observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var passed []string
+		// The stub resolves the name as a name server would, then the guard judges the
+		// address, as the proxy's dialler does.
+		p.dial = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, port, _ := net.SplitHostPort(addr)
+			if host == "127.0.0.1.nip.io." {
+				addr = net.JoinHostPort("127.0.0.1", port)
+			}
+			if err := p.guard(ctx, addr); err != nil {
+				return nil, err
+			}
+			passed = append(passed, addr)
+			return nil, errPassed
+		}
+		p.Guard(c.names)
+		code, _ := raw(t, p, "GET http://127.0.0.1.nip.io/x", "127.0.0.1.nip.io")
+		d := seen.at(-1)
+		if c.refused {
+			if code != 403 || d.Rule != GuardRule || d.Allowed || d.Outcome != Refused || len(passed) != 0 {
+				t.Errorf("names %q: %d, decision %+v, passed %v; want the guard's refusal at the dial", c.names, code, d, passed)
+			}
+		} else if len(passed) != 1 || d.Rule == GuardRule {
+			t.Errorf("names %q: %d, decision %+v, passed %v; want it dialled", c.names, code, d, passed)
+		}
+		p.Close()
 	}
 }
