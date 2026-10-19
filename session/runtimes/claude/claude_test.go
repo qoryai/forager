@@ -154,7 +154,7 @@ func TestSettingsReadsOnlyAPlainFileItIsLetRead(t *testing.T) {
 		{"a FIFO", p("fifo.json"), nil, "Pass a --settings path to a regular file. This launch passes --settings " +
 			p("fifo.json") + ", and that file is not a regular file, so the run does not start."},
 		{"a file of 1 MiB", p("edge.json"), nil, ""},
-		{"a file larger than 1 MiB", p("big.json"), nil, "Pass a --settings file of at most 1048576 bytes. This launch passes " +
+		{"a file larger than 1 MiB", p("big.json"), nil, "Pass a --settings file of at most 1048576 bytes (1 MiB). This launch passes " +
 			"--settings " + p("big.json") + ", and that file is larger than 1048576 bytes, so the run does not start."},
 		{"a document", ` {"permissions":{}}`, refuseAll, ""},
 	} {

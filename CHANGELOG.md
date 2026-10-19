@@ -420,7 +420,7 @@ release may change what an existing document does, and says so under Upgrading.
   as its names, as for a link inside a writable place of the run's.
 - `catalog.Lookup` read a descriptor in `dir` through a link, of any size. It now reads
   one only when its last part is no link, it is a regular file and it holds at most
-  1 MiB, and refuses one otherwise with "the descriptor <path>: " and the reason.
+  1 MiB, and refuses one otherwise with "Make the runtime descriptor <path> a regular file of at most 1 MiB, or remove it. It could not be read: " and the reason.
 
 #### Changed
 

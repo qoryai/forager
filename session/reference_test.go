@@ -143,7 +143,7 @@ func TestASettingsFileInTheWorkspaceIsJudgedOnThisMachine(t *testing.T) {
 	}
 	sp.Args = []string{"--settings", settings}
 	sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = &targetWall{}, "base", images, []string{"registry.example/agents/"}
-	want := "runtime claude: Move " + settings + " to a directory no walled run writes, or pass the settings as a " +
+	want := "runtime claude: Move " + settings + " to a directory no walled run can write, or pass the settings as a " +
 		"JSON object. This launch passes --settings " + settings + ", which lies in " + sp.Dir +
 		", a place a walled run can write, so the run does not start."
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), want) {

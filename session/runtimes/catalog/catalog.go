@@ -42,7 +42,7 @@ func Lookup(runtime, dir string) (runtimes.Runtime, error) {
 			return described(p, runtime, b)
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("the descriptor %s: %w", accesskey.ShownValue(p, false), accesskey.ShownError(err))
+			return nil, fmt.Errorf("Make the runtime descriptor %s a regular file of at most 1 MiB, or remove it. It could not be read: %w", accesskey.ShownValue(p, false), accesskey.ShownError(err))
 		}
 	}
 	p := "runtimes/" + runtime + "/descriptor.yaml"

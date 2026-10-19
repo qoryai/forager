@@ -338,8 +338,9 @@ up in its parent, so two binds of one root are allowed.
   choose the directory of this machine that is bound. `Names` holds the place as
   passed, the link, absolute and clean, and the writable place as passed. The link is
   the last one inside the writable place on the way to the place, the one that leads
-  out of it. Its sentence reads: "/work/home is reached through the link /work/home
-  inside /work, which a walled agent can change: list the link's target itself". A
+  out of it. Its sentence reads: "List the target of the link /work/home in place of
+  /work/home. /work/home is reached through the link /work/home inside /work, which a
+  walled agent can change". A
   place whose link leads back into the writable place lies inside it and is reached
   through it, and nothing is bound through the link. A link on the way to a place that
   lies inside no writable place of the run's is followed by the engine as it binds.
@@ -347,9 +348,10 @@ up in its parent, so two binds of one root are allowed.
   The same holds of a link inside a place of `Spec.Written`, the places the caller
   records as written by walled runs, though no walled run that wrote it is still
   going: `Names` holds the place, the link and the written place as passed. Its
-  sentence reads: "/code/repo/.claude/worktrees/wt is reached through the link
-  /code/repo/.claude/worktrees/wt inside /code/repo, which a walled agent can change:
-  list the link's target itself".
+  sentence reads: "List the target of the link /code/repo/.claude/worktrees/wt in
+  place of /code/repo/.claude/worktrees/wt. /code/repo/.claude/worktrees/wt is reached
+  through the link /code/repo/.claude/worktrees/wt inside /code/repo, which a walled
+  agent can change".
 - **Forager's files.** A writable place that contains a directory a name on the way
   to one of Forager's files is looked up in, such as a runs directory that is a link
   inside the checkout, is `mount_contains_forager_files`: the agent could point the link
@@ -533,7 +535,7 @@ unwalled launch passes them unchecked.
   `agents-<n>.json`, numbered from 1 in the order the files appear. For a run whose
   workspace is at `/workspace` inside, a copy that is JSON has every string written as
   the enclosure sees it. A file in such a place is refused: "Move /work/mcp.json to a
-  directory no walled run writes, or pass the servers as a JSON string. This launch
+  directory no walled run can write, or pass the servers as a JSON string. This launch
   passes --mcp-config /work/mcp.json, which lies in /work, a place a walled run can
   write, so the run does not start." A file whose path is looked up in such a place
   gets the text with "is reached through /work", and the fix for an `--agents` file
@@ -541,8 +543,8 @@ unwalled launch passes them unchecked.
   shows the reason after the fix, such as "Pass the path of the file that /a/mcp.json
   links to. This launch passes --mcp-config /a/mcp.json, and that file is a link, so
   the run does not start." The other fixes are "Pass a --mcp-config path to a regular
-  file.", "Pass a --mcp-config file of at most 1048576 bytes." and "Start the run again
-  when no process is writing /a/mcp.json." No copy is written before every value has
+  file.", "Pass a --mcp-config file of at most 1048576 bytes (1 MiB)." and "Start the run
+  again when no process is writing /a/mcp.json." No copy is written before every value has
   passed.
 - **`--plugin-dir` and `--plugin-dir-no-mcp` directories** may not lie in, be reached
   through, or contain such a place, by whole names and regardless of case: "Move the
