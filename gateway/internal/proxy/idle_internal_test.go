@@ -73,7 +73,7 @@ func within(ok func() bool) bool {
 // connection closes once the request ends; and that every upstream transport closes a
 // connection idle for idleTimeout.
 func TestTheRunsEndClosesItsIdleUpstreamConnections(t *testing.T) {
-	up, err := NewCA("upstream")
+	up, err := NewCA("upstream", []string{"key.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,11 +104,12 @@ func TestTheRunsEndClosesItsIdleUpstreamConnections(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
+	creds := []Credential{{Name: "key", Hosts: []string{"key.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}}
+	ca, err := NewCA("test", p.Terminating(creds, nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, []Credential{{Name: "key", Hosts: []string{"key.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}}, nil, nil)
+	p.Terminate(ca, creds, nil, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())

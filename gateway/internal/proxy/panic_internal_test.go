@@ -168,11 +168,12 @@ func TestAHandlersPanicIsReportedWithoutItsValue(t *testing.T) {
 	p.dial = func(context.Context, string, string) (net.Conn, error) {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("no host in this test")}
 	}
-	ca, err := NewCA("test")
+	paths := map[string][]string{"key.example": {"/*"}}
+	ca, err := NewCA("test", p.Terminating(nil, paths, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, nil, map[string][]string{"key.example": {"/*"}}, nil)
+	p.Terminate(ca, nil, paths, nil)
 
 	// A plain request: the proxy's handler panics as it records the failed dial.
 	c, err := net.Dial("tcp", p.Addr())

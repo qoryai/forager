@@ -50,7 +50,7 @@ type cachedLeaf struct {
 // leafCap is how many hosts' certificates an authority keeps: past it, the least
 // recently used goes, and is made again when it is asked for. An authority answers only
 // for the hosts the run terminates ([terminator.covers]) and the names under them, and a
-// "*." entry matches any number of names.
+// "*." entry matches any number of names, so its cache is bounded.
 var leafCap = 1024
 
 // caLife is how long a run's authority and its certificates are good for: longer than

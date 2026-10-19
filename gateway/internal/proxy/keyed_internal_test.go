@@ -20,7 +20,7 @@ import (
 // credential, also when the session's Connection header lists the proxy's mark, and a
 // request to a terminated host without a credential arrives over HTTP/2, as before.
 func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
-	up, err := NewCA("upstream")
+	up, err := NewCA("upstream", []string{"key.example", "marked.example", "other.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,12 +47,13 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
+	creds := []Credential{{Name: "key", Hosts: []string{"key.example", "marked.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}}
+	paths := map[string][]string{"other.example": {"/*"}}
+	ca, err := NewCA("test", p.Terminating(creds, paths, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, []Credential{{Name: "key", Hosts: []string{"key.example", "marked.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}},
-		map[string][]string{"other.example": {"/*"}}, nil)
+	p.Terminate(ca, creds, paths, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())

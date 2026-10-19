@@ -319,7 +319,7 @@ func TestARefusalIsRecordedOnceASecondPerLimit(t *testing.T) {
 // CONNECT of a terminated tunnel takes a token, and so does each request inside it, so
 // with a burst of 2 the second request inside waits for its token.
 func TestARequestInsideATerminatedTunnelTakesAToken(t *testing.T) {
-	up, err := NewCA("upstream")
+	up, err := NewCA("upstream", []string{"api.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,11 +338,12 @@ func TestARequestInsideATerminatedTunnelTakesAToken(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
+	creds := []Credential{{Name: "bearer", Hosts: []string{"api.example"}, Scheme: "bearer", Token: func() string { return "t-0001" }}}
+	ca, err := NewCA("test", p.Terminating(creds, nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, []Credential{{Name: "bearer", Hosts: []string{"api.example"}, Scheme: "bearer", Token: func() string { return "t-0001" }}}, nil, nil)
+	p.Terminate(ca, creds, nil, nil)
 	ft := newFakeTime()
 	limit(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 2}, ft)
 	trusted := x509.NewCertPool()
@@ -513,7 +514,7 @@ func TestAReloadDuringTheWaitDecidesTheRequest(t *testing.T) {
 // path the rule /ok/* does not cover, is refused with 403 under enforce. Nothing more
 // reaches the origin.
 func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
-	up, err := NewCA("upstream")
+	up, err := NewCA("upstream", []string{"api.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,11 +539,11 @@ func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
+	paths := map[string][]string{"api.example": {"/ok/*"}}
+	ca, err := NewCA("test", p.Terminating(nil, paths, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := map[string][]string{"api.example": {"/ok/*"}}
 	p.Terminate(ca, nil, paths, nil)
 	waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 2}, func() { p.SetPolicy(policy.Enforce, []string{"api.example"}, nil, paths, nil) })
 	trusted := x509.NewCertPool()

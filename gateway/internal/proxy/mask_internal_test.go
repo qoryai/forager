@@ -136,7 +136,7 @@ func maskedProxy(t *testing.T) (*http.Client, *decisions, func() []echoed) {
 // to the plain echo origin.
 func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decisions, func() []echoed) {
 	t.Helper()
-	up, err := NewCA("upstream")
+	up, err := NewCA("upstream", []string{"bearer.example", "basic.example", "plain.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,15 +153,17 @@ func maskedProxyIn(t *testing.T, mode policy.Mode) (*http.Client, *Proxy, *decis
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(up.PEM())
 	p.TrustUpstream(roots)
-	ca, err := NewCA("test")
+	value := []byte(fakeKey)
+	creds := []Credential{
+		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: func() []byte { return slices.Clone(value) }, Stored: true},
+		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Token: func() string { return fakeToken }},
+	}
+	paths := map[string][]string{"plain.example": {"/*"}}
+	ca, err := NewCA("test", p.Terminating(creds, paths, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	value := []byte(fakeKey)
-	p.Terminate(ca, []Credential{
-		{Name: "bearer", Hosts: []string{"bearer.example"}, Scheme: "bearer", Value: func() []byte { return slices.Clone(value) }, Stored: true},
-		{Name: "basic", Hosts: []string{"basic.example"}, Scheme: "basic", Username: "x-access-token", Token: func() string { return fakeToken }},
-	}, map[string][]string{"plain.example": {"/*"}}, nil)
+	p.Terminate(ca, creds, paths, nil)
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
 	proxyURL, _ := url.Parse(p.URL())
