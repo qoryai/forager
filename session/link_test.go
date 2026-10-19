@@ -61,8 +61,9 @@ func TestTheGatewayPrintsBySocket(t *testing.T) {
 
 // TestTheRunRequestSaysWhatTheGatewayDecidesBy pins the run request: the session's run
 // id, no wall, the labels, what the run is about, and the names of the variables the
-// run passes a value for, from what it inherits, what the harness sets and its
-// variables, sorted, never a value, and none outside a variable name's grammar.
+// run passes a value for, from what the harness sets and its variables, sorted, never
+// a value, and none outside a variable name's grammar. Without a wall what the run
+// inherits is left out, since a placeholder wins over it; behind a wall it counts.
 func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 	const value = "a-value-no-request-carries"
 	sp, g := specGateway(t, "INHERITED="+value, "not a name="+value, "1BAD="+value)
@@ -81,12 +82,22 @@ func TestTheRunRequestSaysWhatTheGatewayDecidesBy(t *testing.T) {
 		t.Fatalf("%d run requests", len(reqs))
 	}
 	req := reqs[0]
-	want := []string{"DEFAULT_ONE", "FAKE_RUNTIME", "FIXED_ONE", "INHERITED", "MACHINE_ONE", "PATH", "RUN_ONE"}
+	want := []string{"DEFAULT_ONE", "FIXED_ONE", "MACHINE_ONE", "RUN_ONE"}
 	if req.RunID != sp.RunID || req.Wall || req.Labels["repository"] != "example-namespace/project" || req.About == nil || req.About.Title != "Example title" || !slices.Equal(req.Passes, want) || req.Images != nil || req.Narrowing != nil {
 		t.Errorf("the run request %+v, passes want %q", req, want)
 	}
 	if raw := string(g.RawRequests()[0]); strings.Contains(raw, value) {
 		t.Errorf("the run request carries a value: %s", raw)
+	}
+
+	sp, g = specGateway(t, "INHERITED="+value)
+	sleeps(&sp, 0)
+	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+	if _, err := session.Run(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := g.Requests(); len(reqs) != 1 || !slices.Equal(reqs[0].Passes, []string{"FAKE_RUNTIME", "INHERITED", "PATH"}) {
+		t.Errorf("a walled run's run requests %+v", reqs)
 	}
 }
 

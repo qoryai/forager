@@ -224,23 +224,35 @@ func TestTheEndpointsCredentialIsShownByName(t *testing.T) {
 	}
 }
 
-// TestAnUnwalledRunDeniesTheEndpoint pins that without a wall the endpoint's variable
-// is denied, whatever credential_hosts the answer has: the run's covered
-// value does not reach the agent, and the record has no kept.
-func TestAnUnwalledRunDeniesTheEndpoint(t *testing.T) {
-	sp, g := specGateway(t)
-	out := dumpsEnv(t, &sp)
-	sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
-	answering(g, modelAndForge, nil)
-	res, err := session.Run(context.Background(), sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value, ok := envOf(t, out)[endpointVariable]; ok {
-		t.Errorf("%s=%q reached the agent", endpointVariable, value)
-	}
-	b, _ := json.Marshal(endpointEntry(t, res))
-	if want := `{"lost":[{"from":"run","why":"denied"}],"name":"` + endpointVariable + `"}`; string(b) != want {
-		t.Errorf("the record's entry %s, want %s", b, want)
+// TestAnUnwalledRunAppliesTheEndpointRule pins the endpoint's variable without a wall:
+// for a run whose answer has credential_hosts the endpoint rule applies, as behind a
+// wall, so the run's covered value reaches the agent and the record has kept; for a
+// run whose answer has none, the runtime's denies leave the value out.
+func TestAnUnwalledRunAppliesTheEndpointRule(t *testing.T) {
+	for name, c := range map[string]struct {
+		hosts []map[string]any
+		value string
+		entry string
+	}{
+		"credential_hosts": {modelAndForge, "https://api.anthropic.com",
+			`{"from":"run","kept":{"credential":"model","why":"endpoint_covered"},"lost":[],"name":"` + endpointVariable + `"}`},
+		"none": {nil, "", `{"lost":[{"from":"run","why":"denied"}],"name":"` + endpointVariable + `"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, g := specGateway(t)
+			out := dumpsEnv(t, &sp)
+			sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
+			answering(g, c.hosts, nil)
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value := envOf(t, out)[endpointVariable]; value != c.value {
+				t.Errorf("%s=%q reached the agent, want %q", endpointVariable, value, c.value)
+			}
+			if b, _ := json.Marshal(endpointEntry(t, res)); string(b) != c.entry {
+				t.Errorf("the record's entry %s, want %s", b, c.entry)
+			}
+		})
 	}
 }

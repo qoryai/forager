@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -86,18 +87,26 @@ func credentialVariables(t *testing.T, res *session.Result) []string {
 // credential lists no placeholder. The chosen variable reaches the agent as the
 // placeholder, the other two do not, the run's ANTHROPIC_BASE_URL for the credential's
 // host is kept, and the record has the credential's variable in credential_variables.
+// A run without a wall is the same.
 func TestTheKeyVariablesChooseTheVariable(t *testing.T) {
-	for _, tc := range []struct{ keyVariables, auth, want string }{
-		{apiKeyVariable, "header", apiKeyVariable},
-		{apiKeyVariable, "header:X-Api-Key", apiKeyVariable},
-		{authTokenVariable, "bearer", authTokenVariable},
-		{oauthVariable, "bearer", oauthVariable},
-		{"OPENAI_API_KEY," + authTokenVariable, "bearer", authTokenVariable},
+	for _, tc := range []struct {
+		keyVariables, auth, want string
+		walled                   bool
+	}{
+		{apiKeyVariable, "header", apiKeyVariable, true},
+		{apiKeyVariable, "header:X-Api-Key", apiKeyVariable, true},
+		{authTokenVariable, "bearer", authTokenVariable, true},
+		{oauthVariable, "bearer", oauthVariable, true},
+		{"OPENAI_API_KEY," + authTokenVariable, "bearer", authTokenVariable, true},
+		{apiKeyVariable, "header", apiKeyVariable, false},
+		{"OPENAI_API_KEY," + authTokenVariable, "bearer", authTokenVariable, false},
 	} {
-		t.Run(tc.keyVariables+" "+tc.auth, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s %s walled %v", tc.keyVariables, tc.auth, tc.walled), func(t *testing.T) {
 			sp, g := specGateway(t)
 			out := dumpsEnv(t, &sp)
-			sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			if tc.walled {
+				sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+			}
 			sp.Variables.Run = []string{endpointVariable + "=https://openrouter.ai/api"}
 			answeringWith(g, []map[string]any{sealed("model", "openrouter.ai", tc.keyVariables, tc.auth)}, nil)
 			res, err := session.Run(context.Background(), sp)
@@ -404,13 +413,13 @@ func (p *recordsPrepare) Model() (runtimes.ModelPlaces, bool) {
 	return p.Runtime.(runtimes.Model).Model()
 }
 
-// TestAWalledRunNeedsAModelKey pins the session's check that a walled run whose
-// gateway holds credentials for it has a model key for its runtime: a credential whose
+// TestAWalledRunNeedsAModelKey pins the session's check that a run whose gateway holds
+// credentials for it, walled or not, has a model key for its runtime: a credential whose
 // placeholder is one of the runtime's model-key variables and whose hosts cover the
 // runtime's model host, api.anthropic.com for Claude Code or the host of the
 // endpoint's value that reaches the runtime, or a value the run or the machine passes
-// for one of the variables. A walled run without credential_hosts, and a run without a
-// wall, are not checked. A model key for another host is in
+// for one of the variables, or, without a wall, a value the run inherits. A run without
+// credential_hosts is not checked. A model key for another host is in
 // [TestTheModelKeyRefusalNamesTheFix].
 func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
@@ -423,7 +432,12 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	}{
 		{"walled, no model key", true, []map[string]any{forge}, nil, true},
 		{"walled, a model credential with no placeholder", true, []map[string]any{forge, sealed("model", "api.anthropic.com", "", "")}, nil, true},
-		{"unwalled", false, []map[string]any{forge}, nil, false},
+		{"unwalled, no model key", false, []map[string]any{forge}, nil, true},
+		{"unwalled, no credential_hosts", false, nil, nil, false},
+		{"unwalled, a machine credential", false, modelAndForge, nil, false},
+		{"unwalled, a value the run inherits", false, []map[string]any{forge}, func(sp *session.Spec) {
+			sp.Env = append(sp.Env, apiKeyVariable+"=sk-ant-a-key-of-the-test")
+		}, false},
 		{"walled, no credential_hosts", true, nil, nil, false},
 		{"walled, a machine credential", true, modelAndForge, nil, false},
 		{"walled, a sealed credential with key_variables", true, []map[string]any{forge, sealed("model", "api.anthropic.com", oauthVariable, "bearer")}, nil, false},

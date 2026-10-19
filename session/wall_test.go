@@ -239,25 +239,11 @@ const authority = "-----BEGIN CERTIFICATE-----\nMIIBexampleAAAA\n-----END CERTIF
 // TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder pins what a wall is given of the
 // run answer of a run whose gateway holds a credential: the run authority's
 // certificate and a placeholder in place of the credential, and what the record says
-// of it, the members of policy_applied the gateway decides as it gives them. Without
-// a wall the session sets neither.
+// of it, the members of policy_applied the gateway decides as it gives them.
 func TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder(t *testing.T) {
-	members := map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}, "deny": []string{}, "source": "config", "digest": strings.Repeat("a", 64),
-		"credentials": []any{map[string]any{"name": "model", "hosts": []string{"api.model.example"}, "scheme": "bearer"}}, "terminated": []string{"api.model.example"}}
-	answer := func(g *linktest.Fake) {
-		g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
-			a := linktest.RunAnswer(req)
-			a["policy"] = map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}}, "credentials": []any{map[string]any{"name": "model"}}}
-			a["digest"], a["applied"], a["placeholders"] = strings.Repeat("a", 64), members, []string{"MODEL_TOKEN"}
-			if req.Wall {
-				a["certificate_authority"] = authority
-			}
-			return linktest.Reply{Status: 200, Body: a}
-		})
-	}
 	w := &openWall{}
 	sp, g := specGateway(t, "FAKE_EXIT=0")
-	answer(g)
+	credentialAnswer(g)
 	sp.Wall, sp.Image = w, "example.com/agent:1"
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
@@ -275,15 +261,80 @@ func TestTheAnswerCrossesAsAnAuthorityAndAPlaceholder(t *testing.T) {
 	if len(creds) != 1 || creds[0].(map[string]any)["scheme"] != "bearer" || len(terminated) != 1 || applied["digest"] != strings.Repeat("a", 64) {
 		t.Errorf("run.policy_applied %v", applied)
 	}
+}
 
-	sp, g = specGateway(t, "FAKE_EXIT=0")
-	answer(g)
-	out := dumpsEnv(t, &sp)
-	if _, err := session.Run(context.Background(), sp); err != nil {
-		t.Fatal(err)
+// credentialAnswer has g answer a run as a gateway that holds the credential model,
+// whose placeholder is MODEL_TOKEN, with the run's authority, with or without a wall.
+func credentialAnswer(g *linktest.Fake) {
+	members := map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}, "deny": []string{}, "source": "config", "digest": strings.Repeat("a", 64),
+		"credentials": []any{map[string]any{"name": "model", "hosts": []string{"api.model.example"}, "scheme": "bearer"}}, "terminated": []string{"api.model.example"}}
+	g.OnRun(func(req server.LinkRunRequest) linktest.Reply {
+		a := linktest.RunAnswer(req)
+		a["policy"] = map[string]any{"version": 1, "egress": map[string]any{"mode": "enforce", "allow": []string{"api.model.example"}}, "credentials": []any{map[string]any{"name": "model"}}}
+		a["digest"], a["applied"], a["placeholders"] = strings.Repeat("a", 64), members, []string{"MODEL_TOKEN"}
+		a["certificate_authority"] = authority
+		return linktest.Reply{Status: 200, Body: a}
+	})
+}
+
+// machineRoots is a bundle of the machine's authorities, in the form of a PEM file.
+const machineRoots = "-----BEGIN CERTIFICATE-----\nMIIBmachineROOT\n-----END CERTIFICATE-----"
+
+// TestAnUnwalledRunIsBrokered pins a run without a wall whose gateway holds a
+// credential: the agent's environment has the credential's placeholder, over a value
+// the run inherits, and the variables of the run's bundle, each of them the path of
+// ca-bundle.pem in the run directory, which contains the machine's authorities and
+// then the run's certificate. Spec.CAEnv names those variables when it is set.
+func TestAnUnwalledRunIsBrokered(t *testing.T) {
+	for name, names := range map[string][]string{"the default variables": nil, "Spec.CAEnv": {"MY_CA_FILE", "SSL_CERT_FILE"}} {
+		t.Run(name, func(t *testing.T) {
+			roots := filepath.Join(t.TempDir(), "cert.pem")
+			if err := os.WriteFile(roots, []byte(machineRoots), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			defer session.SetMachineBundles([]string{filepath.Join(t.TempDir(), "none.pem"), roots})()
+			sp, g := specGateway(t, "FAKE_EXIT=0", "MODEL_TOKEN=inherited-fake-token")
+			credentialAnswer(g)
+			sp.CAEnv = names
+			out := dumpsEnv(t, &sp)
+			sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := envOf(t, out)
+			if env["MODEL_TOKEN"] != link.Placeholder {
+				t.Errorf("MODEL_TOKEN is %q, want the placeholder", env["MODEL_TOKEN"])
+			}
+			bundle := filepath.Join(res.Dir, session.BundleFile)
+			want := names
+			if want == nil {
+				want = wall.DefaultCAEnv
+			}
+			for _, n := range want {
+				if env[n] != bundle {
+					t.Errorf("%s is %q, want %q", n, env[n], bundle)
+				}
+			}
+			b, err := os.ReadFile(bundle)
+			if err != nil || string(b) != machineRoots+"\n"+authority {
+				t.Errorf("the bundle %q, %v", b, err)
+			}
+		})
 	}
-	if env := envOf(t, out); env["MODEL_TOKEN"] != "" {
-		t.Errorf("an unwalled run set the placeholder: %q", env["MODEL_TOKEN"])
+}
+
+// TestAnUnwalledRunWithoutABundleDoesNotStart pins a run without a wall that has an
+// authority, on a machine with none of the files Forager reads authorities from: no
+// run, with the text that says which file to install.
+func TestAnUnwalledRunWithoutABundleDoesNotStart(t *testing.T) {
+	defer session.SetMachineBundles([]string{filepath.Join(t.TempDir(), "none.pem"), t.TempDir()})()
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	credentialAnswer(g)
+	_, err := session.Run(context.Background(), sp)
+	const want = "install a CA bundle at /etc/ssl/cert.pem or /etc/ssl/certs/ca-certificates.crt: the run's tools trust the gateway for the credentials' hosts only through a bundle, and this machine has none of the files Forager reads"
+	if err == nil || err.Error() != want {
+		t.Errorf("%v, want %q", err, want)
 	}
 }
 
@@ -298,9 +349,10 @@ func (a *attached) Prepare(at runtimes.Attach) (runtimes.Launch, error) {
 	return a.Runtime.Prepare(at)
 }
 
-// TestPrepareIsGivenTheStandInsOfAWalledRun pins what a runtime learns of the stand-ins:
-// behind a wall, the variables the enclosure gets a stand-in in, the placeholders of
-// the gateway's run answer, a credential's and a tool's; without one, none.
+// TestPrepareIsGivenTheStandInsOfAWalledRun pins what a runtime learns of the stand-ins,
+// with or without a wall: the variables the agent gets a stand-in in, the placeholders
+// of the gateway's run answer, a credential's and a tool's, and whether the run is
+// walled.
 func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
 	for _, walled := range []bool{true, false} {
 		sp, g := specGateway(t, "FAKE_EXIT=0")
@@ -317,11 +369,8 @@ func TestPrepareIsGivenTheStandInsOfAWalledRun(t *testing.T) {
 		if _, err := runWithSettingsEnv(t, sp); err != nil {
 			t.Fatal(err)
 		}
-		var want []string
-		if walled {
-			want = []string{"MODEL_TOKEN", "FILES_KEY"}
-		}
-		if !slices.Equal(rt.got.Placeholders, want) || rt.got.RunDir == "" {
+		want := []string{"MODEL_TOKEN", "FILES_KEY"}
+		if !slices.Equal(rt.got.Placeholders, want) || rt.got.RunDir == "" || rt.got.Walled != walled {
 			t.Errorf("walled %v: Prepare received %v, want %v", walled, rt.got.Placeholders, want)
 		}
 	}

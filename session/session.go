@@ -49,6 +49,8 @@ type Spec struct {
 	// from what is merely inherited (contracts/forager/v1/README.md §Variables). The
 	// access key's variables, QORY_ACCESS_KEY_SECRET, QORY_ACCESS_KEY_ID and
 	// QORY_APIARY_PUBLIC_KEY, are left out of what the session gets from any of them.
+	// Without a Wall the variables the machine's credentials are read from are left out
+	// of it too, and a placeholder wins over a value of it.
 	Env []string
 	Dir string
 	// LaunchFixed is the values the harness computes itself, NAME=value. They are fixed
@@ -93,8 +95,14 @@ type Spec struct {
 	// enclosure whose only route out leads to the gateway's proxy, in the image the
 	// gateway's run answer gives, with Dir as its workspace and working directory.
 	// Command, Args and Forwarder are then paths inside the enclosure. Nil means no wall:
-	// the runtime is this machine's process, and enforcement is cooperative.
+	// the runtime is this machine's process, and enforcement is cooperative. The
+	// gateway sets the values of the run's credentials either way: the runtime sees
+	// only their placeholders.
 	Wall wall.Wall
+	// CAEnv are the variables that point a program at the run's bundle when the run has
+	// no Wall and the gateway gives it an authority: qory's wall.ca_env. Nil means
+	// [wall.DefaultCAEnv]. Behind a Wall the wall sets its names for the bundle instead.
+	CAEnv []string
 	// Preparation is the run's preparation, the program and then its arguments, which
 	// the session runs inside the wall before the runtime: after the runtime's
 	// preparation, as the runtime's user, in Dir, with the runtime's environment, through
@@ -710,6 +718,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
+	// Without a wall the run inherits the starting process's environment, which may
+	// contain the variables the machine's credentials are read from: their values stay
+	// the gateway's, so the agent's environment has only the placeholders.
+	if spec.Wall == nil {
+		spec.Env = withoutNames(spec.Env, reserved)
+	}
 	// The runtime chooses, among a credential's key_variables, the variable that gets the placeholder
 	// of each credential from the server with key_variables: from here on it is one of the
 	// credential's placeholders and of the run's.
@@ -718,25 +732,31 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	var authority []byte
-	if spec.Wall != nil && answer.CertificateAuthority != "" {
+	if answer.CertificateAuthority != "" {
 		authority = []byte(answer.CertificateAuthority)
+	}
+	// Without a wall the run's tools trust the authority through a bundle in the run
+	// directory, the machine's authorities and the run's certificate, which the
+	// variables of caEnv point at, as the wall's do inside.
+	var caVars []string
+	if spec.Wall == nil && authority != nil {
+		if caVars, err = writeBundle(dir, caEnv(spec), authority); err != nil {
+			return fail(err)
+		}
 	}
 	// The runtime prepares the launch before the variables are resolved, because what it
 	// sets is Forager's own and wins over a server's variable of the same name. Behind
 	// a wall the run directory goes in read-only, apart from every place the run binds:
 	// the settings are read from it, and the record in it is not the agent's to rewrite
-	// or move. Behind a wall the runtime learns that the run is walled and the
-	// placeholders the run sets. A file the runtime reads from this machine is refused
+	// or move. The runtime learns whether the run is walled, and the placeholders the
+	// run sets, with or without a wall. A file the runtime reads from this machine is refused
 	// when a walled run could have written it: one in a place of Spec.Written, in a
 	// writable bind of another walled run in the registry or, behind a wall, in a
 	// writable bind of this run's.
 	written := func() ([]string, error) { return writtenPlaces(spec, runID, plan, wallOwn) }
 	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	attach := runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive,
-		Readable: readable(written)}
-	if spec.Wall != nil {
-		attach.Walled, attach.Placeholders = true, slices.Clone(placeholderNames)
-	}
+		Readable: readable(written), Walled: spec.Wall != nil, Placeholders: slices.Clone(placeholderNames)}
 	if byReference {
 		attach.Inside = inside
 	}
@@ -753,7 +773,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
 	try := func(s Spec) (variables.Resolved, []string, error) {
-		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil)
+		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil, names(caVars))
 	}
 	vars, unset, err := try(harness)
 	if err != nil {
@@ -862,8 +882,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// starts it inside, which sets the proxy and socket variables by the addresses the
 	// enclosure reaches them on. The environment is what the run inherits, then the
 	// variables as resolved, the harness's computed values, what the runtime's
-	// preparation sets and Forager's own, each over the ones before, and behind a
-	// wall the placeholders. The resolution has left out every value of a fixed name, so
+	// preparation sets and Forager's own, each over the ones before, without a wall the
+	// variables of the run's bundle, and last the placeholders, so a placeholder wins
+	// over a value the run inherits. The resolution has left out every value of a fixed name, so
 	// what wins here by position is what the record says. Behind a wall the launch
 	// starts through Exec when the run has names to unset, which unsets the runtime's declared, reserved and denied
 	// variables, its model overrides and the node's denied ones that nothing sets, so an image's value for
@@ -871,7 +892,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv),
+		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv, caVars, placeholders(placeholderNames)),
 	}
 	if enclosure != nil {
 		// The places again, just before the enclosure binds them, and the wall's own
@@ -972,12 +993,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// policyApplied is the policy_applied event of the members the gateway decides, for
 	// the policy in force at the start and for each one a reload puts in its place:
 	// those members as the gateway gives them, and the session's own, the run's
-	// variables as resolved at the start, behind a wall the variables its credentials'
-	// placeholders are in, and the harness's hosts.
-	var credentialVars []map[string]string
-	if spec.Wall != nil {
-		credentialVars = credentialVariables(credentialHosts)
-	}
+	// variables as resolved at the start, the variables its credentials' placeholders
+	// are in, and the harness's hosts.
+	credentialVars := credentialVariables(credentialHosts)
 	policyApplied := func(members map[string]any) map[string]any {
 		a := maps.Clone(members)
 		if a == nil {
@@ -1237,6 +1255,17 @@ func insideValues(env []string, inside func(string) string) []string {
 		}
 	}
 	return out
+}
+
+// withoutNames are the NAME=value entries of env whose name is none of names.
+func withoutNames(env, names []string) []string {
+	if len(names) == 0 {
+		return env
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(names, name)
+	})
 }
 
 // placeholders are the variables a program wants set before it starts, with a value

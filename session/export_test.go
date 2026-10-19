@@ -86,3 +86,11 @@ func SetExitObserved(f func()) { exitObserved = f }
 func Readable(places []string) func(string) (string, error) {
 	return readable(func() ([]string, error) { return places, nil })
 }
+
+// SetMachineBundles sets the files an unwalled run reads the machine's authorities
+// from, until restore is called.
+func SetMachineBundles(paths []string) (restore func()) {
+	old := machineBundles
+	machineBundles = func() []string { return paths }
+	return func() { machineBundles = old }
+}

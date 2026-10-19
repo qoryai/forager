@@ -198,6 +198,11 @@ var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CE
 // OpenSUSE, and the OpenSSL default.
 var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}
 
+// BundleFiles are the files, in order, where a system keeps its authorities as PEM:
+// those the wall reads out of an image, which a machine without a wall keeps at the
+// same paths, macOS's /etc/ssl/cert.pem among them.
+func BundleFiles() []string { return slices.Clone(imageBundles) }
+
 // What goes on a command line is checked for its shape first, because a word that
 // starts with a dash is a flag to the command that reads it: a run id names things, an
 // image is a reference, a user is uid[:gid] or a name, a variable is NAME=value.

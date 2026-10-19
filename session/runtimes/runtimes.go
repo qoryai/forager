@@ -81,8 +81,8 @@ type Attach struct {
 	Walled bool
 	// Placeholders are the variables the session sets to [Placeholder] in the
 	// program's environment: a credential's, whose value the proxy sets outside the
-	// enclosure, and a tool's, whose host the tool serves outside it. Empty without a
-	// wall.
+	// enclosure, and a tool's, whose host the tool serves outside it. The session sets
+	// them with or without a wall.
 	Placeholders []string
 	// Inside, when not nil, writes a path of this machine's as the enclosure sees it,
 	// in a string that may hold one: a runtime applies it to what it copies into the
