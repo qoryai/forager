@@ -399,7 +399,9 @@ func Host(host string) (string, bool) {
 // host is empty, when [Host] refuses its host, or when its port is not a decimal number
 // from 1 to 65535. The host is read as url.Parse decodes it, without the brackets of an
 // IPv6 literal. A URL with no port, or with nothing after the port's colon, has a host
-// if the rest allows it. The path, query and fragment are not read.
+// if the rest allows it. The host does not depend on the path, query or fragment, but
+// url.Parse refuses a bad percent escape in the path or fragment, and such a URL has no
+// host.
 func EndpointHost(raw string) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" || !u.IsAbs() || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {

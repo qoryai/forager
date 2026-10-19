@@ -244,7 +244,8 @@ func TestHostHasOneForm(t *testing.T) {
 
 // TestEndpointHostReadsAnHTTPSBaseURL pins the host read from a base URL: the scheme
 // https, no user information, a host in the form Host gives, no port or one from 1 to
-// 65535, and any path, query or fragment. Every other base URL has no host.
+// 65535. Every other base URL has no host. The host does not depend on the path, query
+// or fragment, but a bad percent escape in the path or fragment leaves the URL with none.
 func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
 	for _, c := range []struct{ raw, host string }{
 		{"https://api.anthropic.com", "api.anthropic.com"},
@@ -256,6 +257,9 @@ func TestEndpointHostReadsAnHTTPSBaseURL(t *testing.T) {
 		{"https://api.anthropic.com:443/v1", "api.anthropic.com"},
 		{"https://api.anthropic.com:", "api.anthropic.com"},
 		{"https://api.anthropic.com/v1?beta=1#part", "api.anthropic.com"},
+		{"https://api.anthropic.com?%zz", "api.anthropic.com"},
+		{"https://api.anthropic.com/%zz", ""},
+		{"https://api.anthropic.com#%zz", ""},
 		{"https://api.anthropic.com/v 1", "api.anthropic.com"},
 		{"https://api.anthropic.com:1", "api.anthropic.com"},
 		{"https://api.anthropic.com:65535", "api.anthropic.com"},
