@@ -164,17 +164,19 @@ type LinkImage struct {
 // LinkCredentialHosts is one credential the gateway holds for a run, as the run answer's
 // credential_hosts has it: its name, its hosts as the proxy matches them, which are the
 // hosts applied.credentials lists for it, and the variables the session sets to a
-// placeholder for it. For a credential from the server, Auth is how the proxy sets its
-// value and KeyVariables its run configuration entry's key_variables, among which the
-// session chooses one more variable for the placeholder by the run's runtime's
-// declarations and Auth; both are empty for a credential of the machine's. Names and
-// hosts alone, never a secret.
+// placeholder for it. Auth is how the proxy sets its value, for a credential from the
+// server and for a model key of the machine's; nil for every other. Format and Endpoint
+// are an API credential's, a model key's, whose Hosts are the endpoint's host alone:
+// the session gives the key to the variable the run's runtime lists for Format and
+// Auth, and sets the runtime's endpoint variable to Endpoint. Names and hosts alone,
+// never a secret.
 type LinkCredentialHosts struct {
 	Name         string   `json:"name"`
 	Hosts        []string `json:"hosts"`
 	Placeholders []string `json:"placeholders"`
 	Auth         *Auth    `json:"auth,omitempty"`
-	KeyVariables []string `json:"key_variables,omitempty"`
+	Format       string   `json:"format,omitempty"`
+	Endpoint     string   `json:"endpoint,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,
@@ -209,6 +211,9 @@ type LinkRunAnswer struct {
 	// holds for the run, so the session can tell which hosts the run's credentials
 	// cover. Empty when the gateway holds none, or sends no credential_hosts.
 	CredentialHosts []LinkCredentialHosts `json:"credential_hosts,omitempty"`
+	// ModelCredential is the name of the model key the runtime starts with, an entry of
+	// CredentialHosts with Format; empty when the gateway holds no model key for the run.
+	ModelCredential string `json:"model_credential,omitempty"`
 	// Image is the image the run gets, when it has a wall.
 	Image *LinkImage `json:"image,omitempty"`
 	// RelayImage is the reference of the machine's default image, which the wall starts
@@ -252,6 +257,7 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	}
 	s.Policy, s.Applied = shownDocument(a.Policy), shownDocument(a.Applied)
 	s.Placeholders, s.Reserved = accesskey.ShownNames(a.Placeholders), accesskey.ShownNames(a.Reserved)
+	s.ModelCredential = accesskey.ShownName(a.ModelCredential, false)
 	if a.CredentialHosts != nil {
 		s.CredentialHosts = make([]LinkCredentialHosts, len(a.CredentialHosts))
 		for i, c := range a.CredentialHosts {
@@ -263,9 +269,10 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 			if placeholders == nil && c.Placeholders != nil {
 				placeholders = []string{}
 			}
-			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders, KeyVariables: accesskey.ShownNames(c.KeyVariables)}
+			s.CredentialHosts[i] = LinkCredentialHosts{Name: accesskey.ShownName(c.Name, false), Hosts: hosts, Placeholders: placeholders,
+				Format: accesskey.ShownValue(c.Format, false), Endpoint: accesskey.ShownValue(c.Endpoint, false)}
 			if c.Auth != nil {
-				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false)}
+				s.CredentialHosts[i].Auth = &Auth{Scheme: c.Auth.Scheme, Header: accesskey.ShownValue(c.Auth.Header, false), Username: accesskey.ShownValue(c.Auth.Username, false), OAuth: c.Auth.OAuth}
 			}
 		}
 	}

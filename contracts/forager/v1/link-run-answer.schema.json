@@ -61,16 +61,21 @@
             "items": {"$ref": "events/run.policy_applied.schema.json#/properties/credentials/items/properties/hosts/items"}
           },
           "placeholders": {
-            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none. The variable the session chooses from key_variables may be among them, when the server's entry lists it; when it is not, the session adds it.",
+            "description": "The variables the session sets to a value that is no credential for this credential, each also in placeholders. Empty when the credential sets none, and for an API credential: the session adds the variable the run's runtime reads the key from.",
             "type": "array",
             "uniqueItems": true,
             "items": {"$ref": "#/properties/placeholders/items"}
           },
-          "auth": {"description": "How the proxy sets the value of a credential from the server, its run configuration entry's auth. Absent for a credential of the machine's.", "$ref": "auth.schema.json"},
-          "key_variables": {"description": "The key_variables of a credential from the server whose run configuration entry has them. The session gives the credential's placeholder to the one of them that the run's runtime declares with the same auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "run-configuration.schema.json#/$defs/key_variables"}
+          "auth": {"description": "How the proxy sets the value: the run configuration entry's auth for a credential from the server, and the definition's for a model key of the machine's. Absent for every other credential of the machine's.", "$ref": "auth.schema.json"},
+          "format": {"description": "The API format of an API credential, a model key from the server or the machine. The session gives the key to the variable the run's runtime lists for this format and auth, and refuses the run otherwise, run_configuration_invalid. Absent for every other credential.", "$ref": "api-format.schema.json"},
+          "endpoint": {"description": "The endpoint of an API credential, which the session sets the runtime's model endpoint variable to; hosts is its host alone.", "$ref": "run-configuration.schema.json#/$defs/endpoint"}
         },
-        "dependentRequired": {"key_variables": ["auth"]}
+        "dependentRequired": {"format": ["auth", "endpoint"], "endpoint": ["format"]}
       }
+    },
+    "model_credential": {
+      "description": "The name of the model key the runtime starts with, an entry of credential_hosts with format: the run configuration's model_credential, or the run's one model key. The session gives the runtime the variable and the endpoint of this one alone. Absent when the gateway holds no model key for the run.",
+      "$ref": "policy.schema.json#/properties/credentials/items/properties/name"
     },
     "image": {
       "description": "The image the run gets, the one the policy in force selects or the machine's default, resolved against the run request's images: present when the run request's wall is true. Its reference may carry a registry's credentials in its user information: never logged or reported.",

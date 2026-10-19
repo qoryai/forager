@@ -73,7 +73,7 @@ func newReference(t *testing.T, origin string) *reference {
 	t.Cleanup(func() { store.Close() })
 	ref.store = store
 	ref.doc = []byte(`{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["` + origin + `"]}},` +
-		`"credentials":[{"name":"model","hosts":["` + origin + `"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}]}`)
+		`"credentials":[{"name":"model","format":"anthropic-messages","endpoint":"https://` + origin + `/v1","auth":{"scheme":"header","header":"x-api-key"}}]}`)
 	keys := map[string]receiver.AccessKey{
 		testKey:       {PublicKey: testAccessKey.PublicKey(), StoredSecrets: true},
 		refPoolKey:    {PublicKey: refPoolSecret.PublicKey(), Node: refPool},
@@ -184,7 +184,7 @@ func throughProxy(t *testing.T, client *http.Client, authority string, o *origin
 	trusted.AppendCertsFromPEM([]byte(authority))
 	client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: trusted}
 	req, _ := http.NewRequest(http.MethodGet, "https://"+o.host+"/v1/models", nil)
-	req.Header.Set("X-Api-Key", link.Placeholder)
+	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("the request through the proxy: %v", err)
@@ -201,7 +201,7 @@ func aroundProxy(t *testing.T, roots *x509.CertPool, o *origin) {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: roots}}}
 	req, _ := http.NewRequest(http.MethodGet, "https://"+o.host+"/v1/models", nil)
-	req.Header.Set("X-Api-Key", link.Placeholder)
+	req.Header.Set("X-Api-Key", link.KeyPlaceholder("model"))
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("the request around the proxy: %v", err)
@@ -239,14 +239,14 @@ func noValueIn(t *testing.T, ref *reference, answer any, dirs ...string) {
 	}
 }
 
-// placeholdersOnly checks the run answer: the session gets MODEL_API_KEY as the one
-// variable to set to its placeholder, and model's hosts, and no value.
+// placeholdersOnly checks the run answer: the session gets no placeholder variable,
+// model as the model key the runtime starts with, model's endpoint host, and no value.
 func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 	t.Helper()
 	host, _, _ := net.SplitHostPort(o.host)
-	if !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) || len(a.CredentialHosts) != 1 || a.CredentialHosts[0].Name != "model" ||
-		!slices.Equal(a.CredentialHosts[0].Hosts, []string{host}) {
-		t.Errorf("the run answer's placeholders %v and credential hosts %+v; want MODEL_API_KEY for model on %s", a.Placeholders, a.CredentialHosts, host)
+	if len(a.Placeholders) != 0 || a.ModelCredential != "model" || len(a.CredentialHosts) != 1 || a.CredentialHosts[0].Name != "model" ||
+		!slices.Equal(a.CredentialHosts[0].Hosts, []string{host}) || a.CredentialHosts[0].Format != "anthropic-messages" {
+		t.Errorf("the run answer's placeholders %v, model_credential %q and credential hosts %+v; want none, model, and model on %s", a.Placeholders, a.ModelCredential, a.CredentialHosts, host)
 	}
 }
 
@@ -259,7 +259,8 @@ func placeholdersOnly(t *testing.T, a *server.LinkRunAnswer, o *origin) {
 // separate gateway, a node pool registers the run and the gateway attaches it with the
 // run key, then reloads it for the digest of the document's bytes. In each case the
 // receiver is asked for the credential model once; the origin gets the value in
-// x-api-key; the run answer has MODEL_API_KEY as its one placeholder and no value; and
+// x-api-key in place of the model key's placeholder; the run answer has no
+// placeholder variable, model as its model_credential and no value; and
 // no record, report, stored event or log line of the receiver contains the value. A run
 // without a wall is brokered the same way, and a request it sends around the proxy
 // reaches the origin with the placeholder alone.
@@ -275,7 +276,7 @@ func sealedReachesTheOrigin(t *testing.T, wall bool) {
 	node := &gateway.Policy{Version: 1, Egress: gateway.PolicyEgress{Mode: "enforce", Allow: []string{"localhost"}}}
 	want := []string{"GET /v1/models " + refValue}
 	if !wall {
-		want = append(want, "GET /v1/models "+link.Placeholder)
+		want = append(want, "GET /v1/models "+link.KeyPlaceholder("model"))
 	}
 	t.Run("start", func(t *testing.T) {
 		certFile, keyFile, roots := testCertificate(t, t.TempDir())

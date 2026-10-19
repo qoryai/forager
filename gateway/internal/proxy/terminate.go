@@ -49,6 +49,11 @@ type Credential struct {
 	// refuses TRACE and TRACK on a host a stored credential is for.
 	Value  func() []byte
 	Stored bool
+	// Placeholder, for a model key, is its placeholder's value: the proxy sets the key
+	// only on a request that carries it where the key goes, the header and the scheme
+	// the key is set with. Empty for every other credential, which the proxy sets on
+	// every request to its hosts.
+	Placeholder string
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -315,7 +320,7 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
-		if allowed && credentialed && c != nil && tl == nil {
+		if allowed && credentialed && c != nil && tl == nil && c.carries(r.Header) {
 			if name, value, ok := c.header(); ok {
 				r.Header.Set(name, value)
 				r.Header.Set(setBy, c.Name)
@@ -390,6 +395,16 @@ func settle(r *http.Request, resp *http.Response, err error) (Decision, bool) {
 // setBy marks, on the way upstream only, a request the proxy set a credential on; the
 // transport takes it off again.
 const setBy = "X-Qory-Credential-Set"
+
+// carries reports whether a request's headers carry the credential's placeholder as
+// the credential sets its token, or the credential has none.
+func (c *Credential) carries(h http.Header) bool {
+	if c.Placeholder == "" {
+		return true
+	}
+	name, value, ok := (&Credential{Scheme: c.Scheme, Username: c.Username, Header: c.Header, Token: func() string { return c.Placeholder }}).header()
+	return ok && h.Get(name) == value
+}
 
 // header is the header that carries the token.
 func (c *Credential) header() (string, string, bool) {

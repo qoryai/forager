@@ -1,0 +1,11 @@
+# A key of a format outside api-format.schema.json's list.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]
+model:
+  formats: [openai-chat]
+  model: {flag: --model}
+  endpoint: {variable: AMP_BASE_URL}
+  keys: [{format: openai-completions, auth: {scheme: bearer}, variable: AMP_API_KEY}]

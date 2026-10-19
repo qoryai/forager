@@ -295,9 +295,9 @@ func checkSelects(cfg *Config) error {
 }
 
 // copyCredentials is a copy of credentials that shares nothing with them: the list and
-// each definition's Adapter, Hosts, Paths and Placeholders are new, so a change to the
-// credentials the copy was taken from leaves the copy as it was. Nil when credentials
-// is, and each list nil where the definition's is.
+// each definition's Adapter, Hosts, Paths, Placeholders and KeyPrefixes are new, so a
+// change to the credentials the copy was taken from leaves the copy as it was. Nil
+// when credentials is, and each list nil where the definition's is.
 func copyCredentials(credentials []Credential) []Credential {
 	if credentials == nil {
 		return nil
@@ -305,7 +305,7 @@ func copyCredentials(credentials []Credential) []Credential {
 	out := make([]Credential, len(credentials))
 	for i, c := range credentials {
 		c.Adapter, c.Hosts, c.Paths = slices.Clone(c.Adapter), slices.Clone(c.Hosts), slices.Clone(c.Paths)
-		c.Placeholders = slices.Clone(c.Placeholders)
+		c.Placeholders, c.KeyPrefixes = slices.Clone(c.Placeholders), slices.Clone(c.KeyPrefixes)
 		out[i] = c
 	}
 	return out

@@ -51,6 +51,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
+	"github.com/qoryai/forager/policy"
 )
 
 // The headers of the contract and the content type of a delivery. HeaderRunID names
@@ -296,6 +297,10 @@ type RunConfiguration struct {
 	// the document's order, each name once; nil when the document has none. The
 	// gateway fetches their values with the secrets request.
 	Credentials []RunCredential `json:"credentials,omitzero"`
+	// ModelCredential is the name of the model key the runtime starts with, an API
+	// credential of Credentials or a model key of the machine's; empty when the document
+	// names none, which a run with one model key may.
+	ModelCredential string `json:"model_credential,omitzero"`
 	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
 	// read from, which Forager computes itself: the digest a secrets request and the
 	// open of its answer use, never the answer's header. Empty for a document not read
@@ -303,29 +308,48 @@ type RunConfiguration struct {
 	Computed string `json:"-"`
 }
 
-// RunCredential is one entry of a run configuration's credentials: the credential's
-// name, the exact hosts and the paths its value is set on, how it is set, the names of
-// the variables from which a runtime reads its key, and the variables the enclosure
-// gets a placeholder in. It has no value.
+// RunCredential is one entry of a run configuration's credentials, with no value. An
+// API credential, a model key, has Format, Endpoint, Auth and KeyPrefixes; a host
+// credential has Hosts, Paths, Auth and Placeholders.
 type RunCredential struct {
-	Name  string   `json:"name"`
-	Hosts []string `json:"hosts"`
+	Name string `json:"name"`
+	// Format is the API format of an API credential, one of api-format.schema.json;
+	// empty for a host credential.
+	Format string `json:"format,omitzero"`
+	// Endpoint is the base URL of an API credential's model API.
+	Endpoint string `json:"endpoint,omitzero"`
+	// KeyPrefixes are the prefixes an API credential's value must start with; nil for
+	// any value.
+	KeyPrefixes []string `json:"key_prefixes,omitzero"`
+	Hosts       []string `json:"hosts,omitzero"`
 	// Paths are nil for every path.
-	Paths []string `json:"paths,omitzero"`
-	Auth  Auth     `json:"auth"`
-	// KeyVariables are the names of the environment variables from which a runtime reads
-	// the credential's key; nil for none. The session gives the placeholder for the
-	// credential to the one of them that the run's runtime declares with the same auth.
-	KeyVariables []string `json:"key_variables,omitzero"`
+	Paths        []string `json:"paths,omitzero"`
+	Auth         Auth     `json:"auth"`
 	Placeholders []string `json:"placeholders,omitzero"`
 }
 
+// Applies are the hosts and paths the credential's value is set on: for an API
+// credential the host [policy.EndpointHost] reads from its endpoint and every path, nil
+// paths; for a host credential its Hosts and Paths. An API credential whose endpoint
+// has no host applies to none.
+func (c RunCredential) Applies() (hosts, paths []string) {
+	if c.Format == "" {
+		return c.Hosts, c.Paths
+	}
+	host, ok := policy.EndpointHost(c.Endpoint)
+	if !ok {
+		return nil, nil
+	}
+	return []string{host}, nil
+}
+
 // Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
-// with Username, or header with Header.
+// with Username, or header with Header. OAuth marks a bearer as an OAuth token.
 type Auth struct {
 	Scheme   string `json:"scheme"`
 	Header   string `json:"header,omitzero"`
 	Username string `json:"username,omitzero"`
+	OAuth    bool   `json:"oauth,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is

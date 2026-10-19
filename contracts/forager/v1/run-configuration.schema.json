@@ -20,7 +20,7 @@
       "$ref": "policy.schema.json#/$defs/image_reference"
     },
     "variables": {
-      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. Behind a wall, the runtime's denies do not leave out the value of the runtime's model endpoint variable: Forager leaves it out when it is not an https URL with a host Forager reads, or its host is none of the hosts of the run's model credential. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
+      "description": "The variables the agent's process receives, by name, as the server resolved them among its levels: an object with the value each. The server's value of a name wins over every value the node passes for it; the run's fixed names win over the server's. Forager leaves out a name its deny list matches, whose built-in QORY_* entry leaves in QORY_RUN_SYSTEM and QORY_RUN_REPOSITORIES, the system and the repositories a run's preparation may use, by these names exactly; a name it, the wall, the runtime's preparation, a placeholder or the harness's computed values set; a name the run's runtime declares or reserves; a name a value of the machine's is read from, such as a credential's variable; and, in an unwalled run, every one unless the node accepts them. With an API credential among the run's credentials, Forager sets the runtime's model endpoint variable to its endpoint, and leaves every other value of it out as fixed. Without one, behind a wall, the runtime's denies do not leave out the value of the runtime's model endpoint variable: Forager leaves it out when it is not an https URL with a host Forager reads, or its host is none of the hosts of the run's model credential. A value is at most 4096 bytes of UTF-8 and contains no NUL, carriage return or line feed.",
       "type": "object",
       "maxProperties": 128,
       "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
@@ -32,6 +32,10 @@
       "minItems": 1,
       "maxItems": 8,
       "items": {"$ref": "#/$defs/credential"}
+    },
+    "model_credential": {
+      "description": "The name of the model key the runtime starts with: an API credential of credentials, or a model key the machine defines and the run's policy selects. Required when the run has two or more model keys, of the server's and the machine's together; with one, that one is the start key. The gateway holds every model key of the run and sets only the start key, on requests to its endpoint's host that carry its placeholder; the session gives the runtime the start key's variable and endpoint alone. A name of no model key of the run, or of a credential without format, is run_configuration_invalid. Fixed when the run starts.",
+      "$ref": "#/$defs/credential_name"
     }
   },
   "$defs": {
@@ -45,7 +49,24 @@
       }
     },
     "credential": {
-      "description": "One credential whose value the server stores: its name, where its value is set and how. The run configuration does not contain the value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json.",
+      "description": "One credential whose value the server stores, with no value: the server seals it to the access key in its answer to the secrets request, secrets-answer.schema.json. An API credential, with format, is a model key, and the session gives it to the runtime's variable for that API format and auth. A host credential, with hosts, is any other secret.",
+      "oneOf": [{"$ref": "#/$defs/api_credential"}, {"$ref": "#/$defs/host_credential"}]
+    },
+    "api_credential": {
+      "description": "A model key: its name, the API format and endpoint it is for, how its value is set, and the prefixes a value must start with. The gateway sets the value on every path of the endpoint's host alone. The session gives the key to the variable the run's runtime's descriptor lists for the format and auth in model.keys, and sets the runtime's endpoint variable to endpoint, in place of every other value of it. A run whose runtime lists no key for the format, or none with this auth, is run_configuration_invalid.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "format", "endpoint", "auth"],
+      "properties": {
+        "name": {"description": "The credential's name, unique among the entries.", "$ref": "#/$defs/credential_name"},
+        "format": {"description": "The API format the endpoint serves.", "$ref": "api-format.schema.json"},
+        "endpoint": {"description": "The base URL of the model API, such as https://api.deepseek.com/anthropic.", "$ref": "#/$defs/endpoint"},
+        "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
+        "key_prefixes": {"description": "The prefixes a value must start with, such as sk-ant-. The gateway refuses a value that starts with none of them when it loads it. Absent, any value is taken.", "$ref": "#/$defs/key_prefixes"}
+      }
+    },
+    "host_credential": {
+      "description": "Any other secret: its name, the hosts and paths its value is set on, how, and the variables the enclosure gets a placeholder in.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "hosts", "auth"],
@@ -54,17 +75,22 @@
         "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
         "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
-        "key_variables": {"description": "The environment variables from which a runtime reads this credential's key, such as ANTHROPIC_API_KEY for Claude Code. The session chooses the one name among them that the run's runtime's descriptor declares, and gives it the credential's placeholder. A run whose runtime declares none of them or more than one, or whose declaration's auth differs from this credential's in the scheme or, for a header, the header's name, is run_configuration_invalid. A placeholder goes only into a variable for a credential: placeholders that list a variable the runtime's descriptor denies, lists in its model overrides or reserves, its model endpoint's variable, or a declared variable not chosen from key_variables are run_configuration_invalid. Absent, placeholders alone set the variables.", "$ref": "#/$defs/key_variables"},
-        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
+        "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start. A placeholder goes only into a variable for a credential: one that the run's runtime's descriptor denies, lists in its model overrides or reserves, reads its model endpoint or a model key from is run_configuration_invalid.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
       }
     },
-    "key_variables": {
-      "description": "The names of the environment variables from which a runtime reads a credential's key: 1 to 16, none twice.",
+    "endpoint": {
+      "description": "A model API's base URL: https, a host, an optional port and path, and no user information, query or fragment, at most 2048 characters. Forager refuses, run_configuration_invalid, one whose host policy.EndpointHost does not read.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https://[^/?#@\\s]+(/[^?#\\s]*)?$"
+    },
+    "key_prefixes": {
+      "description": "1 to 4 literal prefixes, each 1 to 32 characters of printable ASCII without a space, none twice.",
       "type": "array",
       "minItems": 1,
-      "maxItems": 16,
+      "maxItems": 4,
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"}
+      "items": {"type": "string", "pattern": "^[!-~]{1,32}$"}
     },
     "credential_name": {
       "description": "A credential's name: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",

@@ -121,6 +121,11 @@ func TestClaudeSaysWhereItsModelGoes(t *testing.T) {
 			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: efforts},
 		},
 		Endpoint: runtimes.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Keys: []runtimes.Key{
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "header", Header: "x-api-key"}, Variable: "ANTHROPIC_API_KEY"},
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "bearer"}, Variable: "ANTHROPIC_AUTH_TOKEN"},
+			{Format: "anthropic-messages", Auth: runtimes.Auth{Scheme: "bearer", OAuth: true}, Variable: "CLAUDE_CODE_OAUTH_TOKEN"},
+		},
 		Overrides: []string{
 			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
 			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",

@@ -95,8 +95,9 @@ type report struct {
 	// workspace's path on the machine exists inside.
 	Workdir       string `json:"workdir"`
 	HostWorkspace bool   `json:"host_workspace"`
-	// ImageDenied is what the probe sees of ANTHROPIC_BASE_URL, a name the runtime
-	// denies and the suite's image by reference sets in its ENV: unset, empty or set.
+	// ImageDenied is what the probe sees of ANTHROPIC_BEDROCK_BASE_URL, a name the
+	// runtime denies and the suite's image by reference sets in its ENV: unset, empty
+	// or set.
 	ImageDenied string `json:"image_denied"`
 }
 

@@ -15,8 +15,9 @@
 // configure that would make it.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
-// keeps for itself, and its [Model] the API formats the runtime sends and where a
-// composer writes a run's model id, effort value and model endpoint. [Runtimes] renders
+// keeps for itself, and its [Model] the API formats the runtime sends, where a composer
+// writes a run's model id, effort value and model endpoint, and the variables it reads
+// a model key from. [Runtimes] renders
 // both, for every descriptor the contract ships, as runtimes.json, the file a server
 // vendors.
 package descriptor
@@ -25,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -59,10 +61,21 @@ type Model struct {
 	Effort *Effort `yaml:"effort" json:"effort,omitempty"`
 	// Endpoint is where the base URL of the run's model API goes.
 	Endpoint Endpoint `yaml:"endpoint" json:"endpoint"`
+	// Keys is the variables the runtime reads a model key from, one per API format and
+	// auth; nil when the section lists none.
+	Keys []Key `yaml:"keys" json:"keys,omitempty"`
 	// Overrides is the variables that would override the model id or effort value a
 	// composer writes, which a walled run leaves out and unsets inside; nil when the
 	// section lists none.
 	Overrides []string `yaml:"overrides" json:"overrides,omitempty"`
+}
+
+// Key is one variable the runtime reads a model key from: the API format the key is
+// for, how the runtime sends it, and the variable.
+type Key struct {
+	Format   string `yaml:"format" json:"format"`
+	Auth     Auth   `yaml:"auth" json:"auth"`
+	Variable string `yaml:"variable" json:"variable"`
 }
 
 // Place is where a value goes, exactly one of its fields set: Flag, an argument the
@@ -129,11 +142,13 @@ type Declaration struct {
 }
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
-// the header of header, Username the fixed user of basic.
+// the header of header, Username the fixed user of basic, and OAuth marks a bearer as
+// an OAuth token.
 type Auth struct {
 	Scheme   string `yaml:"scheme" json:"scheme"`
 	Header   string `yaml:"header" json:"header,omitempty"`
 	Username string `yaml:"username" json:"username,omitempty"`
+	OAuth    bool   `yaml:"oauth" json:"oauth,omitempty"`
 }
 
 // Group is a set of declarations of which the runtime needs at most one, and exactly
@@ -233,7 +248,83 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 	if err := d.Secrets.check(); err != nil {
 		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
+	if err := d.Model.check(d.Secrets); err != nil {
+		return nil, fmt.Errorf("%s: %w", shown, err)
+	}
 	return &d, nil
+}
+
+// keyless are the variables a key may not be read from, compared without case: each
+// changes what runs.
+var keyless = []string{"HOME", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV"}
+
+// check holds the model keys to what the schema cannot express: a key's variable, and
+// a declaration's, is none of keyless in any case; a key's format is one of Formats;
+// each pair of format and auth appears once; a key's variable is not in the secrets'
+// denies, Overrides or the endpoint's variable; and a key's variable that a
+// declaration also has has the declaration's auth.
+func (m *Model) check(s *Secrets) error {
+	var secrets Secrets
+	if s != nil {
+		secrets = *s
+	}
+	for _, d := range secrets.Declares {
+		if i := slices.IndexFunc(keyless, func(k string) bool { return strings.EqualFold(k, d.Name) }); i >= 0 {
+			return fmt.Errorf("secrets.declares: read the secret %s from another variable than %s: a secret may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV",
+				accesskey.ShownName(d.ID, false), accesskey.ShownName(d.Name, false))
+		}
+	}
+	if m == nil {
+		return nil
+	}
+	for i, k := range m.Keys {
+		v := accesskey.ShownName(k.Variable, false)
+		switch {
+		case slices.ContainsFunc(keyless, func(n string) bool { return strings.EqualFold(n, k.Variable) }):
+			return fmt.Errorf("model.keys: read the key from another variable than %s: a key may not be read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV", v)
+		case !slices.Contains(m.Formats, k.Format):
+			return fmt.Errorf("model.keys: add %s to model.formats, or remove its keys: model.formats lists only %s",
+				accesskey.ShownName(k.Format, false), strings.Join(m.Formats, ", "))
+		case slices.ContainsFunc(m.Keys[:i], func(o Key) bool { return o.Format == k.Format && sameAuth(o.Auth, k.Auth) }):
+			return fmt.Errorf("model.keys: list %s with %s once: two keys have it", accesskey.ShownName(k.Format, false), authWords(k.Auth))
+		case slices.Contains(secrets.Denies, k.Variable) || slices.Contains(m.Overrides, k.Variable) || k.Variable == m.Endpoint.Variable:
+			return fmt.Errorf("model.keys: read the key from a variable outside denies, overrides and the endpoint: %s is %s", v, place(m, k.Variable))
+		}
+		if j := slices.IndexFunc(secrets.Declares, func(d Declaration) bool { return d.Name == k.Variable }); j >= 0 && !sameAuth(secrets.Declares[j].Auth, k.Auth) {
+			return fmt.Errorf("model.keys: give %s the auth of its secrets.declares entry: the two differ", v)
+		}
+	}
+	return nil
+}
+
+// place is where the descriptor lists name among denies, overrides and the endpoint's
+// variable, as check's message writes it.
+func place(m *Model, name string) string {
+	switch {
+	case name == m.Endpoint.Variable:
+		return "the endpoint"
+	case slices.Contains(m.Overrides, name):
+		return "in overrides"
+	}
+	return "in denies"
+}
+
+// sameAuth reports whether two auths are the same: the same scheme, the same header
+// name with case ignored, the same username, and the same oauth.
+func sameAuth(a, b Auth) bool {
+	return a.Scheme == b.Scheme && strings.EqualFold(a.Header, b.Header) && a.Username == b.Username && a.OAuth == b.OAuth
+}
+
+// authWords is how check's message writes an auth: the header with its name, the
+// bearer scheme, with oauth when it is set, or the basic scheme.
+func authWords(a Auth) string {
+	switch {
+	case a.Scheme == "header":
+		return "the header " + accesskey.ShownValue(a.Header, false)
+	case a.OAuth:
+		return "the bearer scheme and oauth"
+	}
+	return "the " + a.Scheme + " scheme"
 }
 
 // check holds the secrets to what the schema cannot express: declaration ids and group

@@ -21,6 +21,7 @@ import (
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/proxy"
 	"github.com/qoryai/forager/gateway/internal/run"
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
@@ -455,6 +456,72 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	_, err = reload(t, r, served(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"model"}]}`, digest('2')))
 	if code, names := refusalOf(err); code != "placeholder_conflict" || !slices.Equal(names, []string{"MODEL_TOKEN"}) {
 		t.Errorf("a placeholder the run passes a value for, at a reload: %v", err)
+	}
+}
+
+// modelKeysDoc is a run configuration whose policy selects the machine's model keys
+// first and second and its host credential git, with model_credential set to start.
+func modelKeysDoc(start, allow string) string {
+	return `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","api.other-model.example","git.example"` + allow + `]},` +
+		`"credentials":[{"name":"first"},{"name":"second"},{"name":"git"}]},"model_credential":"` + start + `"}`
+}
+
+// TestOnlyTheStartModelKeyReachesTheProxy pins ProxyUses for a run with two model keys
+// of the machine's and a host credential: the proxy gets the model key that
+// model_credential names, with its placeholder's value, link.KeyPlaceholder of its
+// name, and the host credential with none; the gateway holds the other model key and
+// the proxy never gets it. A reload with the same model_credential is put in force, and
+// one that names the other model key is refused with the policy in force staying.
+func TestOnlyTheStartModelKeyReachesTheProxy(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "sk-ant-fake-value")
+	cfg := run.Config{
+		RunID: runID, Wall: true, Server: true,
+		Credentials: []run.Credential{
+			{Name: "first", Env: "QORY_TEST_MODEL_TOKEN", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"},
+			{Name: "second", Env: "QORY_TEST_MODEL_TOKEN", Format: "openai-responses", Endpoint: "https://api.other-model.example/v1", Scheme: "bearer"},
+			{Name: "git", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"git.example"}, Scheme: "bearer"},
+		},
+		Fetched: document(t, modelKeysDoc("second", ""), digest('1')),
+	}
+	r := open(t, cfg)
+	if held := r.Held(); held == nil || held.Start != "second" || len(held.Uses) != 3 {
+		t.Fatalf("held %+v", held)
+	}
+	type use struct{ name, placeholder, scheme string }
+	shown := func(uses []proxy.Credential) []use {
+		out := make([]use, len(uses))
+		for i, u := range uses {
+			out[i] = use{u.Name, u.Placeholder, u.Scheme}
+		}
+		return out
+	}
+	want := []use{{"second", link.KeyPlaceholder("second"), "bearer"}, {"git", "", "bearer"}}
+	if got := shown(r.Uses()); !slices.Equal(got, want) {
+		t.Errorf("the proxy's uses %+v, want %+v", got, want)
+	}
+	if got := shown(run.ProxyUses(r.Held())); !slices.Equal(got, want) {
+		t.Errorf("ProxyUses %+v, want %+v", got, want)
+	}
+	if u := r.Uses()[0]; !slices.Equal(u.Hosts, []string{"api.other-model.example"}) || u.Token() != "sk-ant-fake-value" {
+		t.Errorf("the start key's use %+v", u)
+	}
+	d, err := reload(t, r, document(t, modelKeysDoc("second", `,"b.example"`), digest('2')))
+	if err != nil {
+		t.Fatalf("a reload with the same model_credential: %v", err)
+	}
+	r.Commit(d)
+	if got := shown(d.Uses); !slices.Equal(got, want) {
+		t.Errorf("the reload's uses %+v, want %+v", got, want)
+	}
+	_, err = reload(t, r, document(t, modelKeysDoc("first", ""), digest('3')))
+	if want := "run configuration " + runURL + ": start a new run to start with another model key; a run's model_credential is fixed when it starts, and this run configuration names another; the policy in force stays"; err == nil || err.Error() != want {
+		t.Errorf("a reload with another model_credential:\n got %v\nwant %s", err, want)
+	}
+	if r.RunConfiguration() != digest('2') || r.Held().Start != "second" {
+		t.Errorf("after a refused reload: %q, start %q", r.RunConfiguration(), r.Held().Start)
+	}
+	if got := shown(run.ProxyUses(nil)); len(got) != 0 {
+		t.Errorf("ProxyUses of no credentials %+v", got)
 	}
 }
 

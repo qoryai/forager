@@ -78,7 +78,7 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{accesskey.ShownName(name, false)}, "the document is refused: the variable %s holds more than %d bytes", accesskey.ShownName(name, false), MaxVariableValue)
 		}
 	}
-	if err := CheckCredentials(rc.Credentials); err != nil {
+	if err := CheckCredentials(rc.Credentials, rc.ModelCredential); err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(body)
@@ -89,13 +89,21 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 // CheckCredentials refuses what the schema cannot state of a run configuration's
 // credentials, each [refusal.RunConfigurationInvalid] with the credential's name, a
 // name that contains a secret as its phrase ([refusal.Shown]): a name twice, a header
-// [ReservedHeader] reports, and a placeholder [DeniedPlaceholder] reports. The reader
-// of a document calls it, and so does whoever holds a document not read from bytes.
-func CheckCredentials(creds []RunCredential) error {
+// [ReservedHeader] reports, a placeholder [DeniedPlaceholder] reports, and an API
+// credential's endpoint from which [policy.EndpointHost] reads no host. Of model, the
+// document's model_credential, it refuses a name of a host credential, and an empty
+// one beside two or more API credentials; a name of none of creds may be a model key
+// of the machine's, which the gateway checks. The reader of a document calls it, and so
+// does whoever holds a document not read from bytes.
+func CheckCredentials(creds []RunCredential, model string) error {
 	for i, c := range creds {
 		name := accesskey.ShownName(c.Name, true)
 		if slices.ContainsFunc(creds[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name), "the document is refused: list the credential %s once; the document lists it twice", name)
+		}
+		if _, ok := policy.EndpointHost(c.Endpoint); c.Format != "" && !ok {
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"the document is refused: give the credential %s an endpoint whose host is a DNS name or an IP address, port 1 to 65535: Forager reads no host from its endpoint", name)
 		}
 		if c.Auth.Scheme == "header" && ReservedHeader(c.Auth.Header) {
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
@@ -107,6 +115,20 @@ func CheckCredentials(creds []RunCredential) error {
 					"the document is refused: give the credential %s another placeholder than %s; the built-in deny list, denied-variables.json, covers that variable", name, accesskey.ShownName(p, true))
 			}
 		}
+	}
+	var keys []string
+	for _, c := range creds {
+		if c.Format != "" {
+			keys = append(keys, accesskey.ShownName(c.Name, false))
+		}
+	}
+	switch i := slices.IndexFunc(creds, func(c RunCredential) bool { return c.Name == model }); {
+	case model == "" && len(keys) > 1:
+		return refusal.New(refusal.RunConfigurationInvalid, nil,
+			"the document is refused: set model_credential to the model key the runtime starts with: the document lists the model keys %s", strings.Join(keys, ", "))
+	case i >= 0 && creds[i].Format == "":
+		return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
+			"the document is refused: set model_credential to an API credential, one with format: the credential %s has none, so it is no model key", accesskey.ShownName(model, true))
 	}
 	return nil
 }

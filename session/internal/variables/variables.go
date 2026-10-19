@@ -133,6 +133,10 @@ type Inputs struct {
 	// from, its descriptor's model.endpoint.variable; empty when it has none. A walled
 	// run applies the endpoint rule to it, and an unwalled one with Credentials.
 	Endpoint string
+	// EndpointFixed says the run's start key sets Endpoint, and Own lists it: every
+	// value of it is left out as [WhyFixed], the harness's computed ones included, and
+	// the endpoint rule does not apply.
+	EndpointFixed bool
 	// Credentials is each credential the gateway holds for the run, as the run
 	// answer's credential_hosts lists them. A model credential is one with a
 	// placeholder among Runtime.
@@ -216,7 +220,9 @@ type Loss struct {
 // [WhyEndpointUnreadable], and one whose host is in no model credential's hosts by
 // [policy.CredentialFor] as [WhyEndpointUncovered]; another is not left out, and when
 // it applies, the entry's Kept has the first model credential whose hosts include it.
-// A value left out lets the next source's value apply, as a denied one does.
+// A value left out lets the next source's value apply, as a denied one does. With
+// in.EndpointFixed, the start key's endpoint is in.Endpoint's one value: every other
+// value of it, the harness's computed ones included, is left out as [WhyFixed].
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -258,7 +264,7 @@ func Resolve(in Inputs) (Resolved, error) {
 	// denies, and then checked by the endpoint rule.
 	var endpoint string
 	endpointDeny := deny
-	if (in.Walled || len(in.Credentials) > 0) && in.Endpoint != "" {
+	if !in.EndpointFixed && (in.Walled || len(in.Credentials) > 0) && in.Endpoint != "" {
 		endpoint = in.Endpoint
 		if endpointDeny, err = List(slices.Concat(in.Deny, overrides)); err != nil {
 			return Resolved{}, err
@@ -270,6 +276,8 @@ func Resolve(in Inputs) (Resolved, error) {
 	// model credential whose hosts include a kept endpoint's host.
 	left := func(name, v string) (why, credential string) {
 		switch {
+		case in.EndpointFixed && name == in.Endpoint:
+			return "", ""
 		case name != endpoint:
 			if deny.Matches(name) {
 				return WhyDenied, ""
@@ -308,7 +316,10 @@ func Resolve(in Inputs) (Resolved, error) {
 	}
 	for i, kv := range in.Fixed {
 		name, _, _ := strings.Cut(kv, "=")
-		if computed.Matches(name) {
+		switch {
+		case in.EndpointFixed && name == in.Endpoint:
+			deniedFixed[name] = WhyFixed
+		case computed.Matches(name):
 			deniedFixed[name] = WhyDenied
 		}
 		if deniedFixed[name] != "" || (endpoint != "" && name == endpoint && i != lastEndpoint) {

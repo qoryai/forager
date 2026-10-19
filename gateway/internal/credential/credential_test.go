@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,7 +101,7 @@ func TestWhatCannotHoldIsNoRun(t *testing.T) {
 		"an argument nobody provided for": {[]Definition{env}, []policy.Selected{{Name: "model", Argument: "x"}}, nil, "takes no argument"},
 		"a pattern that compiles alone and not anchored": {[]Definition{{Name: "product", Adapter: []string{good, "${argument}"}, Argument: `a\Q`}},
 			[]policy.Selected{{Name: "product", Argument: "a"}}, nil, "argument: error parsing regexp"},
-		"a host the run does not reach": {[]Definition{env}, []policy.Selected{{Name: "model"}}, []string{"example.com"}, "allow list does not cover"},
+		"a host the run does not reach": {[]Definition{env}, []policy.Selected{{Name: "model"}}, []string{"example.com"}, "which no allow entry covers"},
 		"a claim above the machine's": {[]Definition{{Name: "product", Adapter: []string{good, "${argument}"}, Argument: `.+`, Hosts: []string{"git.example.com"}}},
 			[]policy.Selected{{Name: "product", Argument: "acme/shop"}}, []string{"*.example.com"}, "above the hosts"},
 		"paths above the machine's": {[]Definition{{Name: "product", Adapter: []string{good, "${argument}"}, Argument: `.+`, Paths: []string{"/acme/*", "/repos/acme/*"}}},
@@ -219,7 +220,7 @@ var nameMessages = map[string]struct {
 			return resolveError(t, []Definition{envDefinition(name)}, []policy.Selected{{Name: name}}, []string{"example.com"})
 		},
 		func(p string) string {
-			return "the credential " + p + " is for api.model.example, which the run's allow list does not cover"
+			return "add api.model.example to the run's egress allow list, or remove the credential " + p + ": the credential " + p + " is for api.model.example, which no allow entry covers"
 		},
 	},
 	"a name outside the grammar": {
@@ -698,4 +699,276 @@ func TestAnAdaptersAnswerContentsPrintAPhraseForASecret(t *testing.T) {
 			t.Errorf("%s:\n got %v\nwant %s", scheme, err, want)
 		}
 	}
+}
+
+// modelKey is a model key named name whose token comes from MODEL_TOKEN, for the
+// Messages API at api.model.example, set in x-api-key.
+func modelKey(name string) Definition {
+	return Definition{Name: name, Env: "MODEL_TOKEN", Format: "anthropic-messages", Endpoint: "https://api.model.example/anthropic", Scheme: "header", Header: "x-api-key"}
+}
+
+// TestAModelKeyThatCannotBeOneIsRefused pins each refusal of Check for a model key's
+// definition, word for word: a format outside api-format.schema.json, an endpoint from
+// which no host is read, hosts, paths or placeholders beside the endpoint, a scheme
+// the proxy does not implement, oauth beside a scheme other than bearer, key prefixes
+// other than 1 to 4 of 1 to 32 printable ASCII characters without a space, a prefix
+// twice, and an argument for env; and, for a credential without format, endpoint,
+// oauth or key_prefixes.
+func TestAModelKeyThatCannotBeOneIsRefused(t *testing.T) {
+	const (
+		endpoint = "credential model: set endpoint to an https URL with a host and no user, query or fragment: Forager reads no host from it"
+		beside   = "credential model: remove hosts, paths and placeholders from the model key: its endpoint gives its host, and the session gives the runtime the key's variable"
+		shape    = "credential model: write each key prefix as 1 to 32 characters of printable ASCII without a space: "
+		noFormat = "credential plain: add format to the credential, or remove endpoint, oauth and key_prefixes: only a model key has them"
+	)
+	plain := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}
+	for name, c := range map[string]struct {
+		change func(*Definition)
+		want   string
+	}{
+		"an unknown format": {func(d *Definition) { d.Format = "other-format" },
+			`credential model: set format to anthropic-messages, openai-responses, openai-chat or gemini: "other-format" is no API format Forager knows`},
+		"no endpoint":                 {func(d *Definition) { d.Endpoint = "" }, endpoint},
+		"an http endpoint":            {func(d *Definition) { d.Endpoint = "http://api.model.example/anthropic" }, endpoint},
+		"an endpoint with a user":     {func(d *Definition) { d.Endpoint = "https://user@api.model.example/anthropic" }, endpoint},
+		"an endpoint with a query":    {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic?beta=1" }, endpoint},
+		"an endpoint with a fragment": {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic#messages" }, endpoint},
+		"an endpoint with port 0":     {func(d *Definition) { d.Endpoint = "https://api.model.example:0/anthropic" }, endpoint},
+		"hosts":                       {func(d *Definition) { d.Hosts = []string{"api.model.example"} }, beside},
+		"paths":                       {func(d *Definition) { d.Paths = []string{"/anthropic/*"} }, beside},
+		"placeholders":                {func(d *Definition) { d.Placeholders = []string{"ANTHROPIC_API_KEY"} }, beside},
+		"an unknown scheme":           {func(d *Definition) { d.Scheme = "digest" }, `credential model: the scheme "digest" is not bearer, basic or header`},
+		"header without a name":       {func(d *Definition) { d.Header = "" }, "credential model: the scheme header needs a header's name"},
+		"oauth beside header":         {func(d *Definition) { d.OAuth = true }, "credential model: remove oauth, or set the scheme to bearer: oauth marks a bearer alone"},
+		"oauth beside basic": {func(d *Definition) { d.Scheme, d.Header, d.Username, d.OAuth = "basic", "", "x", true },
+			"credential model: remove oauth, or set the scheme to bearer: oauth marks a bearer alone"},
+		"an empty list of key prefixes": {func(d *Definition) { d.KeyPrefixes = []string{} }, "credential model: list 1 to 4 key prefixes, or none: the model key lists 0"},
+		"five key prefixes": {func(d *Definition) { d.KeyPrefixes = []string{"a-", "b-", "c-", "d-", "e-"} },
+			"credential model: list 1 to 4 key prefixes, or none: the model key lists 5"},
+		"an empty key prefix":           {func(d *Definition) { d.KeyPrefixes = []string{""} }, shape + `"" is not`},
+		"a key prefix with a space":     {func(d *Definition) { d.KeyPrefixes = []string{"sk ant"} }, shape + `"sk ant" is not`},
+		"a key prefix with a tab":       {func(d *Definition) { d.KeyPrefixes = []string{"sk\tant"} }, shape + `"sk\tant" is not`},
+		"a key prefix outside ASCII":    {func(d *Definition) { d.KeyPrefixes = []string{"sk-ä"} }, shape + `"sk-ä" is not`},
+		"a key prefix of 33 characters": {func(d *Definition) { d.KeyPrefixes = []string{strings.Repeat("k", 33)} }, shape + `"` + strings.Repeat("k", 33) + `" is not`},
+		"a key prefix twice": {func(d *Definition) { d.KeyPrefixes = []string{"sk-ant-", "sk-ant-oat", "sk-ant-"} },
+			`credential model: list the key prefix "sk-ant-" once: the model key lists it twice`},
+		"an argument for env": {func(d *Definition) { d.Argument = "x" }, "credential model: an argument is an adapter's; env and file take none"},
+	} {
+		d := modelKey("model")
+		c.change(&d)
+		if err := d.Check(); err == nil || err.Error() != c.want {
+			t.Errorf("%s:\n got %v\nwant %s", name, err, c.want)
+		}
+	}
+	for name, change := range map[string]func(*Definition){
+		"an endpoint":                   func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic" },
+		"oauth":                         func(d *Definition) { d.OAuth = true },
+		"key prefixes":                  func(d *Definition) { d.KeyPrefixes = []string{"sk-ant-"} },
+		"an empty list of key prefixes": func(d *Definition) { d.KeyPrefixes = []string{} },
+	} {
+		d := plain
+		change(&d)
+		if err := d.Check(); err == nil || err.Error() != noFormat {
+			t.Errorf("a credential without format with %s:\n got %v\nwant %s", name, err, noFormat)
+		}
+	}
+	for name, change := range map[string]func(*Definition){
+		"as given":        func(*Definition) {},
+		"oauth as bearer": func(d *Definition) { d.Scheme, d.Header, d.OAuth = "bearer", "", true },
+		"four key prefixes of 32 characters": func(d *Definition) {
+			d.KeyPrefixes = []string{strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("~", 32), strings.Repeat("!", 32)}
+		},
+		"an endpoint with a port": func(d *Definition) { d.Endpoint = "https://api.model.example:8443/anthropic" },
+		"a file":                  func(d *Definition) { d.Env, d.File = "", "/run/model-key" },
+		"an adapter": func(d *Definition) {
+			d.Env, d.Adapter, d.Argument = "", []string{"/bin/true", "${argument}"}, "[a-z]+"
+		},
+	} {
+		d := modelKey("model")
+		change(&d)
+		if err := d.Check(); err != nil {
+			t.Errorf("a model key %s: %v", name, err)
+		}
+	}
+}
+
+// TestAModelKeyMatchesItsPrefixes pins KeyMatches: a value that starts with one of the
+// prefixes, or any value when there are none.
+func TestAModelKeyMatchesItsPrefixes(t *testing.T) {
+	for _, c := range []struct {
+		prefixes []string
+		value    string
+		want     bool
+	}{
+		{nil, "anything", true},
+		{nil, "", true},
+		{[]string{}, "anything", true},
+		{[]string{"sk-ant-"}, "sk-ant-fake-value", true},
+		{[]string{"sk-ant-"}, "sk-ant-", true},
+		{[]string{"sk-ant-api", "sk-ant-oat"}, "sk-ant-oat01-fake-value", true},
+		{[]string{"sk-ant-"}, "SK-ANT-fake-value", false},
+		{[]string{"sk-ant-"}, " sk-ant-fake-value", false},
+		{[]string{"sk-ant-"}, "sk-an", false},
+		{[]string{"sk-ant-"}, "", false},
+	} {
+		if got := KeyMatches(c.prefixes, []byte(c.value)); got != c.want {
+			t.Errorf("KeyMatches(%q, %q) = %v, want %v", c.prefixes, c.value, got, c.want)
+		}
+	}
+}
+
+// TestAModelKeysTokenThatMatchesNoPrefixIsRefused pins the prefix check of a model
+// key's token, from env, from a file, and from an adapter: Resolve refuses the run
+// with the prefixes in the message and never the token. An adapter that gives a model
+// key placeholders, or sets it with another scheme than the definition's, is refused
+// as well.
+func TestAModelKeysTokenThatMatchesNoPrefixIsRefused(t *testing.T) {
+	const token = "other-fake-value"
+	file := filepath.Join(t.TempDir(), "model-key")
+	if err := os.WriteFile(file, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	answer := func(apply, more string) string {
+		return `echo '{"version":1,"token":"` + token + `","apply":[` + apply + `]` + more + `}'` + "\n"
+	}
+	set := `{"hosts":["api.model.example"],"scheme":"header","header":"X-Api-Key"}`
+	one := "credential model: give the model key model a token that starts with \"sk-ant-\", its key_prefixes: the token starts with none of them"
+	for name, c := range map[string]struct {
+		change func(*Definition)
+		want   string
+	}{
+		"env":  {func(*Definition) {}, one},
+		"file": {func(d *Definition) { d.Env, d.File = "", file }, one},
+		"env, two prefixes": {func(d *Definition) { d.KeyPrefixes = []string{"sk-ant-api", "sk-ant-oat"} },
+			"credential model: give the model key model a token that starts with \"sk-ant-api\" or \"sk-ant-oat\", its key_prefixes: the token starts with none of them"},
+		"an adapter": {func(d *Definition) { d.Env, d.Adapter = "", []string{adapter(t, answer(set, ""))} }, one},
+	} {
+		d := modelKey("model")
+		d.KeyPrefixes = []string{"sk-ant-"}
+		c.change(&d)
+		t.Setenv("MODEL_TOKEN", token)
+		held, err := Resolve(context.Background(), []Definition{d}, []policy.Selected{{Name: "model"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if err == nil {
+			held.Close()
+			t.Errorf("%s: the credentials resolved", name)
+			continue
+		}
+		if err.Error() != c.want || strings.Contains(err.Error(), token) {
+			t.Errorf("%s:\n got %v\nwant %s", name, err, c.want)
+		}
+	}
+	for name, c := range map[string]struct {
+		body string
+		want string
+	}{
+		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), " gives the model key model placeholders: the session gives the runtime the key's variable"},
+		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), " sets the model key model with another scheme than the definition's"},
+		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), " sets the model key model with another scheme than the definition's"},
+		"a host above its": {answer(`{"hosts":["other.model.example"],"scheme":"header","header":"x-api-key"}`, ""), " claims other.model.example, above the hosts the machine gives it"},
+	} {
+		path := adapter(t, c.body)
+		d := modelKey("model")
+		d.Env, d.Adapter = "", []string{path}
+		held, err := Resolve(context.Background(), []Definition{d}, []policy.Selected{{Name: "model"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if err == nil {
+			held.Close()
+			t.Errorf("an adapter's answer with %s: the credentials resolved", name)
+			continue
+		}
+		if want := "credential model: the adapter " + path + c.want; err.Error() != want {
+			t.Errorf("an adapter's answer with %s:\n got %v\nwant %s", name, err, want)
+		}
+	}
+	d := modelKey("model")
+	d.KeyPrefixes = []string{"sk-ant-"}
+	t.Setenv("MODEL_TOKEN", "sk-ant-fake-value")
+	held, err := Resolve(context.Background(), []Definition{d}, []policy.Selected{{Name: "model"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatalf("a token that starts with the prefix: %v", err)
+	}
+	defer held.Close()
+	if len(held.Uses) != 1 || held.Uses[0].Token() != "sk-ant-fake-value" {
+		t.Errorf("uses %+v", held.Uses)
+	}
+}
+
+// TestAModelKeysFileReadAgainKeepsAMatchingToken pins a model key's file read as it is
+// used: a value that starts with none of the key prefixes is not taken, and the token
+// read when the run started stays; a value that matches is taken.
+func TestAModelKeysFileReadAgainKeepsAMatchingToken(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "model-key")
+	if err := os.WriteFile(file, []byte("sk-ant-fake-first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := modelKey("model")
+	d.Env, d.File, d.KeyPrefixes = "", file, []string{"sk-ant-"}
+	held, err := Resolve(context.Background(), []Definition{d}, []policy.Selected{{Name: "model"}}, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	for _, c := range []struct{ written, want string }{
+		{"other-fake-value\n", "sk-ant-fake-first"},
+		{"\n", "sk-ant-fake-first"},
+		{"sk-ant-fake-second\n", "sk-ant-fake-second"},
+	} {
+		if err := os.WriteFile(file, []byte(c.written), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := held.Uses[0].Token(); got != c.want {
+			t.Errorf("after the file became %q the token is %q, want %q", c.written, got, c.want)
+		}
+	}
+}
+
+// TestAModelKeyIsHeldOnItsEndpointsHost pins a model key of the machine's resolved:
+// one use on the endpoint's host, on every path, with the definition's scheme, format,
+// endpoint and oauth, and a credential with no placeholder.
+func TestAModelKeyIsHeldOnItsEndpointsHost(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "sk-ant-oat01-fake-value")
+	d := modelKey("model")
+	d.Scheme, d.Header, d.OAuth = "bearer", "", true
+	d.Endpoint = "https://API.Model.example:8443/anthropic"
+	held, err := Resolve(context.Background(), []Definition{d}, []policy.Selected{{Name: "model"}}, policy.Enforce, []string{"api.model.example"}, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if len(held.Uses) != 1 {
+		t.Fatalf("uses %+v", held.Uses)
+	}
+	if u := held.Uses[0]; !slices.Equal(u.Hosts, []string{"api.model.example"}) || u.Paths != nil || u.Scheme != "bearer" || u.Format != "anthropic-messages" ||
+		u.Endpoint != d.Endpoint || !u.OAuth || u.Stored || u.Token() != "sk-ant-oat01-fake-value" {
+		t.Errorf("the use %+v", u)
+	}
+	want := []Credential{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{}, Scheme: "bearer",
+		Format: "anthropic-messages", Endpoint: d.Endpoint, OAuth: true}}
+	if got := held.Credentials(); !reflect.DeepEqual(got, want) {
+		t.Errorf("credentials %+v, want %+v", got, want)
+	}
+	if len(held.Placeholders) != 0 || held.Start != "model" {
+		t.Errorf("placeholders %v, start %q", held.Placeholders, held.Start)
+	}
+}
+
+// TestAModelKeyOutsideTheAllowListIsRefused pins the allow-list check for a model key
+// under enforce: an endpoint host that no allow entry covers is refused with the text
+// of a host credential, the endpoint's host in place of a credential's hosts, and no
+// token in the message.
+func TestAModelKeyOutsideTheAllowListIsRefused(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "sk-ant-fake-value")
+	held, err := Resolve(context.Background(), []Definition{modelKey("model")}, []policy.Selected{{Name: "model"}}, policy.Enforce, []string{"other.example", "*.other-model.example"}, func(l string) { t.Log(l) })
+	want := "add api.model.example to the run's egress allow list, or remove the credential model: the credential model is for api.model.example, which no allow entry covers"
+	if err == nil {
+		held.Close()
+		t.Fatal("a model key outside the allow list resolved")
+	}
+	if err.Error() != want || strings.Contains(err.Error(), "sk-ant-fake-value") {
+		t.Errorf("\n got %v\nwant %s", err, want)
+	}
+	held, err = Resolve(context.Background(), []Definition{modelKey("model")}, []policy.Selected{{Name: "model"}}, policy.Enforce, []string{"*.model.example"}, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatalf("a model key whose endpoint host an allow entry covers: %v", err)
+	}
+	held.Close()
 }

@@ -231,6 +231,16 @@ type Credential struct {
 	// Placeholders are variables the enclosure gets with a value that is no credential,
 	// for a program that does not start without one set.
 	Placeholders []string
+	// Format, Endpoint, OAuth and KeyPrefixes make the credential a model key, in place
+	// of Hosts and Placeholders: Format is its API format, one of
+	// api-format.schema.json; Endpoint the base URL of its API, whose host alone gets
+	// the key, on every path; OAuth marks a bearer as an OAuth token; and KeyPrefixes
+	// the prefixes its secret must start with, nil for any. The session gives the key
+	// to the runtime's variable for Format and the scheme, and sets the runtime's
+	// endpoint variable to Endpoint.
+	Format, Endpoint string
+	OAuth            bool
+	KeyPrefixes      []string
 }
 
 // Check refuses a definition that cannot be one, so a command reading the machine's

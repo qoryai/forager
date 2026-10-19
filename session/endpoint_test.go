@@ -11,17 +11,44 @@ import (
 	"github.com/qoryai/forager/internal/linktest"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
+	"github.com/qoryai/forager/session/runtimes"
 )
 
 // endpointVariable is the Claude Code descriptor's model.endpoint.variable.
 const endpointVariable = "ANTHROPIC_BASE_URL"
 
-// modelAndForge are a run answer's credential_hosts: the model credential, whose
-// placeholder the Claude Code runtime declares, and a forge credential, whose
-// placeholder it does not.
-var modelAndForge = []map[string]any{
-	{"name": "model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"ANTHROPIC_API_KEY"}},
+// tokenAndForge are a run answer's credential_hosts without an API credential: model,
+// whose placeholder MODEL_TOKEN a declaresToken runtime declares, and a forge
+// credential, whose placeholder it does not.
+var tokenAndForge = []map[string]any{
+	{"name": "model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"MODEL_TOKEN"}},
 	{"name": "forge", "hosts": []string{"api.github.com"}, "placeholders": []string{"GITHUB_TOKEN"}},
+}
+
+// declaresToken is Claude Code with a descriptor that declares MODEL_TOKEN for
+// api.anthropic.com and lists no model key: its runs have the endpoint rule, which a
+// run with an API credential does not have.
+type declaresToken struct{ runtimes.Runtime }
+
+func (p *declaresToken) Secrets() runtimes.Declarations {
+	d := p.Runtime.(runtimes.Secrets).Secrets()
+	d.Declares = append(slices.Clone(d.Declares), runtimes.Declaration{ID: "token", Title: "Token", Name: "MODEL_TOKEN",
+		Hosts: []string{"api.anthropic.com"}, Auth: runtimes.Auth{Scheme: "bearer"}})
+	return d
+}
+
+func (p *declaresToken) Model() (runtimes.ModelPlaces, bool) {
+	m, ok := p.Runtime.(runtimes.Model).Model()
+	m.Keys = nil
+	return m, ok
+}
+
+// tokenSpec is specGateway's spec and fake gateway with a declaresToken runtime.
+func tokenSpec(t *testing.T, env ...string) (session.Spec, *linktest.Fake) {
+	t.Helper()
+	sp, g := specGateway(t, env...)
+	sp.Runtime = &declaresToken{Runtime: sp.Runtime}
+	return sp, g
 }
 
 // answering makes the gateway's run answer carry credential_hosts, when hosts is not
@@ -58,30 +85,32 @@ func endpointEntry(t *testing.T, res *session.Result) map[string]any {
 }
 
 // TestAWalledRunKeepsACoveredEndpoint pins the endpoint rule end to end, behind a wall,
-// for a value of the endpoint's variable from the server, the run (--env), the machine
-// (wall.env), the harness's defaults and its computed values: a value whose host is a
-// host of the run's model credential reaches the agent and is not unset, and the
-// record has kept with the credential's name; any other value does not reach the
-// agent, the name is unset inside, so the image's value does not reach it either, and
-// the record has the reason. A forge credential's host does not count, and an answer
-// without credential_hosts covers no host. Every event validates against its schema.
+// for a run without an API credential and a runtime that declares a secret for its
+// model host, for a value of the endpoint's variable from the server, the run (--env),
+// the machine (wall.env), the harness's defaults and its computed values: a value whose
+// host is a host of the run's credential with a declared placeholder reaches the agent
+// and is not unset, and the record has kept with the credential's name; any other
+// value does not reach the agent, the name is unset inside, so the image's value does
+// not reach it either, and the record has the reason. A forge credential's host does
+// not count, and an answer without credential_hosts covers no host. Every event
+// validates against its schema.
 func TestAWalledRunKeepsACoveredEndpoint(t *testing.T) {
 	for _, tc := range []struct {
 		what, value string
 		hosts       []map[string]any
 		why         string
 	}{
-		{"covered", "https://api.anthropic.com", modelAndForge, ""},
-		{"uncovered", "https://evil.example", modelAndForge, "endpoint_uncovered"},
-		{"a forge credential's host", "https://api.github.com", modelAndForge, "endpoint_uncovered"},
+		{"covered", "https://api.anthropic.com", tokenAndForge, ""},
+		{"uncovered", "https://evil.example", tokenAndForge, "endpoint_uncovered"},
+		{"a forge credential's host", "https://api.github.com", tokenAndForge, "endpoint_uncovered"},
 		{"no credential_hosts", "https://api.anthropic.com", nil, "endpoint_uncovered"},
-		{"http", "http://api.anthropic.com", modelAndForge, "endpoint_unreadable"},
-		{"user information", "https://a@api.anthropic.com", modelAndForge, "endpoint_unreadable"},
+		{"http", "http://api.anthropic.com", tokenAndForge, "endpoint_unreadable"},
+		{"user information", "https://a@api.anthropic.com", tokenAndForge, "endpoint_unreadable"},
 	} {
 		for _, source := range []string{"apiary", "run", "machine", "harness", "fixed"} {
 			t.Run(tc.what+" from "+source, func(t *testing.T) {
 				w := &imageWall{env: []string{endpointVariable + "=https://image.invalid/"}}
-				sp, g := specGateway(t)
+				sp, g := tokenSpec(t)
 				out := dumpsEnv(t, &sp)
 				sp.Wall, sp.Image = w, "example.com/agent:1"
 				passed := []string{endpointVariable + "=" + tc.value}
@@ -156,7 +185,8 @@ func endpointLines(t *testing.T, path string) []string {
 }
 
 // TestAWalledRunChecksEveryComputedEndpoint pins the harness's computed values of the
-// endpoint's variable behind a wall: when one of two is uncovered, neither reaches the
+// endpoint's variable behind a wall, for a run without an API credential: when one of
+// two is uncovered, neither reaches the
 // wall or the agent and the name is unset; when both are covered, the environment the
 // wall gets and the agent's each have the last one alone; and a kept computed value that wins over the run's is recorded with
 // from fixed and kept, an entry the schema accepts.
@@ -178,14 +208,14 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			w := &imageWall{env: []string{endpointVariable + "=https://image.invalid/"}}
-			sp, g := specGateway(t)
+			sp, g := tokenSpec(t)
 			out := dumpsEnv(t, &sp)
 			sp.Wall, sp.Image = w, "example.com/agent:1"
 			sp.LaunchFixed = tc.fixed
 			if tc.run != "" {
 				sp.Variables.Run = []string{endpointVariable + "=" + tc.run}
 			}
-			answering(g, modelAndForge, nil)
+			answering(g, tokenAndForge, nil)
 			res, err := session.Run(context.Background(), sp)
 			if err != nil {
 				t.Fatal(err)
@@ -207,13 +237,13 @@ func TestAWalledRunChecksEveryComputedEndpoint(t *testing.T) {
 	}
 }
 
-// TestTheEndpointsCredentialIsShownByName pins that a model credential whose name
-// contains qak_ is recorded in kept as the phrase in its place.
+// TestTheEndpointsCredentialIsShownByName pins that a credential that covers the
+// endpoint and whose name contains qak_ is recorded in kept as the phrase in its place.
 func TestTheEndpointsCredentialIsShownByName(t *testing.T) {
-	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp, g := tokenSpec(t, "FAKE_EXIT=0")
 	sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
 	sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
-	answering(g, []map[string]any{{"name": "qak_model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"CLAUDE_CODE_OAUTH_TOKEN"}}}, nil)
+	answering(g, []map[string]any{{"name": "qak_model", "hosts": []string{"api.anthropic.com"}, "placeholders": []string{"MODEL_TOKEN"}}}, nil)
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -224,22 +254,23 @@ func TestTheEndpointsCredentialIsShownByName(t *testing.T) {
 	}
 }
 
-// TestAnUnwalledRunAppliesTheEndpointRule pins the endpoint's variable without a wall:
-// for a run whose answer has credential_hosts the endpoint rule applies, as behind a
-// wall, so the run's covered value reaches the agent and the record has kept; for a
-// run whose answer has none, the runtime's denies leave the value out.
+// TestAnUnwalledRunAppliesTheEndpointRule pins the endpoint's variable without a wall,
+// for a run without an API credential: for a run whose answer has credential_hosts the
+// endpoint rule applies, as behind a wall, so the run's covered value reaches the agent
+// and the record has kept; for a run whose answer has none, the runtime's denies leave
+// the value out.
 func TestAnUnwalledRunAppliesTheEndpointRule(t *testing.T) {
 	for name, c := range map[string]struct {
 		hosts []map[string]any
 		value string
 		entry string
 	}{
-		"credential_hosts": {modelAndForge, "https://api.anthropic.com",
+		"credential_hosts": {tokenAndForge, "https://api.anthropic.com",
 			`{"from":"run","kept":{"credential":"model","why":"endpoint_covered"},"lost":[],"name":"` + endpointVariable + `"}`},
 		"none": {nil, "", `{"lost":[{"from":"run","why":"denied"}],"name":"` + endpointVariable + `"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sp, g := specGateway(t)
+			sp, g := tokenSpec(t)
 			out := dumpsEnv(t, &sp)
 			sp.Variables.Run = []string{endpointVariable + "=https://api.anthropic.com"}
 			answering(g, c.hosts, nil)

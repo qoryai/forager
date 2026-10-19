@@ -121,11 +121,14 @@ func opensOnce(t *testing.T, wall bool) {
 
 // TestCredentialsFromTheServerAreRefusedBeforeTheyOpen pins what refuses a run whose
 // run configuration has credentials, before Secrets is called: no secrets endpoint, a
-// name twice and a reserved header; and after it: an error of Secrets, and
-// a value a header cannot hold, whose message has the name and not the value.
+// name twice and a reserved header; and after it: an error of Secrets, a value a
+// header cannot hold, and a model key's value that starts with none of its
+// key_prefixes, whose messages have the name and not the value.
 func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 	twice := strings.Replace(storedDoc, `]}]}`, `]},{"name":"model","hosts":["b.example"],"auth":{"scheme":"bearer"}}]}`, 1)
 	reserved := strings.Replace(storedDoc, `"scheme":"bearer"`, `"scheme":"header","header":"Proxy-Authorization"`, 1)
+	prefixed := `{"version":1,"security_policy":{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}},"credentials":[` +
+		`{"name":"model","format":"anthropic-messages","endpoint":"https://api.model.example/anthropic","auth":{"scheme":"header","header":"x-api-key"},"key_prefixes":["sk-ant-api","sk-ant-oat"]}]}`
 	for name, c := range map[string]struct {
 		doc    string
 		wall   bool
@@ -143,6 +146,8 @@ func TestCredentialsFromTheServerAreRefusedBeforeTheyOpen(t *testing.T) {
 		"a C1 control":      {storedDoc, true, &secrets{value: "opened\u0085value"}, "run_configuration_invalid", "which a header value cannot have", true},
 		"not UTF-8":         {storedDoc, true, &secrets{value: "opened\xffvalue"}, "", "UTF-8", true},
 		"an empty value":    {storedDoc, true, &secrets{value: ""}, "", "", true},
+		"a value without a key prefix": {prefixed, true, &secrets{value: "opened-value"}, "run_configuration_invalid",
+			`run configuration ` + runURL + `: store a value of the credential "model" that starts with sk-ant-api or sk-ant-oat in Qory Apiary: the stored value starts with none of its key_prefixes: run_configuration_invalid: model`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := run.Config{RunID: runID, Wall: c.wall, Server: true, Fetched: computed(t, c.doc, digest('1'))}

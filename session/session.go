@@ -724,10 +724,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Wall == nil {
 		spec.Env = withoutNames(spec.Env, reserved)
 	}
-	// The runtime chooses, among a credential's key_variables, the variable that gets the placeholder
-	// of each credential from the server with key_variables: from here on it is one of the
-	// credential's placeholders and of the run's.
-	credentialHosts, placeholderNames, err := chosen(rt, answer.CredentialHosts, answer.Placeholders)
+	// The runtime chooses the variable of the start key, the API credential the run
+	// starts with: from here on it is one of the credential's placeholders and of the
+	// run's, and key sets it and the runtime's endpoint variable.
+	credentialHosts, placeholderNames, key, err := chosen(rt, answer.CredentialHosts, answer.Placeholders, answer.ModelCredential)
 	if err != nil {
 		return fail(err)
 	}
@@ -775,7 +775,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	harness := spec
 	harness.LaunchFixed, harness.LaunchDefaults = insideValues(spec.LaunchFixed, inside), insideValues(spec.LaunchDefaults, inside)
 	try := func(s Spec) (variables.Resolved, []string, error) {
-		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil, names(caVars))
+		return resolve(s, rt, answer.Values(), credentialHosts, prepared, placeholderNames, reserved, img.Docker, authority != nil, names(caVars), key)
 	}
 	vars, unset, err := try(harness)
 	if err != nil {
@@ -785,10 +785,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))
 	}
-	passes := func(name string) bool {
-		return reachesFromRun(harness, name, prepared, ownEnv, placeholderNames, try)
+	if key.Endpoint != "" {
+		ownEnv = append(ownEnv, key.Endpoint)
 	}
-	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames, passes); err != nil {
+	if err := checkModelKey(harness, rt, credentialHosts, vars, prepared, placeholderNames); err != nil {
 		return fail(err)
 	}
 	if spec.OnVariables != nil {
@@ -894,7 +894,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// is set before the variables are checked.
 	launch := wall.Launch{
 		Command: command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv, caVars, placeholders(placeholderNames)),
+		Env: environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, fwd.Env(), []string{EnvSocket + "=" + sock.Path()}, ownEnv, caVars, placeholders(placeholderNames, key)),
 	}
 	if enclosure != nil {
 		// The places again, just before the enclosure binds them, and the wall's own
@@ -922,7 +922,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		inner, innerArgs := withExec(spec.Exec, unset, command, args)
 		launch, err = enclosure.Wrap(runCtx, wall.Launch{
 			Command: inner, Args: innerArgs, Dir: shown.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames)),
+			Env:   environment(spec.Env, vars.Env, vars.Fixed, prepared.Env, ownEnv, placeholders(placeholderNames, key)),
 			CA:    authority,
 			Proxy: fwd.Addr(), Socket: sock.Path(), Mounts: shown.Mounts, Limits: spec.Limits,
 			ProxyToken: relayToken,
@@ -1271,11 +1271,16 @@ func withoutNames(env, names []string) []string {
 }
 
 // placeholders are the variables a program wants set before it starts, with a value
-// that is no credential.
-func placeholders(names []string) []string {
+// that is no credential: [link.Placeholder], and the start key's variable its
+// placeholder, [link.KeyPlaceholder].
+func placeholders(names []string, key keyed) []string {
+	variable, _, _ := strings.Cut(key.Variable, "=")
 	out := make([]string, len(names))
 	for i, n := range names {
 		out[i] = n + "=" + link.Placeholder
+		if n == variable {
+			out[i] = key.Variable
+		}
 	}
 	return out
 }

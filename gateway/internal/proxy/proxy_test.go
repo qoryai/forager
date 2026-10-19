@@ -727,6 +727,118 @@ func TestTerminateSetsARuntimesKeyAndNoOtherHostGetsIt(t *testing.T) {
 	}
 }
 
+// TestAModelKeyIsSetOnlyOnARequestThatCarriesItsPlaceholder pins a credential with a
+// Placeholder, the start model key: the proxy sets it on a request to its host that
+// carries the placeholder where the key goes, the header and the scheme the key is set
+// with, and on no other: a request with the shared placeholder, another model key's
+// placeholder, the placeholder in another header or in another scheme's form, or none,
+// reaches the host as the session sent it, and the record lists the credential on the
+// one request alone.
+func TestAModelKeyIsSetOnlyOnARequestThatCarriesItsPlaceholder(t *testing.T) {
+	const key = "sk-ant-fake-value-not-a-secret"
+	placeholder := link.KeyPlaceholder("model")
+	for _, c := range []struct {
+		name, scheme, header, set, prefix, other string
+	}{
+		{"in x-api-key", "header", "X-Api-Key", "X-Api-Key", "", "Authorization"},
+		{"as a bearer", "bearer", "", "Authorization", "Bearer ", "X-Api-Key"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var mu sync.Mutex
+			got := map[string]http.Header{}
+			model := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				got[r.URL.Path] = r.Header.Clone()
+				mu.Unlock()
+			}))
+			defer model.Close()
+			host, port, _ := net.SplitHostPort(model.Listener.Addr().String())
+			var decisions []proxy.Decision
+			p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			ca, err := proxy.NewCA("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := x509.NewCertPool()
+			roots.AddCert(model.Certificate())
+			p.TrustUpstream(roots)
+			p.Terminate(ca, []proxy.Credential{{
+				Name: "model", Hosts: []string{host}, Scheme: c.scheme, Header: c.header,
+				Token: func() string { return key }, Placeholder: placeholder,
+			}}, nil, nil)
+			trusted := x509.NewCertPool()
+			trusted.AppendCertsFromPEM(ca.PEM())
+			proxyURL, _ := url.Parse(p.URL())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+			sent := map[string][2]string{
+				"/carries":         {c.set, c.prefix + placeholder},
+				"/shared":          {c.set, c.prefix + link.Placeholder},
+				"/another-key":     {c.set, c.prefix + link.KeyPlaceholder("other")},
+				"/another-header":  {c.other, placeholder},
+				"/bearer-in-place": {c.set, "Bearer " + placeholder},
+				"/none":            {},
+			}
+			if c.scheme == "bearer" {
+				// A bearer's placeholder without its scheme word.
+				sent["/bearer-in-place"] = [2]string{c.set, placeholder}
+			}
+			for path, h := range sent {
+				req, _ := http.NewRequest("GET", "https://"+net.JoinHostPort(host, port)+path, nil)
+				if h[0] != "" {
+					req.Header.Set(h[0], h[1])
+				}
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("%s: %v", path, err)
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if v := got["/carries"].Values(c.set); len(v) != 1 || v[0] != c.prefix+key {
+				t.Errorf("the request that carries the placeholder got %s %q, want the key once", c.set, v)
+			}
+			for path, h := range sent {
+				if path == "/carries" {
+					continue
+				}
+				seen := got[path]
+				if seen == nil {
+					t.Errorf("%s did not reach the host", path)
+					continue
+				}
+				if h[0] != "" && seen.Get(h[0]) != h[1] {
+					t.Errorf("%s: the host got %s %q, want the session's %q", path, h[0], seen.Get(h[0]), h[1])
+				}
+				for name, vs := range seen {
+					for _, v := range vs {
+						if strings.Contains(v, key) {
+							t.Errorf("%s got the key in %s", path, name)
+						}
+					}
+				}
+			}
+			set := 0
+			for _, d := range decisions {
+				if d.Credential == "model" {
+					set++
+					if d.Path != "/carries" {
+						t.Errorf("the record lists the credential on %s", d.Path)
+					}
+				}
+			}
+			if set != 1 {
+				t.Errorf("the record lists the credential on %d requests, want 1", set)
+			}
+		})
+	}
+}
+
 // TestDenyIsDecidedFirstInEitherMode pins the deny list: a host it covers is refused
 // under observe as under enforce, before the dial, with the first matching entry as
 // the rule; it beats an allow entry of any shape, a host both lists name included; a

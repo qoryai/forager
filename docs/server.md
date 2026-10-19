@@ -228,21 +228,23 @@ does. Set by the node, they are `QORY_` names like any other.
 
 Before it resolves the variables, the session refuses a placeholder that goes into a
 variable for no credential, `run_configuration_invalid`: one of the run's placeholders,
-from this machine's credentials and tools in forager.yaml or from Qory Apiary's, that the
-runtime's descriptor lists in `denies` or in its model `overrides`, or that is its model
-endpoint's variable; a variable the runtime declares or reserves that no credential
-has among its placeholders; or a placeholder of a credential from Qory Apiary in a
-variable the runtime declares or reserves, other than the one its `key_variables`
-chose.
+from this machine's credentials and tools in forager.yaml or from the control plane's,
+that the runtime's descriptor lists in `denies` or in its model `overrides`, or that is
+its model endpoint's variable; a variable the runtime declares or reserves that no
+credential has among its placeholders; and a placeholder of a host credential in a
+variable the runtime reads a model key from, its descriptor's `model.keys`. Only the
+start key, the model key the runtime starts with, gets that variable. The session sets
+the runtime's model endpoint variable, `ANTHROPIC_BASE_URL` for Claude Code, to the
+start key's endpoint, and leaves out every value of it from `Env`, `LaunchFixed`,
+`LaunchDefaults`, `Variables.Run` and `Variables.Machine`.
 
 After it resolves the variables, the session refuses a run whose gateway holds
 credentials for it and that has no model key for its runtime, `model_key_missing`:
 behind a wall, or without one when a credential has a placeholder of a model key's
-variable. The
-run has one when a credential has a placeholder of a model key's variable on the
-runtime's model host, or when a value of one reaches the runtime from `Env`,
-`LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or the runtime's
-preparation.
+variable. The run has one when the gateway holds a model key for it, from the control
+plane or forager.yaml, or when a value of a model key's variable reaches the runtime
+from `Env`, `LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or
+the runtime's preparation.
 
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value

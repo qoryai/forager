@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// filled is a value of v's type with every field set: a string to "x", a list of
-// strings to two. A field of another kind fails the test, so a definition that gains
+// filled is a value of v's type with every field set: a string to "x", a bool to
+// true, a list of strings to two. A field of another kind fails the test, so a definition that gains
 // one gains its copy and its case here together.
 func filled(t *testing.T, v any) reflect.Value {
 	t.Helper()
@@ -16,6 +16,8 @@ func filled(t *testing.T, v any) reflect.Value {
 		switch {
 		case f.Kind() == reflect.String:
 			f.SetString("x")
+		case f.Kind() == reflect.Bool:
+			f.SetBool(true)
 		case f.Kind() == reflect.Slice && f.Type().Elem().Kind() == reflect.String:
 			f.Set(reflect.ValueOf([]string{"a", "b"}))
 		default:

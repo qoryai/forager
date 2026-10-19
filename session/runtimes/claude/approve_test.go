@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/session/runtimes/claude"
 )
@@ -29,12 +31,20 @@ func TestClaudeCodeDeclaresItsModelCredential(t *testing.T) {
 		t.Fatal("Claude Code does not implement runtimes.Secrets")
 	}
 	d := s.Secrets()
-	var names []string
-	for _, dc := range d.Declares {
-		names = append(names, dc.ID+"="+dc.Name+" "+dc.Auth.Scheme)
+	if len(d.Declares) != 0 {
+		t.Errorf("declares %+v, want none: the model keys are in model.keys", d.Declares)
 	}
-	if want := []string{"api_key=ANTHROPIC_API_KEY header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN bearer", "auth_token=ANTHROPIC_AUTH_TOKEN bearer"}; !reflect.DeepEqual(names, want) {
-		t.Errorf("declares %v, want %v", names, want)
+	m, ok := rt.(runtimes.Model)
+	if !ok {
+		t.Fatal("Claude Code does not implement runtimes.Model")
+	}
+	places, _ := m.Model()
+	var names []string
+	for _, k := range places.Keys {
+		names = append(names, k.Variable+" "+k.Auth.Scheme+" "+strconv.FormatBool(k.Auth.OAuth))
+	}
+	if want := []string{"ANTHROPIC_API_KEY header false", "ANTHROPIC_AUTH_TOKEN bearer false", "CLAUDE_CODE_OAUTH_TOKEN bearer true"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("keys %v, want %v", names, want)
 	}
 	if len(d.OneOf) != 0 {
 		t.Errorf("one_of %+v; want none", d.OneOf)
@@ -321,4 +331,16 @@ func decode(t *testing.T, s string) map[string]any {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// TestAModelKeysPlaceholderIsApprovedAsTheStandIn pins that the placeholder of a model
+// key, whose value contains the key's name, ends as the stand-in does, so the approval
+// the script writes covers it.
+func TestAModelKeysPlaceholderIsApprovedAsTheStandIn(t *testing.T) {
+	for _, name := range []string{"model", "a", "local-model.v2"} {
+		v := link.KeyPlaceholder(name)
+		if !strings.HasSuffix(v, approvedEntry) || !strings.Contains(v, name) || v == link.Placeholder {
+			t.Errorf("the placeholder of %s is %q; want one that contains the name and ends in %q", name, v, approvedEntry)
+		}
+	}
 }
