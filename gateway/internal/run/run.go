@@ -168,7 +168,7 @@ func Decide(cfg Config) (*Run, error) {
 		}
 		re, err := WholeMatch(s.Pattern)
 		if err != nil {
-			return nil, err
+			return nil, accesskey.ShownError(err)
 		}
 		r.patterns[i] = re
 	}
@@ -511,7 +511,8 @@ func nameImage(pol, fetched, node *policy.Loaded, image string) error {
 // not list is no run. An entry for a credential that takes an argument gives none when
 // the run's labels do not satisfy it, and the run's user is told why: a label it takes
 // that the run does not have, the forge label among them, a forge label of another
-// value, or a value outside its pattern. Nothing is resolved here: the policy's
+// value, or a value outside its pattern or that is a name's phrase
+// ([accesskey.IsNamePhrase]). Nothing is resolved here: the policy's
 // credentials are resolved as any are, the argument checked against the definition's
 // pattern before its adapter runs.
 func (r *Run) selects(pol *policy.Loaded) error {
@@ -537,7 +538,9 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s by the run's label %s, which the run does not have: it gets no %s", id, name, Spaced(accesskey.ShownName(s.Label, false)), name))
 			continue
 		}
-		if !r.patterns[i].MatchString(value) {
+		// A value that is a name's phrase, as a separate gateway reads the labels from
+		// the attach answer, is no argument, whatever the pattern admits.
+		if accesskey.IsNamePhrase(value) || !r.patterns[i].MatchString(value) {
 			r.cfg.Report(fmt.Sprintf("run %s: the run's label %s=%s is no argument %s takes: it gets no %s", id, Spaced(accesskey.ShownName(s.Label, false)), Spaced(accesskey.ShownName(value, false)), name, name))
 			continue
 		}

@@ -57,13 +57,13 @@ func Listen(grace time.Duration) (*Listener, error) {
 	}
 	dir, err := os.MkdirTemp("", dirPrefix)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	path := filepath.Join(dir, "sock")
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		os.RemoveAll(dir)
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &Listener{dir: dir, path: path, ln: ln, done: make(chan struct{}), grace: grace}, nil
 }

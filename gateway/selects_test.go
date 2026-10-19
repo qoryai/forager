@@ -408,3 +408,41 @@ func TestARunStartedMayCarryALabelsPhrase(t *testing.T) {
 	}
 	h.close()
 }
+
+// TestARunStartedWithRawLabelsGoesOnPhrased pins the labels of a run.started a session
+// sends as they are: the gateway accepts them, and the record and the server get each
+// key and value that contains qak_ or qrk_ in any case as the name's phrase, so no
+// session passes a secret through in its labels.
+func TestARunStartedWithRawLabelsGoesOnPhrased(t *testing.T) {
+	labels := map[string]string{"repository": "acme/qak_FAKE", "qrk_fake": "x", "issue": "7"}
+	want := map[string]any{"repository": accessKeyNamePhrase, runKeyNamePhrase: "x", "issue": "7"}
+	c := newControl(t)
+	h := start(t, gateway.Config{Server: c.server()})
+	a := h.open(server.LinkRunRequest{Labels: labels})
+	if d := h.post(started(a.RunID, labels)); !d.Accepted() {
+		t.Fatalf("the run.started: %+v", d)
+	}
+	if d := h.post(exited(a.RunID)); !d.Accepted() {
+		t.Fatalf("the run.exited: %+v", d)
+	}
+	eventually(t, "the run's exit at the server", func() bool {
+		lines := c.lines(t)
+		return len(lines) > 0 && lines[len(lines)-1].Type == event.RunExited
+	})
+	for what, lines := range map[string][]recorded{"the record": h.record(a.RunID), "the server": c.lines(t)} {
+		n := 0
+		for _, l := range lines {
+			if l.Type != event.RunStarted {
+				continue
+			}
+			n++
+			if !reflect.DeepEqual(l.Data["labels"], want) {
+				t.Errorf("%s: labels %v, want %v", what, l.Data["labels"], want)
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: %d run.started", what, n)
+		}
+	}
+	h.close()
+}

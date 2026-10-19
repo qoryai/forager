@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/qoryai/forager/link"
+	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/wall"
 )
 
@@ -56,8 +59,9 @@ func (w filesWall) Prepare(context.Context, wall.Request) (wall.Enclosure, error
 func (w filesWall) Files() []string { return w.files }
 
 // TestAMountRefusalPrintsAPhraseForASecretInAPath pins the names and the Detail of the
-// refusals of checkMounts: a path that contains qak_ or qrk_ is the phrase, each phrase
-// once among the names, and a clean path prints as before.
+// refusals of checkMounts: a path that contains qak_ or qrk_ is the name's phrase among
+// the names, each phrase once, as run.refused's names are, and the value's phrase in
+// Detail; a clean path prints as before.
 func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	base := t.TempDir()
@@ -79,11 +83,11 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 		{
 			name: "a secret in both paths", mount: mkdir(t, base, "qak_x"),
 			file:  mkdir(t, base, "qak_x", ".config", "qory"),
-			names: []string{akValue}, detail: "the mount " + akValue + " contains " + akValue + ", one of Forager's files",
+			names: []string{akName}, detail: "the mount " + akValue + " contains " + akValue + ", one of Forager's files",
 		},
 		{
 			name: "two secrets", mount: mkdir(t, base, "QRK_y", "qak_x"), file: filepath.Join(base, "QRK_y"),
-			names: []string{akValue, rkValue}, detail: "the mount " + akValue + " lies inside " + rkValue + ", one of Forager's files",
+			names: []string{akName, rkName}, detail: "the mount " + akValue + " lies inside " + rkValue + ", one of Forager's files",
 		},
 		{
 			name: "clean paths", mount: mkdir(t, base, "clean"), file: mkdir(t, base, "clean", ".config", "qory"),
@@ -118,7 +122,7 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 			Mounts: []wall.Mount{{Path: inner, ReadOnly: true}}})
 		want := "the mount " + rkValue + " (read-only) lies inside the workspace " + ws +
 			" (writable): a part of a writable place can't be read-only"
-		if !slices.Equal(r.Names, []string{rkValue, ws}) || r.Detail != want {
+		if !slices.Equal(r.Names, []string{rkName, ws}) || r.Detail != want {
 			t.Errorf("names %q, detail %q; want %q", r.Names, r.Detail, want)
 		}
 	})
@@ -138,8 +142,8 @@ func TestAMountRefusalPrintsAPhraseForASecretInAPath(t *testing.T) {
 
 // TestAWalledRunsCheckPrintsAPhraseForASecretInAPath pins the errors and refusals of
 // the check of a walled run's binds against another run's: a path that contains qak_
-// or qrk_ is the phrase in the sentence and among the names, and a clean path prints
-// as before.
+// or qrk_ is the value's phrase in the sentence and the name's phrase among the names,
+// and a clean path prints as before.
 func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	const otherID = "0b6f1f9e-3c2a-4d5e-8f70-1a2b3c4d5e6f"
@@ -181,7 +185,7 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 			names           []string
 			shown           string
 		}{
-			{filepath.Join(base, "QAK_runs"), "/elsewhere/qrk_y", []string{akValue, otherID, rkValue}, akValue},
+			{filepath.Join(base, "QAK_runs"), "/elsewhere/qrk_y", []string{akName, otherID, rkName}, akValue},
 			{filepath.Join(base, "runs"), "/elsewhere/other", nil, ""},
 		} {
 			runDir := filepath.Join(c.runs, "run")
@@ -211,7 +215,7 @@ func TestAWalledRunsCheckPrintsAPhraseForASecretInAPath(t *testing.T) {
 			dir   string
 			names []string
 		}{
-			{"/state/qak_x", []string{otherID, akValue}},
+			{"/state/qak_x", []string{otherID, akName}},
 			{"/state/clean", []string{otherID, "/state/clean/" + otherID}},
 		} {
 			file := c.dir + "/" + otherID
@@ -377,5 +381,137 @@ func TestALocalGatewayPrintsAPhraseForASecretInItsSocket(t *testing.T) {
 		if got := fmt.Sprintf("%v %s %#v", g, g, g); got != want+" "+want+" "+want {
 			t.Errorf("%s: %q, want %q three times", socket, got, want)
 		}
+	}
+}
+
+// TestARefusalThroughALinkListsANamePhraseForASecret pins the names of the refusals of a
+// link inside a writable place: a path that contains qak_ or qrk_ is the name's phrase
+// among the names, as run.refused's names are, and the value's phrase in Detail.
+func TestARefusalThroughALinkListsANamePhraseForASecret(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	base := t.TempDir()
+	ws, runs, outside := mkdir(t, base, "workspace"), mkdir(t, base, "runs"), mkdir(t, base, "outside")
+	refused := func(t *testing.T, spec Spec) *Refusal {
+		t.Helper()
+		_, err := checkMounts(spec, filepath.Join(runs, "run"))
+		var r *Refusal
+		if !errors.As(err, &r) {
+			t.Fatalf("want a refusal, got %v", err)
+		}
+		return r
+	}
+
+	t.Run("a link on the way to a Forager file", func(t *testing.T) {
+		link := filepath.Join(ws, "qak_FAKE")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(link)
+		r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
+			ForagerFiles: []string{filepath.Join(link, "file")}})
+		if want := []string{ws, akName}; r.Code != "mount_contains_forager_files" || !slices.Equal(r.Names, want) {
+			t.Errorf("%s names %q, want %q", r.Code, r.Names, want)
+		}
+		if leaks(r.Detail) || !strings.Contains(r.Detail, akValue) {
+			t.Errorf("detail %q", r.Detail)
+		}
+	})
+
+	t.Run("a mount reached through a link", func(t *testing.T) {
+		link := filepath.Join(ws, "QRK_FAKE")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(link)
+		r := refused(t, Spec{Wall: filesWall{name: "open"}, Dir: ws, RunsDir: runs,
+			Mounts: []wall.Mount{{Path: link, ReadOnly: true}}})
+		if want := []string{rkName, ws}; r.Code != "mount_through_link" || !slices.Equal(r.Names, want) {
+			t.Errorf("%s names %q, want %q", r.Code, r.Names, want)
+		}
+		if leaks(r.Detail) || !strings.Contains(r.Detail, rkValue) {
+			t.Errorf("detail %q", r.Detail)
+		}
+	})
+}
+
+// phrased fails the test unless err is an error whose text has no qak_ or qrk_ in any
+// case and that wraps target.
+func phrased(t *testing.T, what string, err, target error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: no error", what)
+	}
+	if leaks(err.Error()) || !errors.Is(err, target) {
+		t.Errorf("%s: %q, want a phrase that wraps %v", what, err, target)
+	}
+}
+
+// TestAResendOfARecordThatIsAGatewaysPrintsAPhraseForASecret pins the error of a resend
+// of a directory that holds the run's stream: a directory that contains qak_ or qrk_ is
+// the phrase, and the error still wraps fs.ErrExist.
+func TestAResendOfARecordThatIsAGatewaysPrintsAPhraseForASecret(t *testing.T) {
+	for _, secret := range []string{"qak_FAKE", "QRK_FAKE"} {
+		dir := mkdir(t, t.TempDir(), secret, "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f")
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Resend(context.Background(), ResendSpec{Dir: dir})
+		phrased(t, secret, err, fs.ErrExist)
+	}
+}
+
+// bindsFail is an enclosure whose Binds fails with the error err.
+type bindsFail struct {
+	wall.Enclosure
+	err error
+}
+
+func (b bindsFail) Binds(wall.Launch) ([]wall.Bind, error) { return nil, b.err }
+
+// TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath pins the errors of the run
+// directory's files, the lock, the preparation, the socket, the registry's walk and a
+// wall's binds: a path that contains qak_ or qrk_ is the phrase, and each error still
+// wraps the error of the file system.
+func TestTheSessionsFileErrorsPrintAPhraseForASecretInAPath(t *testing.T) {
+	const runID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for _, secret := range []string{"qak_FAKE", "QRK_FAKE"} {
+		base := mkdir(t, t.TempDir(), secret)
+		missing := filepath.Join(base, "missing", runID)
+		file := filepath.Join(base, "file")
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := Resend(context.Background(), ResendSpec{Dir: missing})
+		phrased(t, "a resend of a directory that does not exist", err, fs.ErrNotExist)
+		_, err = lock(missing)
+		phrased(t, "the lock", err, fs.ErrNotExist)
+		phrased(t, "the mark", markBehindGateway(missing), fs.ErrNotExist)
+		_, err = BehindGateway(filepath.Join(file, "run"))
+		phrased(t, "the mark's read", err, syscall.ENOTDIR)
+		_, err = sessionRecord(filepath.Join(missing, "session.jsonl"))
+		phrased(t, "the record", err, fs.ErrNotExist)
+		_, err = withPreparation(missing, []string{"true"}, runtimes.Launch{Command: "agent"})
+		phrased(t, "the preparation", err, fs.ErrNotExist)
+		_, err = RunsBinding(context.Background(), nil, filepath.Join(file, "child"))
+		phrased(t, "the registry's walk", err, syscall.ENOTDIR)
+		_, err = wallBinds(bindsFail{err: &fs.PathError{Op: "open", Path: filepath.Join(base, "bind"), Err: fs.ErrPermission}}, "", nil)
+		phrased(t, "a wall's binds", err, fs.ErrPermission)
+
+		t.Run(secret+" socket", func(t *testing.T) {
+			t.Setenv("TMPDIR", filepath.Join(base, "missing"))
+			_, err := socket.Listen(0)
+			phrased(t, "the socket", err, fs.ErrNotExist)
+		})
+
+		// A record whose delivered.log cannot be read.
+		dir := mkdir(t, base, "runs", runID)
+		if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mkdir(t, dir, "delivered.log")
+		_, err = Resend(context.Background(), ResendSpec{Dir: dir})
+		phrased(t, "a delivered.log that is a directory", err, syscall.EISDIR)
 	}
 }

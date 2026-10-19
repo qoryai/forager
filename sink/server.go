@@ -555,7 +555,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 func Delivered(dir string) (map[string]bool, bool, error) {
 	b, err := os.ReadFile(filepath.Join(dir, DeliveredFile))
 	if err != nil && !os.IsNotExist(err) {
-		return nil, false, err
+		return nil, false, accesskey.ShownError(err)
 	}
 	seqs, stopped := map[string]bool{}, false
 	for _, line := range strings.Split(string(b), "\n") {

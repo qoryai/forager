@@ -1196,7 +1196,7 @@ func (hostSystem) stdout(ctx context.Context, argv, env []string) (io.ReadCloser
 	}
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &piped{r: out, cmd: cmd, cancel: cancel}, nil
 }

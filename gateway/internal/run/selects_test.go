@@ -521,3 +521,32 @@ func TestTheEgressEventSendsAPhraseForASecretInAValue(t *testing.T) {
 		t.Errorf("a clean decision %v", clean)
 	}
 }
+
+// TestALabelThatIsANamesPhraseIsNoArgument pins a label whose value is a name's phrase,
+// as a separate gateway reads the labels from the attach answer: under a pattern that
+// admits it, .+, and under the entry's pattern, the entry gives no credential, the
+// phrase is never an argument, and the run's user is told.
+func TestALabelThatIsANamesPhraseIsNoArgument(t *testing.T) {
+	for _, phrase := range []string{accessKeyNamePhrase, runKeyNamePhrase} {
+		for _, pattern := range []string{".+", ""} {
+			cfg, said := selectsNamed(t, "github")
+			cfg.Labels["repository"] = phrase
+			if pattern != "" {
+				cfg.Selects[0].Pattern = pattern
+			}
+			r, err := run.Decide(cfg)
+			if err != nil {
+				t.Fatalf("%s, pattern %q: %v", phrase, pattern, err)
+			}
+			for _, c := range r.Policy().Policy.Credentials {
+				if c.Name == "github" || c.Argument == phrase {
+					t.Errorf("%s, pattern %q: credentials %+v", phrase, pattern, r.Policy().Policy.Credentials)
+				}
+			}
+			line := "run " + runID + ": the run's label repository=" + phrase + " is no argument github takes: it gets no github"
+			if !said.reported(line) {
+				t.Errorf("%s, pattern %q: reported %q, want %q", phrase, pattern, said.said, line)
+			}
+		}
+	}
+}

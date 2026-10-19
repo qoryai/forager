@@ -400,7 +400,7 @@ func (r *EnrolmentRequest) post(ctx context.Context, hc *http.Client, serverURL,
 	u := strings.TrimSuffix(serverURL, "/") + EnrolmentPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(sendTo, "/")+EnrolmentPath, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, ShownError(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
@@ -414,12 +414,12 @@ func (r *EnrolmentRequest) post(ctx context.Context, hc *http.Client, serverURL,
 	client.Jar = nil
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("enrolment %s: %w", u, err)
+		return nil, fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
 	defer resp.Body.Close()
 	answer, err := io.ReadAll(io.LimitReader(resp.Body, MaxAnswer+1))
 	if err != nil {
-		return nil, fmt.Errorf("enrolment %s: %w", u, err)
+		return nil, fmt.Errorf("enrolment %s: %w", ShownValue(u, false), ShownError(err))
 	}
 	sig := ""
 	if v := resp.Header.Values(HeaderSignature); len(v) == 1 {

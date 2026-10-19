@@ -68,12 +68,16 @@ a phrase in place of a name or a value that contains either, in any case:
   `(a name that contains a run key)` when it contains `qrk_` and no `qak_`.
 - A value of free text, such as a path, a command, an argument, a URL, a program's
   output or an error's text, is `(a value that contains an access key secret)` or `(a
-  value that contains a run key)` the same way.
+  value that contains a run key)` the same way. `run.started`'s `dir` is a path.
+- In a `run.refused`'s `names`, every entry is the name's phrase, a path among them;
+  the refusal's `detail` prints a path as the value's phrase.
 
 The phrases apply to the events, the registration, the outcome and Forager's messages
-and log lines. An error that a step of the session or the gateway returns unchanged,
-such as an operating system's error that quotes a path, reaches the caller unchanged.
-In the registration and `run.started`:
+and log lines. An operating system's or a network's error that quotes a path, an
+address or a name the caller passed prints as the value's phrase, and still wraps the
+error, so `errors.Is` and `errors.As` find it. A fixed reason that names a prefix, such
+as a run key's "it does not start with qrk_", prints as it is. In the registration and
+`run.started`:
 
 - Of two labels whose keys become the same phrase, the one whose key sorts first is
   sent.
@@ -83,11 +87,17 @@ In the registration and `run.started`:
   two members whose names become the same, the first is sent. Details that grow past
   8192 bytes are left out.
 
-A separate gateway takes a credential's argument from the labels as the registration
-sent them, so a label value that contains a prefix gives no argument. What the agent
-writes, in `run.log` and in the events of its records, is sent as it wrote it. So are
-the server's `run.url` and its codes, which the server sent. The wall and the agent get
-every value as it is.
+A separate gateway takes a credential's argument from the labels the attach answer
+contains, where a label's value that contains a prefix is the name's phrase. A label's
+value that is either name phrase gives no argument, whatever the selection's pattern
+admits. The gateway sends `run.started`'s labels as `server.ShownLabels` gives them,
+also when a session sent them as they are. A separate gateway refuses a run key whose
+instance id contains a prefix as `run_key_invalid`.
+
+`server.Client.Discover` refuses a configuration document whose `run.url` contains a
+prefix, since `run.policy_applied` sends `run.url` as a URI. What the agent writes, in
+`run.log` and in the events of its records, is sent as it wrote it, and so are the
+server's codes. The wall and the agent get every value as it is.
 
 `gateway.Server` holds what identifies the run to the server:
 

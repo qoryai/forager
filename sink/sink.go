@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/event"
 )
 
@@ -59,16 +60,16 @@ func NewFile(dir string) (*File, error) { return NewFileAs(dir, EventsFile) }
 // name is refused.
 func NewFileAs(dir, events string) (*File, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	record, err := os.OpenFile(filepath.Join(dir, events), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	output, err := os.OpenFile(filepath.Join(dir, OutputFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		record.Close()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &File{events: record, output: output}, nil
 }
@@ -78,12 +79,12 @@ func NewFileAs(dir, events string) (*File, error) {
 func (f *File) Write(ev *event.Event) error {
 	line, err := ev.JSON()
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, err := f.events.Write(append(line, '\n')); err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	if ev.Type == event.RunLog {
 		if data, ok := ev.Data.(map[string]any); ok {
@@ -93,7 +94,7 @@ func (f *File) Write(ev *event.Event) error {
 					return err
 				}
 				if _, err := f.output.Write(b); err != nil {
-					return err
+					return accesskey.ShownError(err)
 				}
 			}
 		}
@@ -105,7 +106,7 @@ func (f *File) Write(ev *event.Event) error {
 func (f *File) Close(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return errors.Join(f.events.Sync(), f.events.Close(), f.output.Sync(), f.output.Close())
+	return accesskey.ShownError(errors.Join(f.events.Sync(), f.events.Close(), f.output.Sync(), f.output.Close()))
 }
 
 // Writer writes every event as one JSON line, the line events.jsonl holds, to a stream

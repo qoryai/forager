@@ -91,10 +91,11 @@ func (g *Gateway) attachRefused(code string, status int, runID string) *accesske
 }
 
 // admitRunKey decides the bearer value of a request on the one address, in order: no
-// value, or one that is no run key that verifies under the server's pin, is
-// run_key_invalid, 400; then, in the server's order of the attach, a run key past its
-// attach_by plus the skew of [server.Window], 300 s, by the gateway's clock, of a run
-// the gateway holds nothing of, never attached here, is run_key_expired, 409; one that
+// value, or one that is no run key that verifies under the server's pin, or whose
+// instance id [accesskey.CheckInstanceID] refuses, is run_key_invalid, 400; then, in
+// the server's order of the attach, a run key past its attach_by plus the skew of
+// [server.Window], 300 s, by the gateway's clock, of a run the gateway holds nothing
+// of, never attached here, is run_key_expired, 409; one that
 // names another gateway than the one discovery lists of the access key is
 // wrong_gateway, 409. A run key past its attach_by within the skew goes on as one
 // before it, and the server decides its attach. The run's workspace is the run key's:
@@ -107,6 +108,11 @@ func (g *Gateway) admitRunKey(value string, ok bool) (runkey.Key, *accesskey.Ref
 	}
 	k, err := runkey.Verify(value, g.cfg.Server.ApiaryPublicKey)
 	if err != nil {
+		return runkey.Key{}, runKeyInvalid()
+	}
+	// The instance id goes into run.registered as it is, so one that contains qak_ or
+	// qrk_ in any case is refused, as a registration's is ([accesskey.CheckInstanceID]).
+	if accesskey.CheckInstanceID(k.InstanceID) != nil {
 		return runkey.Key{}, runKeyInvalid()
 	}
 	conf, _ := g.config()

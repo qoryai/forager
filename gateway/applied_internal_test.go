@@ -2,16 +2,20 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
+	"github.com/qoryai/forager/refusal"
 )
 
 // appliedCredentials are the credentials member appliedOf gives for one credential
@@ -216,6 +220,45 @@ func TestARunStartedMayCarryPhrasedLabelKeys(t *testing.T) {
 	} {
 		if sameLabels(c.got, labels) != c.same {
 			t.Errorf("%s: sameLabels = %v", what, !c.same)
+		}
+	}
+}
+
+// TestALinkRefusalSendsNoSecret pins the names of a refusal on the link, a
+// wall_required's image=<name> and a refusal's names: a name that contains qak_ or
+// qrk_ in any case is sent as the name's phrase.
+func TestALinkRefusalSendsNoSecret(t *testing.T) {
+	schema, err := contracts.Compile("link-refusal.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		err   error
+		names []string
+	}{
+		{&refusal.NeedsWall{Names: []string{"image=qrk_FAKE"}}, []string{"image=(a name that contains a run key)"}},
+		{&refusal.NeedsWall{Names: []string{"credentials", "image=QAK_FAKE"}}, []string{"credentials", "image=(a name that contains an access key secret)"}},
+		{&accesskey.Refusal{Code: "image_unknown", Status: 422, From: accesskey.FromApiary, Names: []string{"qak_FAKE", "base"}}, []string{"(a name that contains an access key secret)", "base"}},
+		{&accesskey.Refusal{Code: "image_unknown", Status: 422, Names: []string{"x.qrk_FAKE"}}, []string{"(a name that contains a run key)"}},
+	} {
+		w := httptest.NewRecorder()
+		refuseOpen(w, c.err)
+		var body linkRefusal
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(body.Names, c.names) {
+			t.Errorf("%v: names %q, want %q", c.err, body.Names, c.names)
+		}
+		if accesskey.ContainsSecret(w.Body.String()) {
+			t.Errorf("%v: a secret's prefix in %s", c.err, w.Body)
+		}
+		doc, err := contracts.Decode("link-refusal.json", w.Body.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(doc); err != nil {
+			t.Errorf("%v: link-refusal.schema.json refuses %s: %v", c.err, w.Body, err)
 		}
 	}
 }

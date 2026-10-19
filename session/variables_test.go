@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session"
 	"github.com/qoryai/forager/session/runtimes"
+	"github.com/qoryai/forager/wall"
 )
 
 // dumpsEnv makes the spec's runtime write its environment to a file and returns the
@@ -674,9 +676,9 @@ func TestARefusalOfAnyCodeSendsAPhraseForASecret(t *testing.T) {
 }
 
 // TestARunStartedSendsAPhraseForASecret pins run.started's members of the run's: the
-// directory, the image and its name, a label's key and value, and what the run is
-// about's kind, title and subjects' titles, each sent as the name's phrase when it
-// contains qak_ or qrk_ in any case; a subject whose ref contains one is left out; the
+// directory as the value's phrase, and the image and its name, a label's key and value,
+// and what the run is about's kind, title and subjects' titles as the name's phrase,
+// when it contains qak_ or qrk_ in any case; a subject whose ref contains one is left out; the
 // event validates against its schema; a clean value is sent as it is, and the wall and
 // the agent have every value as it is.
 func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
@@ -686,7 +688,7 @@ func TestARunStartedSendsAPhraseForASecret(t *testing.T) {
 		shown                                        map[string]any
 	}{
 		"prefixes": {"QAK_dir", "qak_base", "example.com/agent:qrk_1", "acme/qAk_x", "QRK_kind", "qrk_x qak_y", "QRK_t",
-			map[string]any{"dir": ak, "image": rk, "image_name": ak, "label": ak, "kind": rk, "title": ak, "subject": rk}},
+			map[string]any{"dir": "(a value that contains an access key secret)", "image": rk, "image_name": ak, "label": ak, "kind": rk, "title": ak, "subject": rk}},
 		"clean": {"work", "base", "example.com/agent:1", "acme/shop", "fix", "A title", "An issue",
 			map[string]any{"image": "example.com/agent:1", "image_name": "base", "label": "acme/shop", "kind": "fix", "title": "A title", "subject": "An issue"}},
 	} {
@@ -769,5 +771,93 @@ func TestARunStartedSendsAPhraseForASecretInAnArgument(t *testing.T) {
 	b, _ := json.Marshal(started)
 	if low := strings.ToLower(string(b)); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") {
 		t.Errorf("run.started contains a secret's prefix: %s", b)
+	}
+}
+
+// TestThePolicyAppliedSendsAPhraseForASecretInAHarnessHost pins policy_applied's
+// harness_hosts: a host that contains qak_ or qrk_ in any case is sent as the value's
+// phrase, in the record and in the batch, the event validates against its schema, and a
+// clean host is sent as it is.
+func TestThePolicyAppliedSendsAPhraseForASecretInAHarnessHost(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Declared = []string{"api.example", "qak_FAKE.example", "QRK_FAKE.example"}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{"api.example", "(a value that contains an access key secret)", "(a value that contains a run key)"}
+	for where, evs := range map[string][]map[string]any{"record": events(t, res), "batch": g.Events()} {
+		pa := ofType(evs, "dev.qory.run.policy_applied")
+		if len(pa) == 0 {
+			t.Fatalf("%s: no policy_applied", where)
+		}
+		applied := data(pa[0])
+		if err := schema.Validate(applied); err != nil {
+			t.Errorf("%s: the policy_applied does not validate: %v", where, err)
+		}
+		if hosts, _ := applied["harness_hosts"].([]any); !slices.Equal(hosts, want) {
+			t.Errorf("%s: harness_hosts %v, want %v", where, applied["harness_hosts"], want)
+		}
+	}
+}
+
+// TestARunStartedSendsAnAboutThatPhrasingEmpties pins run.started's about when every
+// member of it contains qak_ or qrk_ in a form that holds no phrase: it is sent, empty,
+// as an about the caller passed is, and the event validates against its schema.
+func TestARunStartedSendsAnAboutThatPhrasingEmpties(t *testing.T) {
+	sp, g := specGateway(t, "FAKE_EXIT=0")
+	selecting(g, "")
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.About = &session.About{Subjects: []session.Subject{{Type: "issue", Ref: "qak_FAKE"}}}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := data(ofType(events(t, res), "dev.qory.run.started")[0])
+	schema, err := contracts.Compile("events/run.started.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(started); err != nil {
+		t.Errorf("the run.started does not validate: %v", err)
+	}
+	if about, ok := started["about"].(map[string]any); !ok || len(about) != 0 {
+		t.Errorf("run.started about %v, want an empty object", started["about"])
+	}
+}
+
+// wrapFails is an open wall whose Wrap fails with err.
+type wrapFails struct {
+	openWall
+	err error
+}
+
+func (w *wrapFails) Prepare(ctx context.Context, req wall.Request) (wall.Enclosure, error) {
+	w.openWall.Prepare(ctx, req)
+	return w, nil
+}
+
+func (w *wrapFails) Wrap(context.Context, wall.Launch) (wall.Launch, error) {
+	return wall.Launch{}, w.err
+}
+
+// TestAWrapThatFailsPrintsAPhraseForASecretInAPath pins the error of a run whose wall
+// cannot wrap the launch: an error that contains qak_ or qrk_ is the phrase, and still
+// wraps the wall's error.
+func TestAWrapThatFailsPrintsAPhraseForASecretInAPath(t *testing.T) {
+	for _, p := range []string{"/tmp/qak_FAKE/env", "/tmp/QRK_FAKE/env"} {
+		w := &wrapFails{err: &fs.PathError{Op: "open", Path: p, Err: fs.ErrPermission}}
+		_, err := session.Run(context.Background(), walledSpec(t, w))
+		if err == nil {
+			t.Fatalf("%s: the run started", p)
+		}
+		if low := strings.ToLower(err.Error()); strings.Contains(low, "qak_") || strings.Contains(low, "qrk_") || !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("%s: %q, want a phrase that wraps fs.ErrPermission", p, err)
+		}
 	}
 }

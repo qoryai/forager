@@ -75,7 +75,7 @@ const maxLinks = 40
 func split(p string, links int) (splitPath, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		return splitPath{}, err
+		return splitPath{}, accesskey.ShownError(err)
 	}
 	var tail []string
 	for dir := abs; ; {
@@ -84,7 +84,7 @@ func split(p string, links int) (splitPath, error) {
 			return splitPath{target, tail}, nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return splitPath{}, err
+			return splitPath{}, accesskey.ShownError(err)
 		}
 		info, err := os.Lstat(dir)
 		switch {
@@ -96,12 +96,12 @@ func split(p string, links int) (splitPath, error) {
 			}
 			to, err := os.Readlink(dir)
 			if err != nil {
-				return splitPath{}, err
+				return splitPath{}, accesskey.ShownError(err)
 			}
 			if !filepath.IsAbs(to) {
 				parent, err := filepath.EvalSymlinks(filepath.Dir(dir))
 				if err != nil {
-					return splitPath{}, err
+					return splitPath{}, accesskey.ShownError(err)
 				}
 				to = filepath.Join(parent, to)
 			}
@@ -109,7 +109,7 @@ func split(p string, links int) (splitPath, error) {
 		case err == nil:
 			return splitPath{}, fmt.Errorf("%s exists and does not resolve", pathShown(dir))
 		case !errors.Is(err, fs.ErrNotExist):
-			return splitPath{}, err
+			return splitPath{}, accesskey.ShownError(err)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -285,7 +285,7 @@ func lookupsOf(abs string, names []string) ([]lookup, string, error) {
 		}
 		at, err := split(cur, 0)
 		if err != nil {
-			return nil, "", err
+			return nil, "", accesskey.ShownError(err)
 		}
 		out = append(out, lookup{dir: cur, rest: append([]string(nil), names[i:]...), at: at})
 		next := filepath.Join(cur, names[i])
@@ -294,7 +294,7 @@ func lookupsOf(abs string, names []string) ([]lookup, string, error) {
 			return out, "", nil
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", accesskey.ShownError(err)
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {
 			cur = next
@@ -306,7 +306,7 @@ func lookupsOf(abs string, names []string) ([]lookup, string, error) {
 		}
 		to, err := os.Readlink(next)
 		if err != nil {
-			return nil, "", err
+			return nil, "", accesskey.ShownError(err)
 		}
 		if filepath.IsAbs(to) {
 			cur = "/"
@@ -522,9 +522,9 @@ func wordEnd(c byte) bool { return strings.IndexByte(" \t\n\r\"'`:;=,&|()<>", c)
 // directory, read-only, and the hook socket's directory are Forager's, which it
 // keeps apart from every caller's place: the runs directory is one of Forager's
 // files, and so is where the sockets are made. A refusal's first name is always one of
-// the places exactly as the caller passed it, or [accesskey.ShownValue]'s phrase in its
-// place when it contains qak_ or qrk_ in any case. Detail prints such a path as the
-// phrase too, and the names list each phrase once:
+// the places exactly as the caller passed it, or [accesskey.ShownName]'s phrase in its
+// place when it contains qak_ or qrk_ in any case. Detail prints such a path as
+// [accesskey.ShownValue]'s phrase, and the names list each phrase once:
 //
 //   - mount_contains_forager_files: a place that is, contains or lies inside one of
 //     Forager's files, or a writable place that contains a directory a name on the way
@@ -820,20 +820,10 @@ func paths(ms []wall.Mount) []string {
 // its place when it contains qak_ or qrk_ in any case.
 func pathShown(p string) string { return accesskey.ShownValue(p, false) }
 
-// pathsShown are paths as a refusal's Names lists them: each as [pathShown] prints it,
-// in order, with each phrase once. A path without either prefix is listed as it is, as
-// often as it is given.
-func pathsShown(ps ...string) []string {
-	var out []string
-	for _, p := range ps {
-		shown := pathShown(p)
-		if shown != p && slices.Contains(out, shown) {
-			continue
-		}
-		out = append(out, shown)
-	}
-	return out
-}
+// pathsShown are paths as a refusal's Names lists them: as [accesskey.ShownNames] lists
+// them, a name's phrase in place of a path that contains qak_ or qrk_ in any case, as
+// run.refused's names are, each phrase once.
+func pathsShown(ps ...string) []string { return accesskey.ShownNames(ps) }
 
 // eachShown is each of the paths as [pathShown] prints it, in order, every one kept:
 // for a message that lists them side by side.
@@ -856,7 +846,7 @@ func firstWallBinds(w wall.Wall) ([]bindSource, error) {
 	}
 	binds, err := b.Binds(wall.Launch{})
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	binds = append(binds, wall.Bind{Path: socket.Dirs(), Pattern: true})
 	return bindSources(binds)
@@ -871,7 +861,7 @@ func wallBinds(e wall.Enclosure, socketPath string, ca []byte) ([]bindSource, er
 	}
 	binds, err := b.Binds(wall.Launch{Socket: socketPath, CA: ca})
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return bindSources(binds)
 }

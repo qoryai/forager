@@ -298,5 +298,5 @@ func (hostSystem) engine(ctx context.Context, argv, env []string) ([]byte, error
 	if errors.As(err, &exit) && len(bytes.TrimSpace(exit.Stderr)) > 0 {
 		return out, fmt.Errorf("%w: %s", accesskey.ShownError(err), accesskey.ShownValue(string(bytes.TrimSpace(exit.Stderr)), false))
 	}
-	return out, err
+	return out, accesskey.ShownError(err)
 }

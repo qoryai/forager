@@ -141,7 +141,7 @@ type service struct {
 func (g *Gateway) startService(cert *tls.Certificate) (*service, error) {
 	ln, err := net.Listen("tcp", g.cfg.Listen)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	s := &service{g: g, ln: ln, side: &side{remote: true, scheme: "https"}, edgeQ: newConnQueue(ln.Addr()), pending: map[net.Conn]struct{}{},
 		conns: newConnLimit(maxConns, maxSourceConns, maxBlockConns)}
@@ -625,6 +625,7 @@ func (s *service) close(ctx context.Context) error {
 	if errors.Is(err, net.ErrClosed) {
 		err = nil
 	}
+	err = accesskey.ShownError(err)
 	s.wg.Wait()
 	if serr := s.edge.Shutdown(ctx); serr != nil {
 		s.edge.Close()

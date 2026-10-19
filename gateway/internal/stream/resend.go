@@ -96,6 +96,14 @@ type ResendResult struct {
 // NotOpened: every record is completed, as any other, and one that holds no event is
 // left as it is. dev.qory.run.registered is never sent.
 func Resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
+	// The record directory's path, which the caller passed, is in the text of a file's
+	// error: the phrase stands in for one that contains qak_ or qrk_ in any case.
+	res, err := resend(ctx, cfg)
+	return res, accesskey.ShownError(err)
+}
+
+// resend is [Resend], its errors as they are made.
+func resend(ctx context.Context, cfg ResendConfig) (*ResendResult, error) {
 	if cfg.Report == nil {
 		cfg.Report = func(string) {}
 	}

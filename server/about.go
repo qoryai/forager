@@ -290,12 +290,16 @@ func ReportedAbout(a *About) *About {
 // out, since neither form holds a phrase and a subject needs both, and so is a URL
 // that contains one. In Details, a string is accesskey.ShownValue's phrase and a
 // member name accesskey.ShownName's; of two members whose names become the same, the
-// first is kept. Details that grow past their bound are left out. A nil About is nil.
+// first is kept. Details that grow past their bound are left out, and Details without
+// such a value are kept byte for byte. A nil About is nil.
 func ShownAbout(a *About) *About {
 	if a == nil {
 		return nil
 	}
 	out := *a
+	if !aboutContainsSecret(a) {
+		return &out
+	}
 	out.Kind, out.Title = accesskey.ShownName(a.Kind, false), accesskey.ShownName(a.Title, false)
 	out.Subjects = nil
 	for _, s := range a.Subjects {
@@ -308,7 +312,7 @@ func ShownAbout(a *About) *About {
 		s.Title = accesskey.ShownName(s.Title, false)
 		out.Subjects = append(out.Subjects, s)
 	}
-	if !detailsAbsent(a.Details) {
+	if !detailsAbsent(a.Details) && jsonSecrets(a.Details) != "" {
 		d, err := shownDetails(a.Details)
 		if err != nil || checkDetails(d) != "" {
 			d = nil
@@ -316,6 +320,46 @@ func ShownAbout(a *About) *About {
 		out.Details = d
 	}
 	return &out
+}
+
+// aboutContainsSecret reports whether a member of a, a decoded string or member name
+// of its Details among them, contains qak_ or qrk_ in any case.
+func aboutContainsSecret(a *About) bool {
+	if accesskey.ContainsSecret(a.Kind) || accesskey.ContainsSecret(a.Title) {
+		return true
+	}
+	for _, s := range a.Subjects {
+		for _, v := range []string{s.Type, s.Ref, s.URL, s.Title} {
+			if accesskey.ContainsSecret(v) {
+				return true
+			}
+		}
+	}
+	return !detailsAbsent(a.Details) && jsonSecrets(a.Details) != ""
+}
+
+// jsonSecrets are the strings and member names of the JSON d, as they decode, that
+// contain qak_ or qrk_ in any case, joined by spaces, so an escape such as \u0061
+// hides neither; empty when there are none. Bytes that do not decode as JSON are
+// checked as they are written.
+func jsonSecrets(d []byte) string {
+	dec := jsontext.NewDecoder(bytes.NewReader(d), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	var found []string
+	for {
+		tok, err := dec.ReadToken()
+		if err == io.EOF {
+			return strings.Join(found, " ")
+		}
+		if err != nil {
+			if accesskey.ContainsSecret(string(d)) {
+				return string(d)
+			}
+			return strings.Join(found, " ")
+		}
+		if tok.Kind() == '"' && accesskey.ContainsSecret(tok.String()) {
+			found = append(found, tok.String())
+		}
+	}
 }
 
 // shownDetails are Details with each string as accesskey.ShownValue shows it and each

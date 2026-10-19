@@ -74,6 +74,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -637,14 +638,17 @@ func readRegistration(body []byte) (*registrationBody, error) {
 			return nil, err
 		}
 		// Kept as run.started sends it, so the attach's answer, and with it the
-		// gateway's run.registered, contains no value that contains qak_ or qrk_.
-		reg.About = nil
-		if shown := server.ShownAbout(&a); !shown.Empty() {
-			b, err := json.Marshal(shown)
-			if err != nil {
-				return nil, err
+		// gateway's run.registered, contains no value that contains qak_ or qrk_. An
+		// about without one is kept as the body has it.
+		if shown := server.ShownAbout(&a); !reflect.DeepEqual(*shown, a) {
+			reg.About = nil
+			if !shown.Empty() {
+				b, err := json.Marshal(shown)
+				if err != nil {
+					return nil, err
+				}
+				reg.About = b
 			}
-			reg.About = b
 		}
 	}
 	// As run.started sends them, as about is.
@@ -1316,11 +1320,12 @@ type File struct {
 }
 
 // OpenFile opens or creates the file and reads the ids it already holds, so a
-// restarted receiver still deduplicates.
+// restarted receiver still deduplicates. An error whose text contains qak_ or qrk_,
+// such as one that quotes the path, prints as accesskey.ShownError prints it.
 func OpenFile(path string) (*File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	seen := map[string]bool{}
 	s := bufio.NewScanner(f)
@@ -1335,11 +1340,11 @@ func OpenFile(path string) (*File, error) {
 	}
 	if err := s.Err(); err != nil {
 		f.Close()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	return &File{f: f, seen: seen}, nil
 }
@@ -1356,7 +1361,7 @@ func (s *File) Append(id string, line []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.f.Write(append(append([]byte(nil), line...), '\n')); err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	s.seen[id] = true
 	return nil

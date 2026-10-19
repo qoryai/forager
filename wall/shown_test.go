@@ -3,6 +3,7 @@ package wall
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -300,6 +301,40 @@ func TestProgramOutputWithASecretIsAPhrase(t *testing.T) {
 		_, err := runContainersExist(ctx, &recorder{t: t, engineID: id}, e, runID)
 		if err == nil || err.Error() != want {
 			t.Errorf("engine id %s: %v, want %s", id, err, want)
+		}
+	}
+}
+
+// TestTheMachinesCommandsPrintAPhraseForASecretInTheProgram pins the errors of the
+// machine's engine and stdout commands for a program that cannot start: a program path
+// that contains qak_ or qrk_ is the phrase, and the error still wraps the exec error.
+func TestTheMachinesCommandsPrintAPhraseForASecretInTheProgram(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name string
+		call func(argv []string) error
+	}{
+		{"engine", func(argv []string) error {
+			_, err := hostSystem{}.engine(context.Background(), argv, []string{"DOCKER_HOST=unix:///nowhere"})
+			return err
+		}},
+		{"stdout", func(argv []string) error {
+			r, err := hostSystem{}.stdout(context.Background(), argv, nil)
+			if err == nil {
+				r.Close()
+			}
+			return err
+		}},
+	} {
+		for _, program := range []string{dir + "/qak_FAKE/docker", dir + "/QRK_FAKE/docker"} {
+			err := c.call([]string{program, "version"})
+			if err == nil {
+				t.Fatalf("%s %s: no error", c.name, program)
+			}
+			noPrefix(t, c.name, err.Error())
+			if !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s %s: %v does not wrap fs.ErrNotExist", c.name, program, err)
+			}
 		}
 	}
 }

@@ -13,8 +13,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -1498,5 +1500,49 @@ func TestARefusalPrintsAPhraseForASecretInAName(t *testing.T) {
 	}
 	if r.Names[1] != "qak_x" {
 		t.Errorf("the names changed: %q", r.Names)
+	}
+}
+
+// TestAnEnrolmentsDialErrorPrintsAPhraseForASecret pins the error of an enrolment that
+// fails before an answer: when its text contains qak_ or qrk_ in any case, a proxy's
+// address of the caller's client say, the error prints the value's phrase in its place,
+// and still wraps the client's error.
+func TestAnEnrolmentsDialErrorPrintsAPhraseForASecret(t *testing.T) {
+	key, err := accesskey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := accesskey.NewEnrolmentRequest(key, "qecn_F1XT0RE0000000000000000000."+keys(t).SigningKey.Fingerprint, "build-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for proxy, phrase := range map[string]string{
+		"http://qak_fake.example:1": "(a value that contains an access key secret)",
+		"http://QRK_FAKE.example:1": "(a value that contains a run key)",
+	} {
+		p, _ := url.Parse(proxy)
+		hc := &http.Client{Transport: &http.Transport{
+			Proxy: http.ProxyURL(p),
+			DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+				return nil, fmt.Errorf("dial %s: connection refused", addr)
+			},
+		}}
+		for what, post := range map[string]func() error{
+			"Post": func() error {
+				_, err := r.Post(context.Background(), hc, "https://apiary.example", "qory/test")
+				return err
+			},
+			"PostVia": func() error {
+				_, err := r.PostVia(context.Background(), hc, "https://apiary.example", "https://gateway.example", "qory/test")
+				return err
+			},
+		} {
+			err := post()
+			want := "enrolment https://apiary.example" + accesskey.EnrolmentPath + ": " + phrase
+			var ue *url.Error
+			if err == nil || err.Error() != want || !errors.As(err, &ue) {
+				t.Errorf("%s through %s: %v, want %q wrapping a *url.Error", what, proxy, err, want)
+			}
+		}
 	}
 }

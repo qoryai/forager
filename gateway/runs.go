@@ -794,6 +794,8 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 		a["digest"] = pol.Digest
 	}
 	if pol.URL != "" {
+		// server.Client.Discover refuses a run.url that contains qak_ or qrk_, which no
+		// phrase can stand in for: the schema's url is a URI.
 		a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
 	}
 	if pol.Node != nil {

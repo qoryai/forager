@@ -157,7 +157,8 @@ type Spec struct {
 	// run, mount_through_link. A relative path is taken from the working directory.
 	Written []string
 	// Declared is the egress the harness declared, nil when nothing was. It is
-	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
+	// reported in dev.qory.run.policy_applied as harness_hosts, a host that contains
+	// qak_ or qrk_ in any case as accesskey.ShownValue's phrase, and decides nothing:
 	// the policy alone decides.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs. It is one of
@@ -885,7 +886,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			ProxyToken: relayToken,
 		})
 		if err != nil {
-			return fail(err)
+			return fail(accesskey.ShownError(err))
 		}
 	}
 
@@ -896,16 +897,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	start := time.Now()
 	// A value of the run's that contains qak_ or qrk_ in any case is sent as a phrase in
-	// its place: accesskey.ShownName's for the runtime, the host, the directory, the
-	// wall, the image, its name and its container runtime; accesskey.ShownValue's for the
+	// its place: accesskey.ShownName's for the runtime, the host, the wall, the image,
+	// its name and its container runtime; accesskey.ShownValue's for the directory, the
 	// command, each argument, the runtime's version and each word of the preparation;
 	// and server.ShownLabels' and server.ShownAbout's for the labels and about.
 	started := map[string]any{
 		"opened_by": event.OpenedBySession, "runtime": accesskey.ShownName(rt.Name(), false), "command": accesskey.ShownValue(command, false), "args": shownValues(args),
-		"dir": accesskey.ShownName(spec.Dir, false), "interactive": interactive, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false),
+		"dir": accesskey.ShownValue(spec.Dir, false), "interactive": interactive, "forager_version": spec.ForagerVersion, "host": accesskey.ShownName(hostname(), false),
 	}
 	if byReference {
-		started["dir"] = accesskey.ShownName(shown.Dir, false)
+		started["dir"] = accesskey.ShownValue(shown.Dir, false)
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = accesskey.ShownValue(v, false)
@@ -945,8 +946,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if len(answer.Labels) > 0 && remote == nil {
 		started["labels"] = server.ShownLabels(answer.Labels)
 	}
-	if about := server.ShownAbout(server.ReportedAbout(spec.About)); !about.Empty() && remote == nil {
-		started["about"] = about
+	if about := server.ReportedAbout(spec.About); about != nil && remote == nil {
+		started["about"] = server.ShownAbout(about)
 	}
 	write(event.RunStarted, started)
 	// policyApplied is the policy_applied event of the members the gateway decides, for
@@ -960,7 +961,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		a["variables"] = shownVariables(vars.Applied)
 		if spec.Declared != nil {
-			a["harness_hosts"] = spec.Declared
+			a["harness_hosts"] = shownValues(spec.Declared)
 		} else {
 			delete(a, "harness_hosts")
 		}

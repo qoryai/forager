@@ -416,16 +416,16 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	if v := c.Config.Via; v != nil {
 		var err error
 		if u, err = v.rebase(u); err != nil {
-			return nil, err
+			return nil, accesskey.ShownError(err)
 		}
 	}
 	hc, err := c.http()
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if body == nil {
 		req.Body, req.ContentLength = nil, 0
@@ -454,12 +454,12 @@ func (c *Client) send(ctx context.Context, method, u string, body []byte, max in
 	req.Header.Set(HeaderSignature, sig)
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(max)+1))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	a := &answer{status: resp.StatusCode, body: b}
 	if resp.StatusCode == http.StatusUnauthorized || len(b) > max || (resp.StatusCode != http.StatusOK && len(b) > MaxRefusal) {
@@ -539,10 +539,15 @@ func (c *Client) fetchBody(ctx context.Context, what, u, digestHeader string) ([
 	return a.body, digest, nil
 }
 
+// errRunURLSecret refuses a run.url that contains qak_ or qrk_: the run's
+// run.policy_applied sends run.url as a URI, which no phrase is.
+var errRunURLSecret = errors.New("run.url contains qak_ or qrk_ in some case, which starts an access key secret or a run key, and run.policy_applied sends run.url as it is")
+
 // Discover fetches the configuration document from the server's well-known path and
 // returns it with the server's digest of it. An error, transport, status or a document
 // the schema refuses, means no run; it names the URL. A document without the run
-// endpoint is refused as one the schema refuses. A 401 is unauthorized, a signed
+// endpoint, or whose run.url contains qak_ or qrk_ in any case, is refused as one the
+// schema refuses. A 401 is unauthorized, a signed
 // refusal is the code its body contains, rate_limited say, and an answer that does not
 // verify is answer_unsigned, each an [*accesskey.Refusal].
 func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
@@ -557,6 +562,9 @@ func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	}
 	if conf.Run == nil || conf.Run.URL == "" {
 		return nil, "", &DocumentError{"configuration", u, errors.New("the document has no run endpoint, run.url")}
+	}
+	if accesskey.ContainsSecret(conf.Run.URL) {
+		return nil, "", &DocumentError{"configuration", u, errRunURLSecret}
 	}
 	return &conf, digest, nil
 }

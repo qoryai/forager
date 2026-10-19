@@ -365,7 +365,8 @@ A program that needs custom code implements the interface.
 ## The spec
 
 - `Declared` is the egress the harness declared. The record reports it as
-  `harness_hosts`, and it decides nothing. `nil` means no declaration.
+  `harness_hosts`, a host that contains `qak_` or `qrk_` as the value's phrase in its
+  place, and it decides nothing. `nil` means no declaration.
 - `Interactive` runs the session on a pseudo-terminal.
   - The exception: an argument the runtime's descriptor lists as headless is among
     `Args`, such as `-p` for Claude Code. Then the session runs on pipes.

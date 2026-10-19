@@ -332,22 +332,22 @@ func copyTools(tools []Tool) []Tool {
 func (g *Gateway) listenLink() error {
 	dir, err := os.MkdirTemp("", link.LinkDirPrefix)
 	if err != nil {
-		return err
+		return accesskey.ShownError(err)
 	}
 	socket := filepath.Join(dir, link.LinkSocketName)
 	if err := os.Chmod(dir, link.LinkDirMode); err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	if err := os.Chmod(socket, link.LinkSocketMode); err != nil {
 		ln.Close()
 		os.RemoveAll(dir)
-		return err
+		return accesskey.ShownError(err)
 	}
 	g.dir, g.ln = dir, ln
 	return nil
@@ -548,7 +548,7 @@ func (g *Gateway) Close(ctx context.Context) (Delivery, error) {
 	}
 	cancel()
 	if g.dir != "" {
-		errs = append(errs, os.RemoveAll(g.dir))
+		errs = append(errs, accesskey.ShownError(os.RemoveAll(g.dir)))
 	}
 	g.cancel()
 	g.closeErr = errors.Join(errs...)

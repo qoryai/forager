@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/qoryai/forager/accesskey"
 )
 
 // Via is the server document's via: the gateway a keyed machine or a starter reaches
@@ -72,11 +74,11 @@ func (v Via) Transport() (*http.Transport, error) {
 func (v Via) transport(base http.RoundTripper) (*http.Transport, error) {
 	u, err := v.origin()
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	cfg, err := RemoteTLS{CAFile: v.CAFile, CertificateSHA256: v.CertificateSHA256}.config(u.Hostname())
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	var t *http.Transport
 	switch b := base.(type) {
@@ -116,11 +118,11 @@ func defaultTransport() *http.Transport {
 func (v Via) rebase(u string) (string, error) {
 	o, err := v.origin()
 	if err != nil {
-		return "", err
+		return "", accesskey.ShownError(err)
 	}
 	r, err := url.Parse(u)
 	if err != nil {
-		return "", err
+		return "", accesskey.ShownError(err)
 	}
 	r.Scheme, r.Host, r.User = "https", o.Host, nil
 	return r.String(), nil

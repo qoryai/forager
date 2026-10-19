@@ -241,13 +241,16 @@ func (a LinkRunAnswer) shown() shownRunAnswer {
 	return s
 }
 
-// shownDocument is a document as it prints: the value's phrase in place of all of it
-// when it contains qak_ or qrk_ in any case.
+// shownDocument is a document as it prints: the value's phrase, as a JSON string, in
+// place of all of it when a string or member name in it, as it decodes, contains qak_
+// or qrk_ in any case.
 func shownDocument(d json.RawMessage) json.RawMessage {
-	if !accesskey.ContainsSecret(string(d)) {
+	secrets := jsonSecrets(d)
+	if secrets == "" {
 		return d
 	}
-	return json.RawMessage(accesskey.ShownValue(string(d), false))
+	b, _ := json.Marshal(accesskey.ShownValue(secrets, false))
+	return b
 }
 
 // Format prints a as fmt prints a struct, under every verb and flag, with its
@@ -490,7 +493,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	if set != nil {
 		set(req.Header)
@@ -508,9 +511,9 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 		// no place a user knows: the error alone, the caller names the request.
 		var ue *url.Error
 		if errors.As(err, &ue) {
-			return nil, ue.Err
+			return nil, accesskey.ShownError(ue.Err)
 		}
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	defer resp.Body.Close()
 	// Behind a separate gateway the whole answer is read, up to the largest document,
@@ -521,7 +524,7 @@ func (k *Link) send(ctx context.Context, method, u string, body []byte, most int
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	one := func(name string) string {
 		if v := resp.Header.Values(name); len(v) == 1 {

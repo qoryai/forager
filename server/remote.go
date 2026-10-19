@@ -212,7 +212,7 @@ func (g *remoteGateway) dial(ctx context.Context) (*boundConn, error) {
 	d := &tls.Dialer{NetDialer: &net.Dialer{}, Config: g.tls}
 	c, err := d.DialContext(ctx, "tcp", g.address)
 	if err != nil {
-		return nil, err
+		return nil, accesskey.ShownError(err)
 	}
 	tc := c.(*tls.Conn)
 	cs := tc.ConnectionState()

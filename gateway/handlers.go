@@ -1,16 +1,19 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -259,7 +262,7 @@ func refuseOpen(w http.ResponseWriter, err error) {
 	err = codeless(err)
 	var wall *refusal.NeedsWall
 	if errors.As(err, &wall) {
-		refuse(w, http.StatusForbidden, refusal.WallRequired, wall.Names, accesskey.FromGateway, err.Error())
+		refuse(w, http.StatusForbidden, refusal.WallRequired, shownWallNames(wall.Names), accesskey.FromGateway, err.Error())
 		return
 	}
 	var ref *accesskey.Refusal
@@ -279,7 +282,20 @@ func refuseOpen(w http.ResponseWriter, err error) {
 		// A refusal of an answer that came without one, answer_unsigned to a 2xx say.
 		status = http.StatusBadGateway
 	}
-	refuse(w, status, ref.Code, ref.Names, from, err.Error())
+	refuse(w, status, ref.Code, accesskey.ShownNames(ref.Names), from, err.Error())
+}
+
+// shownWallNames are a [refusal.NeedsWall]'s names as the link sends them: the image of
+// image=<name> as [accesskey.ShownName] shows it, the other names as they are.
+func shownWallNames(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		if image, ok := strings.CutPrefix(n, "image="); ok {
+			n = "image=" + accesskey.ShownName(image, false)
+		}
+		out[i] = n
+	}
+	return out
 }
 
 // codeless turns a server's 410 to a request the gateway makes as a run opens, signed
@@ -435,6 +451,7 @@ func (g *Gateway) batch(s *side, w http.ResponseWriter, r *http.Request) {
 		refused(why)
 		return
 	}
+	shownStarted(evs)
 	if _, err := lr.st.Accept(evs); err != nil {
 		if end, ended := lr.gone(); ended {
 			gone(w, end)
@@ -597,6 +614,52 @@ func (lr *linkRun) accepted(evs []event.Event) bool {
 		}
 	}
 	return final
+}
+
+// shownStarted sets the labels of each dev.qory.run.started in evs, a batch
+// [linkRun.check] accepted, to those [server.ShownLabels] gives, so labels a session
+// sends as they are reach the record and the server with a phrase for each key and
+// value that contains qak_ or qrk_ in any case. Data whose labels are already so is
+// left as it is.
+func shownStarted(evs []event.Event) {
+	for i, ev := range evs {
+		if ev.Type != event.RunStarted {
+			continue
+		}
+		raw, ok := ev.Data.(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var data map[string]json.RawMessage
+		var labels map[string]string
+		if json.Unmarshal(raw, &data) != nil || data["labels"] == nil || json.Unmarshal(data["labels"], &labels) != nil {
+			continue
+		}
+		shown := server.ShownLabels(labels)
+		if maps.Equal(shown, labels) {
+			continue
+		}
+		b, err := unescaped(shown)
+		if err != nil {
+			continue
+		}
+		data["labels"] = b
+		if b, err = unescaped(data); err == nil {
+			evs[i].Data = json.RawMessage(b)
+		}
+	}
+}
+
+// unescaped is v as JSON without HTML escaping, so the rest of an event's data keeps
+// its characters.
+func unescaped(v any) (json.RawMessage, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // sameLabels reports whether a run.started's labels, as its data decodes, are the

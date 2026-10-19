@@ -47,7 +47,7 @@
     },
     "image": {"description": "The image the policy or the run configuration selects, which the run started in: the machine's name for it, or its reference pinned by digest. Absent when neither selects one and the machine's default was used. Fixed for the run. An image that contains qak_ or qrk_ in any case is one of two phrases in its place: the access key secret's when it contains qak_, else the run key's.", "anyOf": [{"$ref": "../policy.schema.json#/properties/image"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)"]}]},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "harness_hosts": {"description": "The egress the harness declared, as passed to Forager, when present. Information only: it decides nothing. A host that contains qak_ or qrk_ in any case is `(a value that contains an access key secret)` in its place, or `(a value that contains a run key)` when it contains qrk_ and no qak_.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "node_policy": {
       "description": "The node's policy, when the run has both a fetched policy and a policy the command passes, which narrows it, so the record shows the path rules of the server's policy and of the node's.",
       "type": "object",

@@ -298,6 +298,13 @@ func ShownName(v string, quote bool) string {
 	return v
 }
 
+// IsNamePhrase reports whether v is one of the phrases [ShownName] gives in place of a
+// name: what a reader of shown names, labels say, gets for a value that contains qak_
+// or qrk_ in any case.
+func IsNamePhrase(v string) bool {
+	return v == ShownName(SecretPrefix, false) || v == ShownName(runKeyPrefix, false)
+}
+
 // ShownNames are names as a message or an event lists them: each as [ShownName] shows
 // it bare, in order, with each phrase once, so two names that give one phrase list it
 // once. A name without either prefix is listed as it is, as often as it is given.
