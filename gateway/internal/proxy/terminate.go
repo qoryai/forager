@@ -317,11 +317,12 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		keyed := false
 		if allowed && credentialed && c != nil && tl == nil {
 			if name, value, ok := c.header(); ok {
 				r.Header.Set(name, value)
 				r.Header.Set(setBy, c.Name)
-				req.Credential = c.Name
+				req.Credential, keyed = c.Name, true
 			}
 		}
 		if !allowed {
@@ -343,6 +344,11 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
 		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req})
+		if keyed {
+			// In the context, since the session's Connection header can take any header
+			// off the request before it reaches the transport, the mark among them.
+			ctx = context.WithValue(ctx, keyedKey{}, true)
+		}
 		rp.ServeHTTP(w, r.WithContext(ctx))
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
@@ -465,8 +471,11 @@ func (p *Proxy) upstream() http.RoundTripper {
 	return p.up
 }
 
+// keyedKey marks the context of a request the proxy set a credential on.
+type keyedKey struct{}
+
 // unmark takes the proxy's own mark off a request before it leaves, and sends a
-// request that has it by keyed.
+// request whose context has [keyedKey] by keyed.
 type unmark struct{ rt, keyed http.RoundTripper }
 
 // CloseIdleConnections closes the idle connections of both transports.
@@ -477,14 +486,18 @@ func (u *unmark) CloseIdleConnections() {
 
 // RoundTrip sends the request on without the mark.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt := u.rt
+	if r.Context().Value(keyedKey{}) != nil {
+		rt = u.keyed
+	}
 	if r.Header.Get(setBy) == "" {
-		return u.rt.RoundTrip(r)
+		return rt.RoundTrip(r)
 	}
 	out := r.Clone(r.Context())
 	out.Header.Del(setBy)
 	// The trailer is filled once the body is read; a clone's copy would stay empty.
 	out.Trailer = r.Trailer
-	resp, err := u.keyed.RoundTrip(out)
+	resp, err := rt.RoundTrip(out)
 	if resp != nil {
 		resp.Request = r
 	}

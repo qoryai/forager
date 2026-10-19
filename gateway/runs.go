@@ -549,7 +549,7 @@ func (lr *linkRun) arm() {
 	lr.mu.Lock()
 	lr.last = time.Now()
 	if !lr.ended {
-		lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet)
 	}
 	lr.mu.Unlock()
 	if lr.live != nil {
@@ -593,6 +593,11 @@ func (lr *linkRun) touch() {
 	lr.mu.Unlock()
 }
 
+// watchAfter runs watch after d, a panic in it reported under the run's id.
+func (lr *linkRun) watchAfter(d time.Duration) *time.Timer {
+	return time.AfterFunc(d, func() { routine.Do(routine.ForRun(lr.g.report, lr.id), lr.watch) })
+}
+
 // watch ends the run when its session has asked nothing of it for the quiet time, and
 // otherwise looks again when that time would be up.
 func (lr *linkRun) watch() {
@@ -602,7 +607,7 @@ func (lr *linkRun) watch() {
 		return
 	}
 	if idle := time.Since(lr.last); idle < lr.g.quiet {
-		lr.timer = time.AfterFunc(lr.g.quiet-idle, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet - idle)
 		lr.mu.Unlock()
 		return
 	}
@@ -635,9 +640,12 @@ func (lr *linkRun) end(e ending) {
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
-	routine.Go(routine.ForRun(lr.g.report, lr.id), func() {
+	report := routine.ForRun(lr.g.report, lr.id)
+	routine.Go(report, func() {
 		defer close(lr.done)
-		lr.release()
+		// A panic while the run lets go of what it holds still flushes its record and,
+		// on the one address, retires it.
+		routine.Do(report, lr.release)
 		if discarded {
 			if err := lr.st.Discard(lr.g.base); err != nil {
 				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, accesskey.ShownError(err)))

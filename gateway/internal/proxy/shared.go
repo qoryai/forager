@@ -226,10 +226,16 @@ func (l *Listener) take(c *net.Conn) (more, failed bool) {
 // dispatch reads c's preamble and hands c to the run it names, or closes it.
 func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 	defer l.wg.Done()
+	forgotten := false
+	defer func() {
+		// After a panic in open.
+		if !forgotten {
+			l.forget(c)
+		}
+	}()
 	p, r, why := l.open(c, guardedOnly)
-	l.mu.Lock()
-	delete(l.pending, c)
-	l.mu.Unlock()
+	l.forget(c)
+	forgotten = true
 	if p == nil {
 		c.Close()
 		if l.report != nil {
@@ -238,6 +244,13 @@ func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 		return
 	}
 	p.in.deliver(&relayed{Conn: c, r: r})
+}
+
+// forget takes c off the connections whose preamble is being read.
+func (l *Listener) forget(c net.Conn) {
+	l.mu.Lock()
+	delete(l.pending, c)
+	l.mu.Unlock()
 }
 
 // open reads the preamble within the listener's wait, and finds the run whose secret

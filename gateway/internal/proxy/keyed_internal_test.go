@@ -17,8 +17,8 @@ import (
 
 // TestARequestThatCarriesACredentialGoesOverHTTP1 pins that, to an origin that offers
 // HTTP/2, a request the proxy sets a credential on arrives over HTTP/1.1, with the
-// credential, and a request to a terminated host without a credential arrives over
-// HTTP/2, as before.
+// credential, also when the session's Connection header lists the proxy's mark, and a
+// request to a terminated host without a credential arrives over HTTP/2, as before.
 func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	up, err := NewCA("upstream")
 	if err != nil {
@@ -51,7 +51,7 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Terminate(ca, []Credential{{Name: "key", Hosts: []string{"key.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}},
+	p.Terminate(ca, []Credential{{Name: "key", Hosts: []string{"key.example", "marked.example"}, Scheme: "bearer", Token: func() string { return "fake-key-0001" }}},
 		map[string][]string{"other.example": {"/*"}}, nil)
 
 	trusted := x509.NewCertPool()
@@ -60,9 +60,13 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	tr := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
-	for _, host := range []string{"key.example", "other.example"} {
+	for _, host := range []string{"key.example", "marked.example", "other.example"} {
 		req, _ := http.NewRequest(http.MethodGet, "https://"+host+"/v1", nil)
 		req.Header.Set("Authorization", "Bearer stand-in")
+		if host == "marked.example" {
+			// The mark is taken off before the transport reads the request.
+			req.Header.Set("Connection", setBy)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -75,7 +79,7 @@ func TestARequestThatCarriesACredentialGoesOverHTTP1(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for host, want := range map[string]string{"key.example": "HTTP/1.1 Bearer fake-key-0001", "other.example": "HTTP/2.0 Bearer stand-in"} {
+	for host, want := range map[string]string{"key.example": "HTTP/1.1 Bearer fake-key-0001", "marked.example": "HTTP/1.1 Bearer fake-key-0001", "other.example": "HTTP/2.0 Bearer stand-in"} {
 		if got[host] != want {
 			t.Errorf("%s: the origin got %q, want %q", host, got[host], want)
 		}

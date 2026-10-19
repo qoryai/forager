@@ -517,7 +517,9 @@ func (h *held) stop() { h.once.Do(func() { close(h.done) }) }
 
 // renew asks an adapter again before its token expires and after a host refused it. A
 // renewal that fails, or that answers with other hosts, schemes or paths, leaves the
-// token as it was and is reported: what a run reaches is fixed when it starts.
+// token as it was and is reported: what a run reaches is fixed when it starts. A
+// renewal that panics is reported as [routine.Do] reports one, and the next waits as
+// one after a failed renewal does.
 func (h *held) renew() {
 	if len(h.def.Adapter) == 0 {
 		return
@@ -525,6 +527,15 @@ func (h *held) renew() {
 	h.mu.Lock()
 	h.wake = make(chan struct{}, 1)
 	h.mu.Unlock()
+	for routine.Do(h.panics, h.renewals) {
+		h.mu.Lock()
+		h.asked, h.stale = time.Now(), false
+		h.mu.Unlock()
+	}
+}
+
+// renewals renews the token until the credential is let go of.
+func (h *held) renewals() {
 	for {
 		h.mu.Lock()
 		wait := time.Until(h.expires.Add(-renewBefore))

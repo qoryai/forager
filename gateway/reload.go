@@ -132,14 +132,24 @@ func (l *live) failed(err error) {
 	}
 }
 
-// loop runs passes until nothing is marked dirty or the run ends.
+// loop runs passes until nothing is marked dirty or the run ends. After a pass that
+// panicked the loop is no longer running, so the next answer that differs starts
+// another.
 func (l *live) loop() {
 	defer l.wg.Done()
+	ended := false
+	defer func() {
+		if !ended {
+			l.mu.Lock()
+			l.running = false
+			l.mu.Unlock()
+		}
+	}()
 	for {
 		l.pass()
 		l.mu.Lock()
 		if !l.dirty || l.ctx.Err() != nil {
-			l.running = false
+			l.running, ended = false, true
 			l.mu.Unlock()
 			return
 		}

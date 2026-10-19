@@ -137,8 +137,12 @@ goroutine, request or accepted connection alone: the connection closes, an accep
 accepts the next connection, and the gateway serves its other runs on.
 `gateway.Config.Report` gets "run <id>: the gateway recovered from a panic and serves
 on; send the stack below to Forager's maintainers", without "run <id>: " where the
-panic is in no one run, and the stack on the lines after it. Neither the report nor any
-log contains the panic's value, which may contain a request's header or a credential.
+panic is in no one run, and the stack on the lines after it. A panic while a run's
+events are sent, by the gateway or by the session, ends that batch alone: the report is
+"the run's event sender recovered from a panic and sends the next batch; send the stack
+below to Forager's maintainers", with the stack, and the next batch is sent. Neither
+report nor any log contains the panic's value, which may contain a request's header or
+a credential.
 
 ## A separate gateway
 

@@ -103,10 +103,16 @@ func (l *linkListener) dial(context.Context) (net.Conn, error) {
 // and closes it otherwise.
 func (l *linkListener) check(c net.Conn, inMemory bool) {
 	defer l.wg.Done()
+	forgotten := false
+	defer func() {
+		// After a panic in opens.
+		if !forgotten {
+			l.forget(c)
+		}
+	}()
 	ok := l.opens(c, inMemory)
-	l.mu.Lock()
-	delete(l.pending, c)
-	l.mu.Unlock()
+	l.forget(c)
+	forgotten = true
 	if !ok {
 		c.Close()
 		return
@@ -116,6 +122,13 @@ func (l *linkListener) check(c net.Conn, inMemory bool) {
 	case <-l.done:
 		c.Close()
 	}
+}
+
+// forget takes c off the connections being checked.
+func (l *linkListener) forget(c net.Conn) {
+	l.mu.Lock()
+	delete(l.pending, c)
+	l.mu.Unlock()
 }
 
 // opens reports whether c is a session's: its peer this process's user, by the uid the

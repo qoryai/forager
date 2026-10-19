@@ -390,10 +390,16 @@ release may change what an existing document does, and says so under Upgrading.
   accept loop accepts the next connection, and the gateway serves its other runs on.
   `gateway.Config.Report` gets "run <id>: the gateway recovered from a panic and serves
   on; send the stack below to Forager's maintainers", without "run <id>: " where the
-  panic is in no one run, and the stack after it, never the panic's value. Before, a
-  panic in a goroutine or an accept loop stopped the gateway and every run, and Go
-  printed the panic's value to standard error; net/http printed a request handler's
-  panic with its value to standard error, from the proxy, or wrote it nowhere.
+  panic is in no one run, and the stack after it, never the panic's value. A panic
+  while a run's events are sent, by the gateway or by the session, ends that batch
+  alone: the report is "the run's event sender recovered from a panic and sends the
+  next batch; send the stack below to Forager's maintainers", with the stack, and the
+  next batch is sent. After a panic, a run's reload starts again at the next answer
+  whose digest differs, and a credential's renewal goes on after the wait a failed
+  renewal gets. Before, a panic in a goroutine or an accept loop stopped the gateway
+  and every run, and Go printed the panic's value to standard error; net/http printed
+  a request handler's panic with its value to standard error, from the proxy, or wrote
+  it nowhere.
 - A request the gateway's proxy sets a credential on goes to its host over HTTP/1.1,
   so no HTTP/2 header table (HPACK) on the connection keeps a copy of the credential.
   A request without a credential goes on over HTTP/2 where the host offers it. Before,

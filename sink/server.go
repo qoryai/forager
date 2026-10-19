@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -292,16 +293,35 @@ func (w *Server) Resend(ctx context.Context, line []byte, seq string) bool {
 	}
 }
 
-// run is the worker: it forms batches from the queue and delivers each with retries.
+// run is the worker: it forms batches from the queue and delivers each with retries. A
+// panic while a batch is formed or delivered ends that batch alone: report gets
+// [panicked] and the stack, never the panic's value, which may contain a credential,
+// and the worker goes on with the next batch.
 func (w *Server) run() {
 	defer close(w.done)
+	for w.batches() {
+	}
+}
+
+// panicked is the first line of the report of a panic in the worker; the stack follows.
+const panicked = "the run's event sender recovered from a panic and sends the next batch; send the stack below to Forager's maintainers"
+
+// batches delivers batches until the queue is closed and drained. It returns true
+// after a panic, which it reports, and false at the end.
+func (w *Server) batches() (again bool) {
+	defer func() {
+		if recover() != nil {
+			w.report(panicked + "\n" + string(debug.Stack()))
+			again = true
+		}
+	}()
 	for {
 		batch, ok := w.next()
 		if len(batch) > 0 {
 			w.deliver(batch)
 		}
 		if !ok {
-			return
+			return false
 		}
 	}
 }
