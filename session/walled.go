@@ -230,10 +230,15 @@ func (r *registration) update(binds []bindSource) error {
 	return r.write(binds)
 }
 
-// lockRegistry takes the registry's lock, waiting for a session that holds it.
+// lockRegistry takes the registry's lock, waiting for a session that holds it. A lock
+// that is a symbolic link is not opened.
 func lockRegistry(dir string) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(dir, walledLock), os.O_CREATE|os.O_RDWR, 0o600)
+	file := filepath.Join(dir, walledLock)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
+		if l := lockLink(file, "the lock of the registry of walled runs", err); l != nil {
+			return nil, l
+		}
 		return nil, fmt.Errorf("the registry of walled runs: %w", accesskey.ShownError(err))
 	}
 	for {
