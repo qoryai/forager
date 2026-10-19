@@ -87,7 +87,7 @@ func TestARunWithAServer(t *testing.T) {
 	}
 	var members map[string]any
 	json.Unmarshal(a.Applied, &members)
-	if members["source"] != "fetched" || members["run_configuration"] != c.digest || members["url"] != c.srv.URL+runsPath {
+	if members["source"] != "fetched" || members["run_configuration"] != digestOf(string(c.run)) || members["url"] != c.srv.URL+runsPath {
 		t.Errorf("applied %s", a.Applied)
 	}
 	runID := a.RunID

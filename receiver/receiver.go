@@ -4,63 +4,78 @@
 // the same signed fixtures.
 //
 // A [Handler] serves the endpoints of the contract: discovery at the well-known path,
-// the run endpoint, where a run registers with a POST, is reloaded by its id with a
-// GET of the run endpoint, a slash and the run id, is attached by its gateway with a
-// POST of the run endpoint, the run id and /attach, and is given its starter's outcome
-// with a POST of the run endpoint, the run id and /outcome, and the events endpoint,
-// the last two where its fields say. It accepts the access keys its configuration
-// holds, each a public key and the node, node pool or gateway it belongs to, and skips
-// enrolment. It answers in the contract's order of refusals: a body over its limit,
-// 413; a POST of another content type, application/json for a registration, an attach
-// and an outcome and application/cloudevents-batch+json for a batch, 415; a header the
-// signature depends on sent twice, an unsigned 400 bad_request; then verification, the
-// access key id's shape before any lookup and the Ed25519 signature over the request
-// string, every failure alike an unsigned 401 with {"error":"unauthorized"} and nothing
-// about the headers said or logged. Every answer after verification but a 401 is signed
-// under the receiver's own key and bound to the request by its signature: an instance
-// id absent or outside its pattern, 400 bad_request; another contract revision, 400
-// unsupported_contract_version; a body the contract refuses, 400 invalid_request; a
-// GET's timestamp or a POST's time outside the window, the unsigned 401; then each
-// endpoint's own.
+// the run endpoint, where a run registers with a POST, is reloaded by its id with a GET
+// of the run endpoint, a slash and the run id, is attached by its gateway with a POST
+// of the run endpoint, the run id and /attach, and is given its starter's outcome with
+// a POST of the run endpoint, the run id and /outcome, the events endpoint, and the
+// secrets endpoint, the last three where its fields say. It accepts the access keys its
+// configuration holds, each a public key, the node, node pool or gateway it belongs to
+// and whether it is allowed stored secrets, and skips enrolment. It answers in the
+// contract's order of refusals: a body over its limit, 413, 32 KiB for a secrets
+// request; a POST of another content type, application/json for a registration, an
+// attach, an outcome and a secrets request and application/cloudevents-batch+json for a
+// batch, 415; a header the signature depends on sent twice, an unsigned 400
+// bad_request; then verification, the access key id's shape before any lookup and the
+// Ed25519 signature over the request string, every failure alike an unsigned 401 with
+// {"error":"unauthorized"} and nothing about the headers said or logged. Every answer
+// after verification but a 401 is signed under the receiver's own key and bound to the
+// request by its signature: an instance id absent or outside its pattern, 400
+// bad_request; another contract revision, 400 unsupported_contract_version; a body the
+// contract refuses, 400 invalid_request; a GET's timestamp or a POST's time outside the
+// window, the unsigned 401; then each endpoint's own.
 //
 // Discovery answers each access key with the key's node: Configuration's document, with
 // node_id that of the key's record, workspaces a node's or node pool's one workspace,
-// and no workspaces for a gateway's key. The run endpoint resolves each registration's
-// gateway from the record of the registering key's node or node pool, never from the
-// body: Direct, Default, the workspace's default gateway, else its organisation's, or a
-// named gateway, ng_. It keeps every registration it accepted by its run id, with the
-// answer it gave, holding a SHA-256 of each body rather than the body: the same bytes
-// under any active key of the same node get that answer again; a run the receiver wants
-// nothing more of is a signed 410; a gateway's own key, a signed 409 gateway_key; a
-// body whose shape does not match the node's resolved choice, node_is_direct or
-// node_uses_gateway; a choice that resolves to no gateway, no_default_gateway,
-// gateway_not_serving or gateway_without_key; a new instance it does not admit,
-// instance_limit; and the same run id from another node, even with the same bytes, or
-// other bytes, run_id_used. A direct run is answered its run configuration; a run
-// through a gateway its run key, signed under the receiver's key, which the gateway it
-// names attaches with. The
+// no workspaces for a gateway's key, and no secrets for a key not allowed stored
+// secrets. The run endpoint resolves each registration's gateway from the record of the
+// registering key's node or node pool, never from the body: Direct, Default, the
+// workspace's default gateway, else its organisation's, or a named gateway, ng_. It
+// keeps every registration it accepted by its run id, with the answer it gave, holding
+// a SHA-256 of each body rather than the body: the same bytes under any active key of
+// the same node get that answer again; a run the receiver wants nothing more of is a
+// signed 410; a gateway's own key, a signed 409 gateway_key; a body whose shape does
+// not match the node's resolved choice, node_is_direct or node_uses_gateway; a choice
+// that resolves to no gateway, no_default_gateway, gateway_not_serving or
+// gateway_without_key; a new instance it does not admit, instance_limit; and the same
+// run id from another node, even with the same bytes, or other bytes, run_id_used. A
+// direct run is answered its run configuration; a run through a gateway its run key,
+// signed under the receiver's key, which the gateway it names attaches with. The
 // [Handler.RunConfiguration] hook is handed each run's id, labels, about and placement,
 // and returns its run configuration or refuses the run; without it every run gets
 // {"version":1}, no policy. A run's reloads and batches are accepted from one node
 // alone, under any of its active keys: the node that registered a direct run, or the
 // gateway node that attached a run through a gateway, that run's reloads from the
 // instance id its attach was signed with alone, and its batches from that instance too
-// while the run is live; a reload from another is a signed 404, and a batch a signed 409
-// wrong_node or wrong_gateway. Once a run through a gateway is not live, its
+// while the run is live; a reload from another is a signed 404, and a batch a signed
+// 409 wrong_node or wrong_gateway. Once a run through a gateway is not live, its
 // dev.qory.run.exited accepted or its heartbeats gone quiet, a batch from any instance
 // of the attaching gateway node gets the answer the attaching instance would, and only
 // the attaching instance's heartbeat makes the run live again; until then, the
-// starter's outcome alone changes nothing of who may send. The starter's
-// outcome is accepted from any active key of the registering node, once per run, and
-// every 2xx to a batch of the run then carries it as the end member until the batch
-// that carries the run's dev.qory.run.exited. A batch whose events are not all of one
-// run is a signed 400 invalid_request. A delivery it verified is deduplicated on each event's id,
+// starter's outcome alone changes nothing of who may send. The starter's outcome is
+// accepted from any active key of the registering node, once per run, and every 2xx to
+// a batch of the run then carries it as the end member until the batch that carries the
+// run's dev.qory.run.exited. A batch whose events are not all of one run is a signed
+// 400 invalid_request. A delivery it verified is deduplicated on each event's id,
 // handed to a [Store], and answered 202 with the digests in force; it reads nothing of
 // an event's data but a heartbeat's time and the type. [File] is a store that appends
 // events to one JSON lines file and remembers the ids it holds. It keeps one store and
 // one table of runs for every access key alike, as a test needs; a server of many
 // access keys scopes event ids per access key, so one key's events never deduplicate
 // another's.
+//
+// The receiver computes every run configuration's digest from the bytes it serves:
+// sha256= and the lower-case hex SHA-256. The secrets endpoint, served when
+// [Handler.Secrets] is set, answers a run's secrets request, which only a key allowed
+// stored secrets, [AccessKey.StoredSecrets], finds in its discovery: after the shared
+// order, a body the contract refuses, 400 invalid_request, and a timestamp outside the
+// window, the unsigned 401, a key not allowed is a signed 409 secrets_not_allowed; then
+// the request is answered as a reload of the run is; a digest that is not that of the
+// run configuration in force, or not one the run was answered with, is a signed 410
+// run_configuration_superseded; and a credentials list other than that run
+// configuration's names, in its order, a signed 409 credentials_differ. Otherwise the
+// hook's values are sealed to the requesting access key with [sealed.Seal], signed
+// under the receiver's key and answered 200, and the receiver overwrites them with
+// zeros. No value is logged or stored.
 package receiver
 
 import (
@@ -69,6 +84,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"mime"
@@ -88,6 +105,7 @@ import (
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/runkey"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -96,14 +114,19 @@ import (
 // batch at, so what an unauthenticated sender can make the receiver hold is small.
 const MaxBody = 2 << 20
 
-// The default paths of the events endpoint and the run endpoint.
+// The default paths of the events endpoint, the run endpoint and the secrets endpoint.
 const (
-	DefaultEventsPath = "/v1/events"
-	DefaultRunPath    = "/v1/runs"
+	DefaultEventsPath  = "/v1/events"
+	DefaultRunPath     = "/v1/runs"
+	DefaultSecretsPath = "/v1/secrets"
 )
 
-// RegistrationType is the content type of a run's registration, its attach and its
-// outcome.
+// MaxSecretsBody is the largest secrets request body accepted: 32 KiB, the contract's
+// bound.
+const MaxSecretsBody = 32 << 10
+
+// RegistrationType is the content type of a run's registration, its attach, its
+// outcome and a secrets request.
 const RegistrationType = "application/json"
 
 // NoPolicy is the run configuration of no policy, which a run gets when the handler
@@ -161,6 +184,9 @@ var (
 	outcomeSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 		return contracts.Compile("run-outcome.schema.json")
 	})
+	secretsSchema = sync.OnceValues(func() (*jsonschema.Schema, error) {
+		return contracts.Compile("secrets-request.schema.json")
+	})
 )
 
 // Store keeps what a receiver accepted.
@@ -181,6 +207,9 @@ type AccessKey struct {
 	// Every active key of one node is that node alike. Empty, the access key is a node
 	// of its own, which reports directly.
 	Node string
+	// StoredSecrets is true for an access key allowed stored secrets: discovery lists
+	// the secrets endpoint for it, and its secrets requests are served.
+	StoredSecrets bool
 }
 
 // Node is the record of a node or node pool.
@@ -275,24 +304,37 @@ type Handler struct {
 	Window time.Duration
 	// Configuration answers discovery with the configuration document and the
 	// receiver's digest of it. The document lists version, node_id, workspaces, events,
-	// run, whose url is the run endpoint, and apiary_public_key, the receiver's public
-	// key. For an access key whose node or gateway the records hold, node_id is replaced
-	// by the key's, workspaces by a node's or node pool's one workspace, and a gateway's
-	// key gets no workspaces; the digest is then sha256= and the hex SHA-256 of the
-	// document served. Nil means discovery is not served.
+	// run, whose url is the run endpoint, apiary_public_key, the receiver's public key,
+	// and secrets, whose url is the secrets endpoint, when the receiver serves one. For
+	// an access key whose node or gateway the records hold, node_id is replaced by the
+	// key's, workspaces by a node's or node pool's one workspace, and a gateway's key
+	// gets no workspaces; secrets is left out for an access key not allowed stored
+	// secrets. The digest of a document changed so is sha256= and the hex SHA-256 of
+	// the document served. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration decides the run configuration of a run: as it registers, as it
-	// is attached and reloaded by its id, and for the digest every answer to a delivery
-	// of the run carries. It returns the document and the receiver's digest of it, an
-	// empty digest meaning sha256= and the hex SHA-256 of the document, or a refusal.
-	// Which labels name what the run works on is its to decide: the qory command labels
-	// a run in a git checkout with forge and repository, and another caller labels its
-	// runs as it likes. About never selects or changes a security policy. Nil gives
-	// every run NoPolicy.
+	// is attached and reloaded by its id, as its gateway fetches its credentials'
+	// values, and for the digest every answer to a delivery of the run carries. It
+	// returns the document, or a refusal. The receiver computes the document's digest
+	// itself, sha256= and the lower-case hex SHA-256 of the bytes it serves; the digest
+	// the hook returns is empty or that digest, and any other is a signed 500 in place
+	// of the answer. Which labels name what the run works on is its to decide: the qory
+	// command labels a run in a git checkout with forge and repository, and another
+	// caller labels its runs as it likes. About never selects or changes a security
+	// policy. Nil gives every run NoPolicy.
 	RunConfiguration func(run Run) (document []byte, digest string, refusal *Refusal)
-	// EventsPath and RunPath are where the events endpoint and the run endpoint are
-	// served; empty means DefaultEventsPath and DefaultRunPath.
-	EventsPath, RunPath string
+	// Secrets returns the values of a run's credentials, for a secrets request the
+	// receiver accepted: one value for each name of credentials, the names of the
+	// credentials of the run configuration in force, in its order, or a refusal, which
+	// is answered as RunConfiguration's is. Each value is a copy, which the receiver
+	// overwrites with zeros once it sealed it. A value outside the contract's form, or
+	// a count other than the names', is a signed 500. Nil serves no secrets endpoint:
+	// list secrets in Configuration's document only with the hook set.
+	Secrets func(run Run, credentials []string) (values [][]byte, refusal *Refusal)
+	// EventsPath, RunPath and SecretsPath are where the events endpoint, the run
+	// endpoint and the secrets endpoint are served; empty means DefaultEventsPath,
+	// DefaultRunPath and DefaultSecretsPath.
+	EventsPath, RunPath, SecretsPath string
 	// Log receives one line per delivery, and may be nil. It never sees a header.
 	Log func(string)
 	// Stop, when set, is called per run id to learn whether the receiver wants nothing
@@ -341,6 +383,10 @@ type registration struct {
 	instance     string
 	attachAnswer []byte
 	attachDigest string
+	// served are the digests of the run configurations the run was answered with: at
+	// its registration, its attach and each reload. A secrets request is for one of
+	// them.
+	served map[string]bool
 	// beats are the run's heartbeats accepted, through a gateway those the attaching
 	// instance stored alone; exited says its dev.qory.run.exited arrived; outcome is its
 	// starter's outcome, nil before one.
@@ -360,6 +406,14 @@ type outcome struct {
 	sum    [sha256.Size]byte
 	state  string
 	reason string
+}
+
+// serve records that the run was answered the run configuration of the digest.
+func (reg *registration) serve(digest string) {
+	if reg.served == nil {
+		reg.served = map[string]bool{}
+	}
+	reg.served[digest] = true
 }
 
 // through reports whether the run goes through a gateway.
@@ -455,16 +509,20 @@ const (
 	toAttach
 	toOutcome
 	toEvents
+	toSecrets
 )
 
 // ServeHTTP routes one request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	events, run := h.EventsPath, h.RunPath
+	events, run, secrets := h.EventsPath, h.RunPath, h.SecretsPath
 	if events == "" {
 		events = DefaultEventsPath
 	}
 	if run == "" {
 		run = DefaultRunPath
+	}
+	if secrets == "" {
+		secrets = DefaultSecretsPath
 	}
 	var to int
 	var method, runID string
@@ -483,6 +541,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		to, method, runID = toOutcome, http.MethodPost, id
 	case r.URL.Path == events:
 		to, method = toEvents, http.MethodPost
+	case r.URL.Path == secrets && h.Secrets != nil:
+		to, method = toSecrets, http.MethodPost
 	default:
 		http.NotFound(w, r)
 		return
@@ -492,12 +552,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, method+" is the method here", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
-	if err != nil || len(body) > MaxBody {
+	limit := MaxBody
+	if to == toSecrets {
+		limit = MaxSecretsBody
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+	if err != nil || len(body) > limit {
 		refuse(w, http.StatusRequestEntityTooLarge, "")
 		return
 	}
-	if want := map[int]string{toRegistration: RegistrationType, toAttach: RegistrationType, toOutcome: RegistrationType, toEvents: server.ContentType}[to]; want != "" {
+	if want := map[int]string{toRegistration: RegistrationType, toAttach: RegistrationType, toOutcome: RegistrationType, toEvents: server.ContentType,
+		toSecrets: RegistrationType}[to]; want != "" {
 		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != want {
 			refuse(w, http.StatusUnsupportedMediaType, "")
 			return
@@ -531,6 +596,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.outcome(w, v, runID, body)
 	case to == toEvents:
 		h.deliver(w, v, body)
+	case to == toSecrets:
+		h.secrets(w, v, body)
 	case !h.fresh(r.Header.Get(server.HeaderTimestamp)):
 		refuse(w, http.StatusUnauthorized, "unauthorized")
 	case to == toDiscovery:
@@ -546,24 +613,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // configuration is discovery's document for a verified access key, with the
 // receiver's digest of it: Configuration's, and for a key whose node or node pool
 // Nodes holds, or whose gateway Gateways holds, with node_id that id, workspaces the
-// node's one workspace and no workspaces for a gateway, its digest then sha256= and
-// the hex SHA-256 of the document served.
+// node's one workspace and no workspaces for a gateway; without secrets for a key not
+// allowed stored secrets; the digest of a document changed so sha256= and the hex
+// SHA-256 of the document served.
 func (h *Handler) configuration(v verified) ([]byte, string) {
 	doc, digest := h.Configuration()
 	n, node := h.Nodes[v.key.Node]
 	_, gateway := h.Gateways[v.key.Node]
-	if v.key.Node == "" || !node && !gateway {
-		return doc, digest
-	}
+	records := v.key.Node != "" && (node || gateway)
 	var m map[string]json.RawMessage
 	if json.Unmarshal(doc, &m) != nil {
 		return doc, digest
 	}
-	m["node_id"], _ = json.Marshal(v.key.Node)
-	if node {
-		m["workspaces"], _ = json.Marshal([]string{n.Workspace})
-	} else {
-		delete(m, "workspaces")
+	_, listed := m["secrets"]
+	hide := listed && !v.key.StoredSecrets
+	if !records && !hide {
+		return doc, digest
+	}
+	if hide {
+		delete(m, "secrets")
+	}
+	if records {
+		m["node_id"], _ = json.Marshal(v.key.Node)
+		if node {
+			m["workspaces"], _ = json.Marshal([]string{n.Workspace})
+		} else {
+			delete(m, "workspaces")
+		}
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -760,6 +836,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request, v verified, b
 	accepted := &registration{sum: sum, node: v.node, run: run, since: now, interval: time.Duration(reg.IntervalSeconds) * time.Second}
 	if !through {
 		accepted.document, accepted.digest = doc, digest
+		accepted.serve(digest)
 		h.keep(accepted)
 		h.answerRun(w, v, doc, digest)
 		return
@@ -932,6 +1009,7 @@ func (h *Handler) attach(w http.ResponseWriter, v verified, runID string, body [
 		return
 	}
 	reg.attached, reg.instance, reg.attachAnswer, reg.attachDigest = v.node, v.instance, answer, digest
+	reg.serve(digest)
 	reg.since, reg.interval = now, time.Duration(a.IntervalSeconds)*time.Second
 	h.answerAttach(w, v, answer, digest)
 }
@@ -1040,23 +1118,177 @@ func (h *Handler) reload(w http.ResponseWriter, v verified, runID string) {
 		h.refuseRun(w, v, refusal)
 		return
 	}
+	h.mu.Lock()
+	reg.serve(digest)
+	h.mu.Unlock()
 	h.answerRun(w, v, doc, digest)
 }
 
+// secretsBody is what the receiver reads of a secrets request's body, decoded with each
+// member name once and no member the schema does not define, its timestamp kept as its
+// raw number so its form is checked.
+type secretsBody struct {
+	Version          int            `json:"version"`
+	RunID            string         `json:"run_id"`
+	RunConfiguration string         `json:"run_configuration"`
+	Credentials      []string       `json:"credentials"`
+	Timestamp        jsontext.Value `json:"timestamp"`
+}
+
+// integerShape is a JSON integer with no sign, fraction or exponent, below 2^53 in
+// digits.
+var integerShape = regexp.MustCompile(`^(?:0|[1-9][0-9]{0,15})$`)
+
+// readSecrets reads a secrets request's body and refuses what the contract refuses: a
+// member name twice, a member the schema does not define, invalid UTF-8, a body the
+// schema refuses, and a timestamp that is not a JSON integer below 2^53 with no sign,
+// fraction or exponent. It returns the body and its timestamp.
+func readSecrets(body []byte) (*secretsBody, int64, error) {
+	var req secretsBody
+	if err := jsonv2.Unmarshal(body, &req, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return nil, 0, err
+	}
+	if err := validate(secretsSchema, body); err != nil {
+		return nil, 0, err
+	}
+	if !integerShape.Match(req.Timestamp) {
+		return nil, 0, errors.New("the timestamp is not a JSON integer with no sign, fraction or exponent")
+	}
+	ts, err := strconv.ParseInt(string(req.Timestamp), 10, 64)
+	if err != nil || ts > 1<<53-1 {
+		return nil, 0, errors.New("the timestamp is not below 2^53")
+	}
+	return &req, ts, nil
+}
+
+// credentialNames are the names of a run configuration's credentials, in the
+// document's order; none for a document without credentials, or one that does not
+// decode.
+func credentialNames(doc []byte) []string {
+	var d struct {
+		Credentials []struct {
+			Name string `json:"name"`
+		} `json:"credentials"`
+	}
+	if json.Unmarshal(doc, &d) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(d.Credentials))
+	for _, c := range d.Credentials {
+		names = append(names, c.Name)
+	}
+	return names
+}
+
+// secrets answers one verified secrets request, in its order after the shared one: a
+// body the contract refuses, 400 invalid_request; a timestamp more than the window
+// from the receiver's clock, either way, the unsigned 401; an access key not allowed
+// stored secrets, 409 secrets_not_allowed; then as a reload of the run would be
+// answered: a run whose reloads the request may not send, or a run not registered,
+// 404; a run through a gateway that may no longer serve the run's workspace, 410
+// workspace_not_served; a run it wants nothing more of, 410; the hook's refusal of the
+// run configuration; then a digest that is not the digest of the run configuration in
+// force, or not one the run was answered with, 410 run_configuration_superseded; a
+// credentials list other than that run configuration's names, in its order, 409
+// credentials_differ; the Secrets hook's refusal; values outside the contract's form, or
+// a count other than the names', a signed 500. Otherwise each value is sealed to the
+// access key the request verified under, signed under the receiver's key, with exp its
+// clock plus sealed.Lifetime, and answered 200. The values are cleared once sealed, and
+// none is logged or kept.
+func (h *Handler) secrets(w http.ResponseWriter, v verified, body []byte) {
+	req, ts, err := readSecrets(body)
+	if err != nil {
+		h.refuseSigned(w, v, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if !h.within(ts) {
+		refuse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !v.key.StoredSecrets {
+		h.refuseSigned(w, v, http.StatusConflict, "secrets_not_allowed")
+		return
+	}
+	h.mu.Lock()
+	reg := h.runs[req.RunID]
+	allowed := reg != nil && reg.reloadable(v)
+	serving := allowed && reg.serving(h)
+	served := allowed && reg.served[req.RunConfiguration]
+	h.mu.Unlock()
+	if !allowed {
+		h.answer(w, v, http.StatusNotFound, nil)
+		return
+	}
+	if !serving {
+		h.refuseSigned(w, v, http.StatusGone, "workspace_not_served")
+		return
+	}
+	if h.Stop != nil && h.Stop(req.RunID) {
+		h.answer(w, v, http.StatusGone, nil)
+		return
+	}
+	doc, digest, refusal := h.runConfiguration(reg.run)
+	if refusal != nil {
+		h.refuseRun(w, v, refusal)
+		return
+	}
+	if !served || req.RunConfiguration != digest {
+		h.refuseSigned(w, v, http.StatusGone, "run_configuration_superseded")
+		return
+	}
+	names := credentialNames(doc)
+	if !slices.Equal(names, req.Credentials) {
+		h.refuseSigned(w, v, http.StatusConflict, "credentials_differ")
+		return
+	}
+	run := reg.run
+	run.Labels = cloneLabels(run.Labels)
+	values, refusal := h.Secrets(run, slices.Clone(names))
+	defer func() {
+		for _, b := range values {
+			clear(b)
+		}
+	}()
+	if refusal != nil {
+		h.refuseRun(w, v, refusal)
+		return
+	}
+	if len(values) != len(names) {
+		h.answer(w, v, http.StatusInternalServerError, nil)
+		return
+	}
+	s := sealed.Sealing{AccessKeyID: v.id, PublicKey: v.key.PublicKey, RunID: req.RunID, RunConfiguration: digest,
+		Credentials: names, Exp: sealed.Expiry(h.now())}
+	for i, name := range names {
+		s.Values = append(s.Values, sealed.NewValue(name, values[i]))
+	}
+	answer, err := sealed.Seal(s, h.Signer)
+	if err != nil {
+		h.answer(w, v, http.StatusInternalServerError, nil)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	h.answer(w, v, http.StatusOK, answer)
+}
+
 // runConfiguration asks the hook for a run's configuration, with a copy of its labels,
-// and makes the digest of a document the hook gave none: NoPolicy without a hook.
+// NoPolicy without a hook, and computes its digest, sha256= and the lower-case hex
+// SHA-256 of the document's bytes. A hook's digest other than empty or that one is a
+// refusal of status 500 with no code: the receiver never serves a digest of another
+// form.
 func (h *Handler) runConfiguration(run Run) ([]byte, string, *Refusal) {
-	doc, digest := NoPolicy, ""
+	doc, given := NoPolicy, ""
 	if h.RunConfiguration != nil {
 		run.Labels = cloneLabels(run.Labels)
 		var refusal *Refusal
-		if doc, digest, refusal = h.RunConfiguration(run); refusal != nil {
+		if doc, given, refusal = h.RunConfiguration(run); refusal != nil {
 			return nil, "", refusal
 		}
 	}
-	if digest == "" {
-		sum := sha256.Sum256(doc)
-		digest = "sha256=" + hex.EncodeToString(sum[:])
+	sum := sha256.Sum256(doc)
+	digest := "sha256=" + hex.EncodeToString(sum[:])
+	if given != "" && given != digest {
+		return nil, "", &Refusal{Status: http.StatusInternalServerError}
 	}
 	return doc, digest, nil
 }

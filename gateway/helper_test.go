@@ -225,7 +225,7 @@ func newControlWith(t *testing.T, accessKey, signer *accesskey.Key) *control {
 		pin: accesskey.Pin{{Alg: "ed25519", PublicKey: signer.PublicKey().String()}}}
 	h := &receiver.Handler{
 		Keys: func(k string) (receiver.AccessKey, bool) {
-			return receiver.AccessKey{PublicKey: c.accessKey.PublicKey()}, k == testKey
+			return receiver.AccessKey{PublicKey: c.accessKey.PublicKey(), StoredSecrets: true}, k == testKey
 		},
 		Signer:        c.signer,
 		Store:         store,
@@ -242,7 +242,9 @@ func newControlWith(t *testing.T, accessKey, signer *accesskey.Key) *control {
 			if c.run == nil {
 				return receiver.NoPolicy, "", nil
 			}
-			return c.run, c.digest, nil
+			// The receiver computes the digest of the bytes; c.digest is the digest of
+			// the answers the control writes itself.
+			return c.run, "", nil
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -484,8 +486,10 @@ func (c *control) withEnd(w http.ResponseWriter, r *http.Request, h http.Handler
 	w.Write(body)
 }
 
-// serve makes the control serve a run configuration with the policy, under a digest
-// of the test's choosing: sha256= and 64 hex digits.
+// serve makes the control serve a run configuration with the policy. The answers the
+// control writes itself, an attach's and an attached run's reload, carry a digest of
+// the test's choosing: sha256= and 64 hex digits; the receiver's carry the digest of
+// the document's bytes.
 func (c *control) serve(policy string, digest byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

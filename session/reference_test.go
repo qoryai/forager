@@ -272,7 +272,7 @@ func TestTheServersImageByReferenceIsTheOneTheWallPulls(t *testing.T) {
 		`{"version":1,"security_policy":{"version":1,"egress":{"mode":"observe"},"image":"` + pinned + `"}}`,
 	} {
 		c := newControl(t)
-		c.serveDocument(doc, 'a')
+		c.serveDocument(doc)
 		w := &targetWall{}
 		sp := spec(t, "FAKE_EXIT=0")
 		sp.Wall, sp.Image, sp.Images, sp.ImagesAllow = w, "base", images, []string{"registry.example/agents/"}
