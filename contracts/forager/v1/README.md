@@ -85,7 +85,11 @@ Stated so a receiver reads the record for what it is.
   run's record: behind a wall, for a host the run has a credential or path rules for, or
   a tool serves, the proxy ends the session's TLS itself and reads each request's method
   and path. `dev.qory.run.policy_applied` lists those hosts as `terminated`, and no
-  other host is read.
+  other host is read. A credential's `*.` entry there is not for a name under it that
+  ends in `.local`, `.internal` or `.home.arpa`, such as `x.home.arpa` under `*.arpa`
+  (§Credentials). An entry under which every name has such an ending, such as
+  `*.local`, is not listed for the credential; it is listed when a tool serves it or
+  it has path rules.
 - On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
   that needs HTTP/2 end to end, such as gRPC, does not work there, and a program that
   pins the host's certificate refuses the run's. A host that sends a request's headers
@@ -482,6 +486,15 @@ host's GraphQL endpoint, is not reached. A definition may set `hosts` and `paths
 adapter: the most the adapter may claim. For `env` and `file`, which have no adapter to
 define the use, the definition's `hosts`, scheme and `paths` are the use itself.
 
+**Private hosts.** The proxy sets a credential on a private host only through a `hosts`
+entry equal to the host, compared without regard to case, and never through a `*.`
+pattern. A private host is an IP literal in `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16` or `fc00::/7`, a name of one label such as `litellm`, or a name that
+ends in `.local`, `.internal` or `.home.arpa`. A credential whose `hosts` are
+`["*.local"]` sets nothing on `litellm.local`; list `litellm.local` itself. A
+credential's key is sent only over TLS whose certificate the gateway machine's system
+trust store verifies.
+
 Before the run starts every selected credential is resolved, and any of these is
 no run: a name the machine does not define, an argument it does not provide for, a host
 two credentials claim, a claim above the definition's, and under `enforce` a host the
@@ -506,7 +519,11 @@ roots. Every other host stays a tunnel the proxy does not read, and a run with n
 credential and no path rule has no authority at all.
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
-`hosts`, `scheme` and `paths`, and the `terminated` hosts. `argument` is the policy's
+`hosts`, `scheme` and `paths`, and the `terminated` hosts. A credential's `*.` pattern
+among the `terminated` hosts is for no private host under it, such as `x.home.arpa`
+under `*.arpa`, and a pattern under which every name is a private host, such as
+`*.local`, is not listed for the credential; it is listed when a tool serves it or it
+has path rules. `argument` is the policy's
 argument to the credential, the same on every use of one credential and absent when the
 policy passes none, so the record shows what each secret is minted for, such as the
 repositories of a source code host. On a terminated host `dev.qory.run.egress` is one
@@ -3275,14 +3292,18 @@ reached by default. Two rules, in either mode, observe included:
 - The link-local range, where a cloud keeps its metadata service, is refused whatever
   the allow list contains.
 - Forager's machine, loopback and every address it has, is refused unless an
-  `egress.allow` entry of the policy lists the host itself. A `*.` suffix over it does
-  not count, and neither does a name a harness declares under such a suffix: the
-  machine's owner decides what is opened on the machine, a repository cannot. A
-  local MCP server or model endpoint is reached through the proxy like everything else,
-  decided and recorded, when the policy lists it, and the rule that lists it applies
-  under observe as well. The session addresses such a server by the machine's host name or
-  an alias of it, as the hosts file or a name server gives it, with no search domain
-  added, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
+  `egress.allow` entry of the node's policy lists the host itself and the run's policy
+  allows the host. A `*.` suffix over it does not count, and neither does a name a
+  harness declares under such a suffix, an entry of a server's `security_policy` or a
+  session's narrowing: the machine's owner decides what is opened on the machine, a
+  repository or a server cannot. A local MCP server or model endpoint is reached
+  through the proxy like everything else, decided and recorded, when the node's policy
+  lists it and the run's policy allows it, and the rule that lists it applies under
+  observe as well. A session's narrowing of a policy that observes opens nothing, the
+  node's policy's entries included. The session addresses such a server by the
+  machine's host name or an alias of it, as the hosts file or a name server gives it,
+  with no search domain added, not by `localhost`, which `NO_PROXY` keeps inside the
+  enclosure.
 
 An address is judged as itself, an IPv6 address without its zone, and one that does not
 read is refused. An address in `::/96` (other than `::1` and `::`), `::ffff:0:0:0/96`

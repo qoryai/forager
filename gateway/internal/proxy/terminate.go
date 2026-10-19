@@ -88,7 +88,8 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 func (p *Proxy) NodePaths(sides ...map[string][]string) { p.node = sides }
 
 // Terminated reports the hosts, as configured, the proxy terminates TLS for: under the
-// policy set last, when one was.
+// policy set last, when one was. A credential's "*." pattern that is for no host by
+// [policy.CredentialFor], such as "*.local", is left out.
 func (p *Proxy) Terminated() []string {
 	t := p.term.Load()
 	if t == nil {
@@ -98,7 +99,7 @@ func (p *Proxy) Terminated() []string {
 	seen := map[string]bool{}
 	for _, c := range t.creds {
 		for _, h := range c.Hosts {
-			if !seen[h] {
+			if !seen[h] && !privatePattern(h) {
 				seen[h] = true
 				out = append(out, h)
 			}
@@ -121,6 +122,19 @@ func (p *Proxy) Terminated() []string {
 		}
 	}
 	return out
+}
+
+// privatePattern reports whether entry is a "*." pattern that is for no host by
+// [policy.CredentialFor]: the name one label below it, such as a.local for "*.local",
+// has a form under [policy.Host] and is not for entry. The label a has no dot, so when
+// that name is private, every name under the pattern ends as it does and is private.
+func privatePattern(entry string) bool {
+	suffix, ok := strings.CutPrefix(entry, "*.")
+	if !ok {
+		return false
+	}
+	name, ok := policy.Host("a." + suffix)
+	return ok && !policy.CredentialFor([]string{entry}, name)
 }
 
 type terminator struct {
