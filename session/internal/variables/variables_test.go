@@ -161,6 +161,65 @@ func TestTheHarnesssComputedValuesTakeTheBuiltinListAlone(t *testing.T) {
 	})
 }
 
+// overrides is what the Claude Code descriptor's model section lists in overrides: the
+// variables that would override the model or effort a composer writes.
+var overrides = []string{
+	"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+	"CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL",
+	"CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+}
+
+// TestAWalledRunLeavesTheOverridesOut pins the runtime's overrides behind a wall: each
+// name's value from the server, the run, the machine, the harness's defaults and the
+// harness's computed values is left out and recorded as denied, and the inherited
+// environment's value, which no entry matches against, then applies. Without a wall
+// the overrides leave nothing out: the run's value applies, and under accept the
+// server's.
+func TestAWalledRunLeavesTheOverridesOut(t *testing.T) {
+	for _, name := range overrides {
+		for _, tc := range []struct {
+			source string
+			set    func(in *variables.Inputs)
+		}{
+			{"apiary", func(in *variables.Inputs) { in.Server = map[string]string{name: "x"} }},
+			{"run", func(in *variables.Inputs) { in.Run = []string{name + "=x"} }},
+			{"machine", func(in *variables.Inputs) { in.Machine = []string{name + "=x"} }},
+			{"harness", func(in *variables.Inputs) { in.Defaults = []string{name + "=x"} }},
+			{"fixed", func(in *variables.Inputs) { in.Fixed = []string{name + "=x"} }},
+		} {
+			t.Run(name+" from "+tc.source, func(t *testing.T) {
+				in := claude
+				in.Overrides = overrides
+				in.Walled = true
+				tc.set(&in)
+				got := resolve(t, in)
+				want(t, "env", got.Env, nil)
+				want(t, "fixed", got.Fixed, nil)
+				want(t, "record", record(got.Applied), []string{name + " " + tc.source + ":denied"})
+
+				in.Shell = []string{name + "=inherited"}
+				got = resolve(t, in)
+				want(t, "env with the inherited value", got.Env, nil)
+				want(t, "record with the inherited value", record(got.Applied), []string{name + "<-shell " + tc.source + ":denied"})
+			})
+		}
+	}
+	in := claude
+	in.Overrides = overrides
+	in.Run = []string{"ANTHROPIC_MODEL=from-the-run", "CLAUDE_CODE_EFFORT_LEVEL=low"}
+	in.Fixed = []string{"ANTHROPIC_SMALL_FAST_MODEL=computed"}
+	got := resolve(t, in)
+	want(t, "unwalled env", got.Env, []string{"ANTHROPIC_MODEL=from-the-run", "CLAUDE_CODE_EFFORT_LEVEL=low"})
+	want(t, "unwalled fixed", got.Fixed, []string{"ANTHROPIC_SMALL_FAST_MODEL=computed"})
+	want(t, "unwalled record", record(got.Applied), []string{"ANTHROPIC_MODEL<-run", "CLAUDE_CODE_EFFORT_LEVEL<-run"})
+	in.Unwalled = variables.Accept
+	in.Server = map[string]string{"ANTHROPIC_MODEL": "from-the-server"}
+	got = resolve(t, in)
+	want(t, "unwalled env under accept", got.Env, []string{"ANTHROPIC_MODEL=from-the-server", "CLAUDE_CODE_EFFORT_LEVEL=low"})
+	want(t, "unwalled record under accept", record(got.Applied), []string{"ANTHROPIC_MODEL<-apiary run:overridden", "CLAUDE_CODE_EFFORT_LEVEL<-run"})
+}
+
 // TestAnUnwalledRun pins variables.unwalled: under ignore, the default, every server
 // variable is left out with unwalled and the run's own value, --env, applies; under
 // accept, the server's apply as in a walled run, the deny list first, and win over the

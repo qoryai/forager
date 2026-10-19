@@ -88,10 +88,11 @@ func passes(spec Spec) []string {
 // the gateway sets for the run, what a value of the machine's is read from. It returns the
 // resolution and, for a walled run, the names to unset inside, which [Exec] takes out
 // of the launch's environment: the runtime's declared and reserved variables and the
-// names the runtime denies or the node's deny list removes, that nothing sets. Forager,
-// the wall and the preparation set names too, [wall.Nest] among them for a run with
-// nested Docker, docker, so none of theirs is ever unset; the wall's names for a run
-// with an authority count as set only when the run has one, authority.
+// names the runtime denies, lists in its model overrides or the node's deny list
+// removes, that nothing sets. Forager, the wall and the preparation set names too,
+// [wall.Nest] among them for a run with nested Docker, docker, so none of theirs is
+// ever unset; the wall's names for a run with an authority count as set only when the
+// run has one, authority.
 func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared runtimes.Launch, placeholderNames, reserved []string, docker, authority bool) (variables.Resolved, []string, error) {
 	var decl runtimes.Declarations
 	if s, ok := rt.(runtimes.Secrets); ok {
@@ -102,6 +103,14 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		runtimeNames = append(runtimeNames, d.Name)
 	}
 	runtimeNames = append(runtimeNames, decl.Reserves...)
+	// The variables that would override the model id or effort value a composer
+	// writes: a walled run leaves them out like a denied name, and unsets them inside.
+	var overrides []string
+	if m, ok := rt.(runtimes.Model); ok {
+		if places, ok := m.Model(); ok {
+			overrides = places.Overrides
+		}
+	}
 	// What a value of the machine's is read from: the gateway's own names.
 	readFrom := reserved
 	// Forager's own names, the proxy's, the wall's and the preparation's: with the
@@ -135,7 +144,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 		Fixed: spec.LaunchFixed, Server: served, Run: spec.Variables.Run, Machine: spec.Variables.Machine,
 		Defaults: spec.LaunchDefaults, Shell: spec.Env,
 		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled,
-		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Runtime: runtimeNames,
+		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Overrides: overrides, Runtime: runtimeNames,
 		Placeholders: placeholderNames, ReadFrom: readFrom, Own: own,
 	})
 	if err != nil {
@@ -155,11 +164,11 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, prepared 
 				unset = append(unset, name)
 			}
 		}
-		// A name the runtime denies or the node's deny list removes is unset too, so an
-		// image's value for it does not reach the runtime either. A value that wins with
-		// it stays, and so does a name Forager, the wall or the preparation sets. A
-		// pattern names no variable to unset.
-		for _, name := range slices.Concat(decl.Denies, spec.Variables.Deny) {
+		// A name the runtime denies, lists in its model overrides or the node's deny
+		// list removes is unset too, so an image's value for it does not reach the
+		// runtime either. A value that wins with it stays, and so does a name Forager,
+		// the wall or the preparation sets. A pattern names no variable to unset.
+		for _, name := range slices.Concat(decl.Denies, overrides, spec.Variables.Deny) {
 			if variableShape.MatchString(name) && !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)
 			}

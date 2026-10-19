@@ -97,7 +97,8 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 // TestClaudeDescribesWhereItsModelGoes pins the model section of the contract's Claude
 // Code descriptor as it decodes: Anthropic's Messages format, the model id as --model,
 // the run's effort as --effort with low to max, an agent's effort in the agent file's
-// effort frontmatter with low to max, and the endpoint in ANTHROPIC_BASE_URL.
+// effort frontmatter with low to max, the endpoint in ANTHROPIC_BASE_URL, and the 12
+// variables that would override the model or effort in overrides.
 func TestClaudeDescribesWhereItsModelGoes(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {
@@ -116,6 +117,11 @@ func TestClaudeDescribesWhereItsModelGoes(t *testing.T) {
 			Agent: &descriptor.AgentPlace{Frontmatter: "effort", Values: efforts},
 		},
 		Endpoint: descriptor.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Overrides: []string{
+			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+			"CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+		},
 	}
 	if !reflect.DeepEqual(d.Model, want) {
 		t.Errorf("model = %+v; want %+v", d.Model, want)
@@ -152,7 +158,8 @@ func TestModelDecodesFromYAMLAndJSON(t *testing.T) {
 			Run:   descriptor.ValuedPlace{Place: descriptor.Place{Variable: "AMP_EFFORT"}, Values: []string{"low", "medium", "high"}},
 			Agent: &descriptor.AgentPlace{Frontmatter: "reasoning-effort", Values: []string{"low", "high"}},
 		},
-		Endpoint: descriptor.Endpoint{Variable: "AMP_BASE_URL"},
+		Endpoint:  descriptor.Endpoint{Variable: "AMP_BASE_URL"},
+		Overrides: []string{"AMP_MODEL", "AMP_EFFORT_LEVEL"},
 	}
 	for name, d := range map[string]*descriptor.Descriptor{"yaml": fromYAML, "json": fromJSON} {
 		if !reflect.DeepEqual(d.Model, want) {
@@ -164,8 +171,8 @@ func TestModelDecodesFromYAMLAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := descriptor.Parse("model-no-effort.yaml", noEffort)
-	if err != nil || d.Model == nil || d.Model.Effort != nil {
-		t.Errorf("a model section without effort: %+v %v", d, err)
+	if err != nil || d.Model == nil || d.Model.Effort != nil || d.Model.Overrides != nil {
+		t.Errorf("a model section without effort or overrides: %+v %v", d, err)
 	}
 	const none = "version: 1\nruntime: amp\nruntime_version: \"1\"\nsources: {output: {format: jsonl}}\n" +
 		"rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]\n"
@@ -195,9 +202,9 @@ func TestModelIsChecked(t *testing.T) {
 			t.Errorf("%s was accepted", e.Name())
 		}
 	}
-	if n < 5 {
+	if n < 8 {
 		t.Errorf("%d invalid model fixtures; want one per rule: an unknown format, two places, "+
-			"empty values, no formats and an extra member", n)
+			"empty values, no formats, an extra member, and overrides empty, with a duplicate or with a non-name", n)
 	}
 }
 
@@ -272,6 +279,8 @@ func TestRuntimesJSONHasModelOnlyWhenDescribed(t *testing.T) {
 		"a descriptor without a model section": {head, nil},
 		"a descriptor with one": {head + "model:\n formats: [gemini]\n model: {flag: --model}\n endpoint: {variable: AMP_URL}\n",
 			map[string]any{"formats": []any{"gemini"}, "model": map[string]any{"flag": "--model"}, "endpoint": map[string]any{"variable": "AMP_URL"}}},
+		"a descriptor with overrides": {head + "model:\n formats: [gemini]\n model: {flag: --model}\n endpoint: {variable: AMP_URL}\n overrides: [AMP_MODEL]\n",
+			map[string]any{"formats": []any{"gemini"}, "model": map[string]any{"flag": "--model"}, "endpoint": map[string]any{"variable": "AMP_URL"}, "overrides": []any{"AMP_MODEL"}}},
 	} {
 		b, err := descriptor.Runtimes(fstest.MapFS{"runtimes/amp/descriptor.yaml": {Data: []byte(c.doc)}})
 		if err != nil {
@@ -316,8 +325,8 @@ func TestRuntimesJSONIsGenerated(t *testing.T) {
 // scheme, the header of a header scheme and the username of a basic scheme, and paths
 // when it has some; per group id, required and of; and model when the descriptor has
 // one, with formats, model, endpoint with its variable and optionally effort, with run
-// and optionally agent, each place being exactly one of flag, setting and variable. The
-// claude runtime has a model. Every built-in descriptor is one runtime, in name order.
+// and optionally agent, each place being exactly one of flag, setting and variable, and
+// optionally overrides. The claude runtime has a model with overrides. Every built-in descriptor is one runtime, in name order.
 func TestRuntimesJSONShape(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, descriptor.RuntimesFile)
 	if err != nil {
@@ -435,8 +444,13 @@ func TestRuntimesJSONShape(t *testing.T) {
 			strs("of", gr["of"])
 		}
 		if m, ok := rt["model"]; ok {
-			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort")
+			model := members("model", m, []string{"formats", "model", "endpoint"}, "effort", "overrides")
 			strs("formats", model["formats"])
+			if o, ok := model["overrides"]; ok {
+				strs("overrides", o)
+			} else if rt["name"] == "claude" {
+				t.Error("the claude runtime's model has no overrides")
+			}
 			place(model["model"])
 			members("endpoint", model["endpoint"], []string{"variable"})
 			if e, ok := model["effort"]; ok {

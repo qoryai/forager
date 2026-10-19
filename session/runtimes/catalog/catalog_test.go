@@ -121,6 +121,11 @@ func TestClaudeSaysWhereItsModelGoes(t *testing.T) {
 			Agent: &runtimes.AgentPlace{Frontmatter: "effort", Values: efforts},
 		},
 		Endpoint: runtimes.Endpoint{Variable: "ANTHROPIC_BASE_URL"},
+		Overrides: []string{
+			"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+			"CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_AUTO_MODE_MODEL", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_EXTRA_BODY",
+		},
 	}
 	if got, ok := m.Model(); !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("model %v\n%+v\nwant\n%+v", ok, got, want)

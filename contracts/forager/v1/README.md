@@ -661,8 +661,11 @@ the node's owner adds in the launch spec, `Spec.Variables.Deny` in Go, such as `
 PREFIX_*]`. The built-in entries apply to the harness's computed values as well, so a
 computed `DOCKER_HOST` or `NODE_EXTRA_CA_CERTS` is left out too; the runtime's `denies`
 and the node's entries leave them in, since the harness computes such values for the
-runtime. What the run inherits is matched against no entry: it is the developer's
-environment. A denied value is left out, recorded as `denied`, and the next source's
+runtime. Behind a wall, the names in the runtime's model `overrides` (§The descriptor)
+are entries of the deny list too, and they leave out the harness's computed value of
+such a name as well; without a wall they leave nothing out. What the run inherits is
+matched against no entry: it is the developer's environment. A denied value is left
+out, recorded as `denied`, and the next source's
 value of the name applies. Each built-in entry undermines the wall, the proxy or
 Forager. An entry is a name or a pattern, `^[A-Za-z0-9_*]{1,128}$` with at least one
 character other than `*`. It matches a whole name: `*` matches any run of characters,
@@ -670,8 +673,8 @@ the empty run included, anywhere in the entry. Matching ignores case, because pr
 read `http_proxy` and `HTTP_PROXY` alike. `denied-variables.json`, `{"version": 1,
 "names": [...], "patterns": [...]}`, is the built-in list for every source the deny list
 covers, the harness's computed values included. It holds every row of the table but the
-two that depend on the node and the run: the names the wall sets for the run's bundle,
-and the runtime's `denies`, which `runtimes.json` lists.
+rows that depend on the node and the run: the names the wall sets for the run's bundle,
+and the runtime's `denies` and `overrides`, which `runtimes.json` lists.
 
 | Name | Why |
 |---|---|
@@ -684,6 +687,7 @@ and the runtime's `denies`, which `runtimes.json` lists.
 | `DOCKER_CONFIG` | the wall sets it for nested Docker |
 | `PATH` | the enclosure resolves the launch's program through it, and which program runs is the node's choice (§Images) |
 | the run's runtime's `denies` | they move the runtime's model credential or run its commands (§The descriptor) |
+| behind a wall, the run's runtime's model `overrides` | they would override the model id or effort value a composer writes (§The descriptor) |
 
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
@@ -704,9 +708,10 @@ the node passes for a variable the runtime declares or reserves reaches the runt
 passed. Behind a wall, every variable the runtime declares or reserves that neither a
 placeholder, a source, the runtime's preparation, Forager nor the wall sets is unset
 inside the enclosure, so an image's `ENV` cannot set one, and the runtime never sees it
-empty, which a program may read as set. So is every name the runtime `denies` or the
-node's deny list removes, by its exact name, that nothing sets: a pattern unsets none,
-and a name Forager, the wall or the preparation sets keeps its value. One exception
+empty, which a program may read as set. So is every name the runtime `denies` or lists
+in its model `overrides`, or the node's deny list removes, by its exact name, that
+nothing sets: a pattern unsets none, and a name Forager, the wall or the preparation
+sets keeps its value. One exception
 limits this: with nested Docker, `DOCKER_CONFIG` is never unset, and a non-empty value
 in the enclosure's environment, the image's included, takes the place of the wall's
 docker configuration (§The wall, Nested Docker).
@@ -2712,9 +2717,13 @@ accepts there, and optionally `agent`, `{frontmatter, values}`: the key of an ag
 file's frontmatter that takes an agent's effort value, and the values the runtime
 accepts there. A value is a lower-case letter, then up to 31 lower-case letters, digits
 and dashes. `endpoint` is `{variable}`, the variable the runtime reads the base URL of
-its model API from, and is always a variable. Every object of the section is closed.
-The session and the gateway do not use the section: `denies` still decides whether the
-server's value of the endpoint's variable reaches the runtime.
+its model API from, and is always a variable. `overrides`, optional, lists 1 to 64
+distinct variables that would override the model id or effort value a composer writes.
+Behind a wall the session treats each as a name of `denies`, and also leaves out the
+harness's computed value of it (§Variables); without a wall `overrides` changes
+nothing. Every object of the section is closed. The session uses only `overrides` of the
+section, and the gateway uses none of it: `denies` still decides whether the server's
+value of the endpoint's variable reaches the runtime.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
@@ -2731,8 +2740,13 @@ model credential, an API key set as `x-api-key` or an OAuth credential set as a 
 on `api.anthropic.com` under `/v1/`, one of the two required. Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
-taking `low`, `medium`, `high`, `xhigh` and `max`; and it places the endpoint in
-`ANTHROPIC_BASE_URL`.
+taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in
+`ANTHROPIC_BASE_URL`; and its `overrides` are `ANTHROPIC_MODEL`,
+`ANTHROPIC_DEFAULT_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+`ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+`CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`,
+`CLAUDE_CODE_AUTO_MODE_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL` and `CLAUDE_CODE_EXTRA_BODY`.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
@@ -2766,7 +2780,7 @@ in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `res
 and `paths` when the declaration has some, `one_of` with `id`, `required` and `of`, and
 `model`, the descriptor's model section in the same shape, when it has one. Every list
 is present, empty when the descriptor has none; `model` is absent when the descriptor
-has none. `go generate ./contracts`
+has none, and so is `overrides` in a `model` that has none. `go generate ./contracts`
 writes it from the descriptors, and a test fails while the file differs from what that
 writes.
 
@@ -3241,7 +3255,7 @@ the option experimental.
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
 | `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
-| `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, and one whose `model` has no `effort` | `descriptor.schema.json` |
+| `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats and two `overrides`, and one whose `model` has no `effort` | `descriptor.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |
