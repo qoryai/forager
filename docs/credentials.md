@@ -117,6 +117,76 @@ that needs more than a credential in a header.
 - A policy selects tools by name, as it selects credentials.
 - Tools need a wall.
 
+## The gateway's process
+
+The gateway holds each credential's secret and the access key in memory. Before it
+starts anything, `gateway.Start` keeps that memory out of a core dump and away from a
+debugger:
+
+- **Linux**: `prctl(PR_SET_DUMPABLE, 0)`, so that the kernel writes no core dump of
+  the process, and a process of the same user without `CAP_SYS_PTRACE` can neither
+  attach to it with `ptrace` nor read its memory or its environment under
+  `/proc/<pid>/`; and `RLIMIT_CORE` 0, soft and hard.
+- **macOS**: `RLIMIT_CORE` 0, soft and hard; and `ptrace(PT_DENY_ATTACH)`, so that no
+  debugger attaches to the process.
+- **Other systems**: nothing.
+
+The settings stay for the life of the process, after `Close` too. In `qory run` the
+session runs in that process, so the settings apply to it as well.
+
+- A program the process starts keeps `RLIMIT_CORE` at 0. On Linux it is dumpable again
+  after its `execve`.
+- On macOS, a process that a debugger traces exits at `Start` with status 45
+  (`ENOTSUP`). To debug the gateway, debug its tests: a test binary, the one `go test`
+  builds, gets none of these settings. The tests of the settings run them in a child
+  process.
+- If a call fails, `Start` returns an error that starts with the fix, and the gateway
+  does not start:
+  - Linux: `allow prctl in the gateway's seccomp profile: PR_SET_DUMPABLE 0 failed: <reason>`
+  - Linux: `allow setrlimit in the gateway's seccomp profile: RLIMIT_CORE 0 failed: <reason>`
+  - macOS: `allow setrlimit in the gateway's sandbox: RLIMIT_CORE 0 failed: <reason>`
+  - macOS: `allow ptrace in the gateway's sandbox: PT_DENY_ATTACH failed: <reason>`
+
+### Keep the memory out of swap
+
+On Linux, `gateway.lock_memory: true` in `forager.yaml` keeps every page of the
+gateway's process in RAM, so that the kernel writes no key to swap. A Go program sets
+`gateway.Config.LockMemory`. The default is `false`, which locks nothing.
+
+```yaml
+gateway:
+  lock_memory: true   # Linux only
+```
+
+1. Set the locked-memory limit of the gateway's process, `RLIMIT_MEMLOCK`, to
+   unlimited:
+   - in a systemd unit, `LimitMEMLOCK=infinity` under `[Service]`;
+   - in a shell, `ulimit -l unlimited`, which needs a hard limit of unlimited;
+   - in Docker, `docker run --ulimit memlock=-1`.
+2. Start the gateway.
+
+With `true`, `Start` calls `mlockall(MCL_CURRENT|MCL_FUTURE)`: the pages mapped now,
+and each page mapped later.
+
+- Linux counts the whole address space of the process against `RLIMIT_MEMLOCK`, not
+  only the memory in use. A small Go program on Linux arm64 maps about 1.2 GB, so a
+  lower limit fails at `Start`. A limit that the gateway reaches later ends it with
+  `runtime: out of memory`. Set the limit to unlimited.
+- A process with `CAP_IPC_LOCK` has no limit.
+- Locking loads the mapped pages into RAM: the resident memory of the same small
+  program grew from 2.5 MB to 42 MB when it locked its memory.
+- A program the process starts locks nothing.
+- If `mlockall` fails, `Start` returns an error of two lines, and the gateway does not
+  start:
+
+  ```text
+  raise RLIMIT_MEMLOCK to unlimited: LimitMEMLOCK=infinity in a systemd unit, or ulimit -l unlimited
+  gateway.lock_memory is true, and mlockall failed with RLIMIT_MEMLOCK at 8388608 bytes: cannot allocate memory; in Docker, pass --ulimit memlock=-1, or set gateway.lock_memory to false
+  ```
+
+- On macOS and other systems, `true` stops the gateway:
+  `set gateway.lock_memory to false: Forager locks memory only on Linux, and this system is darwin`.
+
 ## The details
 
 The rules, the adapter's document and the tools: the contract's
