@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/refusal"
 )
@@ -302,7 +303,7 @@ func Check(env []string, walled bool, placeholders, machine []string) error {
 			return refusal.New(refusal.VariableReserved, reserved, "the run passes %s into the enclosure, Forager's names or what a value of the machine's is read from", strings.Join(reserved, ", "))
 		}
 	}
-	if conflict := pick(func(n string) bool { return slices.Contains(placeholders, n) }); len(conflict) > 0 {
+	if conflict := accesskey.ShownNames(pick(func(n string) bool { return slices.Contains(placeholders, n) })); len(conflict) > 0 {
 		return refusal.New(refusal.PlaceholderConflict, conflict, "the run passes a value for %s, a placeholder of what the gateway holds outside the enclosure", strings.Join(conflict, ", "))
 	}
 	return nil

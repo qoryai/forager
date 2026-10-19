@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/internal/jcs"
 	"github.com/qoryai/forager/refusal"
@@ -251,12 +252,12 @@ func Narrowed(fetched, node *Loaded) (*Loaded, error) {
 		run.Egress.Deny = union(s.Egress.Deny, n.Egress.Deny)
 	}
 	if n.Tools != nil {
-		if out := outside(s.Tools, n.Tools); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Tools, n.Tools)); len(out) > 0 {
 			return nil, refusal.New(refusal.ToolUnknown, out, "the server's policy selects the tools %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}
 	if n.Credentials != nil {
-		if out := outside(s.Credentials, n.Credentials); len(out) > 0 {
+		if out := accesskey.ShownNames(outside(s.Credentials, n.Credentials)); len(out) > 0 {
 			return nil, fmt.Errorf("the server's policy selects the credentials %s, which the node's policy does not list", strings.Join(out, ", "))
 		}
 	}

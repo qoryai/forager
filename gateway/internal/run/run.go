@@ -529,7 +529,7 @@ func (r *Run) selects(pol *policy.Loaded) error {
 			continue
 		}
 		if forge != s.Forge {
-			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(s.Forge), Spaced(forge), name))
+			r.cfg.Report(fmt.Sprintf("run %s: the gateway selects %s for the forge %s, and the run's forge is %s: it gets no %s", id, name, Spaced(s.Forge), Spaced(accesskey.ShownName(forge, false)), name))
 			continue
 		}
 		value, ok := r.labels[s.Label]
@@ -839,11 +839,13 @@ func (r *Run) choose(held *credential.Held) ([]tool.Chosen, error) {
 }
 
 func credentialConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", accesskey.ShownName(name, false))
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 func toolConflict(name string) error {
-	return refusal.New(refusal.PlaceholderConflict, []string{name}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", name)
+	shown := accesskey.ShownName(name, false)
+	return refusal.New(refusal.PlaceholderConflict, []string{shown}, "%s is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside", shown)
 }
 
 // inForce is the policy a run configuration puts in force. Without a security_policy it

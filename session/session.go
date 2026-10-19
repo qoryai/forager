@@ -26,6 +26,7 @@ import (
 	"github.com/qoryai/forager/refusal"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/session/internal/socket"
+	"github.com/qoryai/forager/session/internal/variables"
 	"github.com/qoryai/forager/session/runtimes"
 	"github.com/qoryai/forager/sink"
 	"github.com/qoryai/forager/wall"
@@ -952,7 +953,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		if a == nil {
 			a = map[string]any{}
 		}
-		a["variables"] = vars.Applied
+		a["variables"] = shownVariables(vars.Applied)
 		if spec.Declared != nil {
 			a["harness_hosts"] = spec.Declared
 		} else {
@@ -1282,6 +1283,19 @@ func loopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// shownVariables are the run's variables as its dev.qory.run.policy_applied sends them:
+// each entry as it is, with its name as accesskey.ShownName shows it, bare, in the
+// order of the names before. Two names that give one phrase are two entries with that
+// phrase.
+func shownVariables(applied []variables.Entry) []variables.Entry {
+	out := make([]variables.Entry, len(applied))
+	for i, e := range applied {
+		out[i] = e
+		out[i].Name = accesskey.ShownName(e.Name, false)
+	}
+	return out
+}
+
 // eventNames are a refusal's names as its dev.qory.run.refused sends them. The names of
 // a placeholder_conflict are sent as accesskey.ShownName shows a name, bare, and a
 // phrase two names give is sent once, as the schema holds the names unique. The names
@@ -1290,11 +1304,5 @@ func eventNames(code string, names []string) []string {
 	if code != refusal.PlaceholderConflict {
 		return names
 	}
-	var out []string
-	for _, n := range names {
-		if shown := accesskey.ShownName(n, false); !slices.Contains(out, shown) {
-			out = append(out, shown)
-		}
-	}
-	return out
+	return accesskey.ShownNames(names)
 }

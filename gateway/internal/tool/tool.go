@@ -89,30 +89,30 @@ var (
 // Check refuses a definition that cannot be one, before any run selects it.
 func (d Definition) Check() error {
 	if !nameShape.MatchString(d.Name) {
-		return fmt.Errorf("the tool name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", d.Name)
+		return fmt.Errorf("the tool name %s is not 1 to 64 of a-z, 0-9, underscore, dot and dash", accesskey.ShownName(d.Name, true))
 	}
 	if len(d.Command) == 0 || d.Command[0] == "" {
-		return fmt.Errorf("tool %s: the command is empty", d.Name)
+		return fmt.Errorf("tool %s: the command is empty", accesskey.ShownName(d.Name, false))
 	}
 	if strings.Contains(d.Command[0], "${argument}") {
-		return fmt.Errorf("tool %s: the argument goes in the command's arguments, not in the program's name", d.Name)
+		return fmt.Errorf("tool %s: the argument goes in the command's arguments, not in the program's name", accesskey.ShownName(d.Name, false))
 	}
 	if d.Argument != "" {
 		if _, err := wholeMatch(d.Argument); err != nil {
-			return fmt.Errorf("tool %s: argument: %w", d.Name, err)
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), err)
 		}
 	}
 	if len(d.Serves) == 0 {
-		return fmt.Errorf("tool %s serves no host; a tool is reached by the hosts it serves", d.Name)
+		return fmt.Errorf("tool %s serves no host; a tool is reached by the hosts it serves", accesskey.ShownName(d.Name, false))
 	}
 	for _, h := range d.Serves {
 		if !hostShape.MatchString(h) {
-			return fmt.Errorf("tool %s: %q is not a lower-case host name or a *. suffix", d.Name, h)
+			return fmt.Errorf("tool %s: %q is not a lower-case host name or a *. suffix", accesskey.ShownName(d.Name, false), h)
 		}
 	}
 	for _, p := range d.Placeholders {
 		if !envShape.MatchString(p) {
-			return fmt.Errorf("tool %s: the placeholder %q is not a variable's name", d.Name, p)
+			return fmt.Errorf("tool %s: the placeholder %s is not a variable's name", accesskey.ShownName(d.Name, false), accesskey.ShownName(p, true))
 		}
 	}
 	return nil
@@ -125,14 +125,14 @@ func (d Definition) check(argument string) error {
 	}
 	switch {
 	case d.Argument == "" && argument != "":
-		return fmt.Errorf("tool %s takes no argument and the policy gives %q", d.Name, argument)
+		return fmt.Errorf("tool %s takes no argument and the policy gives %s", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 	case d.Argument != "":
 		re, err := wholeMatch(d.Argument)
 		if err != nil {
-			return fmt.Errorf("tool %s: argument: %w", d.Name, err)
+			return fmt.Errorf("tool %s: argument: %w", accesskey.ShownName(d.Name, false), err)
 		}
 		if !re.MatchString(argument) {
-			return fmt.Errorf("tool %s: the argument %q is not one the machine provides for", d.Name, argument)
+			return fmt.Errorf("tool %s: the argument %s is not one the machine provides for", accesskey.ShownName(d.Name, false), accesskey.ShownName(argument, true))
 		}
 	}
 	return nil
@@ -163,11 +163,11 @@ func Choose(defs []Definition, selected []policy.Selected) ([]Chosen, error) {
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
 		if i < 0 {
-			return nil, refusal.New(refusal.ToolUnknown, []string{sel.Name}, "the policy selects the tool %q, which this machine does not define", sel.Name)
+			return nil, refusal.New(refusal.ToolUnknown, []string{accesskey.ShownName(sel.Name, false)}, "the policy selects the tool %s, which this machine does not define", accesskey.ShownName(sel.Name, true))
 		}
 		def := defs[i]
 		if slices.ContainsFunc(out, func(c Chosen) bool { return c.Name == def.Name }) {
-			return nil, fmt.Errorf("the policy selects the tool %q twice", def.Name)
+			return nil, fmt.Errorf("the policy selects the tool %s twice", accesskey.ShownName(def.Name, true))
 		}
 		if err := def.check(sel.Argument); err != nil {
 			return nil, err
@@ -175,7 +175,7 @@ func Choose(defs []Definition, selected []policy.Selected) ([]Chosen, error) {
 		for _, host := range def.Serves {
 			for _, other := range out {
 				if claims(other.Serves, host) {
-					return nil, fmt.Errorf("the tools %s and %s both serve %s; a host has one", other.Name, def.Name, host)
+					return nil, fmt.Errorf("the tools %s and %s both serve %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(def.Name, false), host)
 				}
 			}
 		}
@@ -192,10 +192,10 @@ func Check(chosen []Chosen, mode policy.Mode, allow []string, claimed func(host 
 	for _, c := range chosen {
 		for _, host := range c.Serves {
 			if name := claimed(host); name != "" {
-				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", c.Name, accesskey.ShownName(name, false), host)
+				return fmt.Errorf("the tool %s and the credential %s both claim %s; a host has one", accesskey.ShownName(c.Name, false), accesskey.ShownName(name, false), host)
 			}
 			if mode == policy.Enforce && !slices.ContainsFunc(allow, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return fmt.Errorf("the tool %s serves %s, which the run's allow list does not cover", c.Name, host)
+				return fmt.Errorf("the tool %s serves %s, which the run's allow list does not cover", accesskey.ShownName(c.Name, false), host)
 			}
 		}
 	}
@@ -282,7 +282,7 @@ func Start(ctx context.Context, chosen []Chosen, runID string, env []string, rep
 		t, err := start(ctx, c, runID, env, report)
 		if err != nil {
 			set.Close()
-			return nil, fmt.Errorf("tool %s: %w", c.Name, err)
+			return nil, fmt.Errorf("tool %s: %w", accesskey.ShownName(c.Name, false), err)
 		}
 		set.Tools = append(set.Tools, t)
 	}
@@ -333,7 +333,7 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 		gone := t.ready && !t.stopping
 		t.mu.Unlock()
 		if gone {
-			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", t.Name, t.err))
+			report(fmt.Sprintf("tool %s exited while the run goes on (%v); requests to it fail from now on", accesskey.ShownName(t.Name, false), t.err))
 		}
 	}()
 	if err := t.listens(ctx); err != nil {
@@ -363,7 +363,7 @@ func (t *Running) lines(r io.Reader) {
 		}
 		t.mu.Unlock()
 		if ready {
-			t.report("tool " + t.Name + ": " + line)
+			t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + line)
 		}
 	}
 	// A line longer than the buffer ends the scan; the rest is read and dropped, so the
@@ -386,7 +386,7 @@ func (t *Running) listens(ctx context.Context) error {
 			t.early = nil
 			t.mu.Unlock()
 			for _, line := range early {
-				t.report("tool " + t.Name + ": " + line)
+				t.report("tool " + accesskey.ShownName(t.Name, false) + ": " + line)
 			}
 			return nil
 		}

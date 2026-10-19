@@ -67,7 +67,7 @@
         "additionalProperties": false,
         "required": ["name", "lost"],
         "properties": {
-          "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+          "name": {"description": "The variable's name, or, for a name that contains qak_ or qrk_ in any case, one of two phrases in its place: the access key secret's when it contains qak_, else the run key's.", "type": "string", "anyOf": [{"pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}, {"enum": ["(a name that contains an access key secret)", "(a name that contains a run key)"]}]},
           "from": {"description": "The source whose value the run applies, from the highest: fixed, apiary (the server's run configuration), run, machine, harness (the harness's written defaults), shell (the inherited environment). An open list: a receiver shows a name it does not know as it is. Absent when no source's value applies, as for a variable the runtime declares, which then goes into a walled run empty.", "$ref": "#/$defs/word"},
           "lost": {
             "description": "The values of this name the run left out, the highest source first, each once: the source, and why: overridden, a higher source's value applies; denied, the deny list matched the name, or the server's value is of a variable the runtime declares or reserves or a machine value is read from; fixed, the name is one of the run's fixed names; unwalled, the server's value in a run without a wall that takes none. An open list, as from is.",

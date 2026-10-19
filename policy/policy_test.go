@@ -657,3 +657,57 @@ func TestHostPathsTakesTheMostSpecificEntry(t *testing.T) {
 		t.Error("no rules hold a host")
 	}
 }
+
+// TestANarrowingRefusalPrintsAPhraseForASecret pins the two refusals of a server's
+// selection the node's policy does not list, of tools and of credentials: a name that
+// contains qak_ or qrk_ in any case prints the name's phrase, in the text and in a
+// refusal's names, each phrase once, and a clean name prints as it is.
+func TestANarrowingRefusalPrintsAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	read := func(doc string) *policy.Loaded {
+		t.Helper()
+		l, err := policy.Read("x.json", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	node := read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":[],"credentials":[]}`)
+	for _, c := range []struct {
+		names   []string
+		shown   string
+		refused []string
+	}{
+		{[]string{"qak_a"}, ak, []string{ak}},
+		{[]string{"a.qrk_b"}, rk, []string{rk}},
+		{[]string{"qrk_a.qak_b"}, ak, []string{ak}},
+		{[]string{"files", "qak_a", "qak_b", "qrk_c"}, "files, " + ak + ", " + rk, []string{rk, ak, "files"}},
+		{[]string{"files", "more"}, "files, more", []string{"files", "more"}},
+	} {
+		var entries []string
+		for _, n := range c.names {
+			entries = append(entries, `{"name":"`+n+`"}`)
+		}
+		list := "[" + strings.Join(entries, ",") + "]"
+		_, err := policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"tools":`+list+`}`), node)
+		var r *accesskey.Refusal
+		if want := "the server's policy selects the tools " + c.shown + ", which the node's policy does not list: tool_unknown: " + strings.Join(c.refused, ", "); !errors.As(err, &r) || err.Error() != want {
+			t.Errorf("tools %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		if !slices.Equal(r.Names, c.refused) {
+			t.Errorf("tools %v: the names %q, want %q", c.names, r.Names, c.refused)
+		}
+		tools := err.Error()
+		_, err = policy.Narrowed(read(`{"version":1,"egress":{"mode":"observe","allow":[]},"credentials":`+list+`}`), node)
+		if want := "the server's policy selects the credentials " + c.shown + ", which the node's policy does not list"; err == nil || err.Error() != want {
+			t.Errorf("credentials %v:\n got %v\nwant %s", c.names, err, want)
+			continue
+		}
+		for _, text := range []string{tools, err.Error()} {
+			if lower := strings.ToLower(text); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+				t.Errorf("%v: a secret's prefix in %s", c.names, text)
+			}
+		}
+	}
+}

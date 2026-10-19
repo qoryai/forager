@@ -2,6 +2,8 @@ package credential
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -548,5 +550,87 @@ func TestARenewalReportPrintsAPhraseForASecretInAName(t *testing.T) {
 		if l := renewReport(t, name, answers, "another shape"); l != want {
 			t.Errorf("a renewal of %s with another shape:\n got %s\nwant %s", name, l, want)
 		}
+	}
+}
+
+// adapterIn writes a program that runs body into a directory named dir under a new
+// temporary directory, and returns its path.
+func adapterIn(t *testing.T, dir, body string) string {
+	t.Helper()
+	d := filepath.Join(t.TempDir(), dir)
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(d, "adapter")
+	if err := os.WriteFile(file, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// TestAnAdaptersAnswerPrintsAPhraseForASecretInItsPath pins the messages about an
+// adapter's answer, each of which prints the adapter's path: when the path contains
+// qak_ or qrk_ in any case it prints the value's phrase, and a clean path prints as it
+// is. The rest of each message is the same for both.
+func TestAnAdaptersAnswerPrintsAPhraseForASecretInItsPath(t *testing.T) {
+	answer := func(apply string) string {
+		return `echo '{"version":1,"token":"t","apply":[` + apply + `]}'` + "\n"
+	}
+	for what, c := range map[string]struct {
+		body string
+		def  Definition
+		rest string
+	}{
+		"no JSON document":         {"echo not-a-document\n", Definition{}, " did not print a JSON document: "},
+		"outside the schema":       {`echo '{"version":1}'` + "\n", Definition{}, ": "},
+		"basic without a username": {answer(`{"hosts":["a.example"],"scheme":"basic"}`), Definition{}, ": the scheme basic needs a username without a colon or a space"},
+		"no token":                 {`echo '{"version":1,"apply":[{"hosts":["a.example"],"scheme":"bearer"}]}'` + "\n", Definition{}, " gave no token for [a.example]"},
+		"a host above":             {answer(`{"hosts":["a.example"],"scheme":"bearer"}`), Definition{Hosts: []string{"b.example"}}, " claims a.example, above the hosts the machine gives it"},
+		"every path":               {answer(`{"hosts":["a.example"],"scheme":"bearer"}`), Definition{Paths: []string{"/x/*"}}, " claims every path of [a.example], above the paths the machine gives it"},
+		"a path above":             {answer(`{"hosts":["a.example"],"scheme":"bearer","paths":["/y"]}`), Definition{Paths: []string{"/x/*"}}, " claims the path /y, above the paths the machine gives it"},
+	} {
+		for dir, phrase := range map[string]string{"qak_x": accessKeyValuePhrase, "QRK_x": runKeyValuePhrase, "a.qRk_b.QaK_c": accessKeyValuePhrase, "model": ""} {
+			path := adapterIn(t, dir, c.body)
+			d := c.def
+			d.Name, d.Adapter = "product", []string{path}
+			err := resolveError(t, []Definition{d}, []policy.Selected{{Name: "product"}}, nil)
+			shown := phrase
+			if phrase == "" {
+				shown = path
+			}
+			want := "credential product: the adapter " + shown + c.rest
+			// A rest that ends with ": " is followed by a decoder's or a schema's error.
+			if err == nil || !strings.HasPrefix(err.Error(), want) || (!strings.HasSuffix(c.rest, ": ") && err.Error() != want) {
+				t.Errorf("%s, %s:\n got %v\nwant %s", what, dir, err, want)
+				continue
+			}
+			if phrase != "" {
+				noSecretPrefix(t, what+", "+dir, err)
+			}
+		}
+	}
+}
+
+// TestAFileThatCannotBeReadPrintsAPhraseForASecretInItsPath pins the error of a
+// credential's file that cannot be read: when its text contains qak_ or qrk_ in any
+// case, as the path in it can, the value's phrase is printed in its place, and a clean
+// error prints as it is.
+func TestAFileThatCannotBeReadPrintsAPhraseForASecretInItsPath(t *testing.T) {
+	for dir, phrase := range map[string]string{"qak_x": accessKeyValuePhrase, "QRK_x": runKeyValuePhrase, "a.qRk_b.QaK_c": accessKeyValuePhrase} {
+		file := filepath.Join(t.TempDir(), dir, "token")
+		err := resolveError(t, []Definition{{Name: "model", File: file, Hosts: []string{"api.model.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "model"}}, nil)
+		if want := "credential model: " + phrase; err == nil || err.Error() != want {
+			t.Errorf("%s:\n got %v\nwant %s", dir, err, want)
+			continue
+		}
+		noSecretPrefix(t, dir, err)
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: %v does not wrap fs.ErrNotExist", dir, err)
+		}
+	}
+	file := filepath.Join(t.TempDir(), "model", "token")
+	err := resolveError(t, []Definition{{Name: "model", File: file, Hosts: []string{"api.model.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "model"}}, nil)
+	if want := "credential model: open " + file + ": no such file or directory"; err == nil || err.Error() != want {
+		t.Errorf("a clean path:\n got %v\nwant %s", err, want)
 	}
 }

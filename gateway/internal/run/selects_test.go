@@ -249,6 +249,10 @@ func TestASelectionReportPrintsAPhraseForASecret(t *testing.T) {
 				"the gateway selects " + phrase + " by the run's label forge, which the run does not have: it gets no " + phrase},
 			"another forge": {func(c *run.Config) { c.Labels["forge"] = "git.example" },
 				"the gateway selects " + phrase + " for the forge github.com, and the run's forge is git.example: it gets no " + phrase},
+			"a forge that contains a prefix": {func(c *run.Config) { c.Labels["forge"] = "QAK_x.example" },
+				"the gateway selects " + phrase + " for the forge github.com, and the run's forge is " + accessKeyNamePhrase + ": it gets no " + phrase},
+			"a forge that contains the run key's prefix": {func(c *run.Config) { c.Labels["forge"] = "git.qrk_x" },
+				"the gateway selects " + phrase + " for the forge github.com, and the run's forge is " + runKeyNamePhrase + ": it gets no " + phrase},
 			"no label": {func(c *run.Config) { delete(c.Labels, "repository") },
 				"the gateway selects " + phrase + " by the run's label repository, which the run does not have: it gets no " + phrase},
 			"a value outside the pattern": {func(c *run.Config) { c.Labels["repository"] = "a/b,c/d" },
@@ -313,27 +317,42 @@ func TestARunConfigurationRefusalPrintsAPhraseForASecret(t *testing.T) {
 	}
 }
 
-// TestAPlaceholderConflictPrintsAPhraseForASecret pins the detail of a credential's
-// placeholder_conflict: a placeholder that contains qak_ or qrk_ in any case prints the
-// name's phrase, and a clean one prints as it is. The refusal's names are the
-// placeholder as it is.
+// TestAPlaceholderConflictPrintsAPhraseForASecret pins a placeholder_conflict of a
+// credential's placeholder and of a tool's: a placeholder that contains qak_ or qrk_ in
+// any case prints the name's phrase in the refusal's detail and its names, so the
+// refusal's text holds neither prefix, and a clean one prints as it is.
 func TestAPlaceholderConflictPrintsAPhraseForASecret(t *testing.T) {
 	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
 	for name, phrase := range map[string]string{"QAK_TOKEN": accessKeyNamePhrase, "qrk_token": runKeyNamePhrase, "QRK_X_QAK_Y": accessKeyNamePhrase, "MODEL_TOKEN": "MODEL_TOKEN"} {
-		cfg := modelConfig()
-		cfg.Credentials[0].Placeholders = []string{name}
-		cfg.Passes = func(n string) bool { return n == name }
-		_, err := run.Open(context.Background(), cfg)
-		var r *accesskey.Refusal
-		if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
-			t.Fatalf("%s: %v, want placeholder_conflict", name, err)
-		}
-		if want := phrase + " is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside"; r.Detail != want {
-			t.Errorf("%s:\n got %s\nwant %s", name, r.Detail, want)
-		}
-		noSecretPrefix(t, name, r.Detail)
-		if !slices.Equal(r.Names, []string{name}) {
-			t.Errorf("%s: the names %q", name, r.Names)
+		for of, c := range map[string]struct {
+			cfg    func() run.Config
+			detail string
+		}{
+			"a credential": {func() run.Config {
+				cfg := modelConfig()
+				cfg.Credentials[0].Placeholders = []string{name}
+				return cfg
+			}, " is a placeholder of a credential the gateway holds outside the enclosure, and the run passes a value for it inside"},
+			"a tool": {func() run.Config {
+				cfg := toolConfig()
+				cfg.Tools[0].Placeholders = []string{name}
+				return cfg
+			}, " is a placeholder of a tool the gateway starts outside the enclosure, and the run passes a value for it inside"},
+		} {
+			cfg := c.cfg()
+			cfg.Passes = func(n string) bool { return n == name }
+			_, err := run.Open(context.Background(), cfg)
+			var r *accesskey.Refusal
+			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
+				t.Fatalf("%s, %s: %v, want placeholder_conflict", of, name, err)
+			}
+			if want := phrase + c.detail + ": placeholder_conflict: " + phrase; err.Error() != want {
+				t.Errorf("%s, %s:\n got %s\nwant %s", of, name, err, want)
+			}
+			noSecretPrefix(t, of+", "+name, err.Error())
+			if !slices.Equal(r.Names, []string{phrase}) {
+				t.Errorf("%s, %s: the names %q", of, name, r.Names)
+			}
 		}
 	}
 }

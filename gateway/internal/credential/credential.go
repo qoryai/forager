@@ -444,7 +444,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	case d.File != "":
 		b, err := os.ReadFile(d.File)
 		if err != nil {
-			return nil, err
+			return nil, shownError(err)
 		}
 		return static(strings.TrimSpace(string(b)))
 	}
@@ -454,6 +454,8 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	for i, a := range d.Adapter[1:] {
 		args[i] = strings.ReplaceAll(a, "${argument}", h.argument)
 	}
+	// The adapter's path as a message prints it.
+	path := accesskey.ShownValue(d.Adapter[0], false)
 	cmd := exec.CommandContext(ctx, d.Adapter[0], args...)
 	// The access key's variables are Forager's, and no credential program's.
 	cmd.Env = accesskey.WithoutVariables(os.Environ())
@@ -463,18 +465,18 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 		// What an adapter prints is its own to word, and a line of it is worth the
 		// reader's time; its output is never the token, which goes to stdout.
 		line, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		return nil, fmt.Errorf("the adapter %s: %w: %s", accesskey.ShownValue(d.Adapter[0], false), shownError(err), accesskey.ShownValue(line, false))
+		return nil, fmt.Errorf("the adapter %s: %w: %s", path, shownError(err), accesskey.ShownValue(line, false))
 	}
 	doc, err := contracts.Decode("answer.json", stdout.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", d.Adapter[0], err)
+		return nil, fmt.Errorf("the adapter %s did not print a JSON document: %w", path, err)
 	}
 	schema, err := contracts.Compile("credential.schema.json")
 	if err != nil {
 		return nil, err
 	}
 	if err := schema.Validate(doc); err != nil {
-		return nil, fmt.Errorf("the adapter %s: %w", d.Adapter[0], err)
+		return nil, fmt.Errorf("the adapter %s: %w", path, err)
 	}
 	var a answer
 	if err := json.Unmarshal(stdout.Bytes(), &a); err != nil {
@@ -482,24 +484,24 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 	}
 	for _, u := range a.Apply {
 		if err := u.check(); err != nil {
-			return nil, fmt.Errorf("the adapter %s: %w", d.Adapter[0], err)
+			return nil, fmt.Errorf("the adapter %s: %w", path, err)
 		}
 		if u.Token == "" && a.Token == "" {
-			return nil, fmt.Errorf("the adapter %s gave no token for %v", d.Adapter[0], u.Hosts)
+			return nil, fmt.Errorf("the adapter %s gave no token for %v", path, u.Hosts)
 		}
 		// What the machine's definition says is the most an adapter may claim.
 		for _, host := range u.Hosts {
 			if len(d.Hosts) > 0 && !slices.ContainsFunc(d.Hosts, func(entry string) bool { return policy.Covers(entry, host) }) {
-				return nil, fmt.Errorf("the adapter %s claims %s, above the hosts the machine gives it", d.Adapter[0], host)
+				return nil, fmt.Errorf("the adapter %s claims %s, above the hosts the machine gives it", path, host)
 			}
 		}
 		if len(d.Paths) > 0 {
 			if u.Paths == nil {
-				return nil, fmt.Errorf("the adapter %s claims every path of %v, above the paths the machine gives it", d.Adapter[0], u.Hosts)
+				return nil, fmt.Errorf("the adapter %s claims every path of %v, above the paths the machine gives it", path, u.Hosts)
 			}
 			for _, p := range u.Paths {
 				if !slices.ContainsFunc(d.Paths, func(entry string) bool { return policy.CoversPath(entry, p) }) {
-					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", d.Adapter[0], p)
+					return nil, fmt.Errorf("the adapter %s claims the path %s, above the paths the machine gives it", path, p)
 				}
 			}
 		}

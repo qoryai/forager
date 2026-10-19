@@ -1449,3 +1449,20 @@ func TestShownValue(t *testing.T) {
 		}
 	}
 }
+
+// TestShownNames pins a list of names as a message or an event lists them: each shown
+// as ShownName shows it bare, in order, each phrase once, and a clean name as often as
+// it is given.
+func TestShownNames(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct{ in, want []string }{
+		{nil, nil},
+		{[]string{"files", "QAK_a", "qrk_b", "x.qak_c", "QRK_d"}, []string{"files", ak, rk}},
+		{[]string{"qrk_a.qak_b", "qrk_c"}, []string{ak, rk}},
+		{[]string{"files", "files", "model"}, []string{"files", "files", "model"}},
+	} {
+		if got := accesskey.ShownNames(c.in); !slices.Equal(got, c.want) {
+			t.Errorf("ShownNames(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

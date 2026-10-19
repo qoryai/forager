@@ -185,10 +185,12 @@ does. Set by the node, they are `QORY_` names like any other.
 
 The record lists every variable by name, never a value: `dev.qory.run.policy_applied`'s
 `variables` contains each name, `from`, the source that applies, and `lost`, each value
-that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A
-fixed name, and a name the run inherits, is listed only beside a value of the server,
-the run, the machine or the harness's defaults. `Spec.OnVariables` receives the same
-list, as `session.Applied`.
+that lost with its source and why: `overridden`, `denied`, `fixed` or `unwalled`. A name
+that contains `qak_` or `qrk_` in any case is sent as `(a name that contains an access
+key secret)`, or `(a name that contains a run key)` when it contains `qrk_` and no
+`qak_`. A fixed name, and a name the run inherits, is listed only beside a value of the
+server, the run, the machine or the harness's defaults. `Spec.OnVariables` receives the
+same list, as `session.Applied`, with each name as it is.
 
 ## A control plane
 

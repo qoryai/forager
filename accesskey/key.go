@@ -298,6 +298,21 @@ func ShownName(v string, quote bool) string {
 	return v
 }
 
+// ShownNames are names as a message or an event lists them: each as [ShownName] shows
+// it bare, in order, with each phrase once, so two names that give one phrase list it
+// once. A name without either prefix is listed as it is, as often as it is given.
+func ShownNames(names []string) []string {
+	var out []string
+	for _, n := range names {
+		shown := ShownName(n, false)
+		if shown != n && slices.Contains(out, shown) {
+			continue
+		}
+		out = append(out, shown)
+	}
+	return out
+}
+
 // ContainsSecret reports whether a value contains what starts an access key secret,
 // qak_, or a run key, qrk_, in any case. A reader of a document a secret does not
 // belong in, such as the server document or a pin, refuses one that contains it with a

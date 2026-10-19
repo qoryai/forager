@@ -500,15 +500,19 @@ func refusedNames(t *testing.T, sp session.Spec) []any {
 // validates against its schema; a clean name is sent as it is.
 func TestAPlaceholderConflictSendsAPhraseForASecret(t *testing.T) {
 	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	// want are the names of the gateway's refusal as the event sends them, in the
+	// refusal's order; own are the session's, sorted as its refusal's names are, and
+	// detail the names its refusal's detail lists, in the order of the names before.
 	for _, c := range []struct {
 		placeholders []string
-		want         []any
+		want, own    []any
+		detail       string
 	}{
-		{[]string{"QAK_TOKEN"}, []any{ak}},
-		{[]string{"qrk_token"}, []any{rk}},
-		{[]string{"QRK_X_QAK_Y"}, []any{ak}},
-		{[]string{"MODEL_TOKEN", "QAK_OTHER", "QAK_TOKEN", "QRK_TOKEN"}, []any{"MODEL_TOKEN", ak, rk}},
-		{[]string{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}},
+		{[]string{"QAK_TOKEN"}, []any{ak}, []any{ak}, ak},
+		{[]string{"qrk_token"}, []any{rk}, []any{rk}, rk},
+		{[]string{"QRK_X_QAK_Y"}, []any{ak}, []any{ak}, ak},
+		{[]string{"MODEL_TOKEN", "QAK_OTHER", "QAK_TOKEN", "QRK_TOKEN"}, []any{"MODEL_TOKEN", ak, rk}, []any{rk, ak, "MODEL_TOKEN"}, "MODEL_TOKEN, " + ak + ", " + rk},
+		{[]string{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}, []any{"MODEL_TOKEN"}, "MODEL_TOKEN"},
 	} {
 		t.Run("the session's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
 			sp, g := specGateway(t)
@@ -527,8 +531,19 @@ func TestAPlaceholderConflictSendsAPhraseForASecret(t *testing.T) {
 			if !errors.As(err, &r) || r.Code != "placeholder_conflict" {
 				t.Fatalf("%v, want placeholder_conflict", err)
 			}
-			if got := refusedNames(t, sp); !slices.Equal(got, c.want) {
-				t.Errorf("names %q, want %q", got, c.want)
+			if got := refusedNames(t, sp); !slices.Equal(got, c.own) {
+				t.Errorf("names %q, want %q", got, c.own)
+			}
+			// The refusal's text, its detail and its names, holds the phrases too.
+			names := make([]string, len(c.own))
+			for i, n := range c.own {
+				names[i] = n.(string)
+			}
+			if want := "the run passes a value for " + c.detail + ", a placeholder of what the gateway holds outside the enclosure: placeholder_conflict: " + strings.Join(names, ", "); err.Error() != want {
+				t.Errorf("the refusal:\n got %s\nwant %s", err, want)
+			}
+			if !slices.Equal(r.Names, names) {
+				t.Errorf("the refusal's names %q, want %q", r.Names, names)
 			}
 		})
 		t.Run("the gateway's "+strings.Join(c.placeholders, ","), func(t *testing.T) {
@@ -547,5 +562,49 @@ func TestAPlaceholderConflictSendsAPhraseForASecret(t *testing.T) {
 				t.Errorf("names %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestAppliedVariablesSendAPhraseForASecret pins the variables of the run's
+// policy_applied: a variable's name that contains qak_ or qrk_ in any case is sent as
+// the name's phrase, the access key secret's when it contains both, in the order of the
+// names, two such names as two entries; the event validates against its schema; a
+// clean name is sent as it is; and OnVariables and the agent's environment have every
+// name as it is.
+func TestAppliedVariablesSendAPhraseForASecret(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	sp := spec(t)
+	out := dumpsEnv(t, &sp)
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Variables.Run = []string{"PLAIN_ONE=a", "QAK_ONE=b", "qrk_two=c", "QRK_X_QAK_Y=d"}
+	var calls []session.Applied
+	sp.OnVariables = func(a session.Applied) { calls = append(calls, a) }
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"PLAIN_ONE<-run", ak + "<-run", ak + "<-run", rk + "<-run"}; !slices.Equal(variablesApplied(t, res), want) {
+		t.Errorf("policy_applied variables %q, want %q", variablesApplied(t, res), want)
+	}
+	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	schema, err := contracts.Compile("events/run.policy_applied.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(data(pa[0])); err != nil {
+		t.Errorf("the policy_applied does not validate: %v", err)
+	}
+	vars, _ := json.Marshal(data(pa[0])["variables"])
+	if lower := strings.ToLower(string(vars)); strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		t.Errorf("a secret's prefix in the variables: %s", vars)
+	}
+	if want := []string{"PLAIN_ONE<-run", "QAK_ONE<-run", "QRK_X_QAK_Y<-run", "qrk_two<-run"}; len(calls) != 1 || !slices.Equal(lines(calls[0]), want) {
+		t.Errorf("OnVariables received %v, want once %q", calls, want)
+	}
+	env := envOf(t, out)
+	for name, value := range map[string]string{"PLAIN_ONE": "a", "QAK_ONE": "b", "qrk_two": "c", "QRK_X_QAK_Y": "d"} {
+		if env[name] != value {
+			t.Errorf("%s=%q, want %q", name, env[name], value)
+		}
 	}
 }
