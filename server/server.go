@@ -279,6 +279,38 @@ type RunConfiguration struct {
 	// Image is the image the run starts in, a reference pinned by digest; empty when
 	// the document names none, and the run's policy selects the image.
 	Image string `json:"image,omitzero"`
+	// Credentials are the credentials whose values the server stores for the run, in
+	// the document's order, each name once; nil when the document has none. The
+	// gateway fetches their values with the secrets request.
+	Credentials []RunCredential `json:"credentials,omitzero"`
+	// Computed is sha256= and the lower-case hex SHA-256 of the bytes the document was
+	// read from, which Forager computes itself: the digest a secrets request and the
+	// open of its answer use, never the answer's header. Empty for a document not read
+	// from bytes.
+	Computed string `json:"-"`
+}
+
+// RunCredential is one entry of a run configuration's credentials: the credential's
+// name, the exact hosts and the paths its value is set on, how it is set, the form of
+// the key, and the variables the enclosure gets a placeholder in. It has no value.
+type RunCredential struct {
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts"`
+	// Paths are nil for every path.
+	Paths []string `json:"paths,omitzero"`
+	Auth  Auth     `json:"auth"`
+	// KeyForm is api_key, access_token or empty. No Forager component reads it in this
+	// revision.
+	KeyForm      string   `json:"key_form,omitzero"`
+	Placeholders []string `json:"placeholders,omitzero"`
+}
+
+// Auth is how a value is set on a request, auth.schema.json: Scheme is bearer, basic
+// with Username, or header with Header.
+type Auth struct {
+	Scheme   string `json:"scheme"`
+	Header   string `json:"header,omitzero"`
+	Username string `json:"username,omitzero"`
 }
 
 // Variable is one of a run configuration's variables: its value. A member beside it is

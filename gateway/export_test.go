@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -87,10 +88,18 @@ func Tokens(g *Gateway, runID string) map[string]string {
 	g.mu.Unlock()
 	out := map[string]string{}
 	for _, u := range lr.r.Uses() {
+		if u.Value != nil {
+			out[u.Name] = string(u.Value())
+			continue
+		}
 		out[u.Name] = u.Token()
 	}
 	return out
 }
+
+// SetUpstreamRoots sets the roots every run's proxy verifies a terminated host's
+// certificate against.
+func SetUpstreamRoots(c *Config, roots *x509.CertPool) { c.upstreamRoots = roots }
 
 // SetOpened sets what is called once a run on the one address opened.
 func SetOpened(c *Config, f func()) { c.opened = f }

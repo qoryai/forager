@@ -1,0 +1,124 @@
+package credential
+
+import (
+	"context"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/qoryai/forager/policy"
+)
+
+// storedModel is a credential from the server for api.model.example.
+func storedModel(value string) Stored {
+	return Stored{Name: "server-model", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MODEL_API_KEY"},
+		Value: func() []byte { return []byte(value) }}
+}
+
+// TestACredentialFromTheServerReplacesTheMachinesOnItsHost pins the precedence: a
+// machine's credential whose hosts claim a host of a credential from the server, the
+// same host or one above or below it, is not read, and the server's is the one use on
+// the host, its value and no token; a machine's credential for another host stays;
+// an adapter whose answer claims the host is dropped.
+func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "a-token")
+	for name, hosts := range map[string][]string{
+		"the same host":  {"api.model.example"},
+		"a host above":   {"*.model.example"},
+		"another casing": {"API.model.example"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defs := []Definition{
+				{Name: "model", Env: "MODEL_TOKEN", Hosts: hosts, Scheme: "bearer", Placeholders: []string{"MACHINE_KEY"}},
+				{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"},
+			}
+			held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}, {Name: "plain"}}, []Stored{storedModel("server-value")}, policy.Observe, nil, func(l string) { t.Log(l) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			var names []string
+			for _, u := range held.Uses {
+				names = append(names, u.Name)
+			}
+			if !slices.Equal(names, []string{"plain", "server-model"}) {
+				t.Fatalf("uses %v, want plain and server-model", names)
+			}
+			u := held.Uses[1]
+			if !u.Stored || u.Token() != "" || string(u.Value()) != "server-value" || u.Header != "x-api-key" || u.Scheme != "header" {
+				t.Errorf("the server's use %+v", u)
+			}
+			if held.Uses[0].Value() != nil || held.Uses[0].Token() != "a-token" {
+				t.Errorf("the machine's use plain %+v", held.Uses[0])
+			}
+			if !slices.Equal(held.Placeholders, []string{"MODEL_API_KEY"}) {
+				t.Errorf("placeholders %v, want the server's alone", held.Placeholders)
+			}
+			want := []Credential{{Name: "plain", Hosts: []string{"plain.example"}, Placeholders: []string{}}, {Name: "server-model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"}}}
+			if got := held.Credentials(); !reflect.DeepEqual(got, want) {
+				t.Errorf("credentials %+v, want %+v", got, want)
+			}
+		})
+	}
+	t.Run("an adapter", func(t *testing.T) {
+		defs := []Definition{{Name: "product", Adapter: []string{adapter(t, `echo '{"version":1,"token":"t","apply":[{"hosts":["api.model.example"],"scheme":"bearer"}]}'`+"\n")}}}
+		held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "product"}}, []Stored{storedModel("server-value")}, policy.Observe, nil, func(l string) { t.Log(l) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		if len(held.Uses) != 1 || held.Uses[0].Name != "server-model" {
+			t.Errorf("uses %+v", held.Uses)
+		}
+	})
+}
+
+// TestNoCredentialFromTheServerIsResolveUnchanged pins ResolveWith with no credential
+// from the server: what Resolve gives, the machine's key.
+func TestNoCredentialFromTheServerIsResolveUnchanged(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "a-token")
+	defs := []Definition{envDefinition("model")}
+	held, err := ResolveWith(context.Background(), defs, []policy.Selected{{Name: "model"}}, nil, policy.Observe, nil, func(l string) { t.Log(l) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if len(held.Uses) != 1 || held.Uses[0].Stored || held.Uses[0].Token() != "a-token" || held.Uses[0].Value() != nil {
+		t.Errorf("uses %+v", held.Uses)
+	}
+}
+
+// TestACredentialFromTheServerIsCheckedAsTheMachines pins the checks: a name a
+// selected machine's credential has, two from the server on one host, and, under
+// enforce, a host the allow list does not cover, each no run, with no value in the
+// message.
+func TestACredentialFromTheServerIsCheckedAsTheMachines(t *testing.T) {
+	t.Setenv("MODEL_TOKEN", "a-token")
+	other := storedModel("server-value")
+	other.Name = "server-other"
+	for name, c := range map[string]struct {
+		defs   []Definition
+		sel    []policy.Selected
+		stored []Stored
+		allow  []string
+		want   string
+	}{
+		"a name the machine's has": {[]Definition{{Name: "server-model", Env: "MODEL_TOKEN", Hosts: []string{"plain.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: "server-model"}},
+			[]Stored{storedModel("server-value")}, []string{"plain.example", "api.model.example"},
+			`the run configuration's credential "server-model" has the name of a credential of this machine's that the policy selects; rename one of them`},
+		"two on one host": {nil, nil, []Stored{storedModel("server-value"), other}, []string{"api.model.example"}, "both claim api.model.example"},
+		"a host the run does not reach": {nil, nil, []Stored{storedModel("server-value")}, []string{"plain.example"},
+			"the credential server-model is for api.model.example, which the run's allow list does not cover"},
+	} {
+		held, err := ResolveWith(context.Background(), c.defs, c.sel, c.stored, policy.Enforce, c.allow, func(l string) { t.Log(l) })
+		if err == nil {
+			held.Close()
+			t.Errorf("%s: the credentials resolved", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "server-value") {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+}

@@ -226,6 +226,10 @@ type verified struct {
 	seen   *http.Request
 	body   []byte
 	runDoc string
+	// secretsStatus and secretsBody are the answer to a secrets request, 200 when the
+	// status is 0.
+	secretsStatus int
+	secretsBody   string
 }
 
 func newVerified(t *testing.T) *verified {
@@ -290,6 +294,15 @@ func newVerified(t *testing.T) *verified {
 			w.Header().Set(server.HeaderRunConfiguration, "sha256="+strings.Repeat("1", 64))
 			w.Header().Set("ETag", `"sha256=`+strings.Repeat("1", 64)+`"`)
 			reply(200, v.runDoc)
+		case r.URL.Path == "/v1/secrets" && r.Method == http.MethodPost:
+			if r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("secrets headers %v", r.Header)
+			}
+			status := v.secretsStatus
+			if status == 0 {
+				status = 200
+			}
+			reply(status, v.secretsBody)
 		case r.URL.Path == "/v1/events" && r.Method == http.MethodPost:
 			if r.Header.Get("Content-Type") != server.ContentType || r.Header.Get(server.HeaderDelivery) == "" {
 				t.Errorf("POST headers %v", r.Header)

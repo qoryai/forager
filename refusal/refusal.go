@@ -128,7 +128,14 @@ type NeedsWall struct {
 	Names []string
 }
 
+// ServerCredentials is the name of [WallRequired] for a run configuration that has
+// credentials, whose values the gateway sets only for a run behind a wall.
+const ServerCredentials = "server_credentials"
+
 func (e *NeedsWall) Error() string {
+	if slices.Contains(e.Names, ServerCredentials) {
+		return "run it with a wall: the run configuration from Qory Apiary has credentials, and the gateway sets their values only for a run behind a wall"
+	}
 	for _, n := range e.Names {
 		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
 			return fmt.Sprintf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", image)

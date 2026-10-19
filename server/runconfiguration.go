@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
+	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
@@ -71,7 +74,33 @@ func readRunConfiguration(body []byte) (*RunConfiguration, error) {
 			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{name}, "the document is refused: the variable %s holds more than %d bytes", name, MaxVariableValue)
 		}
 	}
+	for i, c := range rc.Credentials {
+		if slices.ContainsFunc(rc.Credentials[:i], func(o RunCredential) bool { return o.Name == c.Name }) {
+			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{c.Name}, "the document is refused: the credential %s is listed twice", accesskey.ShownName(c.Name, true))
+		}
+		if c.Auth.Scheme == "header" && ReservedHeader(c.Auth.Header) {
+			return nil, refusal.New(refusal.RunConfigurationInvalid, []string{c.Name},
+				"the document is refused: the credential %s is set in the header %s, which frames the request or which the proxy sets", accesskey.ShownName(c.Name, true), accesskey.ShownName(c.Auth.Header, true))
+		}
+	}
+	sum := sha256.Sum256(body)
+	rc.Computed = "sha256=" + hex.EncodeToString(sum[:])
 	return &rc, nil
+}
+
+// ReservedHeader reports whether a credential from the server may not be set in the
+// header name: a header that frames the request or is hop-by-hop, Host,
+// Content-Length, Transfer-Encoding, Connection, TE, Trailer, Upgrade and Keep-Alive;
+// any Proxy- header; Cookie; and the headers the proxy sets, X-Qory- and Qory-. Case
+// is ignored, and an underscore counts as a dash, which some servers read as the
+// same name.
+func ReservedHeader(name string) bool {
+	n := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	switch n {
+	case "host", "content-length", "transfer-encoding", "connection", "te", "trailer", "upgrade", "keep-alive", "cookie":
+		return true
+	}
+	return strings.HasPrefix(n, "proxy-") || strings.HasPrefix(n, "x-qory-") || strings.HasPrefix(n, "qory-")
 }
 
 // CheckConfigurationImage refuses a run configuration's image that is not a reference
