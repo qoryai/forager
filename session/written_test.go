@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,4 +299,121 @@ func TestARunWithoutASettingsFileLeavesTheRegistryAlone(t *testing.T) {
 	if err := runErr(sp); err == nil || !strings.Contains(err.Error(), "the registry of walled runs") {
 		t.Errorf("a run with a settings file: %v", err)
 	}
+}
+
+// TestADirectoryThatHoldsAWrittenPlaceIsNotReadable pins the check of a directory a
+// runtime passes to its program, in both directions: it is refused as a file is, when
+// it lies in or is reached through a place a walled run could have written, and also
+// when such a place is it or lies inside it, as given or through links, by whole names
+// and regardless of case.
+func TestADirectoryThatHoldsAWrittenPlaceIsNotReadable(t *testing.T) {
+	root := t.TempDir()
+	p := func(rel string) string { return filepath.Join(root, rel) }
+	mkdirs(t, p("home/p/work"), p("home/q"), p("ws"), p("safe"), p("home/p2"))
+	// into leads into the place from outside it, and home-link is a link a directory
+	// is passed through.
+	symlink(t, p("ws"), p("safe/into"))
+	symlink(t, p("home/p"), p("home-link"))
+	for _, c := range []struct {
+		name, place, dir, how string
+	}{
+		{"a place inside the directory", p("home/p/work"), p("home/p"), "contains"},
+		{"a place deeper inside", p("home/p/work/later"), p("home"), "contains"},
+		{"a place inside, in another case", p("Home/P/Work"), p("home/p"), "contains"},
+		{"the directory passed in another case", p("home/p/work"), p("HOME/P"), "contains"},
+		{"a place inside, the directory through a link", p("home/p/work"), p("home-link"), "contains"},
+		{"a place inside, through a link", p("home-link/work"), p("home/p"), "contains"},
+		{"the filesystem's root holds every place", p("ws"), "/", "contains"},
+		{"the directory is the place", p("ws"), p("ws"), "lies in"},
+		{"the directory lies in the place", p("home"), p("home/q"), "lies in"},
+		{"the directory is reached through the place", p("safe"), p("safe/into"), "lies in"},
+		{"a link to the place", p("ws"), p("safe/into"), "lies in"},
+		{"a sibling with the place as prefix", p("home/p"), p("home/p2"), ""},
+		{"a directory beside the place", p("home/p/work"), p("home/q"), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := session.ReadableDir([]string{c.place})(c.dir)
+			if c.how == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var written *runtimes.WrittenError
+			if !errors.As(err, &written) || written.How != c.how || written.Place != c.place {
+				t.Errorf("ReadableDir(%q) for %q: %v, want it %s the place", c.dir, c.place, err, c.how)
+			}
+		})
+	}
+	want, err := filepath.EvalSymlinks(p("home/p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := session.ReadableDir(nil)(p("home-link")); err != nil || got != want {
+		t.Errorf("no places: %q, %v, want %q", got, err, want)
+	}
+}
+
+// TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun pins that a walled run whose launch
+// passes --mcp-config with a file in its workspace, or reached through a link in it,
+// stops before the wall is prepared, with the runtime's text; and that a file outside
+// every such place is passed as a copy in the run directory.
+func TestAWalledLaunchsMCPConfigInAWrittenPlaceIsNoRun(t *testing.T) {
+	t.Run("in the workspace", func(t *testing.T) {
+		w := &openWall{}
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = w, "example.com/agent:1"
+		f := filepath.Join(sp.Dir, "mcp.json")
+		if err := os.WriteFile(f, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--mcp-config", f)
+		want := "runtime claude: This launch passes --mcp-config " + f + ", and that file lies in " + sp.Dir +
+			", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
+			"or pass the servers as a JSON string."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+		if w.req.RunID != "" || w.wrapped {
+			t.Errorf("the wall was prepared or wrapped: %+v", w.req)
+		}
+	})
+	t.Run("reached through the workspace", func(t *testing.T) {
+		sp := spec(t, "FAKE_EXIT=0")
+		sp.Wall, sp.Image = &openWall{}, "example.com/agent:1"
+		outside := t.TempDir()
+		if err := os.WriteFile(filepath.Join(outside, "mcp.json"), []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// into, outside the workspace, leads into it, and out, in it, leads out of it.
+		safe := t.TempDir()
+		symlink(t, sp.Dir, filepath.Join(safe, "into"))
+		symlink(t, outside, filepath.Join(sp.Dir, "out"))
+		f := filepath.Join(safe, "into", "out", "mcp.json")
+		sp.Args = append(sp.Args, "--mcp-config="+f)
+		want := "runtime claude: This launch passes --mcp-config " + f + ", and that file is reached through " + sp.Dir +
+			", which a walled run can write, so the run does not start. Move the file to a directory no walled run writes, " +
+			"or pass the servers as a JSON string."
+		if err := runErr(sp); err == nil || err.Error() != want {
+			t.Errorf("the run: %v, want %q", err, want)
+		}
+	})
+	t.Run("outside every written place", func(t *testing.T) {
+		t.Setenv("QORY_TEST_HOST_ONLY", "1")
+		sp := spec(t, "FAKE_EXIT=0")
+		mount := t.TempDir()
+		sp.Wall, sp.Image, sp.Mounts = &openWall{}, "example.com/agent:1", []wall.Mount{{Path: mount, ReadOnly: true}}
+		f := filepath.Join(mount, "mcp.json")
+		if err := os.WriteFile(f, []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sp.Args = append(sp.Args, "--mcp-config", f)
+		res, err := runWithSettingsEnv(t, sp)
+		if err != nil || res.ExitCode != 0 {
+			t.Fatalf("the run: %+v, %v", res, err)
+		}
+		if b, err := os.ReadFile(filepath.Join(res.Dir, "mcp-config-1.json")); err != nil || string(b) != `{"mcpServers":{}}` {
+			t.Errorf("the copy: %s, %v", b, err)
+		}
+	})
 }

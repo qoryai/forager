@@ -33,13 +33,21 @@ const maxSettings = 1 << 20
 // --settings, that flag is given the path of the run's settings.
 // A walled launch whose arguments pass --settings more than once is refused before
 // anything is read: Claude Code reads only the last one, so the run would start
-// without Forager's hooks and with a file that was not checked.
+// without Forager's hooks and with a file that was not checked. A walled launch's
+// --mcp-config, --agents, --plugin-dir, --plugin-dir-no-mcp and --add-dir values are
+// then checked as [walledPaths] checks them, before the settings are read.
 // An interactive launch whose API key is the run's stand-in is then started through
 // the script of [ApproveScript], so Claude Code uses the stand-in at once.
 func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
 	launch := a.Launch
 	if a.Walled && settingsFlags(launch.Args) > 1 {
 		return runtimes.Launch{}, errSettingsMoreThanOnce
+	}
+	if a.Walled {
+		var err error
+		if launch.Args, err = walledPaths(launch.Args, a); err != nil {
+			return runtimes.Launch{}, err
+		}
 	}
 	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder, a.Readable, a.Inside, a.Walled)
 	if err != nil {
