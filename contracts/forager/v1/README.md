@@ -2651,7 +2651,7 @@ exactly the recorded events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has six parts, beside
+`descriptor.schema.json`. One YAML file per runtime. It has seven parts, beside
 `runtime`, the name, a lower-case letter and then up to 63 lower-case letters, digits
 and dashes, and an optional `title`, the name a person reads: `Claude Code`.
 
@@ -2709,6 +2709,21 @@ nor the runtime's preparation sets is unset inside (§Variables). The session ch
 `secrets` when it reads the descriptor: the schema, that ids are distinct, and that
 every id of a group is declared and in one group at most.
 
+**Model**, optional: the model API formats the runtime sends its requests in, and where
+a composer, such as qory, writes a run's model id, effort value and model endpoint.
+`formats` lists one or more formats of `api-format.schema.json`. `model` is the place
+of the model id. A place is exactly one of `flag`, an argument the runtime is started
+with, which takes the value; `setting`, a dotted key in the JSON settings file the
+launch passes; or `variable`, an environment variable. `effort`, optional, has `run`,
+the place of the run's effort value with `values`, the 1 to 16 values the runtime
+accepts there, and optionally `agent`, `{frontmatter, values}`: the key of an agent
+file's frontmatter that takes an agent's effort value, and the values the runtime
+accepts there. A value is a lower-case letter, then up to 31 lower-case letters, digits
+and dashes. `endpoint` is `{variable}`, the variable the runtime reads the base URL of
+its model API from, and is always a variable. Every object of the section is closed.
+The session and the gateway do not use the section: `denies` still decides whether the
+server's value of the endpoint's variable reaches the runtime.
+
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
 per event the rules produce from them, in order. A descriptor without fixtures is not
@@ -2721,7 +2736,11 @@ source in both modes; its standard output adds the result line, which only the o
 reports. A descriptor records the version it was written against; Forager
 reports that version and does not check the installed one. Its `secrets` declare the
 model credential, an API key set as `x-api-key` or an OAuth credential set as a bearer,
-on `api.anthropic.com` under `/v1/`, one of the two required.
+on `api.anthropic.com` under `/v1/`, one of the two required. Its `model` lists
+`anthropic-messages`; it places the model id as `--model`, the run's effort value as
+`--effort` and an agent's effort value in the `effort` frontmatter, each of the two
+taking `low`, `medium`, `high`, `xhigh` and `max`; and it places the endpoint in
+`ANTHROPIC_BASE_URL`.
 
 On a pseudo-terminal, Claude Code with `ANTHROPIC_API_KEY` set waits for a person to
 approve the key, unless the configuration it reads lists the key's last 20 characters,
@@ -2752,10 +2771,18 @@ the same way, through a script the session writes into the run directory,
 in name order: `version`, 1, and `runtimes`, each with its `name`, `title`, `reserves`,
 `denies`, `credential_files`, `declares` with `id`, `title`, `name`, `hosts`, `auth`
 (`scheme`, and `header` for the `header` scheme and `username` for the `basic` scheme)
-and `paths` when the declaration has some, and `one_of` with `id`, `required` and `of`.
-Every list is present, empty when the descriptor has none. `go generate ./contracts`
+and `paths` when the declaration has some, `one_of` with `id`, `required` and `of`, and
+`model`, the descriptor's model section in the same shape, when it has one. Every list
+is present, empty when the descriptor has none; `model` is absent when the descriptor
+has none. `go generate ./contracts`
 writes it from the descriptors, and a test fails while the file differs from what that
 writes.
+
+**`api-format.schema.json`** is the fixed list of the formats a model API uses for its
+requests and answers: `anthropic-messages`, Anthropic's Messages API;
+`openai-responses`, OpenAI's Responses API; `openai-chat`, OpenAI's Chat Completions
+API; and `gemini`, Google's Gemini API. The file has no `$defs`: a schema that uses the
+list, in this contract or in another, refers to the whole file with `$ref`.
 
 ## The local socket
 
@@ -3221,6 +3248,8 @@ the option experimental.
 | `fixtures/run-attach-answer/` | attach answers: a run configuration of no policy, and one with variables and labels | `run-attach-answer.schema.json` |
 | `fixtures/run-outcome/` | outcomes: with no state, with a state alone, and with a reason that is no code, which the server drops | `run-outcome.schema.json` |
 | `fixtures/batch-answer/` | bodies of a signed `2xx` to a batch: an `end` with a reason, one without, and none | `batch-answer.schema.json` |
+| `fixtures/api-format/` | each API format of the list, one per file | `api-format.schema.json` |
+| `fixtures/descriptor/` | descriptors that are accepted: one whose `model` places the model id in a setting, the run's effort in a variable and an agent's in the frontmatter, with two formats, and one whose `model` has no `effort` | `descriptor.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server returns: with a policy of each mode, with variables, with neither, which leaves the node's policy in force, and with an image named by its reference pinned by digest and no policy | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: a first batch, the `dev.qory.run.refused` of a run whose run configuration was refused, `run_configuration_invalid`; the gateway's `dev.qory.run.exited` of a session's run whose starter gave no outcome, `cancelled` with `stopped` and `exit_code` `-1`, `session-stopped.json`; and the `dev.qory.run.refused` of the server's `not_found` with its `status` `404`, `refused-not-found.json`, and of a code of the server's the schema's list does not hold, with its `status`, `refused-unlisted-server-code.json`; and the `dev.qory.run.policy_applied` of a walled run whose policy file was put under a ceiling with path rules, with its `ceiling_paths`, `policy-applied-ceiling-paths.json` | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the fixture access key secret, with the status a receiver returns and the code of a coded refusal: discovery, batches, registrations and a reload | the receiver, replaying each in the order of their names with its clock at `1700000000` and checking each answer's signature |

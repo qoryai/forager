@@ -134,6 +134,42 @@ type Auth = descriptor.Auth
 // one when Required.
 type Group = descriptor.Group
 
+// Model is implemented by a runtime that can report a descriptor's model section. It
+// is optional and checked by type assertion, so [Runtime] keeps its methods: a runtime
+// without it has no model section.
+type Model interface {
+	// Model is the runtime's model section and true, or the zero ModelPlaces and false
+	// when the runtime has none. The lists are the caller's to keep: a runtime returns
+	// a copy.
+	Model() (ModelPlaces, bool)
+}
+
+// ModelPlaces is a descriptor's model section: Formats, the model API formats the
+// runtime sends its requests in, from the contract's api-format.schema.json; Model,
+// where a run's model id goes; Effort, where an effort value goes, nil when the runtime
+// has no place for one; and Endpoint, the variable the runtime reads the base URL of
+// its model API from.
+type ModelPlaces = descriptor.Model
+
+// Place is where a value goes, exactly one of its fields set: Flag, an argument the
+// runtime is started with, which takes the value; Setting, a dotted key in the JSON
+// settings file the launch passes; Variable, an environment variable.
+type Place = descriptor.Place
+
+// ValuedPlace is a [Place] and the values the runtime accepts there.
+type ValuedPlace = descriptor.ValuedPlace
+
+// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
+// frontmatter, and the values the runtime accepts there.
+type AgentPlace = descriptor.AgentPlace
+
+// Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
+// runtime has no place for an agent's effort.
+type Effort = descriptor.Effort
+
+// Endpoint is the variable a runtime reads the base URL of its model API from.
+type Endpoint = descriptor.Endpoint
+
 // Record is one unit of what a program reports.
 type Record = descriptor.Record
 
@@ -288,6 +324,25 @@ func (r *described) Secrets() Declarations {
 		out.OneOf = append(out.OneOf, g)
 	}
 	return out
+}
+
+// Model is the descriptor's model section, a copy, and true; the zero ModelPlaces and
+// false when it has none.
+func (r *described) Model() (ModelPlaces, bool) {
+	m := r.d.Model
+	if m == nil {
+		return ModelPlaces{}, false
+	}
+	out := ModelPlaces{Formats: slices.Clone(m.Formats), Model: m.Model, Endpoint: m.Endpoint}
+	if e := m.Effort; e != nil {
+		effort := Effort{Run: e.Run}
+		effort.Run.Values = slices.Clone(e.Run.Values)
+		if a := e.Agent; a != nil {
+			effort.Agent = &AgentPlace{Frontmatter: a.Frontmatter, Values: slices.Clone(a.Values)}
+		}
+		out.Effort = &effort
+	}
+	return out, true
 }
 
 // stopSignals are the signals a spec may name: the ones a program is written to leave

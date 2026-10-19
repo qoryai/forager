@@ -15,8 +15,10 @@
 // configure that would make it.
 //
 // A descriptor's [Secrets] defines the secrets the runtime reads and the variables it
-// keeps for itself. [Runtimes] renders them, for every descriptor the contract ships,
-// as runtimes.json, the file a server vendors.
+// keeps for itself, and its [Model] the API formats the runtime sends and where a
+// composer writes a run's model id, effort value and model endpoint. [Runtimes] renders
+// both, for every descriptor the contract ships, as runtimes.json, the file a server
+// vendors.
 package descriptor
 
 import (
@@ -40,7 +42,56 @@ type Descriptor struct {
 	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
 	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
 	Secrets        *Secrets  `yaml:"secrets" json:"secrets,omitempty"`
+	Model          *Model    `yaml:"model" json:"model,omitempty"`
 	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Model is the API formats the runtime sends its requests in, and where a composer
+// writes a run's model id, effort value and model endpoint for it. Nil when the
+// descriptor has no model section.
+type Model struct {
+	// Formats is the API formats, each one of api-format.schema.json.
+	Formats []string `yaml:"formats" json:"formats"`
+	// Model is where the run's model id goes.
+	Model Place `yaml:"model" json:"model"`
+	// Effort is where an effort value goes; nil when the runtime has no place for one.
+	Effort *Effort `yaml:"effort" json:"effort,omitempty"`
+	// Endpoint is where the base URL of the run's model API goes.
+	Endpoint Endpoint `yaml:"endpoint" json:"endpoint"`
+}
+
+// Place is where a value goes, exactly one of its fields set: Flag, an argument the
+// runtime is started with, which takes the value; Setting, a dotted key in the JSON
+// settings file the launch passes; Variable, an environment variable.
+type Place struct {
+	Flag     string `yaml:"flag" json:"flag,omitempty"`
+	Setting  string `yaml:"setting" json:"setting,omitempty"`
+	Variable string `yaml:"variable" json:"variable,omitempty"`
+}
+
+// ValuedPlace is a place and the values the runtime accepts there.
+type ValuedPlace struct {
+	Place  `yaml:",inline"`
+	Values []string `yaml:"values" json:"values"`
+}
+
+// AgentPlace is where a value goes in an agent's file: Frontmatter, a key of the file's
+// frontmatter, and the values the runtime accepts there.
+type AgentPlace struct {
+	Frontmatter string   `yaml:"frontmatter" json:"frontmatter"`
+	Values      []string `yaml:"values" json:"values"`
+}
+
+// Effort is where an effort value goes: Run, the run's; Agent, an agent's, nil when the
+// runtime has no place for an agent's effort.
+type Effort struct {
+	Run   ValuedPlace `yaml:"run" json:"run"`
+	Agent *AgentPlace `yaml:"agent" json:"agent,omitempty"`
+}
+
+// Endpoint is the variable the runtime reads the base URL of its model API from.
+type Endpoint struct {
+	Variable string `yaml:"variable" json:"variable"`
 }
 
 // Secrets is what the runtime needs of a run's secrets and the variables it keeps for

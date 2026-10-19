@@ -1,0 +1,12 @@
+# An effort place lists at least one value.
+version: 1
+runtime: amp
+runtime_version: "1"
+sources: {output: {format: jsonl}}
+rules: [{source: output, match: {type: end}, type: dev.qory.session.ended, data: {reason: why}}]
+model:
+  formats: [anthropic-messages]
+  model: {flag: --model}
+  effort:
+    run: {flag: --effort, values: []}
+  endpoint: {variable: AMP_BASE_URL}

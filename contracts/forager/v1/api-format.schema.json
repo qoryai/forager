@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/forager/v1/api-format.schema.json",
+  "title": "API format",
+  "description": "The request and response format of a model API, from a fixed list. anthropic-messages is Anthropic's Messages API, openai-responses is OpenAI's Responses API, openai-chat is OpenAI's Chat Completions API, and gemini is Google's Gemini API. It has no $defs: a schema that uses the list refers to the whole file.",
+  "type": "string",
+  "enum": ["anthropic-messages", "openai-responses", "openai-chat", "gemini"]
+}

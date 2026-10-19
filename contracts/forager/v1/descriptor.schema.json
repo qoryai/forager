@@ -182,6 +182,41 @@
         }
       }
     },
+    "model": {
+      "description": "The model API formats the runtime sends its requests in, and where a composer writes a run's model id, effort value and model endpoint for the runtime. runtimes.json lists it for every descriptor that has one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formats", "model", "endpoint"],
+      "properties": {
+        "formats": {
+          "description": "The model API formats the runtime sends its requests in, each from api-format.schema.json.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "api-format.schema.json"}
+        },
+        "model": {"description": "Where the run's model id goes.", "$ref": "#/$defs/place"},
+        "effort": {
+          "description": "Where an effort value goes, and the values the runtime accepts there. Absent, the runtime has no place for one.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run"],
+          "properties": {
+            "run": {"description": "Where the run's effort value goes.", "$ref": "#/$defs/valued_place"},
+            "agent": {"description": "Where an agent's effort value goes, in the agent's file. Absent, the runtime has no place for an agent's effort.", "$ref": "#/$defs/agent_place"}
+          }
+        },
+        "endpoint": {
+          "description": "Where the base URL of the run's model API goes: always a variable.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["variable"],
+          "properties": {
+            "variable": {"description": "The variable the runtime reads the base URL from.", "$ref": "#/$defs/name"}
+          }
+        }
+      }
+    },
     "rules": {
       "description": "Evaluated in order against every record of the rule's source; the first rule whose match succeeds produces one event, and a record no rule matches produces nothing.",
       "type": "array",
@@ -269,6 +304,44 @@
     }
   },
   "$defs": {
+    "place": {
+      "description": "Where a value goes, exactly one of: flag, an argument the runtime is started with, which takes the value; setting, a dotted key in the JSON settings file the launch passes; variable, an environment variable.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flag": {"$ref": "#/$defs/flag"},
+        "setting": {"$ref": "#/$defs/setting"},
+        "variable": {"$ref": "#/$defs/name"}
+      },
+      "oneOf": [{"required": ["flag"]}, {"required": ["setting"]}, {"required": ["variable"]}]
+    },
+    "valued_place": {
+      "description": "A place, and in values the values the runtime accepts there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["values"],
+      "properties": {
+        "flag": {"$ref": "#/$defs/flag"},
+        "setting": {"$ref": "#/$defs/setting"},
+        "variable": {"$ref": "#/$defs/name"},
+        "values": {"$ref": "#/$defs/values"}
+      },
+      "oneOf": [{"required": ["flag"]}, {"required": ["setting"]}, {"required": ["variable"]}]
+    },
+    "agent_place": {
+      "description": "Where a value goes in an agent's file: frontmatter, a key of the file's frontmatter, and in values the values the runtime accepts there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontmatter", "values"],
+      "properties": {
+        "frontmatter": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"},
+        "values": {"$ref": "#/$defs/values"}
+      }
+    },
+    "flag": {"type": "string", "pattern": "^--[a-z][a-z0-9-]{0,63}$"},
+    "setting": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+    "values": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}},
     "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
     "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
     "exact_host": {"type": "string", "maxLength": 253,
