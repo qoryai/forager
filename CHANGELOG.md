@@ -66,6 +66,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
+- `dev.qory.run.egress` takes the rules `wall:connection-limit` and `wall:rate-limit`:
+  a refusal by one of the run's limits, with `decision: denied` and `outcome: refused`,
+  at most one per limit per second for a run. `rule` has no enum, so only its
+  description in `events/run.egress.schema.json` changes.
 - The Claude Code descriptor declares `auth_token`, `ANTHROPIC_AUTH_TOKEN`, an API key
   set as a bearer, which was reserved.
 - The session chooses the variable of a credential from the server with
@@ -311,6 +315,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Upgrading
 
+- Each run on a gateway now has limits: at most 256 connections open at once, and 50
+  requests a second with a burst of 200. A run past one gets `429 Too Many Requests`
+  with `Retry-After: 1`. Set `gateway.Config.RunLimits` higher if your runs need more.
 - A credential's selection gives no argument for a label whose value is `(a name that
   contains an access key secret)` or `(a name that contains a run key)`, whatever its
   `pattern` admits, `.+` among them. A separate gateway reads the labels from the
@@ -355,6 +362,18 @@ release may change what an existing document does, and says so under Upgrading.
   unlimited, such as `LimitMEMLOCK=infinity` in a systemd unit; else the gateway does
   not start, and the error starts with that fix. On other systems `true` stops the
   gateway.
+- `gateway.Config.RunLimits`, `gateway.run_limits` in `forager.yaml`: the limits of
+  each run, the same for every run on the gateway, so that one run cannot slow down the
+  others. `Connections` is the most connections open at once, CONNECT tunnels and
+  plain requests in flight, 1 to 65536, default 256; the next is refused at once with
+  `429` and `Retry-After: 1`. `RequestsPerSecond`, 1 to 10000, default 50, and `Burst`,
+  1 to 100000, default 200, are a token bucket every CONNECT, plain request and request
+  inside a terminated tunnel takes from; a request waits up to 5 seconds for a token,
+  then is refused with `429` and `Retry-After: 1`. While `Connections` requests of the
+  run already wait, the next that needs a token is refused at once, with `429` and
+  `Retry-After: 1`. Each run has counters of its own.
+  Start refuses a field outside its range: `Set RunLimits.Connections to a number from
+  1 to 65536, or 0 for the default of 256. It is -3.`
 - `gateway.Config.Selects`: behind a separate gateway, when the server's policy selects
   no credential, a run, with or without a wall, gets the gateway's selection, a credential that takes an
   argument taking it from a label of the run whose value matches the pattern named, for

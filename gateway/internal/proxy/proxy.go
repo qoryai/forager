@@ -19,6 +19,12 @@
 // for new connections at once, and a tunnel open to a host the new policy denies is
 // closed and recorded as refused.
 //
+// A run's limits ([Proxy.SetLimits]) bound what one run takes of a gateway that other
+// runs share: the connections it has open at once, refused with 429 at once past the
+// limit, and the requests it sends a second, a token bucket a request waits up to
+// [RateWait] on before it is refused with 429. A refusal is recorded at most once a
+// second per limit, with the rule [ConnectionLimit] or [RateLimit].
+//
 // A proxy that serves an enclosure is guarded ([Proxy.Guard]): it dials from this
 // machine on behalf of something that is not on it, so what is on this machine is not
 // reached by default. The link-local range, which holds a cloud's metadata service, and
@@ -161,6 +167,8 @@ type Proxy struct {
 	stop    context.CancelFunc
 	// panics, when set, gets a panic of the proxy's goroutines ([Proxy.ReportPanics]).
 	panics atomic.Pointer[func(string)]
+	// limits, when set, are the run's limits and counters ([Proxy.SetLimits]).
+	limits atomic.Pointer[limiter]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -699,6 +707,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h := sent(authority); strings.Contains(h, "%") {
 		host = h
 	}
+	// Every request takes a token first, one the policy denies too, so the policy it is
+	// decided by is the one in force once it has its token.
+	rated := p.take(r.Context())
 	d := p.decide("HTTP", host, port)
 	d.RequestID = newRequestID()
 	term := p.term.Load()
@@ -729,11 +740,21 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			d.Tool = tl.Name
 		}
 	}
+	if rated != nil {
+		p.limited(w, d, RateLimit, rated)
+		return
+	}
+	// Only a request the policy allows is a connection in flight.
 	if !d.Allowed {
 		p.observe(d)
 		deny(w, d)
 		return
 	}
+	if !p.hold() {
+		p.limited(w, d, ConnectionLimit, nil)
+		return
+	}
+	defer p.release()
 	if tl != nil {
 		// A tool is reached on its socket whatever the scheme; the host is never dialled.
 		term.toTool(w, r, d, tl)
@@ -802,12 +823,25 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The token first, then the decision: a reload during the wait is the policy the
+	// tunnel is decided by.
+	rated := p.take(r.Context())
 	d := p.decide(http.MethodConnect, host, port)
+	if rated != nil {
+		p.limited(w, d, RateLimit, rated)
+		return
+	}
 	if !d.Allowed {
 		p.observe(d)
 		deny(w, d)
 		return
 	}
+	// The tunnel is one of the run's connections until it closes, blind or terminated.
+	if !p.hold() {
+		p.limited(w, d, ConnectionLimit, nil)
+		return
+	}
+	defer p.release()
 	if p.term.Load().covers(d.Host) {
 		// A terminated connection is recorded request by request instead.
 		hj, ok := w.(http.Hijacker)

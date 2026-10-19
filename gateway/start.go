@@ -39,6 +39,28 @@ const (
 // defaultHeartbeat is the interval when the config names none.
 const defaultHeartbeat = 30 * time.Second
 
+// checkRunLimits sets each field of l that is zero to its default, and refuses one
+// outside its range.
+func checkRunLimits(l *RunLimits) error {
+	for _, f := range []struct {
+		name         string
+		v            *int
+		most, normal int
+	}{
+		{"Connections", &l.Connections, 65536, 256},
+		{"RequestsPerSecond", &l.RequestsPerSecond, 10000, 50},
+		{"Burst", &l.Burst, 100000, 200},
+	} {
+		if *f.v == 0 {
+			*f.v = f.normal
+		}
+		if *f.v < 1 || *f.v > f.most {
+			return fmt.Errorf("Set RunLimits.%s to a number from 1 to %d, or 0 for the default of %d. It is %d.", f.name, f.most, f.normal, *f.v)
+		}
+	}
+	return nil
+}
+
 // Gateway is a gateway serving sessions on its local link, or those of other machines
 // on its one address with [Config.Listen]: it opens each run, decides its connections by
 // its policy through its proxy, numbers its events and sends them to the server.
@@ -116,7 +138,8 @@ type Gateway struct {
 // [Config.Selects], which it checks and every run reads: what the caller changes in
 // them later changes nothing.
 //
-// Start refuses, before anything starts, a Listen that is not host:port, a Listen
+// Start refuses, before anything starts, a field of [Config.RunLimits] outside its
+// range, a Listen that is not host:port, a Listen
 // without TLS or without a Server, TLS files it cannot read or whose certificate and key
 // do not match, and TLS without a Listen; Selects without a Listen, and an entry of
 // Selects that names no credential of Credentials or one another entry names, names a
@@ -155,6 +178,9 @@ func Start(ctx context.Context, cfg Config) (*Gateway, error) {
 	}
 	if cfg.Heartbeat < time.Second || cfg.Heartbeat > server.MaxInterval*time.Second || cfg.Heartbeat%time.Second != 0 {
 		return nil, fmt.Errorf("the heartbeat interval %s is not a whole number of seconds from 1 to the %d the link's discovery announces at most", cfg.Heartbeat, server.MaxInterval)
+	}
+	if err := checkRunLimits(&cfg.RunLimits); err != nil {
+		return nil, err
 	}
 	if cfg.Policy != nil {
 		b, _ := json.Marshal(cfg.Policy)

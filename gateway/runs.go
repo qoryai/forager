@@ -440,6 +440,8 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		return fail(err)
 	}
 	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
+	// Every run's counters are its own, at the limits Start checked.
+	lr.px.SetLimits(proxy.Limits{Connections: g.cfg.RunLimits.Connections, RequestsPerSecond: g.cfg.RunLimits.RequestsPerSecond, Burst: g.cfg.RunLimits.Burst})
 	if g.cfg.upstreamRoots != nil {
 		lr.px.TrustUpstream(g.cfg.upstreamRoots)
 	}
