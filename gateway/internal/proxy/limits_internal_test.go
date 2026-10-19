@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -129,15 +130,25 @@ func connect(t *testing.T, addr, preamble, target string) (answer, net.Conn) {
 // get sends a plain GET of rawURL through the proxy at proxyAddr.
 func get(t *testing.T, proxyAddr, rawURL string) answer {
 	t.Helper()
-	u, _ := url.Parse("http://" + proxyAddr)
-	c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u), DisableKeepAlives: true}}
-	resp, err := c.Get(rawURL)
+	a, err := tryGet(proxyAddr, rawURL)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return a
+}
+
+// tryGet is [get] that returns its error, for a goroutine of the test's, and gives up
+// after 5 seconds.
+func tryGet(proxyAddr, rawURL string) (answer, error) {
+	u, _ := url.Parse("http://" + proxyAddr)
+	c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(u), DisableKeepAlives: true}}
+	resp, err := c.Get(rawURL)
+	if err != nil {
+		return answer{}, err
+	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	return answer{status: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After"), body: string(b)}
+	return answer{status: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After"), body: string(b)}, nil
 }
 
 // refusals are the decisions seen whose rule is rule.
@@ -496,9 +507,11 @@ func TestAReloadDuringTheWaitDecidesTheRequest(t *testing.T) {
 	})
 }
 
-// TestAReloadDuringTheWaitInsideATunnel pins the same inside a terminated tunnel: a
-// reload that denies the host while a request inside waits for its token closes the
-// tunnel, the request gets no answer, and nothing more reaches the origin.
+// TestAReloadDuringTheWaitInsideATunnel pins that a request inside a terminated tunnel
+// is decided by its path once it has its token: a reload from observe to enforce while
+// the request waits keeps the host allowed and the tunnel open, and the request, to a
+// path the rule /ok/* does not cover, is refused with 403 under enforce. Nothing more
+// reaches the origin.
 func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
 	up, err := NewCA("upstream")
 	if err != nil {
@@ -516,7 +529,7 @@ func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
 	origin.TLS = &tls.Config{GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) { return up.leaf(hello.ServerName) }}
 	origin.StartTLS()
 	defer origin.Close()
-	p, err := Listen("", policy.Enforce, []string{"api.example"}, nil, (&decisions{}).observe)
+	p, err := Listen("", policy.Observe, []string{"api.example"}, nil, (&decisions{}).observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,30 +542,25 @@ func TestAReloadDuringTheWaitInsideATunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds := []Credential{{Name: "bearer", Hosts: []string{"api.example"}, Scheme: "bearer", Token: func() string { return "t-0001" }}}
-	p.Terminate(ca, creds, nil, nil)
-	waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 2}, func() { p.SetPolicy(policy.Enforce, nil, nil, nil, creds) })
+	paths := map[string][]string{"api.example": {"/ok/*"}}
+	p.Terminate(ca, nil, paths, nil)
+	waitThen(p, Limits{Connections: 10, RequestsPerSecond: 1, Burst: 2}, func() { p.SetPolicy(policy.Enforce, []string{"api.example"}, nil, paths, nil) })
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
 	proxyURL, _ := url.Parse(p.URL())
-	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}, MaxConnsPerHost: 1}}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}, MaxConnsPerHost: 1}}
 	defer client.CloseIdleConnections()
-	// The CONNECT and the first request take the burst; the second request waits.
-	resp, err := client.Get("https://api.example/v1/models")
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the first request: %d", resp.StatusCode)
-	}
-	req, _ := http.NewRequest(http.MethodPost, "https://api.example/v1/models", strings.NewReader("x"))
-	if resp, err := client.Do(req); err == nil {
-		b, _ := io.ReadAll(resp.Body)
+	// The CONNECT and the first request take the burst; the second request waits, and
+	// the reload lands during its wait.
+	for i, want := range []int{http.StatusOK, http.StatusForbidden} {
+		resp, err := client.Get("https://api.example/v1/models")
+		if err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			t.Errorf("a request that waited out a reload denying its host: %d %q", resp.StatusCode, b)
+		if resp.StatusCode != want {
+			t.Errorf("request %d: %d, want %d", i+1, resp.StatusCode, want)
 		}
 	}
 	mu.Lock()
@@ -585,55 +593,83 @@ func TestACloseDuringTheWaitAnswersNothing(t *testing.T) {
 	}
 }
 
-// TestWaitingRequestsAreBounded pins the bound on waiting requests: with a limit of 2
-// connections, while 2 requests wait for a token, the next that needs a wait is refused
-// at once with 429 and the text with the count, with no wait.
+// TestWaitingRequestsAreBounded pins the bound on waiting requests: while as many
+// requests wait for a token as the run may have connections, 1 or 2, the next that
+// needs a wait is refused at once with 429 and the text with the count, with no wait.
+// Once the waiters end, the next request past the burst waits for its token again.
 func TestWaitingRequestsAreBounded(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
-	defer origin.Close()
-	p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		connections int
+		text        string
+	}{
+		{1, "qory: retry in 1 second. This run's requests came faster than 1 a second, the most gateway.run_limits.requests_per_second allows, and 1 of its requests was already waiting.\n"},
+		{2, "qory: retry in 1 second. This run's requests came faster than 1 a second, the most gateway.run_limits.requests_per_second allows, and 2 of its requests were already waiting.\n"},
+	} {
+		t.Run(strconv.Itoa(c.connections), func(t *testing.T) {
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+			defer origin.Close()
+			p, err := Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, (&decisions{}).observe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			free := func() { releaseOnce.Do(func() { close(release) }) }
+			defer free()
+			started := make(chan struct{}, 10)
+			var mu sync.Mutex
+			waits := 0
+			p.limits.Store(newLimiter(Limits{Connections: c.connections, RequestsPerSecond: 1, Burst: 1}, newFakeTime().now, func(ctx context.Context, _ time.Duration) bool {
+				mu.Lock()
+				waits++
+				mu.Unlock()
+				started <- struct{}{}
+				select {
+				case <-release:
+					return true
+				case <-ctx.Done():
+					return false
+				}
+			}))
+			waited := func() int {
+				mu.Lock()
+				defer mu.Unlock()
+				return waits
+			}
+			if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
+				t.Fatalf("the first request: %+v", a)
+			}
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			for range c.connections {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					tryGet(p.Addr(), origin.URL)
+				}()
+				select {
+				case <-started:
+				case <-time.After(5 * time.Second):
+					t.Fatal("a request did not wait")
+				}
+			}
+			a := get(t, p.Addr(), origin.URL)
+			if a.status != http.StatusTooManyRequests || a.retryAfter != "1" || a.body != c.text {
+				t.Errorf("a request past the waiting bound: %+v", a)
+			}
+			if n := waited(); n != c.connections {
+				t.Errorf("%d waits, want %d: the refused request waited", n, c.connections)
+			}
+			free()
+			wg.Wait()
+			// The waiters ended: the next request past the burst waits, and passes.
+			if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
+				t.Errorf("a request once the waiters ended: %+v", a)
+			}
+			if n := waited(); n != c.connections+1 {
+				t.Errorf("%d waits, want %d: the request after the waiters did not wait", n, c.connections+1)
+			}
+		})
 	}
-	defer p.Close()
-	release := make(chan struct{})
-	started := make(chan struct{}, 10)
-	var mu sync.Mutex
-	waits := 0
-	p.limits.Store(newLimiter(Limits{Connections: 2, RequestsPerSecond: 1, Burst: 1}, newFakeTime().now, func(ctx context.Context, _ time.Duration) bool {
-		mu.Lock()
-		waits++
-		mu.Unlock()
-		started <- struct{}{}
-		select {
-		case <-release:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}))
-	if a := get(t, p.Addr(), origin.URL); a.status != http.StatusOK {
-		t.Fatalf("the first request: %+v", a)
-	}
-	var wg sync.WaitGroup
-	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			get(t, p.Addr(), origin.URL)
-		}()
-		<-started
-	}
-	a := get(t, p.Addr(), origin.URL)
-	text := "qory: retry in 1 second. This run's requests came faster than 1 a second, the most gateway.run_limits.requests_per_second allows, and 2 of its requests were already waiting.\n"
-	if a.status != http.StatusTooManyRequests || a.retryAfter != "1" || a.body != text {
-		t.Errorf("a request past the waiting bound: %+v", a)
-	}
-	mu.Lock()
-	if waits != 2 {
-		t.Errorf("%d waits, want 2: the refused request waited", waits)
-	}
-	mu.Unlock()
-	close(release)
-	wg.Wait()
 }

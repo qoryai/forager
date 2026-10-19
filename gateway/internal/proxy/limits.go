@@ -232,7 +232,11 @@ func (p *Proxy) limited(w http.ResponseWriter, d Decision, rule string, why erro
 		return
 	}
 	if errors.Is(why, errCrowded) {
-		fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and %d of its requests were already waiting.\n", lm.l.RequestsPerSecond, max(lm.l.Connections, 1))
+		n, verb := max(lm.l.Connections, 1), "were"
+		if n == 1 {
+			verb = "was"
+		}
+		fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and %d of its requests %s already waiting.\n", lm.l.RequestsPerSecond, n, verb)
 		return
 	}
 	fmt.Fprintf(w, "qory: retry in 1 second. This run's requests came faster than %d a second, the most gateway.run_limits.requests_per_second allows, and this request waited %d seconds.\n", lm.l.RequestsPerSecond, int(RateWait/time.Second))
