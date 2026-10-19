@@ -419,7 +419,9 @@ func (p *recordsPrepare) Model() (runtimes.ModelPlaces, bool) {
 // runtime's model host, api.anthropic.com for Claude Code or the host of the
 // endpoint's value that reaches the runtime, or a value the run or the machine passes
 // for one of the variables, or, without a wall, a value the run inherits. A run without
-// credential_hosts is not checked. A model key for another host is in
+// credential_hosts is not checked, nor is a run without a wall none of whose
+// credentials has a placeholder of a model key's variable: its runtime may use the
+// developer's login. A model key for another host is in
 // [TestTheModelKeyRefusalNamesTheFix].
 func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	forge := sealed("forge", "api.github.com", "", "", "GITHUB_TOKEN")
@@ -432,7 +434,9 @@ func TestAWalledRunNeedsAModelKey(t *testing.T) {
 	}{
 		{"walled, no model key", true, []map[string]any{forge}, nil, true},
 		{"walled, a model credential with no placeholder", true, []map[string]any{forge, sealed("model", "api.anthropic.com", "", "")}, nil, true},
-		{"unwalled, no model key", false, []map[string]any{forge}, nil, true},
+		{"unwalled, only a forge credential", false, []map[string]any{forge}, nil, false},
+		{"unwalled, a model credential with no placeholder", false, []map[string]any{forge, sealed("model", "api.anthropic.com", "", "")}, nil, false},
+		{"unwalled, a model key's placeholder for another host", false, []map[string]any{forge, sealed("model", "10.0.0.5", "", "", apiKeyVariable)}, nil, true},
 		{"unwalled, no credential_hosts", false, nil, nil, false},
 		{"unwalled, a machine credential", false, modelAndForge, nil, false},
 		{"unwalled, a value the run inherits", false, []map[string]any{forge}, func(sp *session.Spec) {

@@ -891,9 +891,10 @@ applies. Behind a wall, an answer without `credential_hosts` has no model creden
 so every value is left out. Without a wall and without `credential_hosts` the rule does
 not apply, and the deny list treats the name as any other.
 
-**A model key.** A run whose answer has `credential_hosts`, with or without a wall, needs a model
-key for its runtime when the runtime's descriptor has a `model` section and
-declarations, its model keys (§The descriptor). After the variables are resolved,
+**A model key.** A run whose answer has `credential_hosts` needs a model key for its
+runtime when the runtime's descriptor has a `model` section and declarations, its
+model keys (§The descriptor): behind a wall, and without one when a credential of
+`credential_hosts` has a model key's variable among its `placeholders`. After the variables are resolved,
 the session refuses the run, `model_key_missing` with the model keys' variables, unless
 one of these holds:
 
@@ -916,8 +917,11 @@ covers. The refusal offers a value of a model key's variable only when the sessi
 a trial with a value of that variable from the run, resolves the run's variables with no
 refusal and the value is in the runtime's environment. A run whose answer has no
 `credential_hosts` is not checked: its runtime may use a login the session does not see,
-such as the developer's, one in a mount or one in the image. The refusal is posted on the link, as the session's
-other refusals are.
+such as the developer's, one in a mount or one in the image. Nor is a run without a
+wall none of whose credentials has a model key's variable among its `placeholders`:
+its runtime may use the developer's login, such as Claude Code's, and no placeholder
+goes to its model host. The refusal is posted on the link, as the session's other
+refusals are.
 
 **The run's system and repositories.** The server's variables may set two `QORY_`
 names, `QORY_RUN_SYSTEM` and `QORY_RUN_REPOSITORIES`: the system and the repositories a
@@ -3074,8 +3078,9 @@ paths of those hosts, in the policy's path grammar; how it is set,
 `basic` with its `username`. The session gives a declaration's variable the placeholder
 of a credential from the server whose `key_variables` list it and whose `auth` is the
 declaration's (§Credentials, The variable of a model key). When the descriptor also has
-a `model` section, its declarations are its model keys, and a run whose run answer has
-`credential_hosts`, with or without a wall, needs one (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
+a `model` section, its declarations are its model keys, and a walled run whose run
+answer has `credential_hosts` needs one, as does a run without a wall when a credential
+has a model key's variable among its placeholders (§Variables, A model key). `one_of` lists groups `{id, required, of}`, `of` being
 declared ids, each in one group at most: groups of declarations of which the runtime
 needs at most one, and exactly one of a `required` group. `reserves` lists variables
 the runtime reads a credential from beside the declared ones; `denies`, variables the

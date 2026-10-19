@@ -22,6 +22,11 @@ Without a wall, Forager gives the run only placeholders, but the agent can read 
   machine with none of them the run does not start.
 - A program that ignores the proxy sends only the placeholder, and its connection is
   not recorded.
+- If no credential has a placeholder of a model key's variable, such as
+  `ANTHROPIC_API_KEY`, the run starts, and Claude Code can use the machine's Claude
+  login. If one has, a credential with such a placeholder must cover the model host,
+  `api.anthropic.com` or the host of `ANTHROPIC_BASE_URL`, or the run stops with
+  `model_key_missing`.
 - In an interactive run, Claude Code shows its approval prompt for the placeholder of
   `ANTHROPIC_API_KEY` once; approve it. Behind a wall the session approves it inside
   the container.

@@ -235,8 +235,10 @@ has among its placeholders; or a placeholder of a credential from Qory Apiary in
 variable the runtime declares or reserves, other than the one its `key_variables`
 chose.
 
-After it resolves the variables, the session refuses a walled run whose gateway holds
-credentials for it and that has no model key for its runtime, `model_key_missing`. The
+After it resolves the variables, the session refuses a run whose gateway holds
+credentials for it and that has no model key for its runtime, `model_key_missing`:
+behind a wall, or without one when a credential has a placeholder of a model key's
+variable. The
 run has one when a credential has a placeholder of a model key's variable on the
 runtime's model host, or when a value of one reaches the runtime from `Env`,
 `LaunchFixed`, `LaunchDefaults`, `Variables.Run`, `Variables.Machine` or the runtime's

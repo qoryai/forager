@@ -56,11 +56,12 @@ release may change what an existing document does, and says so under Upgrading.
   can read every credential the machine already holds; run a brokered run on a machine
   that holds none.
 - A run without a wall whose gateway holds credentials for it now gets the rules a
-  walled run gets: the `key_variables` choice, `model_key_missing`, the endpoint rule
-  and `credential_variables` in `dev.qory.run.policy_applied`. A Claude Code run whose
-  only credential is a forge's, and whose model key comes from a login, now stops with
-  `model_key_missing`: pass the key in the machine's variables, or define a model
-  credential with a placeholder.
+  walled run gets: the `key_variables` choice, the endpoint rule and
+  `credential_variables` in `dev.qory.run.policy_applied`. It is `model_key_missing`
+  only when a credential has a placeholder of a model key's variable and no such
+  credential covers the runtime's model host. A Claude Code run without a wall whose
+  only credential is a forge's starts, and Claude Code can use the machine's Claude
+  login.
 
 #### Added
 
@@ -91,9 +92,10 @@ release may change what an existing document does, and says so under Upgrading.
   phrase in place of a credential's name or a variable that contains `qak_` or `qrk_`.
   The gateway leaves `credential_variables`
   out of the members it matches.
-- The refusal `model_key_missing`, in `refusal.Decides`: a walled run whose run answer
-  has `credential_hosts`, whose runtime has a `model` section and model keys, and that
-  has no model key, as the contract's §Variables, A model key, says. Its names are the
+- The refusal `model_key_missing`, in `refusal.Decides`: a run whose run answer has
+  `credential_hosts`, behind a wall or, without one, with a credential whose placeholder
+  is a model key's variable, whose runtime has a `model` section and model keys, and
+  that has no model key, as the contract's §Variables, A model key, says. Its names are the
   model keys' variables.
 
 - The link's run answer has `credential_hosts`: the hosts and placeholders of each

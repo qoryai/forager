@@ -454,7 +454,10 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 // that reaches it, or, when none does, a host of a model key's declaration; a value
 // from which [policy.EndpointHost] reads no host is covered by no credential. A run
 // whose answer has no credential_hosts is not checked: its key may come from what the
-// session does not see, such as a login of the developer's, a mount or an image. The refusal is [refusal.ModelKeyMissing] with the model keys'
+// session does not see, such as a login of the developer's, a mount or an image. Nor
+// is a run without a wall none of whose credentials has a model key's variable among
+// its placeholders: its runtime may use the developer's login, and no placeholder goes
+// to its model host. The refusal is [refusal.ModelKeyMissing] with the model keys'
 // variables. Its text offers a value only of a model key's variable for which passes
 // reports true: a value of it from the run reaches the runtime's environment.
 // Without a wall, an inherited value of one of placeholderNames reaches nothing: the
@@ -481,6 +484,12 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 		}
 	}
 	if len(keys) == 0 {
+		return nil
+	}
+	isKey := func(p string) bool { return slices.Contains(keys, p) }
+	if spec.Wall == nil && !slices.ContainsFunc(credentials, func(c server.LinkCredentialHosts) bool {
+		return slices.ContainsFunc(c.Placeholders, isKey)
+	}) {
 		return nil
 	}
 	// What reaches the runtime, a later source's value over an earlier one's, as
@@ -533,7 +542,7 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	shownHosts := strings.Join(hosts, " or ")
 	for _, c := range credentials {
-		if !slices.ContainsFunc(c.Placeholders, func(p string) bool { return slices.Contains(keys, p) }) {
+		if !slices.ContainsFunc(c.Placeholders, isKey) {
 			continue
 		}
 		if slices.ContainsFunc(hosts, func(h string) bool { return policy.CredentialFor(c.Hosts, h) }) {
