@@ -7,6 +7,11 @@ A **wall** starts the runtime in a container with no route out except to the pro
 the rest fails, instead of going unseen. A program that ignores the proxy reaches
 nothing.
 
+The gateway sets a run's credentials with or without a wall, and the agent gets their
+placeholders (see [credentials](credentials.md#without-a-wall)). Without a wall, a
+program that ignores the proxy sends only the placeholder; behind one, its connection
+fails. Tools, path rules and images need a wall.
+
 ## How it works
 
 ```
