@@ -19,6 +19,11 @@ release may change what an existing document does, and says so under Upgrading.
   value out. A run that set `NODE_OPTIONS`, `LD_PRELOAD` or `BASH_ENV` that way gets
   no value for them from those sources either, and a sealed credential needs another
   placeholder than one of the four.
+- Return an empty digest from a `receiver.Handler.RunConfiguration` hook, or `sha256=`
+  and the lower-case hex SHA-256 of the document's bytes. The reference receiver
+  computes the digest itself, and a hook's digest in another form gets a signed `500`
+  in place of the answer to the registration, the attach or the reload, and no digest
+  on a batch's answer. Before, the receiver served the hook's digest as it was.
 
 #### Added
 
@@ -102,6 +107,19 @@ release may change what an existing document does, and says so under Upgrading.
   HKDF-SHA256 and AES-256-GCM, to the access key and signed under the server's key; and
   the plaintext it opens to, `sealed-plaintext.schema.json`. `fixtures/sealed/` contains a
   sealed answer with its vectors and an envelope refused at each step.
+- The reference receiver serves the secrets endpoint, at `receiver.DefaultSecretsPath`,
+  `/v1/secrets`, or `Handler.SecretsPath`, when the hook `Handler.Secrets` is set:
+  `func(run receiver.Run, credentials []string) (values [][]byte, refusal
+  *receiver.Refusal)`, one value for each credential of the run configuration in force.
+  It seals the values to the access key the request verified under with `sealed.Seal`,
+  signs the answer under the receiver's key and overwrites the values with zeros; it
+  logs and stores none. `receiver.AccessKey.StoredSecrets` allows a key stored secrets,
+  and discovery lists the configuration's `secrets` for such a key alone. A request is
+  refused in the contract's order, then as a reload of the run would be; a digest that
+  is not the one in force, or not one the run was answered with, is a signed `410`
+  `run_configuration_superseded`, and a `credentials` list other than the run
+  configuration's names in its order a signed `409` `credentials_differ`.
+  `receiver.MaxSecretsBody` is the bound of a request's body, 32 KiB.
 - Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
   opens it with an access key, returning the values by credential name as bytes that
   `Values.Clear` overwrites. A `Values`, a `Value` or a `Sealing` prints no value with

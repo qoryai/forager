@@ -68,6 +68,8 @@ const (
 	// modeNeighbours is the probe in a container the agent started, privileged on the
 	// enclosure's own network, that looks for neighbours on the inside network.
 	modeNeighbours = "neighbours"
+	// modeSealed is the probe of a run whose credential Qory Apiary seals.
+	modeSealed = "sealed"
 )
 
 // ExecArgs are the arguments that make the helper run [session.Exec].
@@ -134,8 +136,8 @@ const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
 // forwarder, the run's preparation, the probe, the start of a Docker of the agent's
-// own, the probe in a container the agent started, the search for neighbours in one, or
-// a recorder. It returns at once otherwise.
+// own, the probe in a container the agent started, the search for neighbours in one, a
+// recorder, or the probe of a sealed credential. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -171,6 +173,8 @@ func Main() {
 		os.Exit(neighboursProbe())
 	case modeRecorder:
 		os.Exit(serveRecorder())
+	case modeSealed:
+		os.Exit(sealedProbe())
 	}
 }
 

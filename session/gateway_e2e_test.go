@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,9 +193,8 @@ type control struct {
 	// goneOnFetch answers every registration a signed 410 run_closed.
 	goneOnFetch atomic.Bool
 
-	mu     sync.Mutex
-	run    []byte
-	digest string
+	mu  sync.Mutex
+	run []byte
 }
 
 func newControl(t *testing.T) *control {
@@ -230,7 +231,8 @@ func newControl(t *testing.T) *control {
 			if c.run == nil {
 				return receiver.NoPolicy, "", nil
 			}
-			return c.run, c.digest, nil
+			// The receiver computes the digest of the bytes.
+			return c.run, "", nil
 		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -263,20 +265,25 @@ func mustKey(t *testing.T) *accesskey.Key {
 	return k
 }
 
-// serve makes the control serve a run configuration with the policy, under the digest
-// sha256= and 64 of the digit.
-func (c *control) serve(policy string, digit byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.run, c.digest = []byte(`{"version":1,"security_policy":`+policy+`}`), "sha256="+strings.Repeat(string(digit), 64)
+// serve makes the control serve a run configuration with the policy.
+func (c *control) serve(policy string) {
+	c.serveDocument(`{"version":1,"security_policy":` + policy + `}`)
 }
 
-// serveDocument makes the control serve the run configuration document doc, under a
-// digest as serve's.
-func (c *control) serveDocument(doc string, digit byte) {
+// serveDocument makes the control serve the run configuration document doc.
+func (c *control) serveDocument(doc string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.run, c.digest = []byte(doc), "sha256="+strings.Repeat(string(digit), 64)
+	c.run = []byte(doc)
+}
+
+// served is the digest the receiver serves the control's run configuration under:
+// sha256= and the hex SHA-256 of its bytes.
+func (c *control) served() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sum := sha256.Sum256(c.run)
+	return "sha256=" + hex.EncodeToString(sum[:])
 }
 
 func (c *control) server() *gateway.Server {
@@ -289,7 +296,7 @@ func (c *control) server() *gateway.Server {
 // numbers and the server receives.
 func TestARealGatewayReloadsARun(t *testing.T) {
 	c := newControl(t)
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`, 'a')
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example"]}}`)
 	sp := spec(t)
 	sleeps(&sp, 30*time.Second)
 	rg := startGateway(t, &sp, gateway.Config{Server: c.server(), Heartbeat: time.Second})
@@ -310,10 +317,10 @@ func TestARealGatewayReloadsARun(t *testing.T) {
 		done <- res
 	}()
 	waitFor(t, func() bool { _, err := os.Stat(own); return err == nil && len(applied()) == 1 })
-	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`, 'b')
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["b.example"]}}`)
 	waitFor(t, func() bool { return len(applied()) == 2 })
 	pa := applied()
-	if fmt.Sprint(data(pa[0])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[1])["allow"]) != "[b.example]" || data(pa[1])["run_configuration"] != "sha256="+strings.Repeat("b", 64) {
+	if fmt.Sprint(data(pa[0])["allow"]) != "[a.example]" || fmt.Sprint(data(pa[1])["allow"]) != "[b.example]" || data(pa[1])["run_configuration"] != c.served() {
 		t.Errorf("policy_applied %v then %v", data(pa[0]), data(pa[1]))
 	}
 	cancel()
@@ -338,7 +345,7 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 	for _, when := range []string{"during the run", "after the registration"} {
 		t.Run(when, func(t *testing.T) {
 			c := newControl(t)
-			c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+			c.serve(`{"version":1,"egress":{"mode":"observe"}}`)
 			sp := spec(t)
 			sleeps(&sp, 4*time.Second)
 			sp.StopGrace = time.Second
@@ -388,7 +395,7 @@ func TestARealGatewayKeepsARunAfterTheServersStop(t *testing.T) {
 	for name, set := range map[string]*atomic.Bool{"to the registration, run_closed": nil, "to the registration, without a code": nil} {
 		t.Run(name, func(t *testing.T) {
 			c := newControl(t)
-			c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+			c.serve(`{"version":1,"egress":{"mode":"observe"}}`)
 			set = &c.goneOnFetch
 			if strings.HasSuffix(name, "without a code") {
 				set = &c.stop
@@ -525,7 +532,7 @@ func TestARealGatewayPassesOnTheServersRefusal(t *testing.T) {
 	for _, code := range []string{"instance_limit", "run_id_used"} {
 		t.Run(code, func(t *testing.T) {
 			c := newControl(t)
-			c.serve(`{"version":1,"egress":{"mode":"observe"}}`, 'a')
+			c.serve(`{"version":1,"egress":{"mode":"observe"}}`)
 			if code == "instance_limit" {
 				c.limit.Store(true)
 			} else {
