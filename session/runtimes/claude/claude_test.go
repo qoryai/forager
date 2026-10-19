@@ -268,3 +268,55 @@ func TestSettingsRefusesAWalledLaunchThatPassesSettingsMoreThanOnce(t *testing.T
 		}
 	})
 }
+
+// projectConfigRoot is the refusal of a walled launch that passes --project-config-root.
+const projectConfigRoot = "This launch passes --project-config-root, and Claude Code reads project settings, " +
+	".mcp.json and the .claude trees from that directory, which Forager does not check, so the run does not start. " +
+	"Remove --project-config-root from the walled launch."
+
+// TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot pins that a walled launch
+// that passes --project-config-root, in either form, after --, as the value of another
+// option or bare, is refused before any file is read or written, and that an unwalled
+// launch keeps it.
+func TestSettingsRefusesAWalledLaunchThatPassesProjectConfigRoot(t *testing.T) {
+	root := t.TempDir()
+	for name, args := range map[string][]string{
+		"--project-config-root dir":  {"-p", "hi", "--project-config-root", root},
+		"--project-config-root=dir":  {"--project-config-root=" + root, "-p", "hi"},
+		"after --":                   {"-p", "hi", "--", "--project-config-root", root},
+		"= after --":                 {"--", "--project-config-root=" + root},
+		"as an option's value":       {"--model", "--project-config-root", root},
+		"bare, last":                 {"-p", "hi", "--project-config-root"},
+		"with a file to check first": {"--mcp-config", filepath.Join(root, "mcp.json"), "--project-config-root", root},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var asked []string
+			run := t.TempDir()
+			_, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+				Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: run, Forwarder: []string{"q"}, Walled: true,
+				Readable: func(p string) (string, error) {
+					asked = append(asked, p)
+					return filepath.EvalSymlinks(p)
+				},
+			})
+			if err == nil || err.Error() != projectConfigRoot {
+				t.Fatalf("got %v, want %q", err, projectConfigRoot)
+			}
+			if len(asked) > 0 {
+				t.Errorf("Readable was asked of %q", asked)
+			}
+			if entries, _ := os.ReadDir(run); len(entries) > 0 {
+				t.Errorf("the run directory has %d entries", len(entries))
+			}
+		})
+	}
+	t.Run("unwalled", func(t *testing.T) {
+		args := []string{"--project-config-root", root, "--project-config-root=" + root}
+		got, err := claude.Settings([]string{"Stop"}, runtimes.Attach{
+			Launch: runtimes.Launch{Command: "claude", Args: args}, RunDir: t.TempDir(), Forwarder: []string{"q"},
+		})
+		if err != nil || !slices.Equal(got.Args[:len(args)], args) {
+			t.Errorf("launch %q, %v", got.Args, err)
+		}
+	})
+}

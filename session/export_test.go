@@ -86,3 +86,9 @@ func SetExitObserved(f func()) { exitObserved = f }
 func Readable(places []string) func(string) (string, error) {
 	return readable(func() ([]string, error) { return places, nil })
 }
+
+// ReadableDir is what a runtime is given to ask of a directory before it passes it to
+// the program, for the places a walled run could have written.
+func ReadableDir(places []string) func(string) (string, error) {
+	return readableDir(func() ([]string, error) { return places, nil })
+}
