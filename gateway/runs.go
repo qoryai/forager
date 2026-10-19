@@ -456,8 +456,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	}
 	var authority []byte
 	if r.NeedsCA() {
-		// The authority is good only for the hosts the proxy terminates as the run
-		// starts: a reload that would terminate another is refused (apply).
+		// The authority is good only for the names the proxy terminates as the run
+		// starts, the names under them and the addresses it terminates: a reload that
+		// would terminate another host is refused (apply).
 		uses, tools := r.Uses(), run.ProxyTools(lr.tools)
 		ca, err := proxy.NewCA(req.RunID, lr.px.Terminating(uses, pol.Policy.Egress.Paths, tools))
 		if err != nil {
@@ -917,14 +918,15 @@ func (lr *linkRun) apply(next *policy.Loaded) error {
 		return nil
 	}
 	in := d.Policy.Policy.Egress
-	// The run's authority is good only for the hosts terminated when the run started.
+	// The run's authority is good only for the hosts terminated when the run started
+	// and the names under them.
 	if host, credential := lr.px.Outside(in.Paths, d.Uses); host != "" {
 		d.Discard()
 		set := "path rules"
 		if credential {
 			set = "a credential"
 		}
-		return fmt.Errorf("run configuration %s: start a new run to set %s on %s; the run's certificate covers only the hosts it terminated when it started; the policy in force stays", accesskey.ShownValue(next.URL, false), set, accesskey.ShownValue(host, false))
+		return fmt.Errorf("run configuration %s: start a new run to set %s on %s; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays", accesskey.ShownValue(next.URL, false), set, accesskey.ShownValue(host, false))
 	}
 	// Every run.egress from here on waits for the session's policy_applied of the new
 	// policy: held before the proxy decides by it, so no connection decided under it is

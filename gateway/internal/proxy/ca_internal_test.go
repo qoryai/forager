@@ -282,3 +282,57 @@ func TestAReloadMayNotTerminateAHostOutsideTheAuthority(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAuthorityWithNoNamePermitsNoName pins the stand-in: a run that terminates only
+// an address has a certificate that permits only invalid, and a reload may add no name,
+// invalid and the names under it among them. An address of the other family is not
+// permitted either. A run that terminates invalid itself may add it.
+func TestAnAuthorityWithNoNamePermitsNoName(t *testing.T) {
+	for _, hosts := range [][]string{{"192.0.2.10"}, {"2001:db8::1"}, nil} {
+		ca, err := NewCA("test", hosts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ca.cert.PermittedDNSDomains; !slices.Equal(got, []string{"invalid"}) {
+			t.Fatalf("%q: permitted names %q", hosts, got)
+		}
+		for _, entry := range []string{"invalid", "x.invalid", "*.invalid", "api.example.com"} {
+			if ca.Permits(entry) {
+				t.Errorf("%q: Permits(%q)", hosts, entry)
+			}
+		}
+	}
+	v4, err := NewCA("test", []string{"192.0.2.10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v6, err := NewCA("test", []string{"2001:db8::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v4.Permits("192.0.2.10") || v4.Permits("2001:db8::1") || !v6.Permits("2001:db8::1") || v6.Permits("192.0.2.10") {
+		t.Error("an address is permitted by the other family's range, or not by its own")
+	}
+	listed, err := NewCA("test", []string{"invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !listed.Permits("invalid") || !listed.Permits("x.invalid") {
+		t.Error("a run that terminates invalid may not add it")
+	}
+
+	p, err := Listen("", policy.Observe, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	paths := map[string][]string{"192.0.2.10": {"/*"}}
+	ca, err := NewCA("test", p.Terminating(nil, paths, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Terminate(ca, nil, paths, nil)
+	if host, _ := p.Outside(map[string][]string{"192.0.2.10": {"/*"}, "x.invalid": {"/*"}}, nil); host != "x.invalid" {
+		t.Errorf("Outside = %q, want x.invalid", host)
+	}
+}

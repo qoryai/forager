@@ -468,7 +468,7 @@ func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
 	}
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'c')
 	h.post(logged(runID))
-	line := "start a new run to set a credential on b.example; the run's certificate covers only the hosts it terminated when it started; the policy in force stays"
+	line := "start a new run to set a credential on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
 	eventually(t, "the refused reload's report", func() bool {
 		h.post(heartbeat(runID))
 		return h.reported(line)
@@ -483,13 +483,65 @@ func TestAReloadSetsNoCredentialOutsideTheRunsAuthority(t *testing.T) {
 	// Path rules for another host: refused as well, with their own text.
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"],"paths":{"b.example":["/v1/*"]}},"credentials":[{"name":"a"}]}`, 'd')
 	h.post(logged(runID))
-	line = "start a new run to set path rules on b.example; the run's certificate covers only the hosts it terminated when it started; the policy in force stays"
+	line = "start a new run to set path rules on b.example; the run's certificate covers only the hosts it terminated when it started and the names under them; the policy in force stays"
 	eventually(t, "the refused reload's report of path rules", func() bool {
 		h.post(heartbeat(runID))
 		return h.reported(line)
 	})
 	if again, err := h.linkOf(runID).Reload(t.Context(), server.LocalOrigin+"/v1/run-configuration", runID); err != nil || again.Digest != reloaded.Digest {
 		t.Errorf("after a refused reload of path rules: %v %+v", err, again)
+	}
+	h.post(exited(runID))
+	h.close()
+}
+
+// TestARefusedReloadStopsTheRenewalsItStarted pins the credentials a reload outside the
+// run's authority resolved: their renewals stop when it is refused. The adapter of b,
+// which only the refused reload selects, answers a token that expires in 5 minutes and
+// 1 second, so a renewal that went on would ask it again once the 30 seconds between
+// two askings pass.
+func TestARefusedReloadStopsTheRenewalsItStarted(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "a-token")
+	if err := os.WriteFile(token, []byte("a-value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asked := filepath.Join(dir, "b-asked")
+	adapter := filepath.Join(dir, "b-adapter")
+	expires := time.Now().Add(5*time.Minute + time.Second).UTC().Format(time.RFC3339)
+	script := "#!/bin/sh\necho asked >> '" + asked + "'\n" +
+		`printf '{"version":1,"token":"b-value","expires_at":"` + expires + `","apply":[{"hosts":["b.example"],"scheme":"bearer"}]}\n'` + "\n"
+	if err := os.WriteFile(adapter, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	creds := []gateway.Credential{
+		{Name: "a", File: token, Hosts: []string{"a.example"}, Scheme: "bearer"},
+		{Name: "b", Adapter: []string{adapter}, Hosts: []string{"b.example"}},
+	}
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"}]}`, 'a')
+	h := start(t, gateway.Config{Server: c.server(), Credentials: creds})
+	a := h.open(server.LinkRunRequest{Wall: true})
+	runID := a.RunID
+	if d := h.post(started(runID, nil), applied(runID, a.Applied)); !d.Accepted() {
+		t.Fatalf("the first batch: %+v", d)
+	}
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["a.example","b.example"]},"credentials":[{"name":"a"},{"name":"b"}]}`, 'b')
+	h.post(logged(runID))
+	eventually(t, "the refused reload's report", func() bool {
+		h.post(heartbeat(runID))
+		return h.reported("start a new run to set a credential on b.example")
+	})
+	count := func() int {
+		b, _ := os.ReadFile(asked)
+		return strings.Count(string(b), "asked")
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("b's adapter was asked %d times by the reload, want 1", n)
+	}
+	time.Sleep(35 * time.Second)
+	if n := count(); n != 1 {
+		t.Errorf("b's adapter was asked %d times; the refused reload's renewal went on", n)
 	}
 	h.post(exited(runID))
 	h.close()

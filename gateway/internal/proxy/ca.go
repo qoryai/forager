@@ -22,13 +22,17 @@ import (
 // CA is one run's certificate authority: what lets the proxy answer as a host it
 // terminates TLS for. Its key is made for the run, lives in this process's memory and
 // nowhere else, and is gone with it. Its certificate's name constraints limit it to the
-// hosts the run terminates when it starts, so whoever holds the key can be one of those
-// hosts to whoever trusts it, and no other host to a client that enforces the
-// constraints. Only the certificate, never the key, reaches an enclosure.
+// names the run terminates when it starts and the names under them, and to the
+// addresses it terminates, so whoever holds the key can be one of those hosts to
+// whoever trusts it, and no other host to a client that enforces the constraints. Only
+// the certificate, never the key, reaches an enclosure.
 type CA struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
 	pem  []byte
+	// standIn says the run terminated no name when it started: the certificate permits
+	// only invalid, which stands for no name, and [CA.Permits] permits no name.
+	standIn bool
 
 	mu sync.Mutex
 	// leaves are the certificates made for each host, at most [leafCap], the least
@@ -56,13 +60,14 @@ const caLife = 7 * 24 * time.Hour
 // leafRenew is how long before its end a leaf is made again.
 const leafRenew = 24 * time.Hour
 
-// NewCA makes an authority for the run named, good only for the hosts: those
-// [Proxy.Terminating] reports when the run starts.
+// NewCA makes an authority for the run named, good only for the hosts as [constrain]
+// reads them: those [Proxy.Terminating] reports when the run starts.
 func NewCA(runID string, hosts []string) (*CA, error) {
 	return newCA(pkix.Name{CommonName: "qory run " + runID, Organization: []string{"Forager gateway, one run only"}}, caLife, hosts)
 }
 
-// newCA makes an authority of the subject, good for life and for the hosts alone.
+// newCA makes an authority of the subject, good for life and for the hosts as
+// [constrain] reads them.
 func newCA(subject pkix.Name, life time.Duration, hosts []string) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -83,22 +88,28 @@ func newCA(subject pkix.Name, life time.Duration, hosts []string) (*CA, error) {
 		IsCA:                  true,
 		MaxPathLenZero:        true,
 	}
-	constrain(tmpl, hosts)
+	standIn := constrain(tmpl, hosts)
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, err
 	}
-	return caOf(der, key)
+	ca, err := caOf(der, key)
+	if err != nil {
+		return nil, err
+	}
+	ca.standIn = standIn
+	return ca, nil
 }
 
-// constrain sets the name constraints of an authority good for the hosts alone, entries
+// constrain sets the name constraints of an authority good for the hosts, entries
 // as [Proxy.Terminated] reports them: "*.example.com" permits example.com and every name
 // under it, since a DNS constraint has no form for the names under it alone; a name
 // permits itself and every name under it; an IPv4 address permits itself as a /32, an
 // IPv6 address as a /128. With no name, only invalid is permitted, a name that never
 // resolves (RFC 6761); with no address, every address is excluded. The constraint is
 // critical, so a client that cannot read it rejects every certificate of the authority.
-func constrain(tmpl *x509.Certificate, hosts []string) {
+// standIn says invalid stands for no name.
+func constrain(tmpl *x509.Certificate, hosts []string) (standIn bool) {
 	var names []string
 	var ips []*net.IPNet
 	for _, h := range hosts {
@@ -112,7 +123,7 @@ func constrain(tmpl *x509.Certificate, hosts []string) {
 		}
 	}
 	if len(names) == 0 {
-		names = []string{"invalid"}
+		names, standIn = []string{"invalid"}, true
 	}
 	tmpl.PermittedDNSDomainsCritical = true
 	tmpl.PermittedDNSDomains = names
@@ -124,6 +135,7 @@ func constrain(tmpl *x509.Certificate, hosts []string) {
 			{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
 		}
 	}
+	return standIn
 }
 
 // constraintOf is the name or the address range that permits every host entry matches,
@@ -150,16 +162,17 @@ func constraintOf(entry string) (name string, ip *net.IPNet, ok bool) {
 
 // Permits reports whether the authority's certificates are good for every host the
 // entry matches, an entry as [Proxy.Terminated] reports one. An entry that matches no
-// host a request can name is permitted.
+// host a request can name is permitted; a name is not when the run terminated no name
+// when it started.
 func (c *CA) Permits(entry string) bool {
 	name, ip, ok := constraintOf(entry)
 	switch {
 	case !ok:
 		return true
 	case ip != nil:
-		return slices.ContainsFunc(c.cert.PermittedIPRanges, func(n *net.IPNet) bool {
-			return len(n.IP) == len(ip.IP) && n.Contains(ip.IP)
-		})
+		return slices.ContainsFunc(c.cert.PermittedIPRanges, func(n *net.IPNet) bool { return n.Contains(ip.IP) })
+	case c.standIn:
+		return false
 	}
 	return slices.ContainsFunc(c.cert.PermittedDNSDomains, func(d string) bool {
 		return name == d || strings.HasSuffix(name, "."+d)
