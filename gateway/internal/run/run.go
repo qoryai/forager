@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/gateway/internal/credential"
@@ -31,6 +33,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/refusal"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 )
 
@@ -81,6 +84,12 @@ type Config struct {
 	// renewal that failed, a tool's standard error, path rules a reload cannot hold.
 	// Nil reports nothing.
 	Report func(string)
+	// Secrets fetches the values of the credentials of the run configuration the run
+	// starts with, by their names in the document's order, under digest, the digest
+	// Forager computed of the document's bytes, and opens them: the secrets request,
+	// once per run. Nil when the server's discovery lists no secrets endpoint; a run
+	// configuration with credentials is then refused.
+	Secrets func(ctx context.Context, digest string, credentials []string) (sealed.Values, error)
 }
 
 // Fetched is one run configuration as the server answered it.
@@ -136,6 +145,14 @@ type Run struct {
 	images    map[*policy.Loaded]string
 	held      *credential.Held
 	runDigest string
+	// creds are the credentials of each run configuration Read read that a reload has
+	// not decided yet.
+	creds map[*policy.Loaded][]server.RunCredential
+
+	// stored are the credentials of the run configuration the run started with, and
+	// values their values as they opened, fixed for the run and cleared by Close.
+	stored []server.RunCredential
+	values sealed.Values
 }
 
 // Decide is the policy a run starts under, and refuses a run that cannot have it: the
@@ -194,19 +211,23 @@ func Decide(cfg Config) (*Run, error) {
 			return nil, err
 		}
 		pol = fetched
-		r.guard, r.named = r.takeGuard(fetched), r.takeNamed(fetched)
+		r.guard, r.named, r.stored = r.takeGuard(fetched), r.takeNamed(fetched), r.takeCreds(fetched)
 		if cfg.Fetched.Document != nil {
 			r.served = cfg.Fetched.Document.Values()
 		}
 		r.runDigest = pol.RunConfiguration
 	}
 	if !cfg.Wall {
-		if err := needsWall(pol, len(r.beside) > 0); err != nil {
+		if err := needsWall(pol, len(r.beside) > 0, len(r.stored) > 0); err != nil {
 			return nil, err
 		}
 		if len(cfg.Selects) > 0 {
 			cfg.Report(fmt.Sprintf("run %s: the gateway selects credentials for a walled run alone: this run has no wall and gets none", cfg.RunID))
 		}
+	}
+	if len(r.stored) > 0 && cfg.Secrets == nil {
+		return nil, refusal.New(refusal.RunConfigurationInvalid, nil,
+			"run configuration %s: enrol an access key allowed stored secrets: the document has credentials, and Qory Apiary's configuration document lists no secrets endpoint for this access key", cfg.Fetched.URL)
 	}
 	if cfg.Wall {
 		img, err := cfg.Images.resolve(pol.Policy.Image)
@@ -221,9 +242,13 @@ func Decide(cfg Config) (*Run, error) {
 
 // needsWall refuses what a policy selects that needs a wall, a [*refusal.NeedsWall]
 // naming it: credentials, tools and path rules, the node's beside a server's and the
-// sides beside the node's policy, beside, included, and an image.
-func needsWall(pol *policy.Loaded, beside bool) error {
+// sides beside the node's policy, beside, included, and an image; and, stored, a run
+// configuration's credentials, server_credentials.
+func needsWall(pol *policy.Loaded, beside, stored bool) error {
 	var names []string
+	if stored {
+		names = append(names, refusal.ServerCredentials)
+	}
 	if len(pol.Policy.Credentials) > 0 {
 		names = append(names, "credentials")
 	}
@@ -245,15 +270,24 @@ func needsWall(pol *policy.Loaded, beside bool) error {
 // Hold resolves the credentials the policy in force selects and chooses its tools,
 // beside them: a credential that does not resolve, a tool that cannot be chosen or
 // that cannot be beside the credentials, and a placeholder [Config.Passes] says the run
-// passes a value for, are no run. It is called once, after [Decide].
+// passes a value for, are no run. When the run configuration the run starts with has
+// credentials, it first fetches and opens their values with [Config.Secrets], and
+// refuses a value that a header cannot hold. It is called once, after [Decide].
 func (r *Run) Hold(ctx context.Context) error {
+	if len(r.stored) > 0 {
+		if err := r.open(ctx); err != nil {
+			return err
+		}
+	}
 	held, err := r.hold(ctx, r.start)
 	if err != nil {
+		r.clearValues()
 		return err
 	}
 	chosen, err := r.choose(held)
 	if err != nil {
 		held.Close()
+		r.clearValues()
 		return err
 	}
 	r.mu.Lock()
@@ -277,8 +311,9 @@ func Open(ctx context.Context, cfg Config) (*Run, error) {
 	return r, nil
 }
 
-// Close stops the renewals of the credentials the run holds. The tools are the
-// caller's to stop, with the set [Run.StartTools] returned.
+// Close stops the renewals of the credentials the run holds, and overwrites the values
+// of the run configuration's credentials. The tools are the caller's to stop, with the
+// set [Run.StartTools] returned.
 func (r *Run) Close() {
 	r.mu.Lock()
 	held := r.held
@@ -287,6 +322,65 @@ func (r *Run) Close() {
 	if held != nil {
 		held.Close()
 	}
+	r.clearValues()
+}
+
+// open fetches and opens the values of the start's run configuration's credentials,
+// under the digest Forager computed of the document's bytes, and refuses a value a
+// header cannot hold.
+func (r *Run) open(ctx context.Context) error {
+	names := make([]string, len(r.stored))
+	for i, c := range r.stored {
+		names[i] = c.Name
+	}
+	digest := ""
+	if d := r.cfg.Fetched.Document; d != nil {
+		digest = d.Computed
+	}
+	values, err := r.cfg.Secrets(ctx, digest, names)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if v, _ := values.Value(name); !HeaderValue(v) {
+			values.Clear()
+			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
+				"run configuration %s: store another value of the credential %s in Qory Apiary: its value has a control character, or a space or tab at its start or end, which a header value cannot have", r.cfg.Fetched.URL, accesskey.ShownName(name, true))
+		}
+	}
+	r.mu.Lock()
+	r.values = values
+	r.mu.Unlock()
+	return nil
+}
+
+// clearValues overwrites the opened values of the run configuration's credentials,
+// under r.mu, so it never overlaps the copy a request takes ([Run.storedUses]).
+func (r *Run) clearValues() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values.Clear()
+	r.values = sealed.Values{}
+}
+
+// HeaderValue reports whether v, UTF-8, holds the contract's rule for a value set in a
+// header: no control character but tab, of C0, DEL and C1, and no space or tab at its
+// start or end. Every value from the server is held to it, whatever its scheme.
+func HeaderValue(v []byte) bool {
+	if len(v) == 0 || v[0] == ' ' || v[0] == '\t' || v[len(v)-1] == ' ' || v[len(v)-1] == '\t' {
+		return false
+	}
+	for i := 0; i < len(v); {
+		c, size := utf8.DecodeRune(v[i:])
+		if c == utf8.RuneError && size <= 1 {
+			return false
+		}
+		if c != '\t' && (c < 0x20 || (c >= 0x7f && c <= 0x9f)) {
+			return false
+		}
+		i += size
+	}
+	return true
 }
 
 // RunID is the run's id.
@@ -455,6 +549,11 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		}
 		fetched.Source = "fetched"
 	}
+	if f.Document != nil {
+		if err := server.CheckCredentials(f.Document.Credentials); err != nil {
+			return nil, fmt.Errorf("run configuration %s: %w", f.URL, err)
+		}
+	}
 	pol, err := inForce(fetched, r.node, f.URL, f.Digest)
 	named := ""
 	if err == nil && f.Document != nil && f.Document.Image != "" {
@@ -473,6 +572,12 @@ func (r *Run) Read(f Fetched) (*policy.Loaded, error) {
 		r.read = map[*policy.Loaded][]string{}
 	}
 	r.read[out] = GuardNames(r.node, pol, r.cfg.Narrowing)
+	if f.Document != nil && len(f.Document.Credentials) > 0 {
+		if r.creds == nil {
+			r.creds = map[*policy.Loaded][]server.RunCredential{}
+		}
+		r.creds[out] = f.Document.Credentials
+	}
 	if named != "" {
 		if r.images == nil {
 			r.images = map[*policy.Loaded]string{}
@@ -576,6 +681,16 @@ func (r *Run) takeGuard(p *policy.Loaded) []string {
 	}
 	delete(r.read, p)
 	return names
+}
+
+// takeCreds is the credentials of the run configuration of a policy [Run.Read] made,
+// nil when it has none, and forgets them.
+func (r *Run) takeCreds(p *policy.Loaded) []server.RunCredential {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.creds[p]
+	delete(r.creds, p)
+	return c
 }
 
 // takeNamed is the image the run configuration of a policy [Run.Read] made named,
@@ -717,9 +832,12 @@ func (d *Decision) Discard() {
 // allow list instead, so they are not reached on every path, and the caller's user is
 // told.
 func (r *Run) Reload(ctx context.Context, next *policy.Loaded) (*Decision, error) {
-	guard, named := r.takeGuard(next), r.takeNamed(next)
+	guard, named, creds := r.takeGuard(next), r.takeNamed(next), r.takeCreds(next)
 	if next.RunConfiguration == r.RunConfiguration() {
 		return &Decision{Unchanged: true, Policy: next}, nil
+	}
+	if !sameCredentials(creds, r.stored) {
+		return nil, fmt.Errorf("run configuration %s: start a new run to use other credentials; a run's credentials from Qory Apiary are fixed when it starts, and this run configuration has other credentials than the run started with; the policy in force stays", next.URL)
 	}
 	d, err := r.decide(ctx, next, named)
 	if d != nil {
@@ -803,11 +921,12 @@ func (r *Run) Commit(d *Decision) {
 	}
 }
 
-// hold resolves the credentials a policy selects, as the machine defines them, and
-// refuses a placeholder the run passes a value for: at the start and at every reload
-// alike.
+// hold resolves the credentials a policy selects, as the machine defines them, beside
+// the run configuration's credentials the run started with, which replace a machine's
+// credential that claims one of their hosts, and refuses a placeholder the run passes
+// a value for: at the start and at every reload alike.
 func (r *Run) hold(ctx context.Context, pol *policy.Loaded) (*credential.Held, error) {
-	held, err := credential.Resolve(ctx, r.defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
+	held, err := credential.ResolveWith(ctx, r.defs, pol.Policy.Credentials, r.storedUses(), pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, r.cfg.Report)
 	if err != nil {
 		return nil, err
 	}
@@ -915,6 +1034,37 @@ func claimedBy(held *credential.Held) func(string) string {
 	}
 }
 
+// storedUses are the run configuration's credentials the run started with, as the
+// credential package holds them. Each one's Value copies the opened value under r.mu,
+// as [Run.clearValues] clears it, so a request that is still being served when the run
+// ends copies the value whole or gets none, and never reads bytes while they are
+// overwritten.
+func (r *Run) storedUses() []credential.Stored {
+	out := make([]credential.Stored, len(r.stored))
+	for i, c := range r.stored {
+		name := c.Name
+		out[i] = credential.Stored{Name: name, Hosts: c.Hosts, Scheme: c.Auth.Scheme, Username: c.Auth.Username, Header: c.Auth.Header,
+			Paths: c.Paths, Placeholders: c.Placeholders, Value: func() []byte {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				b, _ := r.values.Value(name)
+				return slices.Clone(b)
+			}}
+	}
+	return out
+}
+
+// sameCredentials reports whether two run configurations' credentials are the same
+// entries, in any order.
+func sameCredentials(a, b []server.RunCredential) bool {
+	order := func(s []server.RunCredential) []server.RunCredential {
+		s = slices.Clone(s)
+		slices.SortFunc(s, func(x, y server.RunCredential) int { return strings.Compare(x.Name, y.Name) })
+		return s
+	}
+	return reflect.DeepEqual(order(a), order(b))
+}
+
 // sameSelection reports whether two selections, of tools or of credentials, are the
 // same, in any order.
 func sameSelection(a, b []policy.Selected) bool {
@@ -956,7 +1106,13 @@ func ProxyUses(held *credential.Held) []proxy.Credential {
 	}
 	uses := make([]proxy.Credential, len(held.Uses))
 	for i, u := range held.Uses {
-		uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, Token: u.Token, Rejected: u.Rejected}
+		uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths}
+		if u.Stored {
+			// The server's value: no renewal, and no Token, so it stays bytes.
+			uses[i].Value, uses[i].Stored = u.Value, true
+		} else {
+			uses[i].Token, uses[i].Rejected = u.Token, u.Rejected
+		}
 	}
 	return uses
 }

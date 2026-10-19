@@ -27,7 +27,7 @@
       "additionalProperties": {"$ref": "#/$defs/variable"}
     },
     "credentials": {
-      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url.",
+      "description": "The credentials whose values the server stores for the run, at most 8, each name once. The document has no value: the server seals the values to the access key in its answer, secrets-answer.schema.json, to the secrets request, secrets-request.schema.json, a POST to the configuration's secrets.url. The gateway sends it once, when a walled run starts, and sets each value in place of a credential of the machine's that claims one of its hosts; the credentials are fixed for the run.",
       "type": "array",
       "minItems": 1,
       "maxItems": 8,

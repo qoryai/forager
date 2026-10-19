@@ -22,6 +22,7 @@ import (
 	"github.com/qoryai/forager/gateway/internal/tool"
 	"github.com/qoryai/forager/policy"
 	"github.com/qoryai/forager/runkey"
+	"github.com/qoryai/forager/sealed"
 	"github.com/qoryai/forager/server"
 	"github.com/qoryai/forager/sink"
 )
@@ -406,10 +407,14 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		// The gateway's selection is for a run that attached with a run key alone.
 		selects = g.cfg.Selects
 	}
+	var secrets func(context.Context, string, []string) (sealed.Values, error)
+	if g.client != nil {
+		secrets = g.secrets(req.RunID)
+	}
 	r, err := run.Decide(run.Config{
 		RunID: req.RunID, Node: g.cfg.Policy, Server: g.client != nil, Fetched: fetched, Labels: decideLabels, Wall: req.Wall,
 		Credentials: g.cfg.Credentials, Tools: g.cfg.Tools, Selects: selects, Images: images(req.Images), Passes: run.Passing(req.Passes), Report: g.report,
-		Narrowing: narrowing,
+		Narrowing: narrowing, Secrets: secrets,
 	})
 	if err != nil {
 		return fail(err)
@@ -432,6 +437,9 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	pol := r.Policy()
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
+	}
+	if g.cfg.upstreamRoots != nil {
+		lr.px.TrustUpstream(g.cfg.upstreamRoots)
 	}
 	if req.Wall || remote {
 		// The proxy serves something that is not on this machine, so this machine's own

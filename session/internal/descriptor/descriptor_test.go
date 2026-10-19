@@ -96,7 +96,9 @@ func TestClaudeDeclaresItsModelCredential(t *testing.T) {
 
 // TestClaudeRequiresNoModelKey pins that the Claude Code descriptor has no one_of
 // group and that its entry in runtimes.json has one_of, empty. The descriptor requires
-// neither key, because no server supplies the model key.
+// neither key, because a server's model key reaches the run only as a sealed
+// credential that the run configuration names, and otherwise the run's model key is a
+// credential the machine defines.
 func TestClaudeRequiresNoModelKey(t *testing.T) {
 	b, err := fs.ReadFile(contracts.FS, "runtimes/claude/descriptor.yaml")
 	if err != nil {

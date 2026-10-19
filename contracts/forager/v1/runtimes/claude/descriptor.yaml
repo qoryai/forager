@@ -38,12 +38,14 @@ sources:
 headless:
   args: ["-p", "--print"]
 # The model credential is an API key or an OAuth credential. The descriptor requires
-# neither, because no server supplies the model key. Claude Code reads
-# ANTHROPIC_AUTH_TOKEN before either, so it is reserved. The denied variables move
-# where requests and the credential go, add headers, switch to another provider, wrap or
-# replace the shell, move the settings and the credential file, or change the client
-# certificate and the trust of TLS connections; each is in the environment-variable
-# reference and in the 2.1.288 binary.
+# neither, because a server's model key reaches the run only as a sealed credential
+# that the run configuration names, and otherwise the run's model key is a credential
+# the machine defines. Claude Code reads ANTHROPIC_AUTH_TOKEN before either, so it is
+# reserved. The denied variables move where requests and the credential go, add
+# headers, switch to another provider, wrap or replace the shell, move the settings and
+# the credential file, or change the client certificate and the trust of TLS
+# connections; each is in the environment-variable reference and in the 2.1.288
+# binary.
 secrets:
   declares:
     - id: api_key

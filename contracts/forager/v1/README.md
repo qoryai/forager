@@ -411,7 +411,9 @@ included: on a host that ignores case this denies a spelling the host accepts,
 never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
-empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
+empty segment, a dot segment. On a host that gets a credential from the server, a
+`TRACE` or `TRACK` is denied in either mode, with the rule `wall:echo-method`
+(§Credentials, From the server). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
@@ -556,11 +558,47 @@ subscription login. The runtime's descriptor is to use it with `auth` to choose 
 variable that receives the placeholder; no Forager component reads it in this revision.
 `placeholders` are variables for the enclosure to get with the placeholder value. An entry
 has no value and no member beside these six: the server seals each value to the access
-key in the answer to the secrets request (§The server, Secrets). This revision defines
-the member, the secrets request, its answer and the plaintext. Forager checks a run
-configuration's `credentials` against the schema, and a run configuration the schema
-refuses is `run_configuration_invalid`; it sends no secrets request, sets no value and
-adds no placeholder for an entry.
+key in the answer to the secrets request (§The server, Secrets). Forager checks a run
+configuration's `credentials` against the schema, then refuses a name twice and an
+`auth.header` that frames the request or that the proxy sets: `Host`, `Content-Length`,
+`Transfer-Encoding`, `Connection`, `TE`, `Trailer`, `Upgrade`, `Keep-Alive`, `Expect`,
+`Cookie`, and any name that starts with `Proxy-`, `X-Qory-` or `Qory-`, case ignored and
+`_` read as `-`. It also refuses a placeholder that an entry of the built-in deny list,
+`denied-variables.json`, covers, case ignored, such as `GIT_SSL_CAINFO`, `HTTPS_PROXY` or
+one of Forager's `QORY_` names. Each is `run_configuration_invalid`, and a name that
+contains an access key secret or a run key is shown as a phrase and left out of the
+refusal's `names`.
+
+The gateway sets these credentials for a walled run alone. A run configuration with
+`credentials` and no wall is `wall_required` with the name `server_credentials`; one from
+a server whose discovery lists no `secrets` is `run_configuration_invalid`. When the run
+starts, the gateway sends the secrets request once, under the access key, for the
+document's credentials in its order and the digest it computes of the document's bytes,
+and opens the answer with `sealed.Open` under the pinned `apiary_public_key` and the
+machine's clock. A pin or an access key that is a published fixture key is
+`run_configuration_invalid`: the registration or the attach has been sent, and the
+secrets request is not. A value with a control character other
+than tab, or a space or tab at its start or end, is `run_configuration_invalid`, and so
+is an answer `sealed.Open` refuses, but one whose envelope signature does not verify,
+`answer_unsigned`. No message contains a value. A credential from the server replaces
+each credential of the machine's whose hosts claim one of its hosts, or a host above or
+below one: a key from `env` or `file`, such as forager.yaml's model key for that host, is
+then not read; an adapter still runs, and its answer is dropped. The run answer, the
+record and `placeholders` list the server's credential instead. The replaced credential
+may have the same name: forager.yaml's `model` on `api.anthropic.com` and a run
+configuration's `model` on `api.anthropic.com` give the run the server's `model`. A
+credential of the machine's that stays, because its hosts claim none of the server's
+credential's hosts, and that has the same name is no run, so the record lists each name
+once. Without `credentials` the run gets the machine's credentials as before.
+
+The credentials are fixed when the run starts: a reload whose `credentials` differ fails,
+and the policy in force stays. A private host gets a value only through an exact entry,
+as a credential of the machine's does, and the proxy verifies the host's certificate
+against the gateway machine's trust store. A host on the gateway machine gets a value
+only when the node's policy names it, as for every name on the machine. On a host that
+gets a credential from the server, a `TRACE` or `TRACK` is denied with the rule
+`wall:echo-method`, since its answer would send the value back. The values stay bytes
+until the proxy sets the header, and are overwritten when the run ends.
 
 ## Tools
 
@@ -1429,8 +1467,10 @@ run key. A direct node's gateway records its one entry as `workspace`, and `node
 a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key,
 and during a rotation the next one, for information: Forager verifies under its pin
 alone. `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access
-key allowed stored secrets, and a server that lists it requires a wall for every run. Its
-URL is the secrets request's endpoint (§The server, Secrets).
+key allowed stored secrets. A server that lists it requires a wall for every run (vault
+0088); Forager reads it only for a run whose run configuration has `credentials`, and
+refuses such a run without a wall (§Credentials, From the server). Its URL is the
+secrets request's endpoint (§The server, Secrets).
 Discovery lists no key endpoint: keys change through enrolment alone. A `401` is no run,
 `unauthorized`. `events.url` is `https`, or `http` to a loopback address; `events.types`
 is a non-empty list of full type names, or `*` for every type. `run.url` is the run
@@ -1629,8 +1669,10 @@ fixture signing key, with its vectors and an envelope refused at each step
 (§Fixtures). This revision defines the request, its answer and the plaintext. Package
 `sealed` implements both sides: `sealed.Open` makes the checks of whoever opens the
 envelope, in that order, all but the rule for a value set in a header, and returns the
-values as bytes it can clear; `sealed.Seal` seals and signs an answer. Forager sends no
-secrets request, and no Forager component calls `sealed.Open`.
+values as bytes it can clear; `sealed.Seal` seals and signs an answer. The gateway sends
+the secrets request and calls `sealed.Open` for a walled run whose run configuration has
+`credentials` (§Credentials, From the server); for an attached run it takes the run
+configuration and its digest from a reload, whose bytes the digest is of.
 
 **Through a gateway.** Each node or node pool records one of three choices: `direct`,
 `default`, or a named gateway, `ng_` followed by 16 lower-case Crockford base32
@@ -2419,7 +2461,8 @@ the answer gives and decides none of it again.
 `wall_required` is a code of the link alone: a `403` from `gateway` to a run request
 whose `wall` is false and whose policy in force selects what needs a wall. Its names are
 `credentials`, `tools` and `paths`, each one the policy selects, or `image=<name>` for
-an image the policy selects. The session turns it back into the error it gives today,
+an image the policy selects, and `server_credentials` for a run configuration that has
+`credentials`. The session turns it back into the error it gives today,
 word for word, and writes no `dev.qory.run.refused` for it, as today: the code is not
 one of `refusal.Decides`, not in the enum of `events/run.refused.schema.json`, and never
 appears in an event.
@@ -2917,7 +2960,9 @@ reports. A descriptor records the version it was written against; Forager
 reports that version and does not check the installed one. Its `secrets` declare the
 model credential, an API key set as `x-api-key` or an OAuth credential set as a bearer,
 on `api.anthropic.com` under `/v1/`, and no `one_of` group. The descriptor requires
-neither, because no server supplies the model key. Its `model` lists
+neither, because a server's model key reaches the run only as a sealed credential that
+the run configuration names (§Credentials, From the server), and otherwise the run's
+model key is a credential the machine defines. Its `model` lists
 `anthropic-messages`; it places the model id as `--model`, the run's effort value as
 `--effort` and an agent's effort value in the `effort` frontmatter, each of the two
 taking `low`, `medium`, `high`, `xhigh` and `max`; it places the endpoint in

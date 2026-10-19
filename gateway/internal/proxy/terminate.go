@@ -23,6 +23,11 @@ import (
 // ways: not a path entry, the proxy's own refusal, in either mode.
 const AmbiguousPath = "wall:ambiguous-path"
 
+// EchoMethod is the rule a denial names of a TRACE or a TRACK, which echo the
+// request's headers back, to a host a credential from the server is for: the proxy's
+// own refusal, in either mode.
+const EchoMethod = "wall:echo-method"
+
 // Credential is one use of a credential the gateway holds for the session: the hosts it
 // goes to, how it is set, and the paths of those hosts the run may request.
 type Credential struct {
@@ -37,6 +42,12 @@ type Credential struct {
 	// told when the host answered 401, which is a reason to ask for another.
 	Token    func() string
 	Rejected func()
+	// Value, for a credential from the server, returns a copy of its opened value's
+	// bytes, which the proxy clears once the header is set, in place of Token; Stored
+	// says the credential is the server's. The proxy
+	// refuses TRACE and TRACK on a host a stored credential is for.
+	Value  func() []byte
+	Stored bool
 }
 
 // Tool is a program of the machine's that serves hosts: the proxy hands every request
@@ -294,6 +305,14 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			req.Tool = tl.Name
 		}
 		c := t.credential(d.Host)
+		if c != nil && c.Stored && (strings.EqualFold(r.Method, "TRACE") || strings.EqualFold(r.Method, "TRACK")) {
+			req.Allowed, req.PathRule, req.Outcome = false, EchoMethod, Refused
+			t.p.observe(req)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, "qory: %s %s%s denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n", r.Method, d.Host, clean)
+			return
+		}
 		r.Header.Del(setBy)
 		if allowed && credentialed && c != nil && tl == nil {
 			if name, value, ok := c.header(); ok {
@@ -373,6 +392,9 @@ const setBy = "X-Qory-Credential-Set"
 
 // header is the header that carries the token.
 func (c *Credential) header() (string, string, bool) {
+	if c.Value != nil {
+		return c.storedHeader()
+	}
 	token := c.Token()
 	if token == "" {
 		return "", "", false
@@ -384,6 +406,41 @@ func (c *Credential) header() (string, string, bool) {
 		return "Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+token)), true
 	case "header":
 		return c.Header, token, true
+	}
+	return "", "", false
+}
+
+// storedHeader is the header that carries a credential from the server. The value
+// stays bytes until here: Value returns a copy, which this clears, and every buffer
+// this builds is cleared before it returns.
+// The header's value is a Go string, since http.Header holds strings: one copy per
+// request that cannot be cleared, and the copies the transport makes as it writes the
+// request, its buffers and, over HTTP/2, the header compression's table.
+func (c *Credential) storedHeader() (string, string, bool) {
+	v := c.Value()
+	defer clear(v)
+	if len(v) == 0 {
+		return "", "", false
+	}
+	join := func(prefix string, b []byte) string {
+		out := make([]byte, 0, len(prefix)+len(b))
+		out = append(append(out, prefix...), b...)
+		defer clear(out)
+		return string(out)
+	}
+	switch c.Scheme {
+	case "bearer":
+		return "Authorization", join("Bearer ", v), true
+	case "basic":
+		pair := make([]byte, 0, len(c.Username)+1+len(v))
+		pair = append(append(append(pair, c.Username...), ':'), v...)
+		defer clear(pair)
+		enc := make([]byte, base64.StdEncoding.EncodedLen(len(pair)))
+		base64.StdEncoding.Encode(enc, pair)
+		defer clear(enc)
+		return "Authorization", join("Basic ", enc), true
+	case "header":
+		return c.Header, join("", v), true
 	}
 	return "", "", false
 }

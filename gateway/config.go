@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"time"
 
@@ -104,6 +105,9 @@ type Config struct {
 	// of Qory Apiary as a run opens. Tests set them.
 	openWaits  []time.Duration
 	openWindow time.Duration
+	// upstreamRoots, when not nil, are the roots every run's proxy verifies a
+	// terminated host's certificate against, in place of this machine's. Tests set them.
+	upstreamRoots *x509.CertPool
 }
 
 // TLS is the certificate and key a separate gateway serves on its one address, files in

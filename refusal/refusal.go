@@ -105,6 +105,19 @@ func New(code string, names []string, format string, a ...any) *accesskey.Refusa
 	return &accesskey.Refusal{Code: code, Names: sorted, Detail: fmt.Sprintf(format, a...)}
 }
 
+// Shown are names as a refusal lists them: each that contains an access key secret or
+// a run key, [accesskey.ContainsSecret], is left out, since a refusal's names reach its
+// text and the answer that carries it. Nil when none is left.
+func Shown(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		if !accesskey.ContainsSecret(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // ByGateway is the refusal [New] makes, decided by a gateway: its From is
 // [accesskey.FromGateway].
 func ByGateway(code string, names []string, format string, a ...any) *accesskey.Refusal {
@@ -115,20 +128,29 @@ func ByGateway(code string, names []string, format string, a ...any) *accesskey.
 
 // WallRequired is the gateway's link's code, and the link's alone, of a run without a
 // wall whose policy in force selects what needs one: a 403 from the gateway whose names
-// are credentials, tools and paths, each one the policy selects, or image=<name>. It is
+// are credentials, tools and paths, each one the policy selects, or image=<name>, and
+// [ServerCredentials] for a run configuration that has credentials. It is
 // not one of [Decides] and never appears in an event: the session turns it back into
 // the error it gives today, [NeedsWall].
 const WallRequired = "wall_required"
 
 // NeedsWall is a run without a wall whose policy selects what needs one, with the names
 // of [WallRequired]: credentials, tools and paths, each one the policy selects, and
-// image=<name> for an image it selects. Its Error is the text a run refused for it has
-// always had, word for word, the credentials' before the image's.
+// image=<name> for an image it selects, and [ServerCredentials]. Its Error is the text a
+// run refused for it has always had, word for word, the credentials' before the
+// image's; with ServerCredentials among the names, the text for those credentials.
 type NeedsWall struct {
 	Names []string
 }
 
+// ServerCredentials is the name of [WallRequired] for a run configuration that has
+// credentials, whose values the gateway sets only for a run behind a wall.
+const ServerCredentials = "server_credentials"
+
 func (e *NeedsWall) Error() string {
+	if slices.Contains(e.Names, ServerCredentials) {
+		return "run it with a wall: the run configuration from Qory Apiary has credentials, and the gateway sets their values only for a run behind a wall"
+	}
 	for _, n := range e.Names {
 		if image, ok := strings.CutPrefix(n, "image="); ok && len(e.Names) == 1 {
 			return fmt.Sprintf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", image)

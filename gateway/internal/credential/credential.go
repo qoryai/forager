@@ -70,12 +70,45 @@ type Use struct {
 	Hosts                    []string
 	Scheme, Username, Header string
 	Paths                    []string
-	held                     *held
-	index                    int
+	// Stored says the credential is the server's, a run configuration's credentials
+	// entry, whose value Qory Apiary sealed to the access key.
+	Stored bool
+	held   *held
+	index  int
 }
 
-// Token is the token as it is now.
-func (u *Use) Token() string { return u.held.token(u.index) }
+// Stored is a credential whose value Qory Apiary stores for the run: an entry of the
+// run configuration's credentials, how its value is set, and the value as it opened.
+type Stored struct {
+	Name                     string
+	Hosts                    []string
+	Scheme, Username, Header string
+	// Paths are nil for every path.
+	Paths        []string
+	Placeholders []string
+	// Value returns a copy of the opened value's bytes, which the caller clears once it
+	// has set them; empty once the run has ended.
+	Value func() []byte
+}
+
+// Token is the token as it is now, of a credential of the machine's; empty for a
+// credential from the server, whose value [Use.Value] returns.
+func (u *Use) Token() string {
+	if u.Stored {
+		return ""
+	}
+	return u.held.token(u.index)
+}
+
+// Value is a copy of the opened value of a credential from the server, which the
+// caller clears once it has set it; empty once the run has ended. Nil for a credential
+// of the machine's.
+func (u *Use) Value() []byte {
+	if !u.Stored || u.held.value == nil {
+		return nil
+	}
+	return u.held.value()
+}
 
 // Rejected tells the holder a host refused the token, which is a reason to ask the
 // adapter again, not more often than every [retryWait].
@@ -139,7 +172,31 @@ func (h *Held) Close() {
 // under enforce, a claim above the definition's own. report hears of a renewal that
 // failed.
 func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
+	return ResolveWith(ctx, defs, selected, nil, mode, allow, report)
+}
+
+// ResolveWith is [Resolve] beside the credentials from the server, stored, which come
+// after the machine's. A credential from the server replaces each credential of the
+// machine's that claims a host it claims, or a host above or below one: a definition
+// whose env or file use claims one is not read, and an adapter's answer that claims one
+// is dropped, with no renewal; the adapter has run all the same. A credential of the
+// machine's that it replaces may have its name. A credential from the server with the
+// name of a credential of the machine's that stays is refused, so the record names
+// each once. The checks of Resolve then cover all of them.
+func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selected, stored []Stored, mode policy.Mode, allow []string, report func(string)) (*Held, error) {
 	out := &Held{}
+	replaced := func(hosts []string) bool {
+		for _, s := range stored {
+			for _, theirs := range s.Hosts {
+				for _, host := range hosts {
+					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
 	for _, sel := range selected {
 		i := slices.IndexFunc(defs, func(d Definition) bool { return d.Name == sel.Name })
 		if i < 0 {
@@ -150,7 +207,11 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 			return nil, fmt.Errorf("the policy selects the credential %s twice", accesskey.ShownName(def.Name, true))
 		}
 		if err := def.check(sel.Argument); err != nil {
+			out.Close()
 			return nil, err
+		}
+		if len(def.Adapter) == 0 && replaced(def.Hosts) {
+			continue
 		}
 		h := &held{def: def, argument: sel.Argument, report: report, done: make(chan struct{})}
 		answer, err := h.ask(ctx)
@@ -158,12 +219,40 @@ func Resolve(ctx context.Context, defs []Definition, selected []policy.Selected,
 			out.Close()
 			return nil, fmt.Errorf("credential %s: %w", accesskey.ShownName(def.Name, false), err)
 		}
+		var claimed []string
+		for _, a := range answer.Apply {
+			claimed = append(claimed, a.Hosts...)
+		}
+		if replaced(claimed) {
+			continue
+		}
 		h.set(answer)
 		h.shape = answer.shape()
 		for i, a := range answer.Apply {
 			out.Uses = append(out.Uses, &Use{Name: def.Name, Argument: sel.Argument, Hosts: a.Hosts, Scheme: a.Scheme, Username: a.Username, Header: a.Header, Paths: a.Paths, held: h, index: i})
 		}
 		for _, p := range slices.Concat(def.Placeholders, answer.Placeholders) {
+			if !slices.Contains(h.placeholders, p) {
+				h.placeholders = append(h.placeholders, p)
+			}
+			if !slices.Contains(out.Placeholders, p) {
+				out.Placeholders = append(out.Placeholders, p)
+			}
+		}
+		out.all = append(out.all, h)
+	}
+	// The name check runs against the machine's credentials that stay, so one the
+	// server's replaces may have its name, such as model in both.
+	for _, s := range stored {
+		if slices.ContainsFunc(out.all, func(h *held) bool { return h.def.Name == s.Name }) {
+			out.Close()
+			return nil, fmt.Errorf("rename the run configuration's credential %s or this machine's credential of that name; the machine's is for other hosts, so it stays, and the record names each credential once", accesskey.ShownName(s.Name, true))
+		}
+	}
+	for _, s := range stored {
+		h := &held{def: Definition{Name: s.Name}, value: s.Value, done: make(chan struct{})}
+		out.Uses = append(out.Uses, &Use{Name: s.Name, Hosts: s.Hosts, Scheme: s.Scheme, Username: s.Username, Header: s.Header, Paths: s.Paths, Stored: true, held: h})
+		for _, p := range s.Placeholders {
 			if !slices.Contains(h.placeholders, p) {
 				h.placeholders = append(h.placeholders, p)
 			}
@@ -192,7 +281,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", other.Name, u.Name, host)
+						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), host)
 					}
 				}
 			}
@@ -336,6 +425,9 @@ type held struct {
 	shape    string
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
+	// value, for a credential from the server, returns its opened value; nil for the
+	// machine's.
+	value func() []byte
 
 	mu      sync.Mutex
 	tokens  []string
