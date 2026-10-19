@@ -34,7 +34,8 @@
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
-// tool that serves the host. For every other host the proxy sees host names and ports
+// tool that serves the host. In what a host that gets a credential answers, the
+// credential's value is replaced with the placeholder. For every other host the proxy sees host names and ports
 // and never the content of a TLS connection: a tunnel is a blind relay once
 // established. Only a proxy-aware program is seen.
 //
@@ -713,7 +714,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// asked for: the host's connection is closed, and the client's after a 502.
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		w.Header().Set("Connection", "close")
-		http.Error(w, "upstream: the host answered 101 Switching Protocols to a request that asked for no upgrade", http.StatusBadGateway)
+		http.Error(w, "upstream: "+errUnaskedSwitch.Error(), http.StatusBadGateway)
 		return
 	}
 	for k, vs := range resp.Header {

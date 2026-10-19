@@ -434,7 +434,7 @@ func TestAnAttachedRunTakesItsCredentialsFromAReload(t *testing.T) {
 // a request to an HTTPS origin on this machine, whose certificate the proxy verifies,
 // reaches it with the opened value in the credential's header, the session's stand-in
 // replaced, when the node's policy names the origin's host; a TRACE gets the gateway's
-// 403 and never reaches it, with or without a wall. Without the node's policy, a name
+// 405 and never reaches it, with or without a wall. Without the node's policy, a name
 // on this machine is not the server's to open to a walled run, sealed credential or
 // not: the dial is refused and the origin gets nothing.
 func TestASealedKeyReachesATLSOrigin(t *testing.T) {
@@ -508,8 +508,8 @@ func TestASealedKeyReachesATLSOrigin(t *testing.T) {
 				if resp == nil || resp.StatusCode != http.StatusOK || !slices.Equal(got, []string{"GET " + sealedValue}) {
 					t.Errorf("the origin got %q; want the GET with the opened value once", got)
 				}
-				want := "qory: TRACE localhost/v1/models denied by the gateway: use another method; TRACE and TRACK send the request's headers back, and this host gets a credential from Qory Apiary\n"
-				if traced.StatusCode != http.StatusForbidden || string(traceBody) != want {
+				want := "qory: use a method other than TRACE or TRACK on this host.\nqory: TRACE localhost/v1/models denied by the gateway: this host gets a credential from the gateway, and the answer to TRACE or TRACK contains the request's headers\n"
+				if traced.StatusCode != http.StatusMethodNotAllowed || string(traceBody) != want {
 					t.Errorf("the TRACE: %d %q", traced.StatusCode, traceBody)
 				}
 				return

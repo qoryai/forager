@@ -74,6 +74,32 @@ In `qory`, the `gateway.credentials` section of `forager.yaml` defines them. See
 
 [qory-credentials]: https://github.com/qoryai/qory/blob/main/docs/run.md#credentials-the-agent-never-has
 
+## What the agent gets back
+
+A host can send back what it received: the answer to a `TRACE`, a debug endpoint, an
+error page. The proxy replaces a credential's value with its placeholder in every answer
+from a host that gets the credential, before the answer reaches the agent.
+
+- A `TRACE` or `TRACK` to such a host gets a `405` from the gateway and never reaches the
+  host, in either mode, with the rule `wall:echo-method`. Use another method.
+- The proxy replaces the value in the answer's headers, those of a `1xx` and the
+  trailer included, and in the body as it streams.
+- For a `basic` credential, the proxy also replaces the base64 of the username and the
+  value, as the header has it, with or without its padding.
+- The proxy also looks for each form percent-encoded and JSON-escaped. For a key of
+  letters, digits, `-`, `_`, `.` and `~`, such as an API key, these forms are the key
+  itself. A base64 form with `+` or `/` differs percent-encoded, and a `/` differs in
+  JSON whose encoder writes it as `\/`.
+- The request goes to the host with `Accept-Encoding: identity`, and without `Range`,
+  `If-Range` and `Upgrade`. If the host compresses its answer anyway, or switches
+  protocols, the agent gets a `502` from the gateway.
+- The answer has no `Content-Length` and comes chunked, since the placeholder and the
+  value differ in length.
+
+The proxy does not replace a part of the value, a copy in another case or encoding, such
+as hex, a copy inside a compressed file such as a zip archive, or a value the credential
+had before a renewal. A tool's answers are the tool's.
+
 ## From Qory Apiary
 
 A run configuration may list `credentials`: each a name, its hosts, how its value is set

@@ -263,6 +263,9 @@ release may change what an existing document does, and says so under Upgrading.
   gateway's selection when the server's selects none.
 - `dev.qory.run.policy_applied`'s `credentials` carry, as the argument, the value of the
   run's label a gateway's selection took it from.
+- `wall:echo-method` covers a host of every credential, the machine's included, and
+  its denial is a `405`. The contract's §Credentials has The answer: what the proxy
+  replaces in an answer from a host that gets a credential, and what it does not.
 
 #### Fixed
 
@@ -314,6 +317,16 @@ release may change what an existing document does, and says so under Upgrading.
 - A separate gateway refuses a run key whose instance id contains `qak_` or `qrk_` in
   any case: the attach is answered `run_key_invalid`, 400. Before, the run attached and
   `run.registered` sent the instance id as it was.
+- A `TRACE` or `TRACK` to a host of a credential of the machine's is now denied with
+  the rule `wall:echo-method`, as one to a host of a credential from Qory Apiary was.
+  The denial is a `405` whose first line is "qory: use a method other than TRACE or
+  TRACK on this host."; before, a `403`. Use another method.
+- A request to a host that gets a credential goes to the host with `Accept-Encoding:
+  identity`, and without `Range`, `If-Range`, `Upgrade` and `Connection`, and its
+  answer has no `Content-Length`. If the host compresses its answer anyway, the agent
+  gets a `502` whose first line is "qory: remove this host's credential from the
+  policy, or serve the host through a tool."; a `101` is a `502` too. Before, the
+  answer was passed on as the host sent it.
 
 #### Added
 
@@ -329,6 +342,13 @@ release may change what an existing document does, and says so under Upgrading.
   the policy's image: the server's policy and the node's must name the same wherever
   they name one, else `image_unknown`, and a reload that names another, or none in its
   place, is refused. `server.CheckConfigurationImage` holds its rule.
+- The proxy replaces a credential's value with its placeholder in every answer from a
+  host that gets the credential: in the headers, those of a `1xx` and the trailer
+  included, and in the body as it streams, a copy split across two reads included. For
+  `basic` it also replaces the base64 of the username and the value, with or without
+  its padding, and it looks for each form percent-encoded and JSON-escaped too. See
+  [credentials](docs/credentials.md#what-the-agent-gets-back) for what it does not
+  replace.
 
 #### Changed
 

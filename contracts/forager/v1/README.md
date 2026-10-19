@@ -442,14 +442,14 @@ included: on a host that ignores case this denies a spelling the host accepts,
 never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
-empty segment, a dot segment. On a host that gets a credential from the server, a
-`TRACE` or `TRACK` is denied in either mode, with the rule `wall:echo-method`
-(§Credentials, From the server). Under `observe` a path no entry matches is recorded as
+empty segment, a dot segment. On a host that gets a credential, a `TRACE` or `TRACK`
+is denied in either mode with a `405`, with the rule `wall:echo-method`
+(§Credentials, The answer). Under `observe` a path no entry matches is recorded as
 allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
 as allowed with an empty `rule`, but the credential is set only where the credential's
 paths match: observe mode sends no secret to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
-`Host` a request contains. A denial is a `403` containing the method, the host and the path.
+`Host` a request contains. A denial of a path is a `403` containing the method, the host and the path.
 A plain request is decided by the same paths, and the proxy never sets a credential on it.
 
 *Reading without writing.* Paths define what a run does on a host as well as where. git
@@ -562,6 +562,23 @@ run's tools trust the gateway for the credentials' hosts only through a bundle, 
 machine has none of the files Forager reads`. The proxy verifies the real host against the machine's
 roots. Every other host stays a tunnel the proxy does not read, and a run with no
 credential and no path rule has no authority at all, unless it has a server.
+
+**The answer.** A host can send back what it received: the answer to a `TRACE`, a
+debug endpoint, an error page. On a host that gets a credential, the proxy denies a
+`TRACE` or `TRACK` with a `405` and the rule `wall:echo-method`, in either mode, before
+anything is sent, and replaces the credential's value with the placeholder in every
+answer it passes on, also on a path that gets no credential: in the headers, those of a
+`1xx` and the trailer included, in header names in any case, and in the body as it
+streams. For `basic` it also replaces the base64 of the username and the value, with or
+without its padding, in the standard and the URL alphabet, with the base64 of the
+username and the placeholder. Each form is also looked for percent-encoded and
+JSON-escaped where that changes it. The request goes upstream with `Accept-Encoding:
+identity` and without `Range`, `If-Range`, `Upgrade` and `Connection`; an answer with
+another `Content-Encoding` and a body, or a `101`, is a `502` from the proxy, and the
+record contains the host's status. The answer has no `Content-Length`, since the
+placeholder and the value differ in length. A part of the value, another case or
+encoding of it, a copy inside a compressed payload such as a zip file, and a value from
+before a renewal are not replaced. A tool's answers are the tool's.
 
 **The record.** `dev.qory.run.policy_applied` contains each use, `name`, `argument`,
 `hosts`, `scheme` and `paths`, and the `terminated` hosts. Its `credential_variables` lists the
@@ -682,8 +699,8 @@ and the policy in force stays. A private host gets a value only through an exact
 as a credential of the machine's does, and the proxy verifies the host's certificate
 against the gateway machine's trust store. A host on the gateway machine gets a value
 only when the node's policy names it, as for every name on the machine. On a host that
-gets a credential from the server, a `TRACE` or `TRACK` is denied with the rule
-`wall:echo-method`, since its answer would send the value back. The values stay bytes
+gets a credential, from the server or the machine, a `TRACE` or `TRACK` is denied with the rule
+`wall:echo-method` (§Credentials, The answer). The values stay bytes
 until the proxy sets the header, and are overwritten when the run ends.
 
 ## Tools
