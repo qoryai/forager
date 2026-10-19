@@ -10,6 +10,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
+	"github.com/qoryai/forager/session/internal/runfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -170,7 +171,7 @@ func settingsArgs(events []string, args []string, dir string, forwarder []string
 		return nil, err
 	}
 	path := filepath.Join(dir, "settings.json")
-	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+	if err := runfile.Replace(path, append(out, '\n'), 0o644); err != nil {
 		return nil, accesskey.ShownError(err)
 	}
 	if at >= 0 {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/session/internal/hostfile"
+	"github.com/qoryai/forager/session/internal/runfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -174,7 +175,7 @@ func walledPaths(args []string, a runtimes.Attach) ([]string, error) {
 	}
 	args = append([]string(nil), args...)
 	for _, c := range copies {
-		if err := os.WriteFile(c.path, c.content, 0o644); err != nil {
+		if err := runfile.Replace(c.path, c.content, 0o644); err != nil {
 			return nil, accesskey.ShownError(err)
 		}
 		if c.v.joined {

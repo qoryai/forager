@@ -563,6 +563,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Fixed
 
+- The session wrote `preparation.sh`, and Claude Code's runtime `settings.json`,
+  `approve-key.sh` and the copies of a walled launch's `--mcp-config`, `--agents` and
+  system-prompt files, in place in the run directory, so a link at one of those paths
+  made the write reach the file the link points at. Each, and `ca-bundle.pem`, is now
+  written to a new file beside it, mode 0600 until its mode is set, synced and renamed
+  over the path: a link there is replaced, not followed. A directory at
+  such a path now fails the write with `file exists` (EEXIST) where it failed with
+  `is a directory` (EISDIR), and a failed write leaves no new file.
+
 - More of the session's messages and `run.started`'s members printed or sent a value as
   written, and now print or send a phrase in place of one that contains `qak_` or `qrk_`
   in any case. In `run.started`, `runtime`, `host`, `wall` and `container_runtime` are

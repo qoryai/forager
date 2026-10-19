@@ -2,12 +2,12 @@ package session
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/session/internal/runfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -72,7 +72,7 @@ func withPreparation(runDir string, preparation []string, launch runtimes.Launch
 	}
 	script := strings.Replace(preparationScript, "@PREPARATION@", strings.Join(words, " "), 1)
 	path := filepath.Join(runDir, PreparationScript)
-	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+	if err := runfile.Replace(path, []byte(script), 0o644); err != nil {
 		return runtimes.Launch{}, accesskey.ShownError(err)
 	}
 	launch.Args = append([]string{path, launch.Command}, launch.Args...)

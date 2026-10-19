@@ -1,12 +1,12 @@
 package claude
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/session/internal/runfile"
 	"github.com/qoryai/forager/session/runtimes"
 )
 
@@ -92,7 +92,7 @@ func approve(a runtimes.Attach, launch runtimes.Launch) (runtimes.Launch, error)
 	}
 	script := strings.Replace(approveScript, "@APPROVED@", approved(), 1)
 	path := filepath.Join(a.RunDir, ApproveScript)
-	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+	if err := runfile.Replace(path, []byte(script), 0o644); err != nil {
 		return runtimes.Launch{}, accesskey.ShownError(err)
 	}
 	launch.Args = append([]string{path, launch.Command}, launch.Args...)

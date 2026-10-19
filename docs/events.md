@@ -35,6 +35,10 @@ passes. `qory` keeps them under its state directory and prints the path:
   session's sequence, which is not the stream's: every event the session posts, and the
   few it records alone (below).
 - `output.log`: the session's bytes.
+- The files the session writes for the runtime, such as `preparation.sh`,
+  `ca-bundle.pem`, and Claude Code's `settings.json` and `approve-key.sh`: each is
+  written to a new file beside it and renamed, so a link at its path is replaced, not
+  followed.
 
 The gateway's record and the session's are in the same directory when the caller
 points `gateway.Config.RunDir` at the session's runs directory, `Spec.RunsDir`.
