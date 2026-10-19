@@ -125,10 +125,6 @@ type Declaration struct {
 	// Paths bound the requests the value is set on; empty means every path.
 	Paths []string `yaml:"paths" json:"paths,omitempty"`
 	Auth  Auth     `yaml:"auth" json:"auth"`
-	// KeyForm is the form of model key the runtime reads from the variable, api_key or
-	// access_token, set as Auth.Scheme sets it; empty when the declaration takes no
-	// credential by its key_form.
-	KeyForm string `yaml:"key_form" json:"key_form,omitempty"`
 }
 
 // Auth is how a value is set on a request: Scheme is bearer, header or basic, Header
@@ -239,26 +235,17 @@ func Parse(name string, b []byte) (*Descriptor, error) {
 
 // check holds the secrets to what the schema cannot express: declaration ids and group
 // ids are each distinct, every id a group lists is a declared one, in one group at
-// most, and no two declarations have the same key_form and auth scheme.
+// most.
 func (s *Secrets) check() error {
 	if s == nil {
 		return nil
 	}
 	declared := map[string]bool{}
-	forms := map[[2]string]string{}
 	for _, d := range s.Declares {
 		if declared[d.ID] {
 			return fmt.Errorf("secrets: %s is declared twice", d.ID)
 		}
 		declared[d.ID] = true
-		if d.KeyForm == "" {
-			continue
-		}
-		pair := [2]string{d.KeyForm, d.Auth.Scheme}
-		if other, ok := forms[pair]; ok {
-			return fmt.Errorf("secrets: give %s or %s another key_form or auth.scheme: both have key_form %s and auth.scheme %s, and the session chooses one variable for each pair", other, d.ID, d.KeyForm, d.Auth.Scheme)
-		}
-		forms[pair] = d.ID
 	}
 	groups := map[string]bool{}
 	grouped := map[string]string{}

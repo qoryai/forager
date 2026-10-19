@@ -34,7 +34,7 @@ import (
 // value Qory Apiary seals.
 const (
 	sealedPolicy = `{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"machine-model"}]}`
-	modelEntry   = `{"name":"model","hosts":["api.model.example"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_form":"api_key","placeholders":["MODEL_API_KEY"]}`
+	modelEntry   = `{"name":"model","hosts":["api.model.example"],"paths":["/v1/*"],"auth":{"scheme":"header","header":"x-api-key"},"key_variables":["MODEL_API_KEY"],"placeholders":["MODEL_API_KEY"]}`
 	sealedDoc    = `{"version":1,"security_policy":` + sealedPolicy + `,"credentials":[` + modelEntry + `]}`
 	sealedValue  = "sealed-value-of-the-test"
 	machineValue = "machine-value-of-the-test"
@@ -85,7 +85,7 @@ func (c *control) requests(t *testing.T) []server.SecretsRequest {
 // the run, the digest it computed of the document's bytes, not the header's, and the
 // credentials' names; the proxy sets the opened value in place of forager.yaml's key,
 // whose credential claims the same host; and the run answer has model's hosts and
-// placeholder, its key_form and its auth, and applied.credentials its key_form.
+// placeholder, its key_variables and its auth, and applied.credentials neither.
 func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 	c, h := sealedGateway(t, sealedDoc, map[string]string{"model": sealedValue})
 	a := h.open(server.LinkRunRequest{Wall: true})
@@ -104,11 +104,11 @@ func TestASealedCredentialTakesThePlaceOfTheMachinesKey(t *testing.T) {
 		t.Errorf("the secrets request %+v; want the run, %s and model", r, digestOf(sealedDoc))
 	}
 	want := []server.LinkCredentialHosts{{Name: "model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
-		KeyForm: "api_key", Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
+		KeyVariables: []string{"MODEL_API_KEY"}, Auth: &server.Auth{Scheme: "header", Header: "x-api-key"}}}
 	if !reflect.DeepEqual(a.CredentialHosts, want) || !slices.Equal(a.Placeholders, []string{"MODEL_API_KEY"}) {
 		t.Errorf("credential hosts %+v, placeholders %v; want %+v", a.CredentialHosts, a.Placeholders, want)
 	}
-	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header", "paths": []any{"/v1/*"}, "key_form": "api_key"}}) {
+	if got := members(a.Applied)["credentials"]; !reflect.DeepEqual(got, []any{map[string]any{"name": "model", "hosts": []any{"api.model.example"}, "scheme": "header", "paths": []any{"/v1/*"}}}) {
 		t.Errorf("applied credentials %v", got)
 	}
 	h.post(started(a.RunID, nil), applied(a.RunID, a.Applied), exited(a.RunID))

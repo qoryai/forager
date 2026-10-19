@@ -739,7 +739,7 @@ func (lr *linkRun) runAnswer(authority []byte) []byte {
 }
 
 // credentialHosts are the run answer's credential_hosts: one entry per credential held,
-// from the same uses as appliedOf's credentials, with the auth and key_form of a
+// from the same uses as appliedOf's credentials, with the auth and key_variables of a
 // credential from the server; nil when the run holds none.
 func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	if held == nil {
@@ -747,7 +747,7 @@ func credentialHosts(held *credential.Held) []server.LinkCredentialHosts {
 	}
 	var out []server.LinkCredentialHosts
 	for _, c := range held.Credentials() {
-		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, KeyForm: c.KeyForm}
+		e := server.LinkCredentialHosts{Name: c.Name, Hosts: c.Hosts, Placeholders: c.Placeholders, KeyVariables: c.KeyVariables}
 		if c.Stored {
 			e.Auth = &server.Auth{Scheme: c.Scheme, Header: c.Header, Username: c.Username}
 		}
@@ -845,9 +845,6 @@ func appliedOf(pol *policy.Loaded, beside []map[string][]string, held *credentia
 			}
 			if u.Paths != nil {
 				uses[i]["paths"] = u.Paths
-			}
-			if u.KeyForm != "" {
-				uses[i]["key_form"] = u.KeyForm
 			}
 		}
 		a["credentials"] = uses

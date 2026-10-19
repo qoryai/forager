@@ -239,25 +239,36 @@ func secretsOf(rt runtimes.Runtime) runtimes.Declarations {
 	return runtimes.Declarations{}
 }
 
-// schemeWords is how a refusal writes an auth scheme.
-func schemeWords(scheme string) string {
+// authWords is how a refusal writes how a value is set: in a header, with its name, as
+// a bearer or as basic, or with no auth.
+func authWords(scheme, header string) string {
 	switch scheme {
 	case "header":
-		return "in a header"
+		return "in the header " + header
 	case "":
 		return "with no auth"
 	}
 	return "as a " + scheme
 }
 
+// shownNames are names as a refusal lists them, each through [accesskey.ShownName].
+func shownNames(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = accesskey.ShownName(n, false)
+	}
+	return out
+}
+
 // chosen is the run answer's credentials and placeholders after the runtime's choice.
-// For each credential from the server with a key_form, the one declaration of rt with
-// that key_form and the credential's auth scheme chooses its variable, which is added
-// to the credential's placeholders and to the run's, each once. The header's name is
-// not compared. A credential whose key_form and scheme no declaration has, or whose
+// For each credential from the server with key_variables, the one declaration of rt
+// whose name is among them chooses its variable, which is added to the credential's
+// placeholders and to the run's, each once. A credential of which rt declares none of
+// the key_variables or more than one, whose auth differs from that declaration's in
+// the scheme or, for a header, in the header's name, compared without case, or whose
 // placeholders list another variable rt declares or reserves, is
 // [refusal.RunConfigurationInvalid] with the credential's name; a placeholder rt does
-// not declare stays. A credential without a key_form, every one of the machine's
+// not declare stays. A credential without key_variables, every one of the machine's
 // among them, is as the answer has it.
 func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, placeholders []string) ([]server.LinkCredentialHosts, []string, error) {
 	decl := secretsOf(rt)
@@ -265,46 +276,65 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 	var offered []string
 	for _, d := range decl.Declares {
 		declared = append(declared, d.Name)
-		if d.KeyForm != "" {
-			offered = append(offered, d.KeyForm+" "+schemeWords(d.Auth.Scheme)+" for "+d.Name)
-		}
+		offered = append(offered, d.Name)
 	}
 	names := slices.Clone(placeholders)
 	out := make([]server.LinkCredentialHosts, len(credentials))
 	for i, c := range credentials {
 		c.Placeholders = slices.Clone(c.Placeholders)
-		if c.KeyForm != "" {
-			scheme := ""
-			if c.Auth != nil {
-				scheme = c.Auth.Scheme
+		if len(c.KeyVariables) == 0 {
+			out[i] = c
+			continue
+		}
+		var auth server.Auth
+		if c.Auth != nil {
+			auth = *c.Auth
+		}
+		shown := accesskey.ShownName(c.Name, true)
+		listed := orList(shownNames(c.KeyVariables), ", ", " and ")
+		var matches []runtimes.Declaration
+		for _, d := range decl.Declares {
+			if slices.Contains(c.KeyVariables, d.Name) {
+				matches = append(matches, d)
 			}
-			shown := accesskey.ShownName(c.Name, true)
-			at := slices.IndexFunc(decl.Declares, func(d runtimes.Declaration) bool {
-				return d.KeyForm == c.KeyForm && d.Auth.Scheme == scheme
-			})
-			switch {
-			case at < 0 && len(offered) == 0:
+		}
+		switch {
+		case len(matches) == 0 && len(offered) == 0:
+			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"run a runtime that takes a key in one of the key_variables of the credential %s in Qory Apiary's run configuration, or remove its key_variables: the runtime %s declares no variable for a key, and the credential's key_variables are %s",
+				shown, rt.Name(), listed)
+		case len(matches) == 0:
+			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"add one of %s to the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s takes a key in these variables, and the credential's key_variables are %s",
+				orList(offered, ", ", " or "), shown, rt.Name(), listed)
+		case len(matches) > 1:
+			var both []string
+			for _, d := range matches {
+				both = append(both, d.Name)
+			}
+			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"keep only one of %s in the key_variables of the credential %s in Qory Apiary's run configuration: the runtime %s takes a key in each of them, and a key goes into one variable",
+				orList(both, ", ", " and "), shown, rt.Name())
+		}
+		d := matches[0]
+		if d.Auth.Scheme != auth.Scheme || (d.Auth.Scheme == "header" && !strings.EqualFold(d.Auth.Header, auth.Header)) {
+			return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
+				"set the auth of the credential %s in Qory Apiary's run configuration to send its value %s, or list another variable in its key_variables: the runtime %s sends the key of %s %s, and the credential's auth sends its value %s",
+				shown, authWords(d.Auth.Scheme, d.Auth.Header), rt.Name(), d.Name, authWords(d.Auth.Scheme, d.Auth.Header), authWords(auth.Scheme, auth.Header))
+		}
+		variable := d.Name
+		for _, p := range c.Placeholders {
+			if p != variable && slices.Contains(declared, p) {
 				return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"leave key_form out of the credential %s in Qory Apiary's run configuration, or run a runtime that reads a model key: the runtime %s declares no variable for one", shown, rt.Name())
-			case at < 0:
-				return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"give the credential %s in Qory Apiary's run configuration a key_form and auth.scheme that the runtime %s reads: %s; the credential has %s %s",
-					shown, rt.Name(), orList(offered, ", ", ", or "), c.KeyForm, schemeWords(scheme))
+					"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: its key_variables choose %s for the runtime %s, and a key goes into one variable",
+					accesskey.ShownName(p, false), shown, variable, rt.Name())
 			}
-			variable := decl.Declares[at].Name
-			for _, p := range c.Placeholders {
-				if p != variable && slices.Contains(declared, p) {
-					return nil, nil, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-						"remove %s from the placeholders of the credential %s in Qory Apiary's run configuration: its key_form %s and auth.scheme %s choose %s for the runtime %s, and a model key goes into one variable",
-						p, shown, c.KeyForm, scheme, variable, rt.Name())
-				}
-			}
-			if !slices.Contains(c.Placeholders, variable) {
-				c.Placeholders = append(c.Placeholders, variable)
-			}
-			if !slices.Contains(names, variable) {
-				names = append(names, variable)
-			}
+		}
+		if !slices.Contains(c.Placeholders, variable) {
+			c.Placeholders = append(c.Placeholders, variable)
+		}
+		if !slices.Contains(names, variable) {
+			names = append(names, variable)
 		}
 		out[i] = c
 	}
@@ -337,8 +367,8 @@ func credentialVariables(credentials []server.LinkCredentialHosts) []map[string]
 }
 
 // checkModelKey refuses a walled run whose gateway holds credentials for it, when its
-// runtime has a model section and declares model keys, the declarations with a
-// key_form, and the run has none: no value of a model key's variable reaches the
+// runtime has a model section and declares model keys, its declarations, and the run
+// has none: no value of a model key's variable reaches the
 // runtime, from what the run inherits, the run, the machine, the harness or the
 // runtime's preparation, and no credential of credentials, after [chosen], has a
 // model key's variable among its placeholders and a host of the runtime's model among
@@ -364,9 +394,6 @@ func checkModelKey(spec Spec, rt runtimes.Runtime, credentials []server.LinkCred
 	}
 	var keys, hosts []string
 	for _, d := range secretsOf(rt).Declares {
-		if d.KeyForm == "" {
-			continue
-		}
 		keys = append(keys, d.Name)
 		for _, h := range d.Hosts {
 			if !slices.Contains(hosts, h) {

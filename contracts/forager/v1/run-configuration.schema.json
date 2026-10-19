@@ -54,13 +54,17 @@
         "hosts": {"description": "The hosts the value is set on, each exact: a DNS name or an IP literal, never a *. pattern.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/credential_host"}},
         "paths": {"description": "The paths of those hosts the value is set on, in the policy's path grammar. Absent means every path.", "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^/[^*?#\\s]*\\*?$"}},
         "auth": {"description": "How the value is set on a request, a scheme from the closed set.", "$ref": "auth.schema.json"},
-        "key_form": {"description": "The form of the key, for a model credential: api_key, an API key, or access_token, a key from a subscription login. The session chooses the variable that receives the placeholder by it and auth.scheme: the one declaration of the run's runtime's descriptor with this key_form and that scheme, such as ANTHROPIC_API_KEY for api_key in a header for Claude Code. A key_form and scheme no declaration has, or placeholders that list another variable the runtime declares, are run_configuration_invalid. Absent, placeholders alone set the variables.", "$ref": "#/$defs/key_form"},
+        "key_variables": {"description": "The environment variables in which a runtime takes this credential's key, such as ANTHROPIC_API_KEY for Claude Code. The session chooses the one name among them that the run's runtime's descriptor declares, and gives it the credential's placeholder. A run whose runtime declares none of them or more than one, or whose declaration's auth differs from this credential's in the scheme or, for a header, the header's name, is run_configuration_invalid, and so are placeholders that list another variable the runtime declares. Absent, placeholders alone set the variables.", "$ref": "#/$defs/key_variables"},
         "placeholders": {"description": "Variables the enclosure gets with a value that is no credential, for a program that needs one set to start.", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"}}
       }
     },
-    "key_form": {
-      "description": "The form of a model credential's key: api_key, an API key, or access_token, a key from a subscription login.",
-      "enum": ["api_key", "access_token"]
+    "key_variables": {
+      "description": "The names of the environment variables in which a runtime takes a credential's key: 1 to 16, none twice.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"}
     },
     "credential_name": {
       "description": "A credential's name: 1 to 64 of a-z, 0-9, underscore, dot and dash, starting with a letter or a digit.",

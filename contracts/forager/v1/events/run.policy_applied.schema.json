@@ -27,8 +27,7 @@
           "argument": {"description": "The argument the policy's credentials entry passed, such as the repositories the secret is minted for: the same on every use of one credential. Absent when the entry passes none.", "type": "string", "minLength": 1, "maxLength": 4096},
           "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
-          "paths": {"type": "array", "items": {"type": "string"}},
-          "key_form": {"description": "The form of the key of a credential from the server whose run configuration entry has key_form: api_key or access_token. Absent for every other credential.", "$ref": "../run-configuration.schema.json#/$defs/key_form"}
+          "paths": {"type": "array", "items": {"type": "string"}}
         }
       }
     },
@@ -100,7 +99,7 @@
       }
     },
     "credential_variables": {
-      "description": "Behind a wall, the variables the agent's process receives as a placeholder for a credential the gateway holds, never a value: one entry per credential and variable, in the order of the run answer's credential_hosts and of each credential's placeholders, the variable a credential's key_form and auth choose after them when the credential does not list it. credential is the credential's name. An entry whose credential's name or variable contains an access key secret or a run key is left out, so the record carries neither. Absent when no entry is left. The session decides it; fixed when the run starts: every further policy_applied repeats it.",
+      "description": "Behind a wall, the variables the agent's process receives as a placeholder for a credential the gateway holds, never a value: one entry per credential and variable, in the order of the run answer's credential_hosts and of each credential's placeholders, the variable the session chooses from a credential's key_variables after them when the credential does not list it. credential is the credential's name. An entry whose credential's name or variable contains an access key secret or a run key is left out, so the record carries neither. Absent when no entry is left. The session decides it; fixed when the run starts: every further policy_applied repeats it.",
       "type": "array",
       "minItems": 1,
       "items": {

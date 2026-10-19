@@ -143,7 +143,7 @@ func TestADescriptorDeclaresItsSecretsThroughTheOptionalInterface(t *testing.T) 
 	doc := other + `secrets:
   declares:
     - {id: key, title: A key, name: OTHER_KEY, hosts: [api.example.com], paths: [/v2/*], auth: {scheme: header, header: x-key}}
-    - {id: login, title: A login, name: OTHER_LOGIN, hosts: [api.example.com], auth: {scheme: bearer}, key_form: access_token}
+    - {id: login, title: A login, name: OTHER_LOGIN, hosts: [api.example.com], auth: {scheme: bearer}}
   one_of:
     - {id: credential, required: true, of: [key, login]}
   reserves: [OTHER_SESSION]
@@ -161,7 +161,7 @@ func TestADescriptorDeclaresItsSecretsThroughTheOptionalInterface(t *testing.T) 
 	want := runtimes.Declarations{
 		Declares: []runtimes.Declaration{
 			{ID: "key", Title: "A key", Name: "OTHER_KEY", Hosts: []string{"api.example.com"}, Paths: []string{"/v2/*"}, Auth: runtimes.Auth{Scheme: "header", Header: "x-key"}},
-			{ID: "login", Title: "A login", Name: "OTHER_LOGIN", Hosts: []string{"api.example.com"}, Auth: runtimes.Auth{Scheme: "bearer"}, KeyForm: "access_token"},
+			{ID: "login", Title: "A login", Name: "OTHER_LOGIN", Hosts: []string{"api.example.com"}, Auth: runtimes.Auth{Scheme: "bearer"}},
 		},
 		OneOf:           []runtimes.Group{{ID: "credential", Required: true, Of: []string{"key", "login"}}},
 		Reserves:        []string{"OTHER_SESSION"},

@@ -19,13 +19,6 @@ release may change what an existing document does, and says so under Upgrading.
   now stops: pass the key in the machine's variables,
   or define a model credential with a placeholder. A run without a wall, or whose run
   answer has no `credential_hosts`, starts as before.
-- A run configuration credential with `key_form` now sets a variable: one with
-  `access_token` in a header for Claude Code, or a `key_form` for a runtime that
-  declares no model key, is `run_configuration_invalid`, and so is one whose
-  `placeholders` list another variable the runtime declares, such as
-  `CLAUDE_CODE_OAUTH_TOKEN` beside `api_key` in a header. A credential that lists the
-  chosen variable, such as `ANTHROPIC_API_KEY` beside `api_key` in a header, runs as
-  before.
 - `runtimes.json`: the claude runtime's `reserves` is `[]`, and `ANTHROPIC_AUTH_TOKEN` is
   its declaration `auth_token`, "Anthropic API key as a bearer". A server that lists a
   runtime's declarations shows a third one for Claude Code.
@@ -35,26 +28,21 @@ release may change what an existing document does, and says so under Upgrading.
 
 #### Added
 
-- A runtime descriptor's declaration may have `key_form`, `api_key` or `access_token`:
-  the form of model key the runtime reads from the variable, set by the declaration's
-  `auth.scheme`. The session refuses a descriptor with two declarations of one
-  `key_form` and scheme, and `runtimes.json` writes `key_form` for a declaration that
-  has one. The Claude Code descriptor's three declarations have one each: `api_key`,
-  `ANTHROPIC_API_KEY`, `api_key` in a header; `oauth_token`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `access_token` as a bearer; and the new `auth_token`, `ANTHROPIC_AUTH_TOKEN`, `api_key`
-  as a bearer, which was reserved.
-- The session chooses the variable of a credential from the server with `key_form`:
-  the one declaration of the run's runtime with that `key_form` and the credential's
-  `auth.scheme`. The variable joins the credential's placeholders and the run's, so a
-  value the run passes for it is `placeholder_conflict`, the endpoint rule counts the
-  credential as a model credential, and Claude Code's approval script covers
-  `ANTHROPIC_API_KEY` chosen this way. A run configuration credential with `key_form`
-  needs no `placeholders`.
+- The Claude Code descriptor declares `auth_token`, `ANTHROPIC_AUTH_TOKEN`, an API key
+  set as a bearer, which was reserved.
+- The session chooses the variable of a credential from the server with
+  `key_variables`: the one name among them that the run's runtime declares, whose
+  declaration's `auth` has the credential's scheme and, for a header, its header name.
+  None, two or more, or another auth is `run_configuration_invalid`, and so are
+  `placeholders` that list another variable the runtime declares. The variable joins
+  the credential's placeholders and the run's, so a value the run passes for it is
+  `placeholder_conflict`, the endpoint rule counts the credential as a model
+  credential, and Claude Code's approval script covers `ANTHROPIC_API_KEY` chosen this
+  way. A run configuration credential with `key_variables` needs no `placeholders`.
 - The link's run answer's `credential_hosts` has `auth` for a credential from the
-  server, and `key_form` when its entry has one. `server.LinkCredentialHosts` has `Auth`
-  and `KeyForm`.
-- `dev.qory.run.policy_applied`: each entry of `credentials` of a credential from the
-  server with `key_form` has it, and behind a wall `credential_variables` lists the
+  server, and `key_variables` when its entry has them. `server.LinkCredentialHosts` has
+  `Auth` and `KeyVariables`.
+- `dev.qory.run.policy_applied`: behind a wall `credential_variables` lists the
   variable each credential's placeholder is in, `{credential, name}`, leaving out an
   entry whose credential's name or variable contains an access key secret or a run
   key. The gateway leaves `credential_variables`
@@ -111,9 +99,10 @@ release may change what an existing document does, and says so under Upgrading.
 - The link's run request has `images.allow`; its answer has `relay_image`, the image the
   relay starts from, and `reference: true` on an `image` the policy names by reference.
 - A run configuration's `credentials`: at most 8 credentials whose values the server
-  stores for the run, each `{name, hosts, paths, auth, key_form, placeholders}`, with
-  exact hosts and no value. `key_form`, optional, is the form of the key for a model
-  credential, `api_key` or `access_token`. Forager checks the member against
+  stores for the run, each `{name, hosts, paths, auth, key_variables, placeholders}`,
+  with exact hosts and no value. `key_variables`, optional, are the names of the
+  environment variables in which a runtime takes the credential's key, 1 to 16, upper
+  case, none twice. Forager checks the member against
   `run-configuration.schema.json`, and refuses a name twice and an `auth.header` that
   frames the request or that the proxy sets, and a placeholder that
   `denied-variables.json` covers, each `run_configuration_invalid`.

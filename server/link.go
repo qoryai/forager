@@ -165,15 +165,16 @@ type LinkImage struct {
 // credential_hosts has it: its name, its hosts as the proxy matches them, which are the
 // hosts applied.credentials lists for it, and the variables the session sets to a
 // placeholder for it. For a credential from the server, Auth is how the proxy sets its
-// value and KeyForm its run configuration entry's key_form, by which and Auth.Scheme the
-// session chooses one more variable for the placeholder; both are empty for a
-// credential of the machine's. Names and hosts alone, never a secret.
+// value and KeyVariables its run configuration entry's key_variables, among which the
+// session chooses one more variable for the placeholder by the run's runtime's
+// declarations and Auth; both are empty for a credential of the machine's. Names and
+// hosts alone, never a secret.
 type LinkCredentialHosts struct {
 	Name         string   `json:"name"`
 	Hosts        []string `json:"hosts"`
 	Placeholders []string `json:"placeholders"`
 	Auth         *Auth    `json:"auth,omitempty"`
-	KeyForm      string   `json:"key_form,omitempty"`
+	KeyVariables []string `json:"key_variables,omitempty"`
 }
 
 // LinkRunAnswer is what the gateway answers a run request it accepts,

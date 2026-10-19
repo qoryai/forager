@@ -709,8 +709,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return fail(err)
 	}
 	reserved := slices.Concat(answer.Reserved, reservedOf(spec.Gateway))
-	// The runtime chooses, by key_form and auth, the variable that gets the placeholder
-	// of each credential from the server with a key_form: from here on it is one of the
+	// The runtime chooses, among a credential's key_variables, the variable that gets the placeholder
+	// of each credential from the server with key_variables: from here on it is one of the
 	// credential's placeholders and of the run's.
 	credentialHosts, placeholderNames, err := chosen(rt, answer.CredentialHosts, answer.Placeholders)
 	if err != nil {

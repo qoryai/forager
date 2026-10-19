@@ -13,14 +13,14 @@ import (
 // storedModel is a credential from the server for api.model.example.
 func storedModel(value string) Stored {
 	return Stored{Name: "server-model", Hosts: []string{"api.model.example"}, Scheme: "header", Header: "x-api-key", Placeholders: []string{"MODEL_API_KEY"},
-		KeyForm: "api_key", Value: func() []byte { return []byte(value) }}
+		KeyVariables: []string{"MODEL_API_KEY"}, Value: func() []byte { return []byte(value) }}
 }
 
 // TestACredentialFromTheServerReplacesTheMachinesOnItsHost pins the precedence: a
 // machine's credential whose hosts claim a host of a credential from the server, the
 // same host or one above or below it, is not read, and the server's is the one use on
-// the host, its value and no token, with its key_form, and the credential with its
-// scheme, header and key_form; a machine's credential for another host stays; an
+// the host, its value and no token, with its key_variables, and the credential with
+// its scheme, header and key_variables; a machine's credential for another host stays; an
 // adapter whose answer claims the host is dropped.
 func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 	t.Setenv("MODEL_TOKEN", "a-token")
@@ -47,7 +47,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				t.Fatalf("uses %v, want plain and server-model", names)
 			}
 			u := held.Uses[1]
-			if !u.Stored || u.Token() != "" || string(u.Value()) != "server-value" || u.Header != "x-api-key" || u.Scheme != "header" || u.KeyForm != "api_key" {
+			if !u.Stored || u.Token() != "" || string(u.Value()) != "server-value" || u.Header != "x-api-key" || u.Scheme != "header" || !slices.Equal(u.KeyVariables, []string{"MODEL_API_KEY"}) {
 				t.Errorf("the server's use %+v", u)
 			}
 			if held.Uses[0].Value() != nil || held.Uses[0].Token() != "a-token" {
@@ -57,7 +57,7 @@ func TestACredentialFromTheServerReplacesTheMachinesOnItsHost(t *testing.T) {
 				t.Errorf("placeholders %v, want the server's alone", held.Placeholders)
 			}
 			want := []Credential{{Name: "plain", Hosts: []string{"plain.example"}, Placeholders: []string{}}, {Name: "server-model", Hosts: []string{"api.model.example"}, Placeholders: []string{"MODEL_API_KEY"},
-				Stored: true, Scheme: "header", Header: "x-api-key", KeyForm: "api_key"}}
+				Stored: true, Scheme: "header", Header: "x-api-key", KeyVariables: []string{"MODEL_API_KEY"}}}
 			if got := held.Credentials(); !reflect.DeepEqual(got, want) {
 				t.Errorf("credentials %+v, want %+v", got, want)
 			}

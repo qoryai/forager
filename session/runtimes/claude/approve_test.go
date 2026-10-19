@@ -31,9 +31,9 @@ func TestClaudeCodeDeclaresItsModelCredential(t *testing.T) {
 	d := s.Secrets()
 	var names []string
 	for _, dc := range d.Declares {
-		names = append(names, dc.ID+"="+dc.Name+" "+dc.KeyForm+" "+dc.Auth.Scheme)
+		names = append(names, dc.ID+"="+dc.Name+" "+dc.Auth.Scheme)
 	}
-	if want := []string{"api_key=ANTHROPIC_API_KEY api_key header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN access_token bearer", "auth_token=ANTHROPIC_AUTH_TOKEN api_key bearer"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"api_key=ANTHROPIC_API_KEY header", "oauth_token=CLAUDE_CODE_OAUTH_TOKEN bearer", "auth_token=ANTHROPIC_AUTH_TOKEN bearer"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("declares %v, want %v", names, want)
 	}
 	if len(d.OneOf) != 0 {
