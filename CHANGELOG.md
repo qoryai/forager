@@ -176,7 +176,9 @@ release may change what an existing document does, and says so under Upgrading.
   that passes `--settings` more than once, in either form and anywhere in its
   arguments, now does not start, with "runtime claude: This launch passes --settings
   more than once, and Claude Code reads only the last one, so the run does not start.
-  Pass one --settings file." `runtimes.Attach.Walled` is set for a walled run. An
+  Pass one --settings file." In a walled launch whose last argument is a bare
+  `--settings`, the session gives that flag the path of the run's settings, so the
+  launch passes one `--settings`. `runtimes.Attach.Walled` is set for a walled run. An
   unwalled launch starts as before.
 - A walled run bound a mount or a workspace through a link that an agent of an earlier
   walled run, already ended, had left in a place it could write: the engine followed
