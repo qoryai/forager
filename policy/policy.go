@@ -417,15 +417,38 @@ func EndpointHost(raw string) (string, bool) {
 
 // CredentialFor reports whether a credential with hosts, entries in the allow list's
 // grammar, is for host: host's form under [Host], matched against hosts by [Match]. A
-// host with no form is in no credential's hosts. The gateway's proxy picks a request's
-// credential by this rule.
+// host with no form is in no credential's hosts. A private host is in a credential's
+// hosts only through an entry equal to it, compared lower-case, and never through a
+// "*." pattern. A private host is an IP literal in 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16 or fc00::/7, the ranges [netip.Addr.IsPrivate] reports; a name of one
+// label, such as litellm; or a name that ends in ".local". Of the three, only a
+// ".local" name can get a result other than [Match]'s: Match compares an IP literal
+// only to an identical entry, and a "*." pattern matches no name of one label. The
+// gateway's proxy picks a request's credential by this rule.
 func CredentialFor(hosts []string, host string) bool {
 	h, ok := Host(host)
 	if !ok {
 		return false
 	}
+	if private(h) {
+		for _, entry := range hosts {
+			if strings.ToLower(entry) == h {
+				return true
+			}
+		}
+		return false
+	}
 	_, ok = Match(hosts, h)
 	return ok
+}
+
+// private reports whether h, a host in [Host]'s form, is a private host as
+// [CredentialFor] reads one.
+func private(h string) bool {
+	if a, err := netip.ParseAddr(h); err == nil {
+		return a.IsPrivate()
+	}
+	return !strings.Contains(h, ".") || strings.HasSuffix(h, ".local")
 }
 
 // embedded are the IPv6 ranges a host has no form in, each holding an IPv4 address in

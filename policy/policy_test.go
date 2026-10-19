@@ -353,6 +353,49 @@ func TestCredentialForMatchesAsTheProxyDoes(t *testing.T) {
 	}
 }
 
+// TestCredentialForGivesAPrivateHostOnlyAnExactEntry pins the private hosts: an IP
+// literal in a private range, a name of one label and a ".local" name are each covered
+// only by an entry equal to them, never by a "*." pattern, while a public name is still
+// covered by a pattern.
+func TestCredentialForGivesAPrivateHostOnlyAnExactEntry(t *testing.T) {
+	for _, c := range []struct {
+		hosts []string
+		host  string
+		ok    bool
+	}{
+		{[]string{"*.local"}, "litellm.local", false},
+		{[]string{"*.local"}, "a.litellm.local", false},
+		{[]string{"*.litellm.local"}, "a.litellm.local", false},
+		{[]string{"litellm.local"}, "litellm.local", true},
+		{[]string{"LiteLLM.local"}, "litellm.local", true},
+		{[]string{"litellm.local"}, "LiteLLM.Local.", true},
+		{[]string{"*.local", "litellm.local"}, "litellm.local", true},
+		{[]string{"litellm.local"}, "other.local", false},
+		{[]string{"*.example.com"}, "api.example.com", true},
+		{[]string{"*.local.example.com"}, "api.local.example.com", true},
+		{[]string{"*.example.com"}, "api.example.com.local", false},
+		{[]string{"10.0.0.5"}, "10.0.0.5", true},
+		{[]string{"10.0.0.6"}, "10.0.0.5", false},
+		{[]string{"*.0.0.5"}, "10.0.0.5", false},
+		{[]string{"10.0.0.0/8"}, "10.0.0.5", false},
+		{[]string{"172.16.0.1"}, "172.16.0.1", true},
+		{[]string{"192.168.1.10"}, "192.168.1.10", true},
+		{[]string{"litellm"}, "litellm", true},
+		{[]string{"LiteLLM"}, "litellm.", true},
+		{[]string{"*.litellm"}, "litellm", false},
+		{[]string{"litellm.local"}, "litellm", false},
+		{[]string{"fd00::5"}, "fd00::5", true},
+		{[]string{"fd00::5"}, "FD00::5", true},
+		{[]string{"fd00::6"}, "fd00::5", false},
+		{[]string{"fc00::1"}, "fc00::1", true},
+		{[]string{"*.local"}, "fd00::5", false},
+	} {
+		if ok := policy.CredentialFor(c.hosts, c.host); ok != c.ok {
+			t.Errorf("CredentialFor(%q, %q) = %v; want %v", c.hosts, c.host, ok, c.ok)
+		}
+	}
+}
+
 // TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
 // or a suffix above it, a pattern under the same pattern or a suffix above it, a suffix
 // never covers its own apex, and an IP literal stands under an identical entry alone,

@@ -482,6 +482,14 @@ host's GraphQL endpoint, is not reached. A definition may set `hosts` and `paths
 adapter: the most the adapter may claim. For `env` and `file`, which have no adapter to
 define the use, the definition's `hosts`, scheme and `paths` are the use itself.
 
+**Private hosts.** The proxy sets a credential on a private host only through a `hosts`
+entry equal to the host, compared without regard to case, and never through a `*.`
+pattern. A private host is an IP literal in `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16` or `fc00::/7`, a name of one label such as `litellm`, or a name that
+ends in `.local`. A credential whose `hosts` are `["*.local"]` sets nothing on
+`litellm.local`; list `litellm.local` itself. A credential's key is sent only over TLS
+whose certificate the gateway machine's system trust store verifies.
+
 Before the run starts every selected credential is resolved, and any of these is
 no run: a name the machine does not define, an argument it does not provide for, a host
 two credentials claim, a claim above the definition's, and under `enforce` a host the
