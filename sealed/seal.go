@@ -157,7 +157,7 @@ func (s Sealing) Plaintext() ([]byte, error) {
 		// Unreachable while plaintextSize bounds the length: append moved the buffer,
 		// and the old one, which this package cannot reach, has the values.
 		clear(b[:cap(b)])
-		return nil, errors.New("the plaintext outgrew its buffer")
+		return nil, errors.New("report this bug in package sealed to the Forager maintainers: the plaintext is longer than its buffer")
 	}
 	return b, nil
 }
@@ -192,7 +192,7 @@ func Seal(s Sealing, signer *accesskey.Key) ([]byte, error) { return seal(s, sig
 
 func seal(s Sealing, signer *accesskey.Key, send sender) ([]byte, error) {
 	if signer == nil {
-		return nil, errors.New("sealing needs the server's signing key")
+		return nil, errors.New("pass the server's signing key to Seal; sealing needs it")
 	}
 	u, err := s.PublicKey.X25519()
 	if err != nil {

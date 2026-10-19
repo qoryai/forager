@@ -106,18 +106,27 @@ func TestTheSecretsRequestIsSignedAndItsAnswerVerified(t *testing.T) {
 // TestASecretsRequestOutsideItsFormIsNotSent pins Body's checks.
 func TestASecretsRequestOutsideItsFormIsNotSent(t *testing.T) {
 	ok := server.SecretsRequest{Version: 1, RunID: runID, RunConfiguration: "sha256=" + strings.Repeat("a", 64), Credentials: []string{"model"}}
-	for name, change := range map[string]func(r *server.SecretsRequest){
-		"another run id": func(r *server.SecretsRequest) { r.RunID = "not-a-run" },
-		"another digest": func(r *server.SecretsRequest) { r.RunConfiguration = "" },
-		"no credential":  func(r *server.SecretsRequest) { r.Credentials = nil },
-		"nine":           func(r *server.SecretsRequest) { r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} },
-		"a name twice":   func(r *server.SecretsRequest) { r.Credentials = []string{"a", "a"} },
-		"before 1970":    func(r *server.SecretsRequest) { r.Timestamp = -1 },
+	for name, c := range map[string]struct {
+		change func(r *server.SecretsRequest)
+		want   string
+	}{
+		"another run id": {func(r *server.SecretsRequest) { r.RunID = "not-a-run" },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the run id is not a UUID in the canonical lower-case form"},
+		"another digest": {func(r *server.SecretsRequest) { r.RunConfiguration = "" },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the digest is not sha256= and 64 hex digits"},
+		"no credential": {func(r *server.SecretsRequest) { r.Credentials = nil },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 0 credentials, and a request lists 1 to 8"},
+		"nine": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists 9 credentials, and a request lists 1 to 8"},
+		"a name twice": {func(r *server.SecretsRequest) { r.Credentials = []string{"a", "a"} },
+			"report this bug in the gateway's secrets request to the Forager maintainers; the request lists a credential twice"},
+		"before 1970": {func(r *server.SecretsRequest) { r.Timestamp = -1 },
+			"the secrets request: set this machine's clock to the right time; the timestamp is before 1970"},
 	} {
 		r := ok
-		change(&r)
-		if _, err := r.Body(); err == nil {
-			t.Errorf("%s: sent", name)
+		c.change(&r)
+		if _, err := r.Body(); err == nil || err.Error() != c.want {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
 	if _, err := ok.Body(); err != nil {

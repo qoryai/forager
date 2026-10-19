@@ -917,7 +917,7 @@ func deny(w http.ResponseWriter, d Decision) {
 		return
 	}
 	if d.Rule == GuardRule {
-		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: link-local addresses are never reached through it, and the gateway's machine only for a host the policy's allow list names\n", d.Host, d.Port)
+		fmt.Fprintf(w, "qory: egress to %s:%d denied by the gateway: to reach the gateway's machine, list the host itself, not a *. pattern, in the allow list of the node's policy, and allow it in the run's policy; the gateway reaches its machine only for such a host, and never a link-local address\n", d.Host, d.Port)
 		return
 	}
 	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)

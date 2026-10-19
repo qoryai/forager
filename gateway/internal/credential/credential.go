@@ -281,7 +281,7 @@ func (h *Held) check(mode policy.Mode, allow []string) error {
 			for _, other := range h.Uses[:i] {
 				for _, theirs := range other.Hosts {
 					if policy.Covers(theirs, host) || policy.Covers(host, theirs) {
-						return fmt.Errorf("the credentials %s and %s both claim %s; a host has one", accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false), accesskey.ShownValue(host, false))
+						return fmt.Errorf("claim %s in only one of the credentials %s and %s; both claim it, and a host has one", accesskey.ShownValue(host, false), accesskey.ShownName(other.Name, false), accesskey.ShownName(u.Name, false))
 					}
 				}
 			}

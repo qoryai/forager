@@ -29,17 +29,17 @@ type SecretsRequest struct {
 func (r SecretsRequest) Body() ([]byte, error) {
 	switch {
 	case !runIDShape.MatchString(r.RunID):
-		return nil, errors.New("the secrets request: the run id is not a UUID in the canonical lower-case form")
+		return nil, errors.New("report this bug in the gateway's secrets request to the Forager maintainers; the run id is not a UUID in the canonical lower-case form")
 	case !digestShape.MatchString(r.RunConfiguration):
-		return nil, errors.New("the secrets request: the digest is not sha256= and 64 hex digits")
+		return nil, errors.New("report this bug in the gateway's secrets request to the Forager maintainers; the digest is not sha256= and 64 hex digits")
 	case len(r.Credentials) < 1 || len(r.Credentials) > sealed.MaxCredentials:
-		return nil, fmt.Errorf("the secrets request lists %d credentials, and a request lists 1 to %d", len(r.Credentials), sealed.MaxCredentials)
+		return nil, fmt.Errorf("report this bug in the gateway's secrets request to the Forager maintainers; the request lists %d credentials, and a request lists 1 to %d", len(r.Credentials), sealed.MaxCredentials)
 	case r.Timestamp < 0:
-		return nil, errors.New("the secrets request: the timestamp is before 1970")
+		return nil, errors.New("the secrets request: set this machine's clock to the right time; the timestamp is before 1970")
 	}
 	for i, name := range r.Credentials {
 		if slices.Contains(r.Credentials[:i], name) {
-			return nil, errors.New("the secrets request lists a credential twice")
+			return nil, errors.New("report this bug in the gateway's secrets request to the Forager maintainers; the request lists a credential twice")
 		}
 	}
 	return json.Marshal(r)
