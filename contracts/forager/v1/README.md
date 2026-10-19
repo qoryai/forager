@@ -1568,8 +1568,11 @@ there too, then a credential with two values, its digest and its credentials aga
 request, their order, a value for a credential the request did not ask for, and a value
 missing. The rule for a value set in a header is checked where the value is set. `fixtures/sealed/` contains a sealed answer to the fixture access key, signed
 under the fixture signing key, with its vectors and an envelope refused at each step
-(§Fixtures). This revision defines the request, its answer and the plaintext; Forager
-sends no secrets request and opens no envelope.
+(§Fixtures). This revision defines the request, its answer and the plaintext. Package
+`sealed` implements both sides: `sealed.Open` makes the checks of whoever opens the
+envelope, in that order, all but the rule for a value set in a header, and returns the
+values as bytes it can clear; `sealed.Seal` seals and signs an answer. Forager sends no
+secrets request, and no Forager component calls `sealed.Open`.
 
 **Through a gateway.** Each node or node pool records one of three choices: `direct`,
 `default`, or a named gateway, `ng_` followed by 16 lower-case Crockford base32

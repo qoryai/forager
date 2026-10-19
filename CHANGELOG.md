@@ -45,6 +45,11 @@ release may change what an existing document does, and says so under Upgrading.
   the plaintext it opens to, `sealed-plaintext.schema.json`. `fixtures/sealed/` contains a
   sealed answer with its vectors and an envelope refused at each step. Forager sends no
   secrets request.
+- Package `sealed`: `sealed.Open` checks a secrets answer in the contract's order and
+  opens it with an access key, returning the values by credential name as bytes that
+  `Values.Clear` overwrites and that no format verb prints; `sealed.Seal` seals and signs
+  an answer, for a receiver and the tests. Each refusal is one of the package's errors,
+  and no error contains a value. No Forager component calls `sealed.Open`.
 
 #### Changed
 
