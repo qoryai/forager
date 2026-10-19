@@ -17,6 +17,7 @@ import (
 	"github.com/qoryai/forager/event"
 	"github.com/qoryai/forager/gateway/internal/credential"
 	"github.com/qoryai/forager/gateway/internal/proxy"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/gateway/internal/run"
 	"github.com/qoryai/forager/gateway/internal/stream"
 	"github.com/qoryai/forager/gateway/internal/tool"
@@ -438,6 +439,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 	if lr.px, err = proxy.New(pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, pol.Policy.Egress.Deny, lr.observe); err != nil {
 		return fail(err)
 	}
+	lr.px.ReportPanics(routine.ForRun(g.report, req.RunID))
 	if g.cfg.upstreamRoots != nil {
 		lr.px.TrustUpstream(g.cfg.upstreamRoots)
 	}
@@ -547,7 +549,7 @@ func (lr *linkRun) arm() {
 	lr.mu.Lock()
 	lr.last = time.Now()
 	if !lr.ended {
-		lr.timer = time.AfterFunc(lr.g.quiet, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet)
 	}
 	lr.mu.Unlock()
 	if lr.live != nil {
@@ -591,6 +593,11 @@ func (lr *linkRun) touch() {
 	lr.mu.Unlock()
 }
 
+// watchAfter runs watch after d, a panic in it reported under the run's id.
+func (lr *linkRun) watchAfter(d time.Duration) *time.Timer {
+	return time.AfterFunc(d, func() { routine.Do(routine.ForRun(lr.g.report, lr.id), lr.watch) })
+}
+
 // watch ends the run when its session has asked nothing of it for the quiet time, and
 // otherwise looks again when that time would be up.
 func (lr *linkRun) watch() {
@@ -600,7 +607,7 @@ func (lr *linkRun) watch() {
 		return
 	}
 	if idle := time.Since(lr.last); idle < lr.g.quiet {
-		lr.timer = time.AfterFunc(lr.g.quiet-idle, lr.watch)
+		lr.timer = lr.watchAfter(lr.g.quiet - idle)
 		lr.mu.Unlock()
 		return
 	}
@@ -633,9 +640,12 @@ func (lr *linkRun) end(e ending) {
 	startedAt := lr.startedAt
 	discarded := lr.discarded
 	lr.mu.Unlock()
-	go func() {
+	report := routine.ForRun(lr.g.report, lr.id)
+	routine.Go(report, func() {
 		defer close(lr.done)
-		lr.release()
+		// A panic while the run lets go of what it holds still flushes its record and,
+		// on the one address, retires it.
+		routine.Do(report, lr.release)
 		if discarded {
 			if err := lr.st.Discard(lr.g.base); err != nil {
 				lr.g.report(fmt.Sprintf("run %s: closing its record: %v", lr.id, accesskey.ShownError(err)))
@@ -661,7 +671,7 @@ func (lr *linkRun) end(e ending) {
 			// Flushed: the gateway lets go of it.
 			lr.g.retire(lr)
 		}
-	}()
+	})
 }
 
 // runAnswerDoc is the run answer as the gateway writes it,

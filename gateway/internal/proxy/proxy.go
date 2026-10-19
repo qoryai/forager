@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -156,6 +157,8 @@ type Proxy struct {
 	// stopped ends with Close, and with it the requests a terminated tunnel sends on.
 	stopped context.Context
 	stop    context.CancelFunc
+	// panics, when set, gets a panic of the proxy's goroutines ([Proxy.ReportPanics]).
+	panics atomic.Pointer[func(string)]
 }
 
 // tunnel is one open connection: the decision that opened it and the ends to close.
@@ -230,7 +233,8 @@ func newProxy(mode policy.Mode, allow, deny []string, observe func(Decision)) (*
 	}}
 	p.dial = d.DialContext
 	p.hosts = hostsFile
-	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
+	// A panic is reported without its value, which net/http would log.
+	p.srv = &http.Server{Handler: routine.Handler(p.reportPanic, p), ReadHeaderTimeout: 30 * time.Second}
 	return p, nil
 }
 
@@ -310,10 +314,24 @@ func unzoned(host string) net.IP {
 // serve serves the proxy's connections from ln until Close.
 func (p *Proxy) serve(ln net.Listener) {
 	p.wg.Add(1)
-	go func() {
+	routine.Go(p.reportPanic, func() {
 		defer p.wg.Done()
 		p.srv.Serve(ln)
-	}()
+	})
+}
+
+// ReportPanics sets where a panic of the proxy's goroutines is reported: the gateway
+// passes its report under the run's id. Unset, the report goes to standard error.
+func (p *Proxy) ReportPanics(report func(string)) { p.panics.Store(&report) }
+
+// reportPanic reports a panic of the proxy's goroutines where [Proxy.ReportPanics] set
+// when the panic came.
+func (p *Proxy) reportPanic(line string) {
+	if r := p.panics.Load(); r != nil {
+		(*r)(line)
+		return
+	}
+	routine.Stderr(line)
 }
 
 // Addr is the address the proxy listens on, host:port, or empty for a proxy [New]
@@ -367,7 +385,26 @@ func (p *Proxy) Close() error {
 		err = p.srv.Close()
 	}
 	p.wg.Wait()
+	// No pooled connection outlives the run: one to a terminated host may have carried
+	// the run's credential. A connection that goes idle later is closed as it does.
+	closeIdle(p.upstream())
+	if t := p.term.Load(); t != nil {
+		for _, tl := range t.tools {
+			closeIdle(tl.transport)
+		}
+	}
 	return err
+}
+
+// idleTimeout is how long a pooled upstream connection waits for the next request
+// before it is closed; the run's end closes every idle one at once ([Proxy.Close]).
+const idleTimeout = 90 * time.Second
+
+// closeIdle closes rt's idle connections, when it has any to close.
+func closeIdle(rt http.RoundTripper) {
+	if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // Guard makes the proxy refuse the link-local range and the cloud metadata addresses
@@ -695,7 +732,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, h := range hopByHop {
 		out.Header.Del(h)
 	}
-	resp, err := p.transport().RoundTrip(out)
+	// The transport is the request's alone, and its connection closes once the request
+	// ends: deferred before the body's close, it runs after it.
+	tr := p.transport()
+	defer tr.CloseIdleConnections()
+	resp, err := tr.RoundTrip(out)
 	if err != nil {
 		d = failed(d, err)
 		p.observe(d)
@@ -758,6 +799,8 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// net/http does not close a hijacked connection, after a panic either.
+		defer client.Close()
 		// Tracked before the client hears 200: a reload that lands once the client has
 		// the line, and before the tunnel is on the list, would otherwise miss it.
 		t := p.track(d, true, client)
@@ -801,6 +844,9 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	// Closed after a panic too, as above.
+	defer client.Close()
+	defer upstream.Close()
 	// Tracked before the client hears 200, for the same reason as above.
 	t := p.track(d, false, client, upstream)
 	defer p.untrack(t)
@@ -812,7 +858,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
-	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
+	relay(p.reportPanic, client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
 // sent is the host of an authority as sent: without user information, port and
@@ -825,23 +871,24 @@ func sent(authority string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
 }
 
-// relay copies both ways and closes both ends when either side closes.
-func relay(client, upstream net.Conn, buffered int, r io.Reader) {
+// relay copies both ways and closes both ends when either side closes. A panic of either
+// copy closes both ends too, and report gets it.
+func relay(report func(string), client, upstream net.Conn, buffered int, r io.Reader) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() {
+	routine.Go(report, func() {
 		defer wg.Done()
 		if buffered > 0 {
 			io.CopyN(upstream, r, int64(buffered))
 		}
 		io.Copy(upstream, client)
 		closeWrite(upstream)
-	}()
-	go func() {
+	}, client, upstream)
+	routine.Go(report, func() {
 		defer wg.Done()
 		io.Copy(client, upstream)
 		closeWrite(client)
-	}()
+	}, client, upstream)
 	wg.Wait()
 	client.Close()
 	upstream.Close()
@@ -981,5 +1028,5 @@ var hopByHop = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-A
 
 // transport forwards plain requests upstream, directly and never through another proxy.
 func (p *Proxy) transport() *http.Transport {
-	return &http.Transport{Proxy: nil, DialContext: p.dialHost, DisableCompression: true}
+	return &http.Transport{Proxy: nil, DialContext: p.dialHost, DisableCompression: true, IdleConnTimeout: idleTimeout}
 }

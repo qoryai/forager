@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 )
 
@@ -59,6 +60,9 @@ type Listener struct {
 	pending map[net.Conn]struct{}
 	closed  bool
 	wg      sync.WaitGroup
+	// panics, when set, gets a panic of the listener's goroutines
+	// ([Listener.ReportPanics]).
+	panics atomic.Pointer[func(string)]
 }
 
 // registered is a run the listener serves: its secret, compared in full in constant
@@ -81,8 +85,22 @@ func NewListener(addr string, report func(string)) (*Listener, error) {
 	l := &Listener{ln: ln, report: report, runs: map[[sha256.Size]byte]*registered{}, pending: map[net.Conn]struct{}{}}
 	l.wait.Store(int64(preambleWait))
 	l.wg.Add(1)
-	go l.accept()
+	routine.Go(l.reportPanic, l.accept)
 	return l, nil
+}
+
+// ReportPanics sets where a panic of the listener's goroutines is reported. Unset, the
+// report goes to standard error.
+func (l *Listener) ReportPanics(report func(string)) { l.panics.Store(&report) }
+
+// reportPanic reports a panic of the listener's goroutines where [Listener.ReportPanics]
+// set when the panic came.
+func (l *Listener) reportPanic(line string) {
+	if r := l.panics.Load(); r != nil {
+		(*r)(line)
+		return
+	}
+	routine.Stderr(line)
 }
 
 // Addr is the address the listener listens on, host:port.
@@ -151,7 +169,7 @@ func (l *Listener) Serve(c net.Conn, guardedOnly bool) {
 	l.pending[c] = struct{}{}
 	l.wg.Add(1)
 	l.mu.Unlock()
-	go l.dispatch(c, guardedOnly)
+	routine.Go(l.reportPanic, func() { l.dispatch(c, guardedOnly) }, c)
 }
 
 // Lookup is the proxy of the live run whose secret is secret, or nil: the secret's
@@ -181,39 +199,43 @@ func (l *Listener) find(secret []byte, guardedOnly bool) *Proxy {
 // holds up no one else.
 func (l *Listener) accept() {
 	defer l.wg.Done()
-	var backoff time.Duration
-	for {
-		c, err := l.ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			// What http.Server does for a failed accept, such as one out of descriptors.
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
-			continue
-		}
-		backoff = 0
-		l.mu.Lock()
-		if l.closed {
-			l.mu.Unlock()
-			c.Close()
-			return
-		}
-		l.pending[c] = struct{}{}
-		l.wg.Add(1)
-		l.mu.Unlock()
-		go l.dispatch(c, false)
+	routine.Accept(l.reportPanic, l.take)
+}
+
+// take accepts one connection into *c and reads its preamble in its own goroutine, for
+// [routine.Accept], which waits after a failed accept, such as one out of descriptors,
+// as http.Server does.
+func (l *Listener) take(c *net.Conn) (more, failed bool) {
+	conn, err := l.ln.Accept()
+	if err != nil {
+		return !errors.Is(err, net.ErrClosed), true
 	}
+	*c = conn
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		conn.Close()
+		return false, false
+	}
+	l.pending[conn] = struct{}{}
+	l.wg.Add(1)
+	routine.Go(l.reportPanic, func() { l.dispatch(conn, false) }, conn)
+	return true, false
 }
 
 // dispatch reads c's preamble and hands c to the run it names, or closes it.
 func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 	defer l.wg.Done()
+	forgotten := false
+	defer func() {
+		// After a panic in open.
+		if !forgotten {
+			l.forget(c)
+		}
+	}()
 	p, r, why := l.open(c, guardedOnly)
-	l.mu.Lock()
-	delete(l.pending, c)
-	l.mu.Unlock()
+	l.forget(c)
+	forgotten = true
 	if p == nil {
 		c.Close()
 		if l.report != nil {
@@ -222,6 +244,13 @@ func (l *Listener) dispatch(c net.Conn, guardedOnly bool) {
 		return
 	}
 	p.in.deliver(&relayed{Conn: c, r: r})
+}
+
+// forget takes c off the connections whose preamble is being read.
+func (l *Listener) forget(c net.Conn) {
+	l.mu.Lock()
+	delete(l.pending, c)
+	l.mu.Unlock()
 }
 
 // open reads the preamble within the listener's wait, and finds the run whose secret

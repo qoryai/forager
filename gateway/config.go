@@ -53,8 +53,8 @@ type Config struct {
 	// output this way.
 	Events io.Writer
 	// Report receives one line per thing the gateway reports to its user; nil means
-	// Stderr. It never receives a proxy secret, an access key, a run key or an
-	// image reference.
+	// Stderr. A panic's report has the stack on the lines after its first. It never
+	// receives a proxy secret, an access key, a run key or an image reference.
 	Report func(string)
 	// Heartbeat is the interval the link's discovery announces, and each run's
 	// registration toward the Server: a whole number of seconds from 1 to 300; zero means 30 seconds. The

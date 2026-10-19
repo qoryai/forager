@@ -735,3 +735,31 @@ func TestTheFileSinkPrintsAPhraseForASecretInItsDirectory(t *testing.T) {
 		check("a delivered.log that is a directory", err, syscall.EISDIR)
 	}
 }
+
+// TestAPanicInTheWorkerEndsOneBatchAlone pins that a panic while a batch is delivered
+// is reported with the stack and without the panic's value, and that the worker
+// delivers the next batch.
+func TestAPanicInTheWorkerEndsOneBatchAlone(t *testing.T) {
+	g := &linkGateway{answer: func(int) (int, string) { return http.StatusAccepted, "" }}
+	var calls atomic.Int32
+	reports := make(chan string, 4)
+	w := linkSink(t, g, sink.Config{Report: func(line string) { reports <- line }, OnDigests: func(server.Digests) {
+		if calls.Add(1) == 1 {
+			panic("Authorization: Bearer fake-key-0001")
+		}
+	}})
+	defer w.Close(context.Background())
+	e := event.NewEmitter(event.NewRunID(), nil)
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}))
+	select {
+	case got := <-reports:
+		first, stack, _ := strings.Cut(got, "\n")
+		if first != "the run's event sender recovered from a panic and sends the next batch; send the stack below to Forager's maintainers" || stack == "" || strings.Contains(got, "fake-key-0001") {
+			t.Errorf("the report of the panic: %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was not reported")
+	}
+	w.Write(e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 60, "interval_seconds": 30}))
+	waitFor(t, func() bool { return g.hits() == 2 })
+}

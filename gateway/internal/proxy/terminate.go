@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/qoryai/forager/accesskey"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/link"
 	"github.com/qoryai/forager/policy"
 )
@@ -87,6 +88,7 @@ func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string,
 				return d.DialContext(ctx, "unix", sock)
 			},
 			DisableCompression: true,
+			IdleConnTimeout:    idleTimeout,
 		}
 	}
 	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths, node: p.node, tools: tools})
@@ -315,11 +317,12 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 			return
 		}
 		r.Header.Del(setBy)
+		keyed := false
 		if allowed && credentialed && c != nil && tl == nil {
 			if name, value, ok := c.header(); ok {
 				r.Header.Set(name, value)
 				r.Header.Set(setBy, c.Name)
-				req.Credential = c.Name
+				req.Credential, keyed = c.Name, true
 			}
 		}
 		if !allowed {
@@ -341,10 +344,15 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		// The request is recorded once its outcome is known: when the response's
 		// headers arrive, or when the transport fails.
 		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req})
+		if keyed {
+			// In the context, since the session's Connection header can take any header
+			// off the request before it reaches the transport, the mark among them.
+			ctx = context.WithValue(ctx, keyedKey{}, true)
+		}
 		rp.ServeHTTP(w, r.WithContext(ctx))
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
+	srv := &http.Server{Handler: routine.Handler(t.p.reportPanic, handler), ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
 		if s == http.StateClosed || s == http.StateHijacked {
 			ln.Close()
 		}
@@ -416,7 +424,8 @@ func (c *Credential) header() (string, string, bool) {
 // this builds is cleared before it returns.
 // The header's value is a Go string, since http.Header holds strings: one copy per
 // request that cannot be cleared, and the copies the transport makes as it writes the
-// request, its buffers and, over HTTP/2, the header compression's table.
+// request, in its buffers. The request goes over HTTP/1.1 ([Proxy.upstream]), so no
+// header compression's table keeps one.
 func (c *Credential) storedHeader() (string, string, bool) {
 	v := c.Value()
 	defer clear(v)
@@ -447,27 +456,48 @@ func (c *Credential) storedHeader() (string, string, bool) {
 }
 
 // upstream is the transport to the real hosts of terminated connections: verified
-// against this machine's roots, dialled through the proxy's guarded dialler.
+// against this machine's roots, dialled through the proxy's guarded dialler. A request
+// the proxy set a credential on goes over HTTP/1.1 alone: over HTTP/2 the connection's
+// header table (HPACK) would keep a copy of the credential for as long as it is open.
 func (p *Proxy) upstream() http.RoundTripper {
 	p.upOnce.Do(func() {
-		p.up = &unmark{&http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS}}
+		h1 := new(http.Protocols)
+		h1.SetHTTP1(true)
+		p.up = &unmark{
+			rt:    &http.Transport{Proxy: nil, DialContext: p.dialHost, ForceAttemptHTTP2: true, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+			keyed: &http.Transport{Proxy: nil, DialContext: p.dialHost, Protocols: h1, DisableCompression: true, TLSClientConfig: p.upstreamTLS.Clone(), IdleConnTimeout: idleTimeout},
+		}
 	})
 	return p.up
 }
 
-// unmark takes the proxy's own mark off a request before it leaves.
-type unmark struct{ rt http.RoundTripper }
+// keyedKey marks the context of a request the proxy set a credential on.
+type keyedKey struct{}
+
+// unmark takes the proxy's own mark off a request before it leaves, and sends a
+// request whose context has [keyedKey] by keyed.
+type unmark struct{ rt, keyed http.RoundTripper }
+
+// CloseIdleConnections closes the idle connections of both transports.
+func (u *unmark) CloseIdleConnections() {
+	closeIdle(u.rt)
+	closeIdle(u.keyed)
+}
 
 // RoundTrip sends the request on without the mark.
 func (u *unmark) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt := u.rt
+	if r.Context().Value(keyedKey{}) != nil {
+		rt = u.keyed
+	}
 	if r.Header.Get(setBy) == "" {
-		return u.rt.RoundTrip(r)
+		return rt.RoundTrip(r)
 	}
 	out := r.Clone(r.Context())
 	out.Header.Del(setBy)
 	// The trailer is filled once the body is read; a clone's copy would stay empty.
 	out.Trailer = r.Trailer
-	resp, err := u.rt.RoundTrip(out)
+	resp, err := rt.RoundTrip(out)
 	if resp != nil {
 		resp.Request = r
 	}

@@ -38,8 +38,9 @@ type cachedLeaf struct {
 }
 
 // leafCap is how many hosts' certificates an authority keeps: past it, the least
-// recently used goes, and is made again when it is asked for. Every run's authority
-// answers for every host the run reaches, so its cache is bounded.
+// recently used goes, and is made again when it is asked for. A run's authority answers
+// for each host the proxy terminates ([terminator.covers]), and a *. pattern covers any
+// number of names, so its cache is bounded.
 var leafCap = 1024
 
 // caLife is how long a run's authority and its certificates are good for: longer than

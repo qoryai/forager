@@ -28,10 +28,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/forager/accesskey"
 	"github.com/qoryai/forager/contracts"
+	"github.com/qoryai/forager/gateway/internal/routine"
 	"github.com/qoryai/forager/policy"
 )
 
@@ -135,6 +137,22 @@ type Held struct {
 	Uses         []*Use
 	Placeholders []string
 	all          []*held
+	// panics, when set, gets a panic of the renewals' goroutines ([Held.ReportPanics]).
+	panics atomic.Pointer[func(string)]
+}
+
+// ReportPanics sets where a panic of the renewals' goroutines is reported: the run
+// passes its report under the run's id. Unset, the report goes to standard error.
+func (h *Held) ReportPanics(report func(string)) { h.panics.Store(&report) }
+
+// reportPanic reports a panic of the renewals' goroutines where [Held.ReportPanics] set
+// when the panic came.
+func (h *Held) reportPanic(line string) {
+	if r := h.panics.Load(); r != nil {
+		(*r)(line)
+		return
+	}
+	routine.Stderr(line)
 }
 
 // Credential is one credential a run holds: its name, the hosts of its uses in their
@@ -279,7 +297,8 @@ func ResolveWith(ctx context.Context, defs []Definition, selected []policy.Selec
 		return nil, err
 	}
 	for _, h := range out.all {
-		go h.renew()
+		h.panics = out.reportPanic
+		routine.Go(h.panics, h.renew)
 	}
 	return out, nil
 }
@@ -434,7 +453,9 @@ type held struct {
 	def      Definition
 	argument string
 	report   func(string)
-	shape    string
+	// panics gets a panic of the renewal's goroutines.
+	panics func(string)
+	shape  string
 	// placeholders are the definition's placeholders and then the adapter's, each once.
 	placeholders []string
 	// value, for a credential from the server, returns its opened value; nil for the
@@ -496,7 +517,9 @@ func (h *held) stop() { h.once.Do(func() { close(h.done) }) }
 
 // renew asks an adapter again before its token expires and after a host refused it. A
 // renewal that fails, or that answers with other hosts, schemes or paths, leaves the
-// token as it was and is reported: what a run reaches is fixed when it starts.
+// token as it was and is reported: what a run reaches is fixed when it starts. A
+// renewal that panics is reported as [routine.Do] reports one, and the next waits as
+// one after a failed renewal does.
 func (h *held) renew() {
 	if len(h.def.Adapter) == 0 {
 		return
@@ -504,6 +527,15 @@ func (h *held) renew() {
 	h.mu.Lock()
 	h.wake = make(chan struct{}, 1)
 	h.mu.Unlock()
+	for routine.Do(h.panics, h.renewals) {
+		h.mu.Lock()
+		h.asked, h.stale = time.Now(), false
+		h.mu.Unlock()
+	}
+}
+
+// renewals renews the token until the credential is let go of.
+func (h *held) renewals() {
 	for {
 		h.mu.Lock()
 		wait := time.Until(h.expires.Add(-renewBefore))
@@ -522,13 +554,13 @@ func (h *held) renew() {
 		case <-time.After(wait):
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		go func() {
+		routine.Go(h.panics, func() {
 			select {
 			case <-h.done:
 				cancel()
 			case <-ctx.Done():
 			}
-		}()
+		})
 		a, err := h.ask(ctx)
 		cancel()
 		switch {
