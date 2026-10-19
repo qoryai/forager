@@ -95,8 +95,8 @@ gateway:
 - `format` is one of `anthropic-messages`, `openai-responses`, `openai-chat` and
   `gemini`.
 - `endpoint` is the base URL of the model API: `https`, a host, an optional port and
-  path, and no user name, query or fragment. The proxy sets the key on every path of
-  the endpoint's host, and on no other host.
+  path, and no user name, query or fragment. The proxy sets the key on every path and
+  on any port of the endpoint's host, and on no other host.
 - `auth` is `{scheme: bearer}`, `{scheme: header, header: …}` or
   `{scheme: basic, username: …}`. Add `oauth: true` to a bearer for an OAuth token,
   such as a Claude subscription login's.
@@ -118,7 +118,10 @@ Claude Code:
 
 The session also sets `ANTHROPIC_BASE_URL` to the endpoint. Every other value of
 `ANTHROPIC_BASE_URL`, from the server, `--env`, `wall.env`, the harness or the shell, is
-left out. If the runtime reads no key for the format or the `auth`, the run stops with
+left out. Claude Code's other key variables get no value either: with the start key in
+`ANTHROPIC_API_KEY`, a value of `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` from
+any of these sources is left out, and behind a wall the image's value is unset. If the
+runtime reads no key for the format or the `auth`, the run stops with
 `run_configuration_invalid`.
 
 A run may have several model keys, from `forager.yaml` and from the control plane. The

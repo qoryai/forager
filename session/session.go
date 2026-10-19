@@ -782,6 +782,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return fail(err)
 	}
+	// The runtime's other model-key variables do not reach it from the environment the
+	// run inherits either, walled or not: it would send their values to the start key's
+	// endpoint.
+	spec.Env = withoutNames(spec.Env, key.Others)
 	ownEnv := []string{EnvRunID + "=" + runID}
 	if spec.HarnessHome != "" {
 		ownEnv = append(ownEnv, EnvHarnessHome+"="+inside(spec.HarnessHome))

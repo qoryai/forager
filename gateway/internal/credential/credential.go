@@ -335,7 +335,7 @@ func (h *Held) startKey(start string) error {
 		h.Start = keys[0]
 	case start == "" && len(keys) > 1:
 		return refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys %s", strings.Join(shown, ", "))
+			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(shown, ", "))
 	case slices.Contains(keys, start):
 		h.Start = start
 	case len(keys) == 0:
@@ -418,11 +418,14 @@ func (d Definition) checkModelKey() error {
 	if err := schema.Validate(d.Format); err != nil {
 		return fmt.Errorf("credential %s: set format to anthropic-messages, openai-responses, openai-chat or gemini: %s is no API format Forager knows", name, accesskey.ShownValue(d.Format, true))
 	}
-	if _, ok := policy.EndpointHost(d.Endpoint); !ok || strings.ContainsAny(d.Endpoint, "?#") {
+	if _, ok := policy.EndpointHost(d.Endpoint); !ok {
 		return fmt.Errorf("credential %s: set endpoint to an https URL with a host and no user, query or fragment: Forager reads no host from it", name)
 	}
+	if strings.ContainsAny(d.Endpoint, "?#") {
+		return fmt.Errorf("credential %s: set endpoint to an https URL with a host and no user, query or fragment: the endpoint has a query or a fragment", name)
+	}
 	if len(d.Hosts) > 0 || len(d.Paths) > 0 || len(d.Placeholders) > 0 {
-		return fmt.Errorf("credential %s: remove hosts, paths and placeholders from the model key: its endpoint gives its host, and the session gives the runtime the key's variable", name)
+		return fmt.Errorf("credential %s: remove hosts, paths and placeholders from the model key: the key is set on its endpoint's host, and the session gives the runtime the key's variable", name)
 	}
 	if err := (apply{Scheme: d.Scheme, Username: d.Username, Header: d.Header}).check(); err != nil {
 		return fmt.Errorf("credential %s: %w", name, err)
@@ -772,7 +775,7 @@ func (h *held) ask(ctx context.Context) (*answer, error) {
 			// A model key is set as its definition says, which the session chooses the
 			// runtime's variable by.
 			if u.Scheme != d.Scheme || u.Username != d.Username || !strings.EqualFold(u.Header, d.Header) {
-				return nil, fmt.Errorf("set the model key %s in the answer of the adapter %s with the scheme of its definition: the answer has another", accesskey.ShownName(d.Name, false), path)
+				return nil, fmt.Errorf("set the model key %s in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others", accesskey.ShownName(d.Name, false), path)
 			}
 			token := u.Token
 			if token == "" {

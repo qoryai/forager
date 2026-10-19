@@ -222,9 +222,9 @@ func TestAModelKeyStartsTheRunAsModelCredentialSays(t *testing.T) {
 		want   string
 	}{
 		"two model keys and no start": {[]Definition{first, plain, second}, nil, "", nil,
-			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys first, second: run_configuration_invalid"},
+			"set model_credential in the run configuration, or give the run one model key: the run has the model keys first, second: run_configuration_invalid"},
 		"a model key of each and no start": {[]Definition{first}, []Stored{server}, "", nil,
-			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys first, server-model: run_configuration_invalid"},
+			"set model_credential in the run configuration, or give the run one model key: the run has the model keys first, server-model: run_configuration_invalid"},
 		"a start and no model key": {[]Definition{plain}, nil, "first", []string{"first"},
 			`remove model_credential from the run configuration, or give the run a model key "first": the run has no model key: run_configuration_invalid: first`},
 		"a start and no credential": {nil, nil, "first", []string{"first"},

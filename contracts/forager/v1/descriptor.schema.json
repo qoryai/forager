@@ -368,7 +368,7 @@
       "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}},
     "declared": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
     "key_variable": {
-      "description": "A variable a runtime reads a key from: a variable's name other than HOME, LD_PRELOAD, NODE_OPTIONS and BASH_ENV, which change what runs. Forager also refuses those four in another case.",
+      "description": "A variable a runtime reads a key from: a variable's name other than HOME, LD_PRELOAD, NODE_OPTIONS and BASH_ENV, which change what runs. The schema refuses them in upper case; Forager refuses them in any letter case.",
       "allOf": [{"$ref": "#/$defs/name"}, {"not": {"enum": ["HOME", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV"]}}]
     },
     "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},

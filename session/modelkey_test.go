@@ -303,7 +303,7 @@ func TestModelCredentialChoosesTheStartKey(t *testing.T) {
 		detail      string
 	}{
 		{"no model_credential", "", nil,
-			`set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys model, backup`},
+			`set model_credential in the run configuration, or give the run one model key: the run has the model keys model, backup`},
 		{"a name of no model key", "forge", []string{"forge"},
 			`set model_credential in the run configuration to one of the run's model keys, model, backup: the run has no model key "forge"`},
 	} {
@@ -353,7 +353,7 @@ func TestAPlaceholderGoesOnlyIntoACredentialsVariable(t *testing.T) {
 		{"a second key in another credential", []map[string]any{model(), sealed("forge", "api.github.com", oauthVariable)}, []string{oauthVariable}, nil, []string{"forge"},
 			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the credential "forge" in the run configuration: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a model key's variable of a machine credential", []map[string]any{machine("machine-model", apiKeyVariable)}, []string{apiKeyVariable}, nil, []string{"machine-model"},
-			`remove ANTHROPIC_API_KEY from the placeholders of the credential "machine-model" in forager.yaml, and give the model key format, endpoint and auth: the runtime claude reads a model key from it, and only a credential with an API sets it`},
+			`remove ANTHROPIC_API_KEY from the placeholders of the credential "machine-model" in forager.yaml: the runtime claude reads a model key from it, and only a model key sets it; a model key has format, endpoint and auth`},
 		{"a key among the run's placeholders", []map[string]any{model()}, []string{oauthVariable}, nil, []string{oauthVariable},
 			`remove CLAUDE_CODE_OAUTH_TOKEN from the placeholders of the machine's tools in forager.yaml: the runtime claude reads a model key from it, and only a credential with an API sets it`},
 		{"a machine credential's override", []map[string]any{model(), machine("machine-helper", "ANTHROPIC_MODEL")}, []string{"ANTHROPIC_MODEL"}, nil, []string{"ANTHROPIC_MODEL"},
@@ -593,5 +593,95 @@ func TestAnInheritedKeyAndEndpointGiveWayToTheStartKey(t *testing.T) {
 	env := envOf(t, out)
 	if env[apiKeyVariable] != link.KeyPlaceholder("model") || env[endpointVariable] != modelEndpoint {
 		t.Errorf("%s=%q and %s=%q; want the key's placeholder and endpoint", apiKeyVariable, env[apiKeyVariable], endpointVariable, env[endpointVariable])
+	}
+}
+
+// variableEntry is the entry of the run's policy_applied variables for name, nil when
+// the record lists none.
+func variableEntry(t *testing.T, res *session.Result, name string) map[string]any {
+	t.Helper()
+	pa := ofType(events(t, res), "dev.qory.run.policy_applied")
+	if len(pa) != 1 {
+		t.Fatalf("policy_applied events: %v", pa)
+	}
+	list, _ := data(pa[0])["variables"].([]any)
+	for _, item := range list {
+		if e := item.(map[string]any); e["name"] == name {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestOtherKeyVariablesDoNotReachTheRuntime pins that, beside a start key in
+// ANTHROPIC_API_KEY, a value of Claude Code's other model-key variables reaches the
+// agent from no source: the server, the run, the machine, the harness's defaults and
+// its computed values, the inherited environment and, behind a wall, the image. Behind
+// a wall the name is unset inside. The record has the value lost as fixed, with no
+// from. Without a wall an inherited value is left out too.
+func TestOtherKeyVariablesDoNotReachTheRuntime(t *testing.T) {
+	const value = "sk-fake-dev-token"
+	for _, source := range []string{"apiary", "run", "machine", "harness", "fixed", "shell", "image"} {
+		for _, walled := range []bool{true, false} {
+			if source == "image" && !walled {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s walled %v", source, walled), func(t *testing.T) {
+				var env []string
+				if source == "shell" {
+					env = []string{authTokenVariable + "=" + value}
+				}
+				sp, g := specGateway(t, env...)
+				out := dumpsEnv(t, &sp)
+				w := &imageWall{}
+				if source == "image" {
+					w.env = []string{authTokenVariable + "=" + value}
+				}
+				if walled {
+					sp.Wall, sp.Image = w, "example.com/agent:1"
+				}
+				passed := []string{authTokenVariable + "=" + value}
+				var vars map[string]any
+				switch source {
+				case "apiary":
+					vars = map[string]any{authTokenVariable: map[string]any{"value": value}}
+				case "run":
+					sp.Variables.Run = passed
+				case "machine":
+					sp.Variables.Machine = passed
+				case "harness":
+					sp.LaunchDefaults = passed
+				case "fixed":
+					sp.LaunchFixed = passed
+				}
+				answering(g, []map[string]any{model()}, vars)
+				res, err := session.Run(context.Background(), sp)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := envOf(t, out)
+				if v, ok := got[authTokenVariable]; ok {
+					t.Errorf("%s=%q reached the agent", authTokenVariable, v)
+				}
+				if got[apiKeyVariable] != link.KeyPlaceholder("model") {
+					t.Errorf("%s=%q; want the start key's placeholder", apiKeyVariable, got[apiKeyVariable])
+				}
+				if walled {
+					if names, _ := unsetIn(t, w.got); !slices.Contains(names, authTokenVariable) || slices.Contains(entriesOf(w.got.Env, authTokenVariable), authTokenVariable+"="+value) {
+						t.Errorf("unset %q, the wall's environment %q; want %s unset and not set", names, entriesOf(w.got.Env, authTokenVariable), authTokenVariable)
+					}
+				}
+				if source == "image" {
+					return
+				}
+				b, _ := json.Marshal(variableEntry(t, res, authTokenVariable))
+				if want := `{"lost":[{"from":"` + source + `","why":"fixed"}],"name":"` + authTokenVariable + `"}`; string(b) != want {
+					t.Errorf("the record's entry %s, want %s", b, want)
+				}
+				if strings.Contains(string(b), value) {
+					t.Errorf("the record has the value: %s", b)
+				}
+			})
+		}
 	}
 }

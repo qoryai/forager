@@ -717,10 +717,11 @@ func modelKey(name string) Definition {
 // oauth or key_prefixes.
 func TestAModelKeyThatCannotBeOneIsRefused(t *testing.T) {
 	const (
-		endpoint = "credential model: set endpoint to an https URL with a host and no user, query or fragment: Forager reads no host from it"
-		beside   = "credential model: remove hosts, paths and placeholders from the model key: its endpoint gives its host, and the session gives the runtime the key's variable"
-		shape    = "credential model: write each key prefix as 1 to 32 characters of printable ASCII without a space: "
-		noFormat = "credential plain: add format to the credential, or remove endpoint, oauth and key_prefixes: only a model key has them"
+		endpoint        = "credential model: set endpoint to an https URL with a host and no user, query or fragment: Forager reads no host from it"
+		queryOrFragment = "credential model: set endpoint to an https URL with a host and no user, query or fragment: the endpoint has a query or a fragment"
+		beside          = "credential model: remove hosts, paths and placeholders from the model key: the key is set on its endpoint's host, and the session gives the runtime the key's variable"
+		shape           = "credential model: write each key prefix as 1 to 32 characters of printable ASCII without a space: "
+		noFormat        = "credential plain: add format to the credential, or remove endpoint, oauth and key_prefixes: only a model key has them"
 	)
 	plain := Definition{Name: "plain", Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}
 	for name, c := range map[string]struct {
@@ -732,8 +733,8 @@ func TestAModelKeyThatCannotBeOneIsRefused(t *testing.T) {
 		"no endpoint":                 {func(d *Definition) { d.Endpoint = "" }, endpoint},
 		"an http endpoint":            {func(d *Definition) { d.Endpoint = "http://api.model.example/anthropic" }, endpoint},
 		"an endpoint with a user":     {func(d *Definition) { d.Endpoint = "https://user@api.model.example/anthropic" }, endpoint},
-		"an endpoint with a query":    {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic?beta=1" }, endpoint},
-		"an endpoint with a fragment": {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic#messages" }, endpoint},
+		"an endpoint with a query":    {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic?beta=1" }, queryOrFragment},
+		"an endpoint with a fragment": {func(d *Definition) { d.Endpoint = "https://api.model.example/anthropic#messages" }, queryOrFragment},
 		"an endpoint with port 0":     {func(d *Definition) { d.Endpoint = "https://api.model.example:0/anthropic" }, endpoint},
 		"hosts":                       {func(d *Definition) { d.Hosts = []string{"api.model.example"} }, beside},
 		"paths":                       {func(d *Definition) { d.Paths = []string{"/anthropic/*"} }, beside},
@@ -863,8 +864,8 @@ func TestAModelKeysTokenThatMatchesNoPrefixIsRefused(t *testing.T) {
 		want string
 	}{
 		"placeholders":     {answer(set, `,"placeholders":["MODEL_KEY"]`), "remove placeholders from the answer of the adapter %s: the model key model takes none, since the session gives the runtime the key's variable"},
-		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), "set the model key model in the answer of the adapter %s with the scheme of its definition: the answer has another"},
-		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), "set the model key model in the answer of the adapter %s with the scheme of its definition: the answer has another"},
+		"another scheme":   {answer(`{"hosts":["api.model.example"],"scheme":"bearer"}`, ""), "set the model key model in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others"},
+		"another header":   {answer(`{"hosts":["api.model.example"],"scheme":"header","header":"Authorization"}`, ""), "set the model key model in the answer of the adapter %s with the scheme, header and username of its definition: the answer has others"},
 		"a host above its": {answer(`{"hosts":["other.model.example"],"scheme":"header","header":"x-api-key"}`, ""), "the adapter %s claims other.model.example, above the hosts the machine gives it"},
 	} {
 		path := adapter(t, c.body)

@@ -539,8 +539,8 @@ gateway:
       key_prefixes: [sk-ant-]
 ```
 
-The gateway sets the key on every path of the endpoint's host alone, the host
-`policy.EndpointHost` reads. The gateway refuses a definition that cannot be a model
+The gateway sets the key on every path and on any port of the endpoint's host alone,
+the host `policy.EndpointHost` reads. The gateway refuses a definition that cannot be a model
 key when it reads the machine's configuration: a format outside the list, an endpoint
 from which it reads no host or with a query or fragment, `hosts`, `paths` or
 `placeholders` beside the endpoint, `oauth` beside another scheme than `bearer`, and
@@ -548,11 +548,12 @@ from which it reads no host or with a query or fragment, `hosts`, `paths` or
 `key_prefixes` and no `format` is refused too. An adapter for a model key sets the key
 with the definition's scheme, header and username, claims no host but the endpoint's,
 and lists no `placeholders`; any other answer is no run. A token from `env`, `file` or
-an adapter that starts with none of `key_prefixes` when the run starts is no run: `give
-the model key model a token that starts with "sk-ant-", its key_prefixes: the token
-starts with none of them`. A token read again from `file` that starts with none of them
-is not taken, and the token read when the run started stays. The session gives the key to the runtime as it gives a model
-key from the server (From the server, The variable of a model key, below).
+an adapter that starts with none of `key_prefixes` when the run starts is no run:
+`credential model: give the model key model a token that starts with "sk-ant-", its
+key_prefixes: the token starts with none of them`. A token read again from `file` that
+starts with none of them is not taken, and the token read when the run started stays.
+The session gives the key to the runtime as it gives a model key from the server (From
+the server, The variable of a model key, below).
 
 **Private hosts.** The proxy sets a credential on a private host only through a `hosts`
 entry equal to the host, compared without regard to case, and never through a `*.`
@@ -650,9 +651,9 @@ request (§The server, Secrets).
   (§The descriptor).
 - `endpoint` is the base URL of the model API, at most 2048 characters: `https`, a
   host, an optional port and path, and no user information, query or fragment. The
-  gateway sets the value on every path of the endpoint's host alone, the host
-  `policy.EndpointHost` reads, in the form `policy.Host` returns; the proxy matches
-  credentials by host, so the port is not compared. The path, such as `/anthropic`,
+  gateway sets the value on every path and on any port of the endpoint's host alone,
+  the host `policy.EndpointHost` reads, in the form `policy.Host` returns; the proxy
+  matches credentials by host, so the port is not compared. The path, such as `/anthropic`,
   reaches the runtime alone, through its endpoint variable.
 - `key_prefixes`, optional, are 1 to 4 literal prefixes, each 1 to 32 characters of
   printable ASCII without a space, none twice, such as `sk-ant-`. A value that starts
@@ -699,8 +700,8 @@ machine's clock. A pin or an access key that is a published fixture key is
 secrets request is not. A value with a control character other
 than tab, or a space or tab at its start or end, is `run_configuration_invalid`, and so
 is a model key's value that starts with none of its `key_prefixes`, `run configuration
-https://apiary.example/v1/run-configuration: store a value of the credential "model"
-that starts with sk-ant- in the control plane: the stored value starts with none of its
+https://apiary.example/v1/run-configuration: store in the control plane a value of the
+credential "model" that starts with "sk-ant-": the stored value starts with none of its
 key_prefixes`, and an answer `sealed.Open` refuses, but one whose envelope signature
 does not verify, `answer_unsigned`. No message contains a value. A credential from the
 server replaces each credential of the machine's whose hosts claim one of its hosts, or
@@ -737,6 +738,14 @@ variables:
   start key's `endpoint`. Every other value of the endpoint variable loses to it, and
   the endpoint rule does not apply (§Variables, The model endpoint).
 
+The runtime's other variables of `model.keys` get no value: a value of each, from the
+server, the run, the machine, the harness's defaults, the harness's computed values or
+the environment the run inherits, is left out and recorded as `fixed`, and behind a wall
+the name is unset inside, so an image's value does not reach the runtime either. The
+runtime would send such a value to the start key's endpoint. For Claude Code with a
+start key in `ANTHROPIC_API_KEY`, no value of `ANTHROPIC_AUTH_TOKEN` or
+`CLAUDE_CODE_OAUTH_TOKEN` reaches it.
+
 For Claude Code:
 
 | The start key's `auth` | Claude Code's variable |
@@ -766,9 +775,9 @@ when the runtime's descriptor lists it in `denies`, in its model `overrides` or 
 model key from it, a variable of `model.keys`: only the start key sets a model key's
 variable. A host credential of the machine's with a model key's variable among its
 `placeholders` is `run_configuration_invalid` with the credential's name: `remove
-ANTHROPIC_API_KEY from the placeholders of the credential "model" in forager.yaml, and
-give the model key format, endpoint and auth: the runtime claude reads a model key from
-it, and only a credential with an API sets it`. The session checks the run answer's
+ANTHROPIC_API_KEY from the placeholders of the credential "model" in forager.yaml: the
+runtime claude reads a model key from it, and only a model key sets it; a model key has
+format, endpoint and auth`. The session checks the run answer's
 `placeholders` too, the machine's credentials and tools included: one that the
 descriptor denies, lists in its overrides or reads its endpoint from, one the runtime
 reads a model key from, and one the runtime declares or reserves that no credential has
@@ -976,7 +985,9 @@ with (§Credentials, The start key), the session sets the variable of the runtim
 `endpoint`, with or without a wall. The name is then one of the run's fixed names: a
 value of the server, the run, the machine, the harness's defaults or the harness's
 computed values is left out and recorded as `fixed`, the value the run inherits loses
-to it as well, and the endpoint rule does not apply.
+to it as well, and the endpoint rule does not apply. The runtime's other variables of
+`model.keys` (§Credentials, The variable of a model key) are left out the same way, the
+value the run inherits included, and none of them is set.
 
 In a run without a start key, the endpoint rule sets whether a value of the
 endpoint variable applies: behind a wall, and without one for a run whose answer has
@@ -3182,7 +3193,7 @@ command.
 secrets it reads, each `{id, title, name, hosts, paths, auth}`: an id, unique
 among the declarations; a title for a person choosing one; the variable the
 runtime reads it from, which is not `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV`,
-case ignored; the hosts its value is set on, exact DNS names; optionally the
+in any letter case; the hosts its value is set on, exact DNS names; optionally the
 paths of those hosts, in the policy's path grammar; how it is set,
 `auth.schema.json`, a scheme of the closed set, `bearer`, `header` with its `header`, or
 `basic` with its `username`. A declared variable that is also a key's variable in
@@ -3218,8 +3229,8 @@ case ignored, and its `oauth` (§Credentials, The variable of a model key). Opti
 the schema, `keys` is what makes a run need a model key (§Variables, A model key). The
 session refuses a descriptor whose keys break one of these rules when it reads it:
 
-- A key's variable is not `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV`, case
-  ignored: `model.keys: read the key from another variable than HOME: a key may not be
+- A key's variable is not `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV`, in any
+  letter case: `model.keys: read the key from another variable than HOME: a key may not be
   read from HOME, LD_PRELOAD, NODE_OPTIONS or BASH_ENV`.
 - Each key's format is one of `formats`.
 - Each pair of format and `auth` appears once.

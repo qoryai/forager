@@ -137,6 +137,10 @@ type Inputs struct {
 	// value of it is left out as [WhyFixed], the harness's computed ones included, and
 	// the endpoint rule does not apply.
 	EndpointFixed bool
+	// KeysFixed is the variables the run's runtime reads a model key from other than
+	// the one the start key sets: a value of each, from every source the inherited
+	// environment included, is left out as [WhyFixed], and none of them is set.
+	KeysFixed []string
 	// Credentials is each credential the gateway holds for the run, as the run
 	// answer's credential_hosts lists them. A model credential is one with a
 	// placeholder among Runtime.
@@ -222,7 +226,9 @@ type Loss struct {
 // it applies, the entry's Kept has the first model credential whose hosts include it.
 // A value left out lets the next source's value apply, as a denied one does. With
 // in.EndpointFixed, the start key's endpoint is in.Endpoint's one value: every other
-// value of it, the harness's computed ones included, is left out as [WhyFixed].
+// value of it, the harness's computed ones included, is left out as [WhyFixed]. Every
+// value of a name of in.KeysFixed is left out as [WhyFixed] too, the inherited one
+// included, and the entry has no from: the caller sets none of them.
 func Resolve(in Inputs) (Resolved, error) {
 	if err := CheckDeny(in.Deny); err != nil {
 		return Resolved{}, err
@@ -317,7 +323,7 @@ func Resolve(in Inputs) (Resolved, error) {
 	for i, kv := range in.Fixed {
 		name, _, _ := strings.Cut(kv, "=")
 		switch {
-		case in.EndpointFixed && name == in.Endpoint:
+		case in.EndpointFixed && name == in.Endpoint, slices.Contains(in.KeysFixed, name):
 			deniedFixed[name] = WhyFixed
 		case computed.Matches(name):
 			deniedFixed[name] = WhyDenied
@@ -338,6 +344,11 @@ func Resolve(in Inputs) (Resolved, error) {
 			names[name] = true
 		}
 	}
+	for _, name := range in.KeysFixed {
+		if _, ok := shell[name]; ok {
+			names[name] = true
+		}
+	}
 	setOtherwise := slices.Concat(in.Runtime, in.ReadFrom)
 	for _, name := range slices.Sorted(maps.Keys(names)) {
 		e := Entry{Name: name, Lost: []Loss{}}
@@ -354,6 +365,8 @@ func Resolve(in Inputs) (Resolved, error) {
 		take := func(from string, v string, ok bool, why, credential string) {
 			switch {
 			case !ok:
+			case slices.Contains(in.KeysFixed, name):
+				e.Lost = append(e.Lost, Loss{from, WhyFixed})
 			case why != "":
 				e.Lost = append(e.Lost, Loss{from, why})
 			case fixed[name]:

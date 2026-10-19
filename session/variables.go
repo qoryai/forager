@@ -177,7 +177,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 		Walled: spec.Wall != nil, Unwalled: spec.Variables.Unwalled,
 		Deny: spec.Variables.Deny, RuntimeDenies: decl.Denies, Overrides: overrides, Runtime: runtimeNames,
 		Placeholders: placeholderNames, ReadFrom: readFrom, Own: own,
-		Endpoint: endpoint, EndpointFixed: key.Endpoint != "", Credentials: creds,
+		Endpoint: endpoint, EndpointFixed: key.Endpoint != "", KeysFixed: key.Others, Credentials: creds,
 	})
 	if err != nil {
 		return variables.Resolved{}, nil, err
@@ -190,7 +190,7 @@ func resolve(spec Spec, rt runtimes.Runtime, served map[string]string, credentia
 	// value they give it, since the helper's exec runs after them.
 	var unset []string
 	if spec.Wall != nil {
-		set := slices.Concat(names(spec.Env), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, walls)
+		set := slices.Concat(names(withoutNames(spec.Env, key.Others)), names(vars.Env), names(vars.Fixed), names(prepared.Env), placeholderNames, walls)
 		for _, name := range runtimeNames {
 			if !slices.Contains(set, name) && !slices.Contains(unset, name) {
 				unset = append(unset, name)
@@ -245,9 +245,12 @@ func shownNames(names []string) []string {
 // keyed is what the run's start key sets in the runtime's environment, NAME=value
 // each: Variable, the variable the runtime reads the key from, set to the key's
 // placeholder, [link.KeyPlaceholder]; and Endpoint, the runtime's endpoint variable set
-// to the key's endpoint. Zero when the run has no API credential.
+// to the key's endpoint. Others is the names of the runtime's other model-key
+// variables, which no value reaches: the runtime would send such a value to the start
+// key's endpoint. Zero when the run has no API credential.
 type keyed struct {
 	Variable, Endpoint string
+	Others             []string
 }
 
 // endpointName is the name of the variable Endpoint sets, empty when it sets none.
@@ -276,7 +279,7 @@ func startKey(credentials []server.LinkCredentialHosts, model string) (int, erro
 	switch {
 	case model == "" && len(keys) > 1:
 		return -1, refusal.New(refusal.RunConfigurationInvalid, nil,
-			"set model_credential to the model key the runtime starts with, or keep one model key in forager.yaml: the run has the model keys %s", strings.Join(keys, ", "))
+			"set model_credential in the run configuration, or give the run one model key: the run has the model keys %s", strings.Join(keys, ", "))
 	case model != "" && (start < 0 || credentials[start].Name != model):
 		return -1, refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(model),
 			"set model_credential in the run configuration to one of the run's model keys, %s: the run has no model key %s", strings.Join(keys, ", "), accesskey.ShownName(model, true))
@@ -358,6 +361,11 @@ func chosen(rt runtimes.Runtime, credentials []server.LinkCredentialHosts, place
 			names = append(names, variable)
 		}
 		key = keyed{Variable: variable + "=" + link.KeyPlaceholder(c.Name), Endpoint: places.Endpoint.Variable + "=" + c.Endpoint}
+		for _, k := range keyVariables(rt) {
+			if k != variable {
+				key.Others = append(key.Others, k)
+			}
+		}
 	}
 	if err := checkPlaceholders(rt, out, placeholders); err != nil {
 		return nil, nil, keyed{}, err
@@ -447,7 +455,7 @@ func checkPlaceholders(rt runtimes.Runtime, credentials []server.LinkCredentialH
 			switch {
 			case slices.Contains(keys, p) && c.Auth == nil:
 				return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(c.Name),
-					"remove %s from the placeholders of the credential %s in forager.yaml, and give the model key format, endpoint and auth: the runtime %s reads a model key from it, and only a credential with an API sets it",
+					"remove %s from the placeholders of the credential %s in forager.yaml: the runtime %s reads a model key from it, and only a model key sets it; a model key has format, endpoint and auth",
 					accesskey.ShownName(p, false), shown, runtime)
 			case c.Auth == nil:
 			case slices.Contains(keys, p):

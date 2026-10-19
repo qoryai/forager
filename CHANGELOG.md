@@ -72,10 +72,10 @@ release may change what an existing document does, and says so under Upgrading.
 
 - A descriptor's `model` may list `keys`, 1 to 32 variables the runtime reads a model
   key from, each `{format, auth, variable}`. The session refuses a descriptor whose key
-  is read from `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV`, whose format is not
-  in `formats`, whose pair of format and auth appears twice, whose variable is in
-  `denies` or `overrides` or is the endpoint's variable, or whose variable has another
-  auth in `secrets.declares`. A `secrets.declares` name may not be one of those four
+  is read from `HOME`, `LD_PRELOAD`, `NODE_OPTIONS` or `BASH_ENV` in any letter case,
+  whose format is not in `formats`, whose pair of format and auth appears twice, whose
+  variable is in `denies` or `overrides` or is the endpoint's variable, or whose
+  variable has another auth in `secrets.declares`. A `secrets.declares` name may not be one of those four
   variables either. The Claude Code descriptor lists `ANTHROPIC_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and `runtimes.json` lists them.
 - `auth.schema.json` has `oauth`, `true` and beside `bearer` alone: the value is an
@@ -88,7 +88,9 @@ release may change what an existing document does, and says so under Upgrading.
   placeholders and the run's, so a value the run passes for it is
   `placeholder_conflict`. The session sets the runtime's model endpoint variable,
   `ANTHROPIC_BASE_URL` for Claude Code, to the start key's endpoint, and leaves out
-  every other value of it as `fixed`. A descriptor without a `model` section, a format
+  every other value of it as `fixed`. The runtime's other model-key variables get no
+  value: one from any source, the inherited environment included, is left out as
+  `fixed`, and behind a wall the name is unset inside. A descriptor without a `model` section, a format
   it lists no key for, and an auth no key of that format has are
   `run_configuration_invalid`.
 - A model key's placeholder contains its name: `qory-`, the name and
@@ -355,7 +357,7 @@ release may change what an existing document does, and says so under Upgrading.
 - A model key of the machine's: a `gateway.Credential` with `Format`, `Endpoint`,
   `OAuth` and `KeyPrefixes` in place of `Hosts`, `Paths` and `Placeholders`, in
   forager.yaml `{env|file|adapter, format, endpoint, auth: {scheme, header, username,
-  oauth}, key_prefixes}`. The gateway sets it on every path of the endpoint's host.
+  oauth}, key_prefixes}`. The gateway sets it on every path and on any port of the endpoint's host.
   `Check` refuses a definition that cannot be one. A token from `env` or an adapter
   that starts with none of `key_prefixes` stops the run, and a `file` token read again
   that starts with none of them is not taken. An adapter's answer for a model key sets

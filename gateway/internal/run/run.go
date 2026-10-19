@@ -354,8 +354,12 @@ func (r *Run) open(ctx context.Context) error {
 		}
 		if prefixes := r.stored[i].KeyPrefixes; !credential.KeyMatches(prefixes, v) {
 			values.Clear()
+			shown := make([]string, len(prefixes))
+			for j, p := range prefixes {
+				shown[j] = accesskey.ShownValue(p, true)
+			}
 			return refusal.New(refusal.RunConfigurationInvalid, refusal.Shown(name),
-				"run configuration %s: store a value of the credential %s that starts with %s in the control plane: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(prefixes, " or "))
+				"run configuration %s: store in the control plane a value of the credential %s that starts with %s: the stored value starts with none of its key_prefixes", accesskey.ShownValue(r.cfg.Fetched.URL, false), accesskey.ShownName(name, true), strings.Join(shown, " or "))
 		}
 	}
 	r.mu.Lock()
