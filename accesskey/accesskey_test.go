@@ -1409,3 +1409,23 @@ func TestWithoutVariablesTakesOutForagersOwn(t *testing.T) {
 		t.Errorf("EnvRunKey is %q", accesskey.EnvRunKey)
 	}
 }
+
+// TestShownName pins the phrase a name that contains qak_ or qrk_ in any case is shown
+// as, the access key secret's when it contains both, and a clean name quoted or bare.
+func TestShownName(t *testing.T) {
+	const ak, rk = "(a name that contains an access key secret)", "(a name that contains a run key)"
+	for _, c := range []struct {
+		name  string
+		quote bool
+		want  string
+	}{
+		{"qak_x", true, ak}, {"QAK_x", false, ak}, {"x.QaK_y", true, ak},
+		{"qrk_x", false, rk}, {"QRK_x", true, rk}, {"x.qRk_y", false, rk},
+		{"qrk_x.qak_y", true, ak}, {"QRK_x.QAK_y", false, ak},
+		{"model", true, `"model"`}, {"model", false, "model"}, {"qak-x", false, "qak-x"},
+	} {
+		if got := accesskey.ShownName(c.name, c.quote); got != c.want {
+			t.Errorf("ShownName(%q, %t) = %s, want %s", c.name, c.quote, got, c.want)
+		}
+	}
+}

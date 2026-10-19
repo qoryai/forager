@@ -2,6 +2,7 @@ package credential
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,4 +126,198 @@ func TestAnAdapterReceivesNoAccessKeyVariable(t *testing.T) {
 		t.Fatal(err)
 	}
 	held.Close()
+}
+
+// The phrases a credential message prints in place of a name that contains qak_ or
+// qrk_ in any case.
+const (
+	accessKeyPhrase = "(a name that contains an access key secret)"
+	runKeyPhrase    = "(a name that contains a run key)"
+)
+
+// resolveError is the error of Resolve for defs and the selection sel, with the token
+// of MODEL_TOKEN set and allow as the allow list under enforce.
+func resolveError(t *testing.T, defs []Definition, sel []policy.Selected, allow []string) error {
+	t.Helper()
+	t.Setenv("MODEL_TOKEN", "a-token")
+	held, err := Resolve(context.Background(), defs, sel, policy.Enforce, allow, func(l string) { t.Log(l) })
+	if err == nil {
+		held.Close()
+	}
+	return err
+}
+
+// envDefinition is a credential named name whose token comes from MODEL_TOKEN.
+func envDefinition(name string) Definition {
+	return Definition{Name: name, Env: "MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}
+}
+
+// nameMessages are the eight credential messages that print a name or a placeholder
+// as accesskey.ShownName shows it: the policy's two selection messages, the token read,
+// the allow-list check, and Check's name, source, argument and placeholder checks. The
+// placeholder message has two entries, one for the credential's name and one for the
+// placeholder. Each entry is a function of that name, with the message it gives for the
+// phrase p in its place; a clean name gives the message with the name itself in place
+// of p.
+var nameMessages = map[string]struct {
+	err  func(t *testing.T, name string) error
+	want func(p string) string
+}{
+	"a name the machine does not define": {
+		func(t *testing.T, name string) error {
+			return resolveError(t, nil, []policy.Selected{{Name: name}}, nil)
+		},
+		func(p string) string {
+			return "the policy selects the credential " + p + ", which this machine does not define"
+		},
+	},
+	"a name selected twice": {
+		func(t *testing.T, name string) error {
+			return resolveError(t, []Definition{envDefinition(name)}, []policy.Selected{{Name: name}, {Name: name}}, []string{"api.model.example"})
+		},
+		func(p string) string { return "the policy selects the credential " + p + " twice" },
+	},
+	"a token that cannot be read": {
+		func(t *testing.T, name string) error {
+			return resolveError(t, []Definition{{Name: name, Env: "NOT_SET_ANYWHERE", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}, []policy.Selected{{Name: name}}, nil)
+		},
+		func(p string) string { return "credential " + p + ": the token is empty" },
+	},
+	"a host the allow list does not cover": {
+		func(t *testing.T, name string) error {
+			return resolveError(t, []Definition{envDefinition(name)}, []policy.Selected{{Name: name}}, []string{"example.com"})
+		},
+		func(p string) string {
+			return "the credential " + p + " is for api.model.example, which the run's allow list does not cover"
+		},
+	},
+	"a name outside the grammar": {
+		func(_ *testing.T, name string) error { return Definition{Name: name + "!"}.Check() },
+		func(p string) string {
+			return "the credential name " + p + " is not 1 to 64 of a-z, 0-9, underscore, dot and dash"
+		},
+	},
+	"a definition without a source": {
+		func(_ *testing.T, name string) error { return Definition{Name: name}.Check() },
+		func(p string) string {
+			return "credential " + p + ": exactly one of env, file and adapter says where the token comes from"
+		},
+	},
+	"an argument pattern that does not compile": {
+		func(_ *testing.T, name string) error {
+			d := envDefinition(name)
+			d.Argument = "("
+			return d.Check()
+		},
+		func(p string) string {
+			return "credential " + p + ": argument: error parsing regexp: missing closing ): `(`"
+		},
+	},
+	"a placeholder outside a variable's grammar": {
+		func(_ *testing.T, name string) error {
+			d := envDefinition(name)
+			d.Placeholders = []string{"bad-name"}
+			return d.Check()
+		},
+		func(p string) string {
+			return "credential " + p + ": the placeholder \"bad-name\" is not a variable's name"
+		},
+	},
+	"a placeholder with the name in it": {
+		func(_ *testing.T, name string) error {
+			d := envDefinition("model")
+			d.Placeholders = []string{name + "-"}
+			return d.Check()
+		},
+		func(p string) string { return "credential model: the placeholder " + p + " is not a variable's name" },
+	},
+}
+
+// noSecretPrefix fails the test when the error contains qak_ or qrk_ in any case.
+func noSecretPrefix(t *testing.T, what string, err error) {
+	t.Helper()
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "qak_") || strings.Contains(lower, "qrk_") {
+		t.Errorf("%s: the error contains a secret's prefix: %v", what, err)
+	}
+}
+
+// TestACredentialMessagePrintsAPhraseForASecretInAName pins that the eight credential
+// messages of nameMessages, the policy's two selection messages, the token read, the
+// allow-list check, and Check's name, source, argument and placeholder checks, print a
+// phrase in place of a name or a placeholder that contains qak_ or qrk_ in any case,
+// and the rest of the sentence word for word. The
+// messages Resolve gives after Check, and Check's after its name check, see only a name
+// the grammar admits, lower case; Check refuses any other case first, as the cases of
+// "a name outside the grammar" show.
+func TestACredentialMessagePrintsAPhraseForASecretInAName(t *testing.T) {
+	lower := map[string]string{
+		"qak_x": accessKeyPhrase, "a.qak_b": accessKeyPhrase, "x-qak_": accessKeyPhrase,
+		"qrk_x": runKeyPhrase, "a.qrk_b": runKeyPhrase, "x-qrk_": runKeyPhrase,
+	}
+	anyCase := map[string]string{
+		"QAK_x": accessKeyPhrase, "QaK_x": accessKeyPhrase, "x-qAk_": accessKeyPhrase,
+		"QRK_x": runKeyPhrase, "qRk_x": runKeyPhrase, "x-QrK_": runKeyPhrase,
+	}
+	for what, m := range nameMessages {
+		names := lower
+		switch what {
+		case "a name the machine does not define", "a name outside the grammar", "a placeholder with the name in it":
+			names = maps.Clone(lower)
+			maps.Copy(names, anyCase)
+		}
+		for name, phrase := range names {
+			err := m.err(t, name)
+			if err == nil {
+				t.Errorf("%s, %s: no error", what, name)
+				continue
+			}
+			if got, want := err.Error(), m.want(phrase); got != want {
+				t.Errorf("%s, %s:\n got %s\nwant %s", what, name, got, want)
+			}
+			noSecretPrefix(t, what+", "+name, err)
+		}
+	}
+}
+
+// TestAnAccessKeyPhraseWinsOverARunKeyPhrase pins that a name with both prefixes, the
+// run key's first, prints the access key secret's phrase.
+func TestAnAccessKeyPhraseWinsOverARunKeyPhrase(t *testing.T) {
+	for _, what := range []string{"a name the machine does not define", "a definition without a source", "a placeholder with the name in it"} {
+		m := nameMessages[what]
+		err := m.err(t, "qrk_x.qak_y")
+		if err == nil {
+			t.Fatalf("%s: no error", what)
+		}
+		if got, want := err.Error(), m.want(accessKeyPhrase); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", what, got, want)
+		}
+		noSecretPrefix(t, what, err)
+	}
+}
+
+// TestACleanNamePrintsAsItIs pins that a name without qak_ or qrk_ prints as before:
+// quoted where the message quotes it and bare where it does not.
+func TestACleanNamePrintsAsItIs(t *testing.T) {
+	shown := map[string]string{
+		"a name the machine does not define":         `"model"`,
+		"a name selected twice":                      `"model"`,
+		"a token that cannot be read":                "model",
+		"a host the allow list does not cover":       "model",
+		"a name outside the grammar":                 `"model!"`,
+		"a definition without a source":              "model",
+		"an argument pattern that does not compile":  "model",
+		"a placeholder outside a variable's grammar": "model",
+		"a placeholder with the name in it":          `"model-"`,
+	}
+	for what, m := range nameMessages {
+		err := m.err(t, "model")
+		if err == nil {
+			t.Errorf("%s: no error", what)
+			continue
+		}
+		if got, want := err.Error(), m.want(shown[what]); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", what, got, want)
+		}
+	}
 }
